@@ -1,7 +1,7 @@
 # Gitleaks Configuration for MCP Agent Repository
 # This configuration scans for secrets and sensitive information
 
-title = "MCP Agent Secrets Detection"
+title = "MCP Agent Open Source Security Scanning"
 version = "8.18.0"
 
 # Enable verbose output for better debugging
