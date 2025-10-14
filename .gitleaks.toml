@@ -38,6 +38,33 @@ verbose = true
   # Include additional metadata
   verbose = true
 
+# Allowlist configuration - files and patterns to ignore
+[allowlist]
+description = "Files and directories to ignore"
+paths = [
+  '''frontend/package-lock.json''', # Ignore package-lock.json due to many false positives
+  '''frontend/yarn.lock''', # Ignore yarn.lock due to many false positives
+  '''frontend/node_modules/''', # Ignore node_modules
+  '''agent_go/logs/''', # Ignore log files
+  '''agent_go/cache/''', # Ignore cache files
+  '''agent_go/bin/''', # Ignore binaries
+  '''agent_go/tool_output_folder/''', # Ignore tool output folder
+  '''agent_go/large_tool_output/''', # Ignore large tool output folder
+  '''agent_go/go.sum''', # Ignore go.sum due to many false positives from module hashes
+  '''external_example/api/go.sum''', # Ignore external example go.sum
+  '''agent_go/.env.backup''', # Ignore backup env files (contain real secrets but are backups)
+  '''configs/mcp_servers_clean.json''', # Example config, no real secrets
+  '''configs/mcp_servers_clean_user.json''', # Example config, no real secrets
+  '''configs/mcp_servers_clean_user_with_aws.json''', # Example config, no real secrets
+  '''configs/mcp_servers.json''', # Example config, no real secrets
+  '''configs/mcp_servers_actual.json.example''', # Example config, no real secrets
+  '''configs/mcp_servers_actual.json''', # This file should be in .gitignore, but if it's not, ignore it here
+  '''env.example''', # Example environment file, no real secrets
+  '''agent_go/env.example''', # Example environment file, no real secrets
+  '''agent_go/service-account.json''', # Google Cloud service account key (should be in .gitignore)
+  '''gitleaks-report.json''' # Ignore gitleaks report itself
+]
+
 # Rules configuration
 [[rules]]
   id = "aws-access-key"

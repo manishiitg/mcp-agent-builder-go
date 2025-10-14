@@ -1,6 +1,12 @@
+# Environment files - NEVER commit these!
 .env
-
+.env.*
+!.env.example
 .env.local
+.env.development
+.env.production
+.env.test
+.env.staging
 
 agent_go/configs/mcp_server_actual.json
 
