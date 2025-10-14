@@ -51,8 +51,25 @@ paths = [
   '''agent_go/tool_output_folder/''', # Ignore tool output folder
   '''agent_go/large_tool_output/''', # Ignore large tool output folder
   '''agent_go/go.sum''', # Ignore go.sum due to many false positives from module hashes
+  '''planner/go.sum''', # Ignore planner go.sum due to many false positives from module hashes
+  '''external_example/agent_modes/go.sum''', # Ignore external example go.sum
+  '''external_example/structured_output_test/go.sum''', # Ignore external example go.sum
+  '''external_example/agent_with_events/go.sum''', # Ignore external example go.sum
   '''external_example/api/go.sum''', # Ignore external example go.sum
+  '''external_example/custom_logging/go.sum''', # Ignore external example go.sum
+  '''external_example/langfuse_test/go.sum''', # Ignore external example go.sum
+  '''memory/venv/''', # Ignore Python virtual environment (contains cryptographic hashes and certificates)
+  '''memory/.venv/''', # Ignore Python virtual environment (contains cryptographic hashes and certificates)
+  '''planner-docs/.git/''', # Ignore git index files (contains file hashes)
+  '''planner-docs/.git/index''', # Ignore git index files (contains file hashes)
+  '''.git/index''', # Ignore git index files (contains file hashes)
+  '''logs/''', # Ignore log files (contain secrets but are logs)
+  '''planner-docs/Tasks/''', # Ignore planner docs (contain example data)
+  '''orchestrator-patterns.md''', # Ignore documentation (contains example data)
   '''agent_go/.env.backup''', # Ignore backup env files (contain real secrets but are backups)
+  '''agent_go/pkg/external/ENV_GUIDE.md''', # Ignore ENV guide (contains example secrets)
+  '''bugs-tasks-complete-progress/''', # Ignore bug documentation files
+  '''bug.md''', # Ignore bug documentation files
   '''configs/mcp_servers_clean.json''', # Example config, no real secrets
   '''configs/mcp_servers_clean_user.json''', # Example config, no real secrets
   '''configs/mcp_servers_clean_user_with_aws.json''', # Example config, no real secrets
@@ -62,7 +79,10 @@ paths = [
   '''env.example''', # Example environment file, no real secrets
   '''agent_go/env.example''', # Example environment file, no real secrets
   '''agent_go/service-account.json''', # Google Cloud service account key (should be in .gitignore)
-  '''gitleaks-report.json''' # Ignore gitleaks report itself
+  '''gitleaks-report.json''', # Ignore gitleaks report itself
+  '''gitleaks-current-scan.json''', # Ignore current scan report
+  '''gitleaks-test.json''', # Ignore test scan report
+  '''gitleaks-final-test.json''' # Ignore final test scan report
 ]
 
 # Rules configuration
