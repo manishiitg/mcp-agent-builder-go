@@ -85,7 +85,15 @@ paths = [
   '''gitleaks-report.json''', # Ignore gitleaks report itself
   '''gitleaks-current-scan.json''', # Ignore current scan report
   '''gitleaks-test.json''', # Ignore test scan report
-  '''gitleaks-final-test.json''' # Ignore final test scan report
+  '''gitleaks-final-test.json''', # Ignore final test scan report
+  # Environment files - these contain real secrets but are gitignored
+  '''.env''', # Root .env file
+  '''agent_go/.env''', # Agent .env file
+  '''memory/.env''', # Memory .env file
+  '''planner/.env''', # Planner .env file
+  '''.env.*''', # All .env variants
+  '''!env.example''', # But allow .env.example files
+  '''!agent_go/env.example''' # But allow agent_go/env.example files
 ]
 
 # Rules configuration
