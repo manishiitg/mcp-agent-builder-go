@@ -1,0 +1,888 @@
+/* VS Code Light Theme Colors */
+/* This file contains all the light mode overrides for VS Code light theme */
+
+/* ===== LIGHT MODE OVERRIDES - VS CODE LIGHT THEME ===== */
+
+/* Use CSS custom properties for proper theme integration */
+.bg-gray-50 {
+  background-color: hsl(var(--muted)) !important;
+}
+
+.bg-gray-100 {
+  background-color: hsl(var(--muted)) !important;
+}
+
+.bg-gray-200 {
+  background-color: hsl(var(--border)) !important;
+}
+
+.bg-gray-300 {
+  background-color: hsl(var(--border)) !important;
+}
+
+.bg-gray-400 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-gray-500 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-gray-600 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-gray-700 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-gray-800 {
+  background-color: hsl(var(--card)) !important;
+}
+
+.bg-gray-900 {
+  background-color: hsl(var(--background)) !important;
+}
+
+/* Text colors using CSS custom properties */
+.text-gray-100 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-gray-200 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-gray-300 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-gray-400 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-gray-500 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-gray-600 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-gray-700 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-gray-800 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-gray-900 {
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Border colors using CSS custom properties */
+.border-gray-100 {
+  border-color: hsl(var(--muted)) !important;
+}
+
+.border-gray-200 {
+  border-color: hsl(var(--border)) !important;
+}
+
+.border-gray-300 {
+  border-color: hsl(var(--border)) !important;
+}
+
+.border-gray-400 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-gray-500 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-gray-600 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-gray-700 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-gray-800 {
+  border-color: hsl(var(--card)) !important;
+}
+
+.border-gray-900 {
+  border-color: hsl(var(--background)) !important;
+}
+
+/* Additional background color overrides for light mode */
+.bg-white {
+  background-color: hsl(var(--background)) !important;
+}
+
+.bg-slate-50 {
+  background-color: hsl(var(--muted)) !important;
+}
+
+.bg-slate-100 {
+  background-color: hsl(var(--muted)) !important;
+}
+
+.bg-slate-200 {
+  background-color: hsl(var(--border)) !important;
+}
+
+.bg-slate-300 {
+  background-color: hsl(var(--border)) !important;
+}
+
+.bg-slate-400 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-slate-500 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-slate-600 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-slate-700 {
+  background-color: hsl(var(--muted-foreground)) !important;
+}
+
+.bg-slate-800 {
+  background-color: hsl(var(--card)) !important;
+}
+
+.bg-slate-900 {
+  background-color: hsl(var(--background)) !important;
+}
+
+/* Slate text colors for light mode */
+.text-slate-50 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-slate-100 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-slate-200 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-slate-300 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-slate-400 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-slate-500 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-slate-600 {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.text-slate-700 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-slate-800 {
+  color: hsl(var(--foreground)) !important;
+}
+
+.text-slate-900 {
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Slate border colors for light mode */
+.border-slate-50 {
+  border-color: hsl(var(--muted)) !important;
+}
+
+.border-slate-100 {
+  border-color: hsl(var(--muted)) !important;
+}
+
+.border-slate-200 {
+  border-color: hsl(var(--border)) !important;
+}
+
+.border-slate-300 {
+  border-color: hsl(var(--border)) !important;
+}
+
+.border-slate-400 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-slate-500 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-slate-600 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-slate-700 {
+  border-color: hsl(var(--muted-foreground)) !important;
+}
+
+.border-slate-800 {
+  border-color: hsl(var(--card)) !important;
+}
+
+.border-slate-900 {
+  border-color: hsl(var(--background)) !important;
+}
+
+/* ===== VS CODE LIGHT THEME EVENT COLORS ===== */
+
+/* Orange color variants (used in tool events) - VS Code orange #ce9178 */
+.bg-orange-50 {
+  background-color: hsl(20 30% 95%) !important;     /* Light orange background */
+}
+
+.bg-orange-100 {
+  background-color: hsl(20 30% 90%) !important;
+}
+
+.bg-orange-200 {
+  background-color: hsl(20 30% 85%) !important;
+}
+
+.bg-orange-300 {
+  background-color: hsl(20 30% 80%) !important;
+}
+
+.bg-orange-400 {
+  background-color: hsl(20 30% 75%) !important;
+}
+
+.bg-orange-500 {
+  background-color: hsl(20 30% 70%) !important;
+}
+
+.bg-orange-600 {
+  background-color: hsl(20 30% 65%) !important;
+}
+
+.bg-orange-700 {
+  background-color: hsl(20 30% 60%) !important;     /* VS Code orange #ce9178 */
+}
+
+.bg-orange-800 {
+  background-color: hsl(20 30% 55%) !important;
+}
+
+.bg-orange-900 {
+  background-color: hsl(20 30% 50%) !important;
+}
+
+.text-orange-100 {
+  color: hsl(20 60% 95%) !important;                /* Light orange text */
+}
+
+.text-orange-200 {
+  color: hsl(20 60% 90%) !important;
+}
+
+.text-orange-300 {
+  color: hsl(20 60% 85%) !important;
+}
+
+.text-orange-400 {
+  color: hsl(20 60% 80%) !important;
+}
+
+.text-orange-500 {
+  color: hsl(20 60% 75%) !important;
+}
+
+.text-orange-600 {
+  color: hsl(20 60% 70%) !important;
+}
+
+.text-orange-700 {
+  color: hsl(20 60% 60%) !important;                /* VS Code orange #ce9178 */
+}
+
+.text-orange-800 {
+  color: hsl(20 60% 55%) !important;
+}
+
+.text-orange-900 {
+  color: hsl(20 60% 50%) !important;
+}
+
+/* Green color variants (used in success events) - VS Code green #4ec9b0 */
+.bg-green-50 {
+  background-color: hsl(180 30% 95%) !important;    /* Light green background */
+}
+
+.bg-green-100 {
+  background-color: hsl(180 30% 90%) !important;
+}
+
+.bg-green-200 {
+  background-color: hsl(180 30% 85%) !important;
+}
+
+.bg-green-300 {
+  background-color: hsl(180 30% 80%) !important;
+}
+
+.bg-green-400 {
+  background-color: hsl(180 30% 75%) !important;
+}
+
+.bg-green-500 {
+  background-color: hsl(180 30% 70%) !important;
+}
+
+.bg-green-600 {
+  background-color: hsl(180 30% 65%) !important;
+}
+
+.bg-green-700 {
+  background-color: hsl(180 30% 60%) !important;    /* VS Code green #4ec9b0 */
+}
+
+.bg-green-800 {
+  background-color: hsl(180 30% 55%) !important;
+}
+
+.bg-green-900 {
+  background-color: hsl(180 30% 50%) !important;
+}
+
+.text-green-100 {
+  color: hsl(180 60% 95%) !important;               /* Light green text */
+}
+
+.text-green-200 {
+  color: hsl(180 60% 90%) !important;
+}
+
+.text-green-300 {
+  color: hsl(180 60% 85%) !important;
+}
+
+.text-green-400 {
+  color: hsl(180 60% 80%) !important;
+}
+
+.text-green-500 {
+  color: hsl(180 60% 75%) !important;
+}
+
+.text-green-600 {
+  color: hsl(180 60% 70%) !important;
+}
+
+.text-green-700 {
+  color: hsl(180 60% 60%) !important;               /* VS Code green #4ec9b0 */
+}
+
+.text-green-800 {
+  color: hsl(180 60% 55%) !important;
+}
+
+.text-green-900 {
+  color: hsl(180 60% 50%) !important;
+}
+
+/* Red color variants (used in error events) - VS Code red #f44747 */
+.bg-red-50 {
+  background-color: hsl(0 30% 95%) !important;      /* Light red background */
+}
+
+.bg-red-100 {
+  background-color: hsl(0 30% 90%) !important;
+}
+
+.bg-red-200 {
+  background-color: hsl(0 30% 85%) !important;
+}
+
+.bg-red-300 {
+  background-color: hsl(0 30% 80%) !important;
+}
+
+.bg-red-400 {
+  background-color: hsl(0 30% 75%) !important;
+}
+
+.bg-red-500 {
+  background-color: hsl(0 30% 70%) !important;
+}
+
+.bg-red-600 {
+  background-color: hsl(0 30% 65%) !important;
+}
+
+.bg-red-700 {
+  background-color: hsl(0 30% 60%) !important;      /* VS Code red #f44747 */
+}
+
+.bg-red-800 {
+  background-color: hsl(0 30% 55%) !important;
+}
+
+.bg-red-900 {
+  background-color: hsl(0 30% 50%) !important;
+}
+
+.text-red-100 {
+  color: hsl(0 60% 95%) !important;                 /* Light red text */
+}
+
+.text-red-200 {
+  color: hsl(0 60% 90%) !important;
+}
+
+.text-red-300 {
+  color: hsl(0 60% 85%) !important;
+}
+
+.text-red-400 {
+  color: hsl(0 60% 80%) !important;
+}
+
+.text-red-500 {
+  color: hsl(0 60% 75%) !important;
+}
+
+.text-red-600 {
+  color: hsl(0 60% 70%) !important;
+}
+
+.text-red-700 {
+  color: hsl(0 60% 60%) !important;                 /* VS Code red #f44747 */
+}
+
+.text-red-800 {
+  color: hsl(0 60% 55%) !important;
+}
+
+.text-red-900 {
+  color: hsl(0 60% 50%) !important;
+}
+
+/* Blue color variants (used in tool events and user messages) - VS Code blue #007acc */
+.bg-blue-50 {
+  background-color: hsl(200 40% 95%) !important;    /* Light blue background */
+}
+
+.bg-blue-100 {
+  background-color: hsl(200 40% 90%) !important;
+}
+
+.bg-blue-200 {
+  background-color: hsl(200 40% 85%) !important;
+}
+
+.bg-blue-300 {
+  background-color: hsl(200 40% 80%) !important;
+}
+
+.bg-blue-400 {
+  background-color: hsl(200 40% 75%) !important;
+}
+
+.bg-blue-500 {
+  background-color: hsl(200 40% 70%) !important;
+}
+
+.bg-blue-600 {
+  background-color: hsl(200 40% 65%) !important;
+}
+
+.bg-blue-700 {
+  background-color: hsl(200 40% 60%) !important;    /* VS Code blue #007acc */
+}
+
+.bg-blue-800 {
+  background-color: hsl(200 40% 55%) !important;
+}
+
+.bg-blue-900 {
+  background-color: hsl(200 40% 50%) !important;
+}
+
+.text-blue-100 {
+  color: hsl(200 60% 95%) !important;               /* Light blue text */
+}
+
+.text-blue-200 {
+  color: hsl(200 60% 90%) !important;
+}
+
+.text-blue-300 {
+  color: hsl(200 60% 85%) !important;
+}
+
+.text-blue-400 {
+  color: hsl(200 60% 80%) !important;
+}
+
+.text-blue-500 {
+  color: hsl(200 60% 75%) !important;
+}
+
+.text-blue-600 {
+  color: hsl(200 60% 70%) !important;
+}
+
+.text-blue-700 {
+  color: hsl(200 60% 60%) !important;               /* VS Code blue #007acc */
+}
+
+.text-blue-800 {
+  color: hsl(200 60% 55%) !important;
+}
+
+.text-blue-900 {
+  color: hsl(200 60% 50%) !important;
+}
+
+.border-blue-200 {
+  border-color: hsl(200 40% 85%) !important;
+}
+
+.border-blue-300 {
+  border-color: hsl(200 40% 80%) !important;
+}
+
+.border-blue-400 {
+  border-color: hsl(200 40% 75%) !important;
+}
+
+.border-blue-500 {
+  border-color: hsl(200 40% 70%) !important;
+}
+
+/* Yellow color variants (used in warning events) */
+.bg-yellow-50 {
+  background-color: hsl(45 25% 95%) !important;
+}
+
+.bg-yellow-100 {
+  background-color: hsl(45 25% 90%) !important;
+}
+
+.bg-yellow-200 {
+  background-color: hsl(45 25% 85%) !important;
+}
+
+.bg-yellow-300 {
+  background-color: hsl(45 25% 80%) !important;
+}
+
+.bg-yellow-400 {
+  background-color: hsl(45 25% 75%) !important;
+}
+
+.bg-yellow-500 {
+  background-color: hsl(45 25% 70%) !important;
+}
+
+.bg-yellow-600 {
+  background-color: hsl(45 25% 65%) !important;
+}
+
+.bg-yellow-700 {
+  background-color: hsl(45 25% 60%) !important;
+}
+
+.bg-yellow-800 {
+  background-color: hsl(45 25% 55%) !important;
+}
+
+.bg-yellow-900 {
+  background-color: hsl(45 25% 50%) !important;
+}
+
+.text-yellow-100 {
+  color: hsl(45 25% 95%) !important;
+}
+
+.text-yellow-200 {
+  color: hsl(45 25% 90%) !important;
+}
+
+.text-yellow-300 {
+  color: hsl(45 25% 85%) !important;
+}
+
+.text-yellow-400 {
+  color: hsl(45 25% 80%) !important;
+}
+
+.text-yellow-500 {
+  color: hsl(45 25% 75%) !important;
+}
+
+.text-yellow-600 {
+  color: hsl(45 25% 70%) !important;
+}
+
+.text-yellow-700 {
+  color: hsl(45 25% 65%) !important;
+}
+
+.text-yellow-800 {
+  color: hsl(45 25% 60%) !important;
+}
+
+.text-yellow-900 {
+  color: hsl(45 25% 55%) !important;
+}
+
+/* Purple color variants (used in some events) */
+.bg-purple-50 {
+  background-color: hsl(280 25% 95%) !important;
+}
+
+.bg-purple-100 {
+  background-color: hsl(280 25% 90%) !important;
+}
+
+.bg-purple-200 {
+  background-color: hsl(280 25% 85%) !important;
+}
+
+.bg-purple-300 {
+  background-color: hsl(280 25% 80%) !important;
+}
+
+.bg-purple-400 {
+  background-color: hsl(280 25% 75%) !important;
+}
+
+.bg-purple-500 {
+  background-color: hsl(280 25% 70%) !important;
+}
+
+.bg-purple-600 {
+  background-color: hsl(280 25% 65%) !important;
+}
+
+.bg-purple-700 {
+  background-color: hsl(280 25% 60%) !important;
+}
+
+.bg-purple-800 {
+  background-color: hsl(280 25% 55%) !important;
+}
+
+.bg-purple-900 {
+  background-color: hsl(280 25% 50%) !important;
+}
+
+.text-purple-100 {
+  color: hsl(280 25% 95%) !important;
+}
+
+.text-purple-200 {
+  color: hsl(280 25% 90%) !important;
+}
+
+.text-purple-300 {
+  color: hsl(280 25% 85%) !important;
+}
+
+.text-purple-400 {
+  color: hsl(280 25% 80%) !important;
+}
+
+.text-purple-500 {
+  color: hsl(280 25% 75%) !important;
+}
+
+.text-purple-600 {
+  color: hsl(280 25% 70%) !important;
+}
+
+.text-purple-700 {
+  color: hsl(280 25% 65%) !important;
+}
+
+.text-purple-800 {
+  color: hsl(280 25% 60%) !important;
+}
+
+.text-purple-900 {
+  color: hsl(280 25% 55%) !important;
+}
+
+/* Indigo color variants (used in user message events) */
+.bg-indigo-50 {
+  background-color: hsl(240 25% 95%) !important;
+}
+
+.bg-indigo-100 {
+  background-color: hsl(240 25% 90%) !important;
+}
+
+.bg-indigo-200 {
+  background-color: hsl(240 25% 85%) !important;
+}
+
+.bg-indigo-300 {
+  background-color: hsl(240 25% 80%) !important;
+}
+
+.bg-indigo-400 {
+  background-color: hsl(240 25% 75%) !important;
+}
+
+.bg-indigo-500 {
+  background-color: hsl(240 25% 70%) !important;
+}
+
+.bg-indigo-600 {
+  background-color: hsl(240 25% 65%) !important;
+}
+
+.bg-indigo-700 {
+  background-color: hsl(240 25% 60%) !important;
+}
+
+.bg-indigo-800 {
+  background-color: hsl(240 25% 55%) !important;
+}
+
+.bg-indigo-900 {
+  background-color: hsl(240 25% 50%) !important;
+}
+
+.text-indigo-100 {
+  color: hsl(240 25% 95%) !important;
+}
+
+.text-indigo-200 {
+  color: hsl(240 25% 90%) !important;
+}
+
+.text-indigo-300 {
+  color: hsl(240 25% 85%) !important;
+}
+
+.text-indigo-400 {
+  color: hsl(240 25% 80%) !important;
+}
+
+.text-indigo-500 {
+  color: hsl(240 25% 75%) !important;
+}
+
+.text-indigo-600 {
+  color: hsl(240 25% 70%) !important;
+}
+
+.text-indigo-700 {
+  color: hsl(240 25% 65%) !important;
+}
+
+.text-indigo-800 {
+  color: hsl(240 25% 60%) !important;
+}
+
+.text-indigo-900 {
+  color: hsl(240 25% 55%) !important;
+}
+
+.border-indigo-200 {
+  border-color: hsl(240 25% 85%) !important;
+}
+
+.border-indigo-300 {
+  border-color: hsl(240 25% 80%) !important;
+}
+
+.border-indigo-400 {
+  border-color: hsl(240 25% 75%) !important;
+}
+
+.border-indigo-500 {
+  border-color: hsl(240 25% 70%) !important;
+}
+
+/* Hover states for light mode */
+.hover\:bg-gray-100:hover {
+  background-color: hsl(0 0% 92%) !important;
+}
+
+.hover\:bg-gray-200:hover {
+  background-color: hsl(0 0% 88%) !important;
+}
+
+.hover\:bg-gray-300:hover {
+  background-color: hsl(0 0% 82%) !important;
+}
+
+.hover\:bg-orange-50:hover {
+  background-color: hsl(20 25% 92%) !important;
+}
+
+.hover\:bg-orange-100:hover {
+  background-color: hsl(20 25% 88%) !important;
+}
+
+.hover\:bg-green-50:hover {
+  background-color: hsl(120 25% 92%) !important;
+}
+
+.hover\:bg-green-100:hover {
+  background-color: hsl(120 25% 88%) !important;
+}
+
+.hover\:bg-red-50:hover {
+  background-color: hsl(0 25% 92%) !important;
+}
+
+.hover\:bg-red-100:hover {
+  background-color: hsl(0 25% 88%) !important;
+}
+
+.hover\:bg-blue-50:hover {
+  background-color: hsl(200 25% 92%) !important;
+}
+
+.hover\:bg-blue-100:hover {
+  background-color: hsl(200 25% 88%) !important;
+}
+
+.hover\:bg-yellow-50:hover {
+  background-color: hsl(45 25% 92%) !important;
+}
+
+.hover\:bg-yellow-100:hover {
+  background-color: hsl(45 25% 88%) !important;
+}
+
+.hover\:bg-purple-50:hover {
+  background-color: hsl(280 25% 92%) !important;
+}
+
+.hover\:bg-purple-100:hover {
+  background-color: hsl(280 25% 88%) !important;
+}
+
+.hover\:bg-indigo-50:hover {
+  background-color: hsl(240 25% 92%) !important;
+}
+
+.hover\:bg-indigo-100:hover {
+  background-color: hsl(240 25% 88%) !important;
+}

@@ -1,0 +1,71 @@
+.env
+
+.env.local
+
+agent_go/configs/mcp_server_actual.json
+
+*.log
+
+bin/*
+
+# Additional security patterns
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cert
+*.pwd
+*secret*
+*credential*
+*password*
+
+# Binary files
+*.exe
+*.bin
+
+# Test outputs
+test_output.txt
+aws_cost_report.txt
+
+# Debug files
+debug_*.log
+*_debug.log
+
+!*.example
+
+agent_go/large_tool_output/*
+
+agent_go/tool_output_folder/*
+
+# Ignore files without extensions (executables, Go build outputs)
+# Explicitly ignore common Go build outputs without extensions
+agent_go/agent_go
+agent_go/orchestrator
+agent_go/server
+agent_go/fileserver
+agent_go/mcpagent-test
+
+# External example build outputs
+external_example/api/server
+external_example/api/external_api
+external_example/api/event-test
+external_example/custom_logging/agent_logging
+
+agent_go/cmd/timeout/timeout-server
+
+agent_go/cache/*
+
+cache/*
+
+chat_history.db
+
+planner-docs/
+
+planner-docs/*
+
+agent_go/service-account.json
+
+# Gitleaks reports and cache
+gitleaks-report.json
+.gitleaks-cache/

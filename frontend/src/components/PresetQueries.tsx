@@ -1,0 +1,342 @@
+import React, { useState, useEffect } from 'react';
+import { Button } from './ui/Button';
+import { usePresetsDatabase } from '../hooks/usePresetsDatabase';
+import PresetModal from './PresetModal';
+import type { CustomPreset } from '../hooks/usePresetsDatabase';
+import type { PlannerFile } from '../services/api-types';
+// Note: Predefined presets are now loaded from database via usePresetsDatabase hook
+import { Checkbox } from './ui/checkbox';
+import { Card } from './ui/Card';
+import { useAppStore } from '../stores';
+
+interface PresetQueriesProps {
+  setCurrentQuery: (query: string) => void;
+  isStreaming: boolean;
+  availableServers?: string[];
+  onPresetSelect?: (servers: string[], agentMode?: 'simple' | 'ReAct' | 'orchestrator' | 'workflow') => void;
+  onPresetFolderSelect?: (folderPath?: string) => void;
+  triggerAddPreset?: boolean;
+  onAddPresetTriggered?: () => void;
+  onPresetAdded?: () => void;
+}
+
+  const PresetQueries: React.FC<PresetQueriesProps> = ({ 
+    setCurrentQuery, 
+    isStreaming, 
+    availableServers = [],
+    onPresetSelect,
+    onPresetFolderSelect,
+    triggerAddPreset,
+    onAddPresetTriggered,
+    onPresetAdded,
+  }) => {
+  // Use Zustand store for preset selection
+  const { setSelectedPresetId } = useAppStore();
+  
+  const {
+    customPresets,
+    predefinedPresets,
+    predefinedServerSelections,
+    loading,
+    error,
+    addPreset,
+    updatePreset,
+    deletePreset,
+    updatePredefinedServerSelection,
+    refreshPresets,
+  } = usePresetsDatabase();
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<CustomPreset | null>(null);
+  const [isServerSelectionModalOpen, setIsServerSelectionModalOpen] = useState(false);
+  const [currentPredefinedPreset, setCurrentPredefinedPreset] = useState<string>('');
+  const [tempSelectedServers, setTempSelectedServers] = useState<string[]>([]);
+
+  const handlePresetClick = (query: string, selectedServers?: string[], presetQueryId?: string, agentMode?: 'simple' | 'ReAct' | 'orchestrator' | 'workflow', selectedFolder?: PlannerFile) => {
+    setCurrentQuery(query);
+    // Call the callback to set the preset server selection and agent mode
+    if (selectedServers && selectedServers.length > 0) {
+      onPresetSelect?.(selectedServers, agentMode);
+    } else {
+      // Clear preset server selection if no servers selected, but still pass agent mode
+      onPresetSelect?.([], agentMode);
+    }
+    // Call the callback to handle folder selection
+    onPresetFolderSelect?.(selectedFolder?.filepath);
+    // Use Zustand store to set selected preset ID
+    setSelectedPresetId(presetQueryId || null);
+  };
+
+  const handleAddPreset = () => {
+    setEditingPreset(null);
+    setIsModalOpen(true);
+  };
+
+  // Handle trigger from parent component
+  useEffect(() => {
+    if (triggerAddPreset) {
+      handleAddPreset();
+      onAddPresetTriggered?.();
+    }
+  }, [triggerAddPreset, onAddPresetTriggered]);
+
+
+  const handleEditPreset = (preset: CustomPreset) => {
+    setEditingPreset(preset);
+    setIsModalOpen(true);
+  };
+
+  const handleDeletePreset = async (id: string) => {
+    if (confirm('Are you sure you want to delete this preset?')) {
+      await deletePreset(id);
+      // Call the callback to refresh workflow presets when a preset is deleted
+      setTimeout(() => {
+        onPresetAdded?.();
+      }, 100);
+    }
+  };
+
+  const handleSavePreset = async (label: string, query: string, selectedServers?: string[], agentMode?: 'simple' | 'ReAct' | 'orchestrator' | 'workflow', selectedFolder?: PlannerFile) => {
+    if (editingPreset) {
+      await updatePreset(editingPreset.id, label, query, selectedServers, agentMode, selectedFolder);
+      // Call the callback to refresh workflow presets when a preset is updated
+      setTimeout(() => {
+        onPresetAdded?.();
+      }, 100);
+    } else {
+      await addPreset(label, query, selectedServers, agentMode, selectedFolder);
+      // Add a small delay to ensure the preset is fully processed
+      setTimeout(() => {
+        onPresetAdded?.();
+      }, 100);
+    }
+  };
+
+  const handlePredefinedServerSelection = (presetLabel: string, selectedServers: string[]) => {
+    updatePredefinedServerSelection(presetLabel, selectedServers);
+  };
+
+  const handleOpenServerSelection = (presetLabel: string) => {
+    setCurrentPredefinedPreset(presetLabel);
+    setTempSelectedServers(predefinedServerSelections[presetLabel] || []);
+    setIsServerSelectionModalOpen(true);
+  };
+
+  const handleSaveServerSelection = () => {
+    handlePredefinedServerSelection(currentPredefinedPreset, tempSelectedServers);
+    setIsServerSelectionModalOpen(false);
+  };
+
+  const handleServerToggle = (server: string) => {
+    setTempSelectedServers(prev => 
+      prev.includes(server)
+        ? prev.filter(s => s !== server)
+        : [...prev, server]
+    );
+  };
+
+  return (
+    <div className="flex-shrink-0 mb-4">
+      {/* Loading and Error States */}
+      {loading && (
+        <div className="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
+          Loading presets...
+        </div>
+      )}
+      
+      {error && (
+        <div className="text-xs text-red-500 dark:text-red-400 text-center py-2">
+          {error}
+          <button 
+            onClick={refreshPresets}
+            className="ml-2 text-blue-500 hover:text-blue-700 underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        {/* Predefined Presets */}
+        {predefinedPresets.map((preset) => {
+          const selectedServers = predefinedServerSelections[preset.label] || [];
+          return (
+            <div key={preset.id} className="relative group">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isStreaming}
+                onClick={() => handlePresetClick(preset.query, selectedServers, preset.id, preset.agentMode, preset.selectedFolder)}
+                className="relative pr-10"
+              >
+                <div className="flex items-center gap-2">
+                  <span>{preset.label}</span>
+                  {preset.agentMode && (
+                    <span className="text-xs bg-purple-100 text-purple-800 px-1 rounded">
+                      {preset.agentMode}
+                    </span>
+                  )}
+                  {selectedServers.length > 0 && (
+                    <span className="text-xs bg-blue-100 text-blue-800 px-1 rounded">
+                      {selectedServers.length}
+                    </span>
+                  )}
+                </div>
+                
+                {/* Server Selection Button Inside Preset Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenServerSelection(preset.label);
+                  }}
+                  className="absolute right-1 top-1/2 transform -translate-y-1/2 w-4 h-4 flex items-center justify-center text-xs hover:bg-gray-200 rounded"
+                  title={selectedServers.length > 0 
+                    ? `Selected servers: ${selectedServers.join(', ')}` 
+                    : 'Click to select servers'
+                  }
+                >
+                  {selectedServers.length > 0 ? '🔧' : '⚙️'}
+                </button>
+              </Button>
+            </div>
+          );
+        })}
+
+        {/* Custom Presets */}
+        {customPresets.map((preset) => (
+          <div key={preset.id} className="relative group">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isStreaming}
+              onClick={() => handlePresetClick(preset.query, preset.selectedServers, preset.id, preset.agentMode, preset.selectedFolder)}
+              className="relative pr-12"
+            >
+              <div className="flex items-center gap-2">
+                <span>{preset.label}</span>
+                {preset.agentMode && (
+                  <span className="text-xs bg-purple-100 text-purple-800 px-1 rounded">
+                    {preset.agentMode}
+                  </span>
+                )}
+                {preset.selectedServers && preset.selectedServers.length > 0 && (
+                  <span className="text-xs bg-green-100 text-green-800 px-1 rounded">
+                    {preset.selectedServers.length}
+                  </span>
+                )}
+              </div>
+              
+              {/* Edit/Delete Buttons Inside Preset Button */}
+              <div className="absolute right-1 top-1/2 transform -translate-y-1/2 flex gap-1">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEditPreset(preset);
+                  }}
+                  className="w-4 h-4 flex items-center justify-center text-xs hover:bg-gray-200 rounded"
+                  title="Edit preset"
+                >
+                  ✏️
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeletePreset(preset.id);
+                  }}
+                  className="w-4 h-4 flex items-center justify-center text-xs text-red-600 hover:text-red-700 hover:bg-red-100 rounded"
+                  title="Delete preset"
+                >
+                  🗑️
+                </button>
+              </div>
+            </Button>
+          </div>
+        ))}
+
+      </div>
+
+      {/* Preset Modal */}
+      <PresetModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleSavePreset}
+        editingPreset={editingPreset}
+        availableServers={availableServers}
+      />
+
+      {/* Server Selection Modal for Predefined Presets */}
+      {isServerSelectionModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md mx-4 p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold">
+                Select Servers for "{currentPredefinedPreset}"
+              </h2>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsServerSelectionModalOpen(false)}
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Choose which MCP servers to use with this preset. Leave empty to use all available servers.
+              </p>
+
+              <div className="grid grid-cols-1 gap-2 max-h-60 overflow-y-auto border rounded-md p-3">
+                {availableServers.map((server) => (
+                  <div key={server} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`server-${server}`}
+                      checked={tempSelectedServers.includes(server)}
+                      onCheckedChange={() => handleServerToggle(server)}
+                    />
+                    <label
+                      htmlFor={`server-${server}`}
+                      className="text-sm cursor-pointer"
+                    >
+                      {server}
+                    </label>
+                  </div>
+                ))}
+              </div>
+
+              {tempSelectedServers.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  Selected: {tempSelectedServers.join(', ')}
+                </p>
+              )}
+
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsServerSelectionModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleSaveServerSelection}
+                >
+                  Save Selection
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PresetQueries; 

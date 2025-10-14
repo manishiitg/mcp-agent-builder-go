@@ -1,0 +1,173 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import VS Code Themes */
+@import './themes/vscode-light.css';
+@import './themes/vscode-dark.css';
+
+@layer base {
+  :root {
+    /* VS Code Light Theme Colors */
+    --background: 0 0% 100%;               /* #ffffff - VS Code light background */
+    --foreground: 0 0% 20%;                /* #333333 - VS Code light foreground */
+    --card: 0 0% 98%;                      /* #fafafa - VS Code light panel background */
+    --card-foreground: 0 0% 20%;           /* #333333 - VS Code light foreground */
+    
+    /* Surface Colors - VS Code light hierarchy */
+    --popover: 0 0% 98%;                   /* #fafafa - VS Code light panel */
+    --popover-foreground: 0 0% 20%;        /* #333333 - VS Code light foreground */
+    --primary: 200 100% 40%;               /* #007acc - VS Code blue */
+    --primary-foreground: 0 0% 100%;       /* White text on blue */
+    --secondary: 0 0% 96%;                 /* #f5f5f5 - VS Code light secondary */
+    --secondary-foreground: 0 0% 20%;      /* #333333 - VS Code light foreground */
+    
+    /* Accent Colors - VS Code light palette */
+    --muted: 0 0% 96%;                     /* #f5f5f5 - VS Code light muted */
+    --muted-foreground: 0 0% 45%;          /* #737373 - VS Code light muted text */
+    --accent: 200 100% 40%;                /* #007acc - VS Code blue */
+    --accent-foreground: 0 0% 100%;        /* White text on accent */
+    
+    /* Status Colors - VS Code light colors */
+    --destructive: 0 70% 60%;              /* #f44747 - VS Code red */
+    --destructive-foreground: 0 0% 100%;   /* White text on red */
+    --success: 180 60% 50%;                /* #4ec9b0 - VS Code green */
+    --warning: 20 60% 60%;                 /* #ce9178 - VS Code orange */
+    --info: 200 100% 40%;                  /* #007acc - VS Code blue */
+    
+    /* Border & Input - VS Code light borders */
+    --border: 0 0% 85%;                    /* #d9d9d9 - VS Code light border */
+    --input: 0 0% 96%;                     /* #f5f5f5 - VS Code light input */
+    --ring: 200 100% 40%;                  /* #007acc - VS Code focus ring */
+    
+    /* Chart Colors - VS Code light inspired */
+    --chart-1: 200 100% 40%;              /* VS Code blue */
+    --chart-2: 180 60% 50%;               /* VS Code green */
+    --chart-3: 20 60% 60%;                /* VS Code orange */
+    --chart-4: 280 60% 60%;               /* Purple */
+    --chart-5: 0 70% 60%;                 /* VS Code red */
+    --radius: 0.5rem;
+  }
+  
+  .dark {
+    /* VS Code Default Dark Theme Colors */
+    --background: 0 0% 12%;               /* #1e1e1e - VS Code background */
+    --foreground: 0 0% 83%;               /* #d4d4d4 - VS Code foreground */
+    --card: 0 0% 15%;                     /* #252526 - VS Code panel background */
+    --card-foreground: 0 0% 83%;          /* #d4d4d4 - VS Code foreground */
+    
+    /* Surface Colors - VS Code hierarchy */
+    --popover: 0 0% 15%;                  /* #252526 - VS Code panel */
+    --popover-foreground: 0 0% 83%;       /* #d4d4d4 - VS Code foreground */
+    --primary: 200 100% 40%;              /* #007acc - VS Code blue */
+    --primary-foreground: 0 0% 100%;      /* White text on blue */
+    --secondary: 0 0% 20%;                /* #333333 - VS Code secondary */
+    --secondary-foreground: 0 0% 83%;     /* #d4d4d4 - VS Code foreground */
+    
+    /* Accent Colors - VS Code palette */
+    --muted: 0 0% 20%;                    /* #333333 - VS Code muted */
+    --muted-foreground: 0 0% 60%;         /* #969696 - VS Code muted text */
+    --accent: 200 100% 40%;               /* #007acc - VS Code blue */
+    --accent-foreground: 0 0% 100%;       /* White text on accent */
+    
+    /* Status Colors - VS Code colors */
+    --destructive: 0 70% 60%;             /* #f44747 - VS Code red */
+    --destructive-foreground: 0 0% 100%;  /* White text on red */
+    --success: 180 60% 50%;               /* #4ec9b0 - VS Code green */
+    --warning: 20 60% 60%;                /* #ce9178 - VS Code orange */
+    --info: 200 100% 40%;                 /* #007acc - VS Code blue */
+    
+    /* Border & Input - VS Code borders */
+    --border: 0 0% 24%;                   /* #3c3c3c - VS Code border */
+    --input: 0 0% 20%;                    /* #333333 - VS Code input */
+    --ring: 200 100% 40%;                 /* #007acc - VS Code focus ring */
+    
+    /* Chart Colors - VS Code inspired */
+    --chart-1: 200 100% 40%;              /* VS Code blue */
+    --chart-2: 180 60% 50%;               /* VS Code green */
+    --chart-3: 20 60% 60%;                /* VS Code orange */
+    --chart-4: 280 60% 60%;               /* Purple */
+    --chart-5: 0 70% 60%;                 /* VS Code red */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    @apply font-sans;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-height: 100vh;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+/* ===== AGENT MODE BUTTONS - VS CODE THEME ===== */
+
+/* Selected state - Light mode */
+.agent-mode-selected {
+  background-color: hsl(200 100% 95%) !important;  /* Very light blue background */
+  color: hsl(200 100% 40%) !important;              /* Blue text */
+  border: 1px solid hsl(200 100% 40%) !important;  /* Blue border */
+  box-shadow: 0 0 0 1px hsl(200 100% 60%) !important; /* Subtle focus ring */
+}
+
+/* Unselected state - Light mode */
+.agent-mode-unselected {
+  background-color: hsl(0 0% 96%) !important;      /* Light gray background */
+  color: hsl(0 0% 20%) !important;                 /* Dark text */
+  border: 1px solid hsl(0 0% 80%) !important;      /* Light gray border */
+}
+
+/* Hover state for unselected - Light mode */
+.agent-mode-unselected:hover {
+  background-color: hsl(0 0% 92%) !important;      /* Slightly darker on hover */
+  border-color: hsl(0 0% 70%) !important;          /* Darker border on hover */
+}
+
+/* Icon colors for selected state - Light mode */
+.agent-mode-selected svg {
+  color: hsl(200 100% 40%) !important;              /* Blue icons when selected */
+}
+
+/* Icon colors for unselected state - Light mode */
+.agent-mode-unselected svg {
+  color: hsl(0 0% 20%) !important;                 /* Dark icons when unselected */
+}
+
+/* Dark mode agent mode buttons */
+.dark .agent-mode-selected {
+  background-color: hsl(0 0% 24%) !important;      /* VS Code border #3c3c3c - subtle background */
+  color: hsl(200 100% 40%) !important;              /* VS Code blue #007acc - for text */
+  border: 1px solid hsl(200 100% 40%) !important;  /* VS Code blue #007acc - for border */
+  box-shadow: 0 0 0 1px hsl(200 100% 20%) !important; /* More subtle focus ring */
+}
+
+.dark .agent-mode-unselected {
+  background-color: hsl(0 0% 20%) !important;      /* VS Code secondary #333333 */
+  color: hsl(0 0% 83%) !important;                 /* VS Code foreground #d4d4d4 */
+  border: 1px solid hsl(0 0% 24%) !important;      /* VS Code border #3c3c3c */
+}
+
+.dark .agent-mode-unselected:hover {
+  background-color: hsl(0 0% 25%) !important;      /* Slightly lighter on hover */
+  border-color: hsl(0 0% 30%) !important;          /* Lighter border on hover */
+}
+
+.dark .agent-mode-selected svg {
+  color: hsl(0 0% 100%) !important;                /* White icons when selected */
+}
+
+.dark .agent-mode-unselected svg {
+  color: hsl(0 0% 83%) !important;                 /* VS Code foreground for icons */
+}

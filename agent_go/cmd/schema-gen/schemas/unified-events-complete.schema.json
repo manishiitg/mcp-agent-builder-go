@@ -1,0 +1,3741 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "AgentConversationEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "question": {
+          "type": "string"
+        },
+        "servers": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "tool_choice": {
+          "type": "string"
+        },
+        "max_turns": {
+          "type": "integer"
+        },
+        "available_tools": {
+          "type": "integer"
+        },
+        "system_prompt": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "AgentErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "context": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheCleanupEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "cleanup_type": {
+          "type": "string"
+        },
+        "entries_removed": {
+          "type": "integer"
+        },
+        "entries_total": {
+          "type": "integer"
+        },
+        "space_freed": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheExpiredEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "age": {
+          "type": "integer"
+        },
+        "ttl": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheHitEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "age": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheMissEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheOperationStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CacheWriteEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "data_size": {
+          "type": "integer"
+        },
+        "ttl": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ComprehensiveCacheEvent": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "cache_used": {
+          "type": "boolean"
+        },
+        "fresh_fallback": {
+          "type": "boolean"
+        },
+        "servers_count": {
+          "type": "integer"
+        },
+        "total_tools": {
+          "type": "integer"
+        },
+        "total_prompts": {
+          "type": "integer"
+        },
+        "total_resources": {
+          "type": "integer"
+        },
+        "server_status": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ServerCacheStatus"
+          },
+          "type": "object"
+        },
+        "cache_hits": {
+          "type": "integer"
+        },
+        "cache_misses": {
+          "type": "integer"
+        },
+        "cache_writes": {
+          "type": "integer"
+        },
+        "cache_errors": {
+          "type": "integer"
+        },
+        "connection_time": {
+          "type": "string"
+        },
+        "cache_time": {
+          "type": "string"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConfigurationLoadedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "servers": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConfigurationValidatedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "config_path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ContextCancelledEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConversationEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "turns": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConversationErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "context": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConversationStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "system_prompt": {
+          "type": "string"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "servers": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConversationThinkingEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConversationTurnEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "question": {
+          "type": "string"
+        },
+        "messages_count": {
+          "type": "integer"
+        },
+        "has_tool_calls": {
+          "type": "boolean"
+        },
+        "tool_calls_count": {
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/SerializedMessage"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "DetailedSpanEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "span_name": {
+          "type": "string"
+        },
+        "parent_span": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "start_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ErrorDetailEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "recoverable": {
+          "type": "boolean"
+        },
+        "retry_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ExecutionAgentEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ExecutionAgentErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ExecutionAgentStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "servers_count": {
+          "type": "integer"
+        },
+        "max_turns": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "FallbackAttemptEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "attempt_index": {
+          "type": "integer"
+        },
+        "total_attempts": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "duration": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "FallbackModelUsedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "original_model": {
+          "type": "string"
+        },
+        "fallback_model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "JSONValidationEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "json_content": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "JSONValidationStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "json_content": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LLMGenerationEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "tool_calls": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "usage_metrics": {
+          "$ref": "#/$defs/UsageMetrics"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LLMGenerationErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LLMGenerationStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "messages_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LLMGenerationWithRetryEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "max_retries": {
+          "type": "integer"
+        },
+        "primary_model": {
+          "type": "string"
+        },
+        "current_llm": {
+          "type": "string"
+        },
+        "same_provider_fallbacks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cross_provider_fallbacks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "final_error": {
+          "type": "string"
+        },
+        "usage": {
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LargeToolOutputDetectedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "output_size": {
+          "type": "integer"
+        },
+        "threshold": {
+          "type": "integer"
+        },
+        "output_folder": {
+          "type": "string"
+        },
+        "server_available": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LargeToolOutputFileWrittenEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "file_path": {
+          "type": "string"
+        },
+        "output_size": {
+          "type": "integer"
+        },
+        "file_size": {
+          "type": "integer"
+        },
+        "output_folder": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MCPServerConnectionEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "connection_time": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "server_info": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MCPServerDiscoveryEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "total_servers": {
+          "type": "integer"
+        },
+        "connected_servers": {
+          "type": "integer"
+        },
+        "failed_servers": {
+          "type": "integer"
+        },
+        "discovery_time": {
+          "type": "integer"
+        },
+        "tool_count": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MCPServerSelectionEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "selected_servers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "total_servers": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MaxTurnsReachedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "max_turns": {
+          "type": "integer"
+        },
+        "question": {
+          "type": "string"
+        },
+        "final_message": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MessagePart": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "content": true
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MessageTokenEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "message_type": {
+          "type": "string"
+        },
+        "message_index": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "tool_calls": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ModelChangeEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "old_model_id": {
+          "type": "string"
+        },
+        "new_model_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "NextStepsGeneratedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "generated": {
+          "type": "integer"
+        },
+        "requested": {
+          "type": "integer"
+        },
+        "total_steps": {
+          "type": "integer"
+        },
+        "completed_steps": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "NextStepsGenerationEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "requested": {
+          "type": "integer"
+        },
+        "completed": {
+          "type": "integer"
+        },
+        "total_steps": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrchestratorEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrchestratorErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrchestratorStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "string"
+        },
+        "agents_count": {
+          "type": "integer"
+        },
+        "servers_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrganizerAgentEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrganizerAgentErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OrganizerAgentStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "servers_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanCompletedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "total_steps": {
+          "type": "integer"
+        },
+        "completed_steps": {
+          "type": "integer"
+        },
+        "failed_steps": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "success_rate": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanCreatedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "steps_count": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "plan_json": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanDetailedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "steps_count": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "plan_json": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanFailedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanGenerationEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "steps_count": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanGenerationStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "servers": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanUpdatedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "update_reason": {
+          "type": "string"
+        },
+        "new_steps_count": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "next_step_id": {
+          "type": "string"
+        },
+        "next_step_description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanningAgentEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanningAgentErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "step_index": {
+          "type": "integer"
+        },
+        "iteration": {
+          "type": "integer"
+        },
+        "context_info": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PlanningAgentStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "servers_count": {
+          "type": "integer"
+        },
+        "max_turns": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ReActReasoningEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "final_answer": {
+          "type": "string"
+        },
+        "total_steps": {
+          "type": "integer"
+        },
+        "reasoning_chain": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ReActReasoningFinalEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "final_answer": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ReActReasoningStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ReActReasoningStepEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "step_number": {
+          "type": "integer"
+        },
+        "thought": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "observation": {
+          "type": "string"
+        },
+        "conclusion": {
+          "type": "string"
+        },
+        "step_type": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SerializedMessage": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/MessagePart"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ServerCacheStatus": {
+      "properties": {
+        "server_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "cache_key": {
+          "type": "string"
+        },
+        "tools_count": {
+          "type": "integer"
+        },
+        "prompts_count": {
+          "type": "integer"
+        },
+        "resources_count": {
+          "type": "integer"
+        },
+        "age": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SmartRoutingEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "total_tools": {
+          "type": "integer"
+        },
+        "filtered_tools": {
+          "type": "integer"
+        },
+        "total_servers": {
+          "type": "integer"
+        },
+        "relevant_servers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "routing_reasoning": {
+          "type": "string"
+        },
+        "routing_duration": {
+          "type": "integer"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        },
+        "llm_response": {
+          "type": "string"
+        },
+        "selected_servers": {
+          "type": "string"
+        },
+        "has_appended_prompts": {
+          "type": "boolean"
+        },
+        "appended_prompt_count": {
+          "type": "integer"
+        },
+        "appended_prompt_summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SmartRoutingStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "total_tools": {
+          "type": "integer"
+        },
+        "total_servers": {
+          "type": "integer"
+        },
+        "thresholds": {
+          "properties": {
+            "max_tools": {
+              "type": "integer"
+            },
+            "max_servers": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "llm_prompt": {
+          "type": "string"
+        },
+        "user_query": {
+          "type": "string"
+        },
+        "conversation_context": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "StepCompletedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "step_index": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "StepFailedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "step_index": {
+          "type": "integer"
+        },
+        "retry_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "StepStartedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mcp_servers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "step_index": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "StructuredOutputEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "output_type": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "retry_count": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "StructuredOutputStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "output_type": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SystemPromptEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ThrottlingDetectedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer"
+        },
+        "max_attempts": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TokenLimitExceededEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "token_type": {
+          "type": "string"
+        },
+        "current_tokens": {
+          "type": "integer"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TokenUsageEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "cost_estimate": {
+          "type": "number"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "context": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolCallEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolCallErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolCallProgressEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "progress": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolCallStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_params": {
+          "$ref": "#/$defs/ToolParams"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolExecutionEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolOutputEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolParams": {
+      "properties": {
+        "arguments": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolResponseEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "response": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolTokenEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UsageMetrics": {
+      "properties": {
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UserMessageEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ValidationAgentEndEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "validation_type": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ValidationAgentErrorEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "validation_type": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ValidationAgentStartEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "validation_type": {
+          "type": "string"
+        },
+        "agent_mode": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "servers_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  "properties": {
+    "tool_call_start": {
+      "$ref": "#/$defs/ToolCallStartEvent"
+    },
+    "tool_call_end": {
+      "$ref": "#/$defs/ToolCallEndEvent"
+    },
+    "tool_call_error": {
+      "$ref": "#/$defs/ToolCallErrorEvent"
+    },
+    "llm_generation_start": {
+      "$ref": "#/$defs/LLMGenerationStartEvent"
+    },
+    "llm_generation_end": {
+      "$ref": "#/$defs/LLMGenerationEndEvent"
+    },
+    "agent_error": {
+      "$ref": "#/$defs/AgentErrorEvent"
+    },
+    "conversation_error": {
+      "$ref": "#/$defs/ConversationErrorEvent"
+    },
+    "conversation_thinking": {
+      "$ref": "#/$defs/ConversationThinkingEvent"
+    },
+    "llm_generation_error": {
+      "$ref": "#/$defs/LLMGenerationErrorEvent"
+    },
+    "tool_call_progress": {
+      "$ref": "#/$defs/ToolCallProgressEvent"
+    },
+    "mcp_server_connection": {
+      "$ref": "#/$defs/MCPServerConnectionEvent"
+    },
+    "mcp_server_discovery": {
+      "$ref": "#/$defs/MCPServerDiscoveryEvent"
+    },
+    "mcp_server_selection": {
+      "$ref": "#/$defs/MCPServerSelectionEvent"
+    },
+    "conversation_start": {
+      "$ref": "#/$defs/ConversationStartEvent"
+    },
+    "conversation_end": {
+      "$ref": "#/$defs/ConversationEndEvent"
+    },
+    "conversation_turn": {
+      "$ref": "#/$defs/ConversationTurnEvent"
+    },
+    "system_prompt": {
+      "$ref": "#/$defs/SystemPromptEvent"
+    },
+    "user_message": {
+      "$ref": "#/$defs/UserMessageEvent"
+    },
+    "large_tool_output_detected": {
+      "$ref": "#/$defs/LargeToolOutputDetectedEvent"
+    },
+    "large_tool_output_file_written": {
+      "$ref": "#/$defs/LargeToolOutputFileWrittenEvent"
+    },
+    "fallback_model_used": {
+      "$ref": "#/$defs/FallbackModelUsedEvent"
+    },
+    "throttling_detected": {
+      "$ref": "#/$defs/ThrottlingDetectedEvent"
+    },
+    "token_limit_exceeded": {
+      "$ref": "#/$defs/TokenLimitExceededEvent"
+    },
+    "max_turns_reached": {
+      "$ref": "#/$defs/MaxTurnsReachedEvent"
+    },
+    "context_cancelled": {
+      "$ref": "#/$defs/ContextCancelledEvent"
+    },
+    "react_reasoning_start": {
+      "$ref": "#/$defs/ReActReasoningStartEvent"
+    },
+    "react_reasoning_step": {
+      "$ref": "#/$defs/ReActReasoningStepEvent"
+    },
+    "react_reasoning_final": {
+      "$ref": "#/$defs/ReActReasoningFinalEvent"
+    },
+    "react_reasoning_end": {
+      "$ref": "#/$defs/ReActReasoningEndEvent"
+    },
+    "tool_output": {
+      "$ref": "#/$defs/ToolOutputEvent"
+    },
+    "tool_response": {
+      "$ref": "#/$defs/ToolResponseEvent"
+    },
+    "detailed_span": {
+      "$ref": "#/$defs/DetailedSpanEvent"
+    },
+    "message_token": {
+      "$ref": "#/$defs/MessageTokenEvent"
+    },
+    "tool_token": {
+      "$ref": "#/$defs/ToolTokenEvent"
+    },
+    "model_change": {
+      "$ref": "#/$defs/ModelChangeEvent"
+    },
+    "fallback_attempt": {
+      "$ref": "#/$defs/FallbackAttemptEvent"
+    },
+    "cache_hit": {
+      "$ref": "#/$defs/CacheHitEvent"
+    },
+    "cache_miss": {
+      "$ref": "#/$defs/CacheMissEvent"
+    },
+    "cache_expired": {
+      "$ref": "#/$defs/CacheExpiredEvent"
+    },
+    "cache_cleanup": {
+      "$ref": "#/$defs/CacheCleanupEvent"
+    },
+    "cache_write": {
+      "$ref": "#/$defs/CacheWriteEvent"
+    },
+    "cache_error": {
+      "$ref": "#/$defs/CacheErrorEvent"
+    },
+    "cache_operation_start": {
+      "$ref": "#/$defs/CacheOperationStartEvent"
+    },
+    "comprehensive_cache_event": {
+      "$ref": "#/$defs/ComprehensiveCacheEvent"
+    },
+    "agent_conversation": {
+      "$ref": "#/$defs/AgentConversationEvent"
+    },
+    "tool_execution": {
+      "$ref": "#/$defs/ToolExecutionEvent"
+    },
+    "llm_generation_with_retry": {
+      "$ref": "#/$defs/LLMGenerationWithRetryEvent"
+    },
+    "smart_routing_start": {
+      "$ref": "#/$defs/SmartRoutingStartEvent"
+    },
+    "smart_routing_end": {
+      "$ref": "#/$defs/SmartRoutingEndEvent"
+    },
+    "orchestrator_start": {
+      "$ref": "#/$defs/OrchestratorStartEvent"
+    },
+    "orchestrator_end": {
+      "$ref": "#/$defs/OrchestratorEndEvent"
+    },
+    "orchestrator_error": {
+      "$ref": "#/$defs/OrchestratorErrorEvent"
+    },
+    "plan_created": {
+      "$ref": "#/$defs/PlanCreatedEvent"
+    },
+    "plan_detailed": {
+      "$ref": "#/$defs/PlanDetailedEvent"
+    },
+    "plan_updated": {
+      "$ref": "#/$defs/PlanUpdatedEvent"
+    },
+    "plan_completed": {
+      "$ref": "#/$defs/PlanCompletedEvent"
+    },
+    "plan_failed": {
+      "$ref": "#/$defs/PlanFailedEvent"
+    },
+    "step_started": {
+      "$ref": "#/$defs/StepStartedEvent"
+    },
+    "step_completed": {
+      "$ref": "#/$defs/StepCompletedEvent"
+    },
+    "step_failed": {
+      "$ref": "#/$defs/StepFailedEvent"
+    },
+    "planning_agent_start": {
+      "$ref": "#/$defs/PlanningAgentStartEvent"
+    },
+    "planning_agent_end": {
+      "$ref": "#/$defs/PlanningAgentEndEvent"
+    },
+    "planning_agent_error": {
+      "$ref": "#/$defs/PlanningAgentErrorEvent"
+    },
+    "plan_generation_start": {
+      "$ref": "#/$defs/PlanGenerationStartEvent"
+    },
+    "plan_generation_end": {
+      "$ref": "#/$defs/PlanGenerationEndEvent"
+    },
+    "next_steps_generation": {
+      "$ref": "#/$defs/NextStepsGenerationEvent"
+    },
+    "next_steps_generated": {
+      "$ref": "#/$defs/NextStepsGeneratedEvent"
+    },
+    "execution_agent_start": {
+      "$ref": "#/$defs/ExecutionAgentStartEvent"
+    },
+    "execution_agent_end": {
+      "$ref": "#/$defs/ExecutionAgentEndEvent"
+    },
+    "execution_agent_error": {
+      "$ref": "#/$defs/ExecutionAgentErrorEvent"
+    },
+    "validation_agent_start": {
+      "$ref": "#/$defs/ValidationAgentStartEvent"
+    },
+    "validation_agent_end": {
+      "$ref": "#/$defs/ValidationAgentEndEvent"
+    },
+    "validation_agent_error": {
+      "$ref": "#/$defs/ValidationAgentErrorEvent"
+    },
+    "organizer_agent_start": {
+      "$ref": "#/$defs/OrganizerAgentStartEvent"
+    },
+    "organizer_agent_end": {
+      "$ref": "#/$defs/OrganizerAgentEndEvent"
+    },
+    "organizer_agent_error": {
+      "$ref": "#/$defs/OrganizerAgentErrorEvent"
+    },
+    "structured_output_start": {
+      "$ref": "#/$defs/StructuredOutputStartEvent"
+    },
+    "structured_output_end": {
+      "$ref": "#/$defs/StructuredOutputEndEvent"
+    },
+    "json_validation_start": {
+      "$ref": "#/$defs/JSONValidationStartEvent"
+    },
+    "json_validation_end": {
+      "$ref": "#/$defs/JSONValidationEndEvent"
+    },
+    "configuration_loaded": {
+      "$ref": "#/$defs/ConfigurationLoadedEvent"
+    },
+    "configuration_validated": {
+      "$ref": "#/$defs/ConfigurationValidatedEvent"
+    },
+    "token_usage": {
+      "$ref": "#/$defs/TokenUsageEvent"
+    },
+    "error_detail": {
+      "$ref": "#/$defs/ErrorDetailEvent"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object"
+}

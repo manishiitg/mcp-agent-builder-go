@@ -1,0 +1,14 @@
+# Ignore files for Docker build
+.git
+.gitignore
+README.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+env.example
+.env
+test.sh
+docker-test.sh
+test-docs/
+planner-docs/
+*.log

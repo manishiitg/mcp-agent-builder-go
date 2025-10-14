@@ -1,0 +1,171 @@
+services:
+  # Ollama for embeddings (commented out - not using memory API currently)
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0
+  #   restart: unless-stopped
+
+  # Neo4j AuraDB Cloud Database (for memory API)
+  # Note: Using cloud Neo4j AuraDB instead of local Neo4j
+  # because vector.similarity.cosine function is only available in AuraDB
+  # neo4j:
+  #   image: neo4j:5.26-community
+  #   ports:
+  #     - "7474:7474"
+  #     - "7687:7687"
+  #   volumes:
+  #     - neo4j_data:/data
+  #     - neo4j_logs:/logs
+  #   environment:
+  #     - NEO4J_AUTH=neo4j/password123
+  #     - NEO4J_PLUGINS=["apoc", "graph-data-science"]
+  #     - NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*
+  #     - NEO4J_dbms_security_procedures_allowlist=apoc.*,gds.*
+  #     - NEO4J_dbms_memory_heap_initial__size=512m
+  #     - NEO4J_dbms_memory_heap_max__size=2G
+  #     - NEO4J_dbms_memory_pagecache_size=1G
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password123", "RETURN 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+
+  # Memory API (commented out - not using currently)
+  # memory-api:
+  #   build:
+  #     context: ./memory
+  #     dockerfile: Dockerfile
+  #     args:
+  #       USE_BGE_RERANKER: "true"
+  #   ports:
+  #     - "8055:8000"
+  #   volumes:
+  #     - memory_data:/app/data
+  #     - memory_logs:/app/logs
+  #     - memory_models:/app/models
+  #     - ./memory:/app/memory:ro
+  #   env_file:
+  #     - ./memory/.env
+  #   environment:
+  #     - API_HOST=0.0.0.0
+  #     - API_PORT=8000
+  #     - OLLAMA_BASE_URL=http://ollama:11434/v1
+  #     - KUZU_DB=/app/data/graphiti.kuzu
+  #   depends_on:
+  #     - ollama
+  #     # Removed dependency on local neo4j - using cloud AuraDB instead
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Planner File Management API
+  planner-api:
+    build:
+      context: ./planner
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    env_file:
+      - ./planner/.env
+    environment:
+      # Server Configuration
+      - PORT=8080
+      - DOCS_DIR=/app/planner-docs
+      
+      # Qdrant Configuration
+      - QDRANT_URL=http://qdrant:6333
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your_openai_api_key_here}
+      - OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+      
+      # Optional: Debug mode
+      - DEBUG=${DEBUG:-false}
+      
+      # MCP Cache Configuration
+      - MCP_CACHE_TTL_MINUTES=${MCP_CACHE_TTL_MINUTES:-10080}
+    volumes:
+      - ./planner-docs:/app/planner-docs
+      - planner_data:/app/data
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/package-lock.json:/app/package-lock.json
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/components.json:/app/components.json
+      - ./frontend/index.html:/app/index.html
+      - ./agent_go/schemas:/agent_go/schemas:ro
+      # Mount entire frontend directory for development
+      - ./frontend:/app/frontend:ro
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://localhost:8000
+      - VITE_MEMORY_API_URL=http://localhost:8055
+      - VITE_PLANNER_API_URL=http://localhost:8081
+    depends_on:
+      planner-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  # neo4j_data: # Removed - using cloud AuraDB instead
+  # neo4j_logs: # Removed - using cloud AuraDB instead
+  memory_data:
+  memory_logs:
+  memory_models:
+  agent_logs:
+  planner-docs:
+  planner_data:
+  qdrant_data:

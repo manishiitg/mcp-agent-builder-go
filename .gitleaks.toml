@@ -1,0 +1,189 @@
+# Gitleaks Configuration for MCP Agent Repository
+# This configuration scans for secrets and sensitive information
+
+title = "MCP Agent Secrets Detection"
+version = "8.18.0"
+
+# Enable verbose output for better debugging
+verbose = true
+
+# Scan configuration
+[scan]
+  # Scan all files in the repository
+  path = "."
+  
+  # Use git history for scanning
+  git = true
+  
+  # Include untracked files
+  untracked = true
+  
+  # Scan depth (0 = unlimited)
+  depth = 0
+  
+  # Include binary files
+  binary = false
+  
+  # Include symlinks
+  symlinks = true
+
+# Output configuration
+[output]
+  # Output format (json, sarif, csv, or noop)
+  format = "json"
+  
+  # Output file path
+  path = "gitleaks-report.json"
+  
+  # Include additional metadata
+  verbose = true
+
+# Rules configuration
+[[rules]]
+  id = "aws-access-key"
+  description = "AWS Access Key ID"
+  regex = '''(AKIA[0-9A-Z]{16})'''
+  tags = ["aws", "key", "access-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "aws-secret-key"
+  description = "AWS Secret Access Key"
+  regex = '''([A-Za-z0-9/+=]{40})'''
+  tags = ["aws", "secret", "access-key"]
+  entropy = 4.0
+  secretGroup = 1
+
+[[rules]]
+  id = "openai-api-key"
+  description = "OpenAI API Key"
+  regex = '''(sk-[A-Za-z0-9]{48})'''
+  tags = ["openai", "api-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "anthropic-api-key"
+  description = "Anthropic API Key"
+  regex = '''(sk-ant-[A-Za-z0-9]{48})'''
+  tags = ["anthropic", "api-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "github-pat"
+  description = "GitHub Personal Access Token"
+  regex = '''(ghp_[A-Za-z0-9]{36})'''
+  tags = ["github", "token"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "github-app-token"
+  description = "GitHub App Token"
+  regex = '''(gho_[A-Za-z0-9]{36})'''
+  tags = ["github", "token", "app"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "langfuse-public-key"
+  description = "Langfuse Public Key"
+  regex = '''(pk_[A-Za-z0-9]{32})'''
+  tags = ["langfuse", "public-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "langfuse-secret-key"
+  description = "Langfuse Secret Key"
+  regex = '''(sk_[A-Za-z0-9]{32})'''
+  tags = ["langfuse", "secret-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "generic-api-key"
+  description = "Generic API Key"
+  regex = '''[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][_-]?[=:]\s*['"]?([A-Za-z0-9]{20,})['"]?'''
+  tags = ["api-key", "generic"]
+  entropy = 3.0
+  secretGroup = 1
+
+[[rules]]
+  id = "database-connection"
+  description = "Database Connection String"
+  regex = '''(?:mysql|postgresql|mongodb|redis)://[^:\s]+:([^@\s]+)@[^/\s]+'''
+  tags = ["database", "connection"]
+  entropy = 2.5
+  secretGroup = 1
+
+[[rules]]
+  id = "slack-bot-token"
+  description = "Slack Bot Token"
+  regex = '''(xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24})'''
+  tags = ["slack", "bot", "token"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "slack-app-token"
+  description = "Slack App Token"
+  regex = '''(xapp-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24})'''
+  tags = ["slack", "app", "token"]
+  entropy = 3.5
+  secretGroup = 1
+
+[[rules]]
+  id = "sentry-dsn"
+  description = "Sentry DSN"
+  regex = '''https://([a-f0-9]{32})@[a-z0-9.-]+\.sentry\.io/[0-9]+'''
+  tags = ["sentry", "dsn"]
+  entropy = 3.0
+  secretGroup = 1
+
+[[rules]]
+  id = "grafana-api-key"
+  description = "Grafana API Key"
+  regex = '''eyJrIjoi([A-Za-z0-9]{20,})'''
+  tags = ["grafana", "api-key"]
+  entropy = 3.5
+  secretGroup = 1
+
+# Exclude patterns (files/directories to ignore)
+[[rules.exclude]]
+  # Exclude example files
+  path = '''.*\.example'''
+  
+[[rules.exclude]]
+  # Exclude test files
+  path = '''.*test.*'''
+  
+[[rules.exclude]]
+  # Exclude documentation
+  path = '''.*\.md$'''
+  
+[[rules.exclude]]
+  # Exclude node_modules
+  path = '''node_modules/'''
+  
+[[rules.exclude]]
+  # Exclude vendor directories
+  path = '''vendor/'''
+  
+[[rules.exclude]]
+  # Exclude build artifacts
+  path = '''dist/'''
+  
+[[rules.exclude]]
+  # Exclude cache directories
+  path = '''cache/'''
+  
+[[rules.exclude]]
+  # Exclude log files
+  path = '''.*\.log$'''
+  
+[[rules.exclude]]
+  # Exclude gitleaks reports
+  path = '''gitleaks-report\.json'''

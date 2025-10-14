@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/mipl/ai-work/mcp-agent/agent_go/reports"],
+      "env": {}
+    }
+  }
+}
