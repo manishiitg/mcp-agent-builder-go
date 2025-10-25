@@ -8,8 +8,8 @@ import (
 
 	"mcp-agent/agent_go/internal/observability"
 	"mcp-agent/agent_go/internal/utils"
+	"mcp-agent/agent_go/pkg/mcpagent"
 	"mcp-agent/agent_go/pkg/orchestrator/agents"
-	"mcp-agent/agent_go/pkg/orchestrator/agents/workflow/memory"
 
 	"github.com/tmc/langchaingo/llms"
 )
@@ -22,8 +22,7 @@ type TodoPlannerWriterTemplate struct {
 	ValidationResult string
 	CritiqueResult   string
 	WorkspacePath    string
-	Strategy         string
-	Focus            string
+	TotalIterations  string
 }
 
 // TodoPlannerWriterAgent creates optimal todo list based on execution experience
@@ -32,7 +31,7 @@ type TodoPlannerWriterAgent struct {
 }
 
 // NewTodoPlannerWriterAgent creates a new todo planner writer agent
-func NewTodoPlannerWriterAgent(config *agents.OrchestratorAgentConfig, logger utils.ExtendedLogger, tracer observability.Tracer, eventBridge interface{}) *TodoPlannerWriterAgent {
+func NewTodoPlannerWriterAgent(config *agents.OrchestratorAgentConfig, logger utils.ExtendedLogger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) *TodoPlannerWriterAgent {
 	baseAgent := agents.NewBaseOrchestratorAgentWithEventBridge(
 		config,
 		logger,
@@ -46,25 +45,19 @@ func NewTodoPlannerWriterAgent(config *agents.OrchestratorAgentConfig, logger ut
 	}
 }
 
-// GetBaseAgent implements the OrchestratorAgent interface
-func (tpwa *TodoPlannerWriterAgent) GetBaseAgent() *agents.BaseAgent {
-	return tpwa.BaseOrchestratorAgent.BaseAgent()
-}
-
 // Execute implements the OrchestratorAgent interface
-func (tpwa *TodoPlannerWriterAgent) Execute(ctx context.Context, templateVars map[string]string, conversationHistory []llms.MessageContent) (string, error) {
-	// Extract objective, plan result, execution result, validation result, critique result, and workspace path from template variables
+func (tpwa *TodoPlannerWriterAgent) Execute(ctx context.Context, templateVars map[string]string, conversationHistory []llms.MessageContent) (string, []llms.MessageContent, error) {
+	// Extract variables from template variables
+	// Writer is strategic - synthesizes from all iterations
 	objective := templateVars["Objective"]
 	planResult := templateVars["PlanResult"]
 	executionResult := templateVars["ExecutionResult"]
 	validationResult := templateVars["ValidationResult"]
 	critiqueResult := templateVars["CritiqueResult"]
 	workspacePath := templateVars["WorkspacePath"]
-
-	// Create default strategy for backward compatibility
-	defaultStrategy := IterationStrategy{
-		Name:  "Default Strategy",
-		Focus: "Create optimal todo list",
+	totalIterations := templateVars["TotalIterations"]
+	if strings.TrimSpace(totalIterations) == "" {
+		totalIterations = "1"
 	}
 
 	// Prepare template variables
@@ -75,8 +68,7 @@ func (tpwa *TodoPlannerWriterAgent) Execute(ctx context.Context, templateVars ma
 		"ValidationResult": validationResult,
 		"CritiqueResult":   critiqueResult,
 		"WorkspacePath":    workspacePath,
-		"Strategy":         defaultStrategy.Name,
-		"Focus":            defaultStrategy.Focus,
+		"TotalIterations":  totalIterations,
 	}
 
 	// Execute using input processor
@@ -86,6 +78,10 @@ func (tpwa *TodoPlannerWriterAgent) Execute(ctx context.Context, templateVars ma
 // writerInputProcessor processes inputs specifically for todo list creation
 func (tpwa *TodoPlannerWriterAgent) writerInputProcessor(templateVars map[string]string) string {
 	// Create template data
+	totalIterationsForTemplate := templateVars["TotalIterations"]
+	if strings.TrimSpace(totalIterationsForTemplate) == "" {
+		totalIterationsForTemplate = "1"
+	}
 	templateData := TodoPlannerWriterTemplate{
 		Objective:        templateVars["Objective"],
 		PlanResult:       templateVars["PlanResult"],
@@ -93,192 +89,149 @@ func (tpwa *TodoPlannerWriterAgent) writerInputProcessor(templateVars map[string
 		ValidationResult: templateVars["ValidationResult"],
 		CritiqueResult:   templateVars["CritiqueResult"],
 		WorkspacePath:    templateVars["WorkspacePath"],
-		Strategy:         templateVars["Strategy"],
-		Focus:            templateVars["Focus"],
+		TotalIterations:  totalIterationsForTemplate,
 	}
 
 	// Define the template
-	templateStr := `## PRIMARY TASK - CREATE COMPREHENSIVE TODO LIST BASED ON ITERATION STRATEGY
+	templateStr := `## 🎯 PRIMARY TASK - SYNTHESIZE FINAL TODO LIST FROM ALL ITERATIONS
 
 **OBJECTIVE**: {{.Objective}}
-**PLAN RESULT**: {{.PlanResult}}
-**EXECUTION RESULT**: {{.ExecutionResult}}
-**VALIDATION RESULT**: {{.ValidationResult}}
-**CRITIQUE RESULT**: {{.CritiqueResult}}
 **WORKSPACE**: {{.WorkspacePath}}
-**STRATEGY**: {{.Strategy}}
-**FOCUS**: {{.Focus}}
+**TOTAL ITERATIONS**: {{.TotalIterations}}
 
-**CORE TASK**: Create a comprehensive todo list based on the plan and execution experience, ensuring ALL necessary steps are covered for complete objective achievement. Focus on {{.Focus}}.
+## 🤖 AGENT IDENTITY
+- **Role**: Writer Agent
+- **Responsibility**: Synthesize best methods from ALL iterations into final todo list
+- **Mode**: Strategic (analyze all iterations, create production-ready output)
 
-## Todo Creation Strategy
-- **Strategy Focus**: {{.Focus}}
-- **Review Comprehensive Plan**: Understand the complete plan created by planning agent
-- **Review Execution Results**: Understand which steps were executed and what methods worked
-- **Review Validation Feedback**: Address gaps and improvements identified
-- **Review Critique Analysis**: Incorporate quality and reproducibility insights
-- **Ensure Completeness**: Verify ALL steps needed for objective are included
-- **Create Reproducible Steps**: Write steps that can be exactly replicated using proven MCP methods
-- **Add Verification Methods**: Include specific ways to verify each step
-- **Document Commands**: Include exact commands and procedures that worked
-- **Specify Outputs**: Define what each step should produce
-- **Create Comprehensive Todo List**: Write comprehensive todo.md file with tool call details
-- **Update Workspace**: Save todo list in workspace
+## 📁 FILE PERMISSIONS
+**READ:**
+- {{.WorkspacePath}}/todo_creation/planning/plan.md (ALL "## Iteration X" sections)
+- {{.WorkspacePath}}/todo_creation/execution/execution_results.md (ALL iterations)
+- {{.WorkspacePath}}/todo_creation/execution/completed_steps.md
+- {{.WorkspacePath}}/todo_creation/validation/execution_validation_report.md (ALL validations)
+- {{.WorkspacePath}}/todo_creation/execution/evidence/
 
-## Workspace Updates
-Create/update files in {{.WorkspacePath}}/todo_creation/:
-- **todo.md**: Production-ready comprehensive todo list
+**WRITE:**
+- **CREATE** {{.WorkspacePath}}/todo_creation/iteration_analysis.md (comparison of all iterations)
+- **UPDATE** {{.WorkspacePath}}/todo_creation/todo.md (final synthesized todo list)
 
-**⚠️ IMPORTANT**: Only create, update, or modify files within {{.WorkspacePath}}/todo_creation/ folder structure. Do not modify files outside this directory.
+**RESTRICTIONS:**
+- Only modify files within {{.WorkspacePath}}/todo_creation/
+- Must read ALL {{.TotalIterations}} iterations (not just latest)
+- Keep todo.md under 1000 lines (concise and actionable)
 
-` + memory.GetWorkflowMemoryRequirements() + `
+## 🔍 YOUR SYNTHESIS MISSION
 
-## Tool Call Details Extraction
-**CRITICAL**: Extract exact MCP tool call details using both structured data and file reading:
+**Core Task:** Analyze ALL {{.TotalIterations}} iterations to identify methods with HIGHEST success rates, then create final todo list using ONLY proven methods.
 
-### Extract from Execution Results Parameter:
-- **MCP Server Names**: Which servers were used (e.g., aws, gitlab, github, filesystem)
-- **Tool Names**: Exact MCP tool names that worked (e.g., aws_cli_query, gitlab_get_project)
-- **Tool Arguments**: Exact parameters that were successful
-- **Tool Results**: What each tool call produced
-- **Tool Duration**: How long each tool call took
-- **Success Patterns**: Which approaches worked consistently
+**Process:**
+1. Read ALL "## Iteration X" sections from plan.md and execution_results.md
+2. Calculate success rate for each approach tried
+3. Select methods with highest success + validation
+4. Create 2 outputs: iteration_analysis.md (comparison) + todo.md (final list)
 
-### Read Execution Files for Detailed Evidence:
-- **{{.WorkspacePath}}/todo_creation/execution/execution_results.md**: Comprehensive execution results
-- **{{.WorkspacePath}}/todo_creation/execution/completed_steps.md**: Steps that were successfully executed
-- **{{.WorkspacePath}}/todo_creation/execution/evidence/**: Evidence files for completed steps
+` + GetTodoCreationMemoryRequirements() + `
 
-### Key Sections to Parse:
-- **"Steps Executed This Iteration"**: Contains detailed MCP tool call information
-- **"MCP Server"**: Shows which MCP server was used
-- **"MCP Tool"**: Shows the exact tool name that was called
-- **"Tool Arguments"**: Shows the exact parameters passed
-- **"Tool Call Result"**: Shows what the tool returned
-- **"Tool Call Duration"**: Shows execution time
+## 📁 Read ALL Iteration History First
 
-### Apply to Todo Steps:
-For each step in the todo list, use the proven MCP details:
-- **MCP Server**: Use the exact server that worked for similar steps
-- **MCP Tool**: Use the exact tool name that succeeded
-- **Tool Arguments**: Use the exact arguments that were successful
-- **Tool Call Record**: Document the complete tool call details for reproducibility
+**CRITICAL**: You MUST read ALL "## Iteration X" sections from these files:
 
-## Output Format
-# Comprehensive Todo List
+### Planning History (All Approaches Tried)
+- {{.WorkspacePath}}/todo_creation/planning/plan.md
+  - Read EVERY "## Iteration X" section (not just latest!)
+  - See ALL approaches that were planned
+  - Understand evolution of planning strategy
+
+### Execution History (What Worked/Failed)
+- {{.WorkspacePath}}/todo_creation/execution/execution_results.md
+  - Read EVERY "## Iteration X" section (not just latest!)
+  - Compare success rates across iterations
+  - Identify which approaches/tools worked best
+  - Learn from failures and rejected methods
+- {{.WorkspacePath}}/todo_creation/execution/completed_steps.md
+  - Track all completed work
+  - Extract proven MCP tools and arguments
+
+### Validation History (What Was Verified)
+- {{.WorkspacePath}}/todo_creation/validation/execution_validation_report.md
+  - Read EVERY "## Iteration X" validation
+  - See evidence quality across iterations
+  - Only use validated methods in final todo
+
+### Evidence Files
+- {{.WorkspacePath}}/todo_creation/execution/evidence/
+  - Review critical evidence from all iterations
+
+## 🔍 Extract Best Methods from ALL Iterations
+Parse ALL iterations to extract proven methods:
+- **MCP Servers**: Which servers worked best (aws, gitlab, github, filesystem)
+- **Tool Names**: Exact tools with highest success rates (aws_cli_query, gitlab_get_project)
+- **Arguments**: Exact parameters that were successful
+- **Patterns**: Approaches that worked consistently across iterations
+- **Success Rates**: Compare approaches across iterations (Iteration 1: 80%, Iteration 3: 95%)
+
+**Comparison Process**:
+1. List all approaches tried across iterations
+2. Calculate success rate for each approach
+3. Identify highest performing methods
+4. Select BEST methods for final todo list
+
+## 📤 Output Format - CREATE 2 FILES
+
+### File 1: {{.WorkspacePath}}/todo_creation/iteration_analysis.md
+
+# Iteration Analysis - {{.TotalIterations}} Iterations
 
 ## Project Overview
 - **Objective**: {{.Objective}}
 - **Created**: [Current date]
-- **Based On**: Comprehensive plan and execution experience
-- **Approach**: Systematic execution with documented methods
+- **Total Iterations**: [Number of iterations run]
+- **Best Methods**: [Synthesized from iteration history]
+- **Total Steps in Todo**: [Final count]
+
+## Methods Tried Across Iterations
+**Iteration 1**: [Approach, success rate %]
+**Iteration 2**: [Approach, success rate %]
+[etc for all iterations...]
+
+## 🏆 Winner: Best Method Selected
+- **Method**: [Highest success rate method]
+- **Success Rate**: [%]
+- **Source**: Iteration [X]
+- **Why Best**: [Evidence from validation]
+
+---
+
+### File 2: {{.WorkspacePath}}/todo_creation/todo.md
+
+# Todo List - {{.Objective}}
 
 ## Prerequisites
-[What needs to be prepared before starting]
+[What needs to be set up first]
 
-## Execution Plan
-### Phase 1: [Phase Name]
-#### Step 1.1: [Step Name]
-- **Description**: [What needs to be done]
-- **MCP Server**: [Which MCP server to use - e.g., aws, gitlab, github, filesystem]
-- **MCP Tool**: [Specific MCP tool name - e.g., aws_cli_query, gitlab_get_project]
-- **Tool Arguments**: [Exact arguments/parameters to pass to the tool]
-- **Commands**: [Exact commands to run]
-- **Success Criteria**: [Specific, measurable outcome]
-- **Verification**: [How to verify the step was completed successfully]
-- **Expected Output**: [What should be produced/created]
-- **Estimated Effort**: [How long it should take]
-- **Dependencies**: [What must be done first]
-- **Tool Call Record**: [Will be filled during execution with exact tool call details]
+## Steps
 
-#### Step 1.2: [Step Name]
-- **Description**: [What needs to be done]
-- **MCP Server**: [Which MCP server to use - e.g., aws, gitlab, github, filesystem]
-- **MCP Tool**: [Specific MCP tool name - e.g., aws_cli_query, gitlab_get_project]
-- **Tool Arguments**: [Exact arguments/parameters to pass to the tool]
-- **Commands**: [Exact commands to run]
-- **Success Criteria**: [Specific, measurable outcome]
-- **Verification**: [How to verify the step was completed successfully]
-- **Expected Output**: [What should be produced/created]
-- **Estimated Effort**: [How long it should take]
-- **Dependencies**: [What must be done first]
-- **Tool Call Record**: [Will be filled during execution with exact tool call details]
+### Step 1: [Step Name]
+- **What**: [Indepth description]
+- **How**: MCP Server: [server], Tool: [tool], Arguments: [args]
+- **Success**: [How to verify it worked]
+- **Dependencies**: [Prerequisites]
 
-### Task-Specific Fields (Add ONLY when relevant)
-**Core Fields** (always include): Description, MCP Server, MCP Tool, Tool Arguments, Commands, Success Criteria, Verification, Expected Output, Effort, Dependencies, Tool Call Record
+### Step 2: [Step Name]
+- **What**: [Indepth description]
+- **How**: MCP Server: [server], Tool: [tool], Arguments: [args]
+- **Success**: [How to verify]
+- **Dependencies**: [Prerequisites]
 
-**Additional Fields** (add only when relevant):
-- **Web scraping**: URL, Selectors, Data Extraction, Wait Conditions, Screenshots
-- **File operations**: File Paths, File Formats, Backup Requirements, Permissions
-- **API calls**: Endpoints, Authentication, Rate Limits, Error Handling, Request/Response Format
-- **Data processing**: Input/Output Format, Processing Rules, Data Validation, Performance Requirements
-- **System admin**: System Commands, User Permissions, Rollback Plan, System Dependencies
-- **Database operations**: Database Type, Connection Details, Query/Schema, Backup Strategy, Migration Plan
-- **Content creation**: Content Type, Format Requirements, Quality Standards, Review Process
-- **Network operations**: Network Configuration, Security Settings, Monitoring Requirements
+[Continue for all steps - with indepth descriptions and be comprehensive]
 
-**Smart Detection**: Analyze each step to determine which additional fields are needed based on the task type.
+## Summary
+- **Total Steps**: [Count]
 
-### Examples by Task Type
+---
 
-**Web Scraping Example:**
-- **URL**: https://example-store.com/products
-- **Selectors**: ".product-item", ".product-price", ".product-title"
-- **Data Extraction**: Product names, prices, and availability status
-- **Wait Conditions**: Wait for ".product-item" elements to load completely
-- **Screenshots**: Take screenshot after data extraction for verification
-
-**File Operations Example:**
-- **File Paths**: Input: "data/raw.csv", Output: "data/processed.json"
-- **File Formats**: CSV to JSON conversion with data validation
-- **Backup Requirements**: Create backup of original file before processing
-- **Permissions**: Ensure read access to input file and write access to output directory
-
-**API Integration Example:**
-- **Endpoints**: https://api.example.com/users
-- **Authentication**: Bearer token in Authorization header
-- **Rate Limits**: Maximum 100 requests per minute
-- **Error Handling**: Retry logic for 5xx errors, exponential backoff
-- **Request Format**: GET request with query parameters
-- **Response Format**: JSON array of user objects
-
-**Data Processing Example:**
-- **Input Format**: CSV files with product data
-- **Output Format**: JSON files with processed and validated data
-- **Processing Rules**: Remove duplicates, validate price formats, standardize categories
-- **Data Validation**: Check for required fields, validate data types, range checks
-- **Performance Requirements**: Process files under 1MB in under 30 seconds
-
-[Continue for all steps...]
-
-## Step Summary
-- **Total Steps**: [Total number of steps]
-- **Steps Completed**: [Number of steps that were successfully executed]
-- **Steps Pending**: [Number of steps still needing execution]
-- **Estimated Total Effort**: [Overall time estimate]
-
-## Quality Assurance
-[How to verify each phase and overall success]
-
-## Verification Checklist
-- [ ] Each step has specific, measurable success criteria
-- [ ] Each step has clear verification methods
-- [ ] Each step produces verifiable outputs
-- [ ] Commands are exact and reproducible
-- [ ] Dependencies are clearly defined
-- [ ] Expected outputs are specified
-
-## Risk Management
-[High-risk areas and mitigation strategies]
-
-## Execution Summary
-[Summary of execution results:]
-- **Steps Executed**: [Number of steps that were executed]
-- **Key Methods Discovered**: [Main execution approaches that worked]
-- **Success Rates**: [Average success rates for executed steps]
-- **Common Patterns**: [Reusable patterns discovered during execution]
-
-Focus on creating a comprehensive todo list that covers ALL necessary steps based on the plan and execution experience.`
+Focus on clarity and actionability. Each step has only 4 fields: What, How, Success, Dependencies.`
 
 	// Parse and execute the template
 	tmpl, err := template.New("writer").Parse(templateStr)

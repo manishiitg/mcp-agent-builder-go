@@ -8,6 +8,7 @@ import (
 
 	"mcp-agent/agent_go/internal/observability"
 	"mcp-agent/agent_go/internal/utils"
+	"mcp-agent/agent_go/pkg/mcpagent"
 	"mcp-agent/agent_go/pkg/orchestrator/agents"
 	"mcp-agent/agent_go/pkg/orchestrator/agents/workflow/memory"
 
@@ -28,7 +29,7 @@ type ReportGenerationAgent struct {
 }
 
 // NewReportGenerationAgent creates a new report generation agent
-func NewReportGenerationAgent(config *agents.OrchestratorAgentConfig, logger utils.ExtendedLogger, tracer observability.Tracer, eventBridge interface{}) *ReportGenerationAgent {
+func NewReportGenerationAgent(config *agents.OrchestratorAgentConfig, logger utils.ExtendedLogger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) *ReportGenerationAgent {
 	baseAgent := agents.NewBaseOrchestratorAgentWithEventBridge(
 		config,
 		logger,
@@ -42,13 +43,8 @@ func NewReportGenerationAgent(config *agents.OrchestratorAgentConfig, logger uti
 	}
 }
 
-// GetBaseAgent implements the OrchestratorAgent interface
-func (rga *ReportGenerationAgent) GetBaseAgent() *agents.BaseAgent {
-	return rga.BaseOrchestratorAgent.BaseAgent()
-}
-
 // Execute implements the OrchestratorAgent interface
-func (rga *ReportGenerationAgent) Execute(ctx context.Context, templateVars map[string]string, conversationHistory []llms.MessageContent) (string, error) {
+func (rga *ReportGenerationAgent) Execute(ctx context.Context, templateVars map[string]string, conversationHistory []llms.MessageContent) (string, []llms.MessageContent, error) {
 	// Extract objective from template variables
 	objective, ok := templateVars["Objective"]
 	if !ok {
@@ -264,21 +260,4 @@ Create a detailed technical markdown file with the following structure:
 	}
 
 	return result.String()
-}
-
-// GetPrompts returns nil since we use input processor
-func (rga *ReportGenerationAgent) GetPrompts() interface{} {
-	return nil
-}
-
-// GetPrompt returns the actual prompt used by this agent
-func (rga *ReportGenerationAgent) GetPrompt(objective, critiqueFeedback string) string {
-	// Prepare template variables
-	templateVars := map[string]string{
-		"Objective":        objective,
-		"CritiqueFeedback": critiqueFeedback,
-	}
-
-	// Call the input processor to get the actual prompt
-	return rga.reportGenerationInputProcessor(templateVars)
 }
