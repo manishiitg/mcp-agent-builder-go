@@ -203,13 +203,31 @@ func persistNewMessages(scope, id string, full []enginedetect.ChatMessage) {
 // separately-persist) so a concurrent steer's append can never be lost to a
 // race with this turn's own completion write.
 func persistConversationReply(scope, id string, fallback []enginedetect.ChatMessage, reply string) {
+	persistConversationReplyWithExtras(scope, id, fallback, reply)
+}
+
+// persistConversationReplyWithExtras is persistConversationReply plus trailing
+// tool messages for this same turn (child mode's show_scene/celebrate).
+//
+// Child mode used to build the whole saved transcript from the CALLER's own
+// req.Messages instead of disk, mirroring the exact bug persistConversationReply
+// was written to fix on the parent side (see its own comment) — except here the
+// visible symptom was different: req.Messages only ever carries role
+// user/assistant (the frontend strips tool messages before sending), so every
+// send silently rewrote history as "past text, minus any scene/celebrate" plus
+// this turn's own. A scene shown three turns ago was not stored wrong, it was
+// deleted the moment the NEXT message was sent. Routing child mode through the
+// same disk-is-truth base as parent fixes both bugs in the same place.
+func persistConversationReplyWithExtras(scope, id string, fallback []enginedetect.ChatMessage, reply string, extra ...enginedetect.ChatMessage) {
 	convFileMu.Lock()
 	defer convFileMu.Unlock()
 	base := fallback
 	if existing, ok := loadStoredConversation(scope, id); ok {
 		base = existing.Messages
 	}
-	persistConversation(scope, id, withReply(base, reply))
+	full := withReply(base, reply)
+	full = append(full, extra...)
+	persistConversation(scope, id, full)
 }
 
 // loadStoredConversation reads one persisted conversation by id (same id

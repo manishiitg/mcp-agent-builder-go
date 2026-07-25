@@ -233,8 +233,8 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-widen-btn { border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-widen-btn:hover { border-color: #d9c79c; background: #fbe6bd; color: #6f4e10; }
 .fl-widen-btn.is-on { background: var(--sun, #f6b93b); border-color: var(--sun, #f6b93b); color: #3a2a00; }
-.fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(16px, 2.5vw, 36px); }
-.fl-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(16px, 2.5vw, 36px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
+.fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px); }
+.fl-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
 .fl-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
 .fl-menu { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 21; min-width: 232px; padding: 6px; border: 1px solid #e0d7c5; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); display: flex; flex-direction: column; gap: 2px; }
@@ -245,8 +245,12 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-disclaimer { margin: 0 clamp(16px, 2.5vw, 36px) 16px; color: #8090a6; font-size: var(--text-caption); text-align: center; }
 
 /* Centre thread messages */
-.fl-msg { display: flex; align-items: flex-start; gap: 10px; max-width: min(94%, 760px); }
-.fl-msg.is-agent { max-width: min(96%, 940px); }
+/* No cap at all: the row may use the full width .fl-thread's own padding leaves
+   it. A percentage/px cap (tried first) still left dead margins on a wide pane —
+   it just moved where they showed up. The bubble itself stays width: fit-content,
+   so a short message is unaffected; only a long one can now actually use the
+   space, wrapping at the pane's real edge instead of an arbitrary earlier one. */
+.fl-msg { display: flex; align-items: flex-start; gap: 10px; max-width: 100%; }
 .fl-msg.is-parent { align-self: flex-end; justify-content: flex-end; }
 .fl-msg-avatar { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; margin-top: 2px; border-radius: 12px; }
 .fl-msg-avatar.is-sun { background: #fff2b3; color: #bc8500; }
@@ -292,7 +296,9 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-shell[data-drawer="closed"] .fl-drawer { border: 0; }
 .fl-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 60px; padding: 10px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .fl-drawer-head strong { color: var(--heading); font-size: var(--text-body); font-weight: 700; }
-.fl-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+/* Same fix as .fl-child-side-scroll: the viewed file already has its own
+   padding, so this outer layer only needs to clear the toolbar buttons. */
+.fl-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 8px; }
 .fl-context-card { padding: 18px; border: 1px solid #efd36f; border-radius: 18px; background: #fff8dc; }
 .fl-context-card dl { display: grid; gap: 9px; margin: 14px 0 0; }
 .fl-context-card dl div { padding: 11px 12px; border: 1px solid #efd985; border-radius: 12px; background: rgba(255, 255, 255, .65); }
@@ -484,13 +490,18 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-today-pill { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: #eaf5ff; color: #2f6db0; font-size: var(--text-secondary); font-weight: 700; }
 .fl-parent-return { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 13px; border: 1px solid #d7e0ec; border-radius: 12px; background: var(--surface); color: #3d567a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
 .fl-parent-return:hover { border-color: #9db2ca; color: var(--heading); }
-.fl-child-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(16px, 2.5vw, 36px) 20px; }
+.fl-child-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px) 20px; }
 .fl-child-actions, .fl-child-composer, .fl-child-disclaimer { margin-left: clamp(16px, 2.5vw, 36px); margin-right: clamp(16px, 2.5vw, 36px); }
 .fl-child-composer { margin-bottom: 22px; }
 .fl-child-side { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--surface-2); }
-.fl-child-side-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 16px; }
-.fl-tmsg { display: flex; align-items: flex-start; gap: 10px; max-width: min(94%, 760px); }
-.fl-tmsg.is-tutor { max-width: min(96%, 940px); }
+/* The generated worksheet page already has its own comfortable body+card padding
+   (see html-design.md) — this outer padding used to ALSO be 16px, stacking a
+   third layer on top and eating real width from an already-narrow pane. Kept
+   small rather than 0 so the toolbar buttons still have a little breathing room
+   off the pane's own edge. */
+.fl-child-side-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 8px; }
+/* Same as .fl-msg above: no cap, full width of what .fl-child-thread leaves. */
+.fl-tmsg { display: flex; align-items: flex-start; gap: 10px; max-width: 100%; }
 .fl-tmsg.is-child { align-self: flex-end; justify-content: flex-end; }
 .fl-tmsg-avatar { display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; border-radius: 13px; background: #fff2b3; color: #bc8500; }
 .fl-tmsg-avatar.is-child { border-radius: 50%; background: var(--coral); color: #fff; font-weight: 800; }

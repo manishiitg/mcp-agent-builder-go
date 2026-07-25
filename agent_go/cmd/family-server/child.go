@@ -50,6 +50,17 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 
 	workDir := filepath.Join(familyDataDir(), "workspace")
 
+	// Persist the message(s) that kick off this turn right away, mirroring the
+	// parent flow (chat.go) — see persistConversationReplyWithExtras's own
+	// comment for the bug this and the completion-time calls below fix
+	// together: this used to save the turn's whole transcript straight from
+	// req.Messages, which the frontend sends with every past tool message
+	// (show_scene, celebrate) already stripped out. That silently deleted a
+	// scene shown or a star earned in an EARLIER turn the moment the child
+	// sent her next message — persistConversationReplyWithExtras reloads disk
+	// as the base instead, so only this turn's own new messages are added.
+	persistNewMessages("child", activityDir, req.Messages)
+
 	provider, ok := engineToProvider(s.Engine)
 	if !ok {
 		// Plain-completion fallback (no tools) for engines not yet mapped.
@@ -281,7 +292,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		trace.finish("", err)
 		msg := friendlyTurnError(err)
-		persistConversation("child", activityDir, withReply(req.Messages, msg))
+		persistConversationReply("child", activityDir, req.Messages, msg)
 		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
 		return
 	}
@@ -307,7 +318,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Persist the turn even on failure — see chat.go's parent handler for why.
 		msg := friendlyTurnError(err)
-		persistConversation("child", activityDir, withReply(req.Messages, msg))
+		persistConversationReply("child", activityDir, req.Messages, msg)
 		debugMu.Lock()
 		debugOut := append([]debugToolCall(nil), debugCalls...)
 		debugMu.Unlock()
@@ -328,18 +339,21 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	sceneOut := scene
 	sceneMu.Unlock()
 
-	toSave := withReply(req.Messages, reply)
+	// Base is disk, not req.Messages — see persistConversationReplyWithExtras.
+	// extra carries ONLY this turn's own new tool messages; anything from a
+	// past turn is already sitting on disk and reloaded as part of the base.
+	var extra []enginedetect.ChatMessage
 	if cel := findCelebrateEvent(evs); cel != nil {
-		// Persist the celebration alongside the reply so a reloaded transcript
-		// replays the star moment exactly where it happened, not just the text.
-		toSave = append(toSave, enginedetect.ChatMessage{Role: "tool", Tool: "celebrate", Stars: cel.Stars, Reason: cel.Reason})
+		// Persisted alongside the reply so a reloaded transcript replays the
+		// star moment exactly where it happened, not just the text.
+		extra = append(extra, enginedetect.ChatMessage{Role: "tool", Tool: "celebrate", Stars: cel.Stars, Reason: cel.Reason})
 	}
 	if sceneOut != "" {
-		// Persist the scene alongside the reply so reloading mid-conversation
-		// replays it exactly where it was shown, not just the reply text.
-		toSave = append(toSave, enginedetect.ChatMessage{Role: "tool", Tool: "scene", HTML: sceneOut})
+		// Persisted alongside the reply so reloading mid-conversation replays
+		// it exactly where it was shown, not just the reply text.
+		extra = append(extra, enginedetect.ChatMessage{Role: "tool", Tool: "scene", HTML: sceneOut})
 	}
-	persistConversation("child", activityDir, toSave)
+	persistConversationReplyWithExtras("child", activityDir, req.Messages, reply, extra...)
 
 	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: evs, Suggestions: sug, DebugCalls: debugOut, Scene: sceneOut})
 }

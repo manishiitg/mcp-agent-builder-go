@@ -69,15 +69,15 @@ images, or network calls.
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:18px 22px}
-  .wrap{max-width:840px;margin:0 auto}
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:14px 16px}
+  .wrap{max-width:1100px;margin:0 auto}
   .head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .head .sun{width:30px;height:30px;border-radius:50%;background:var(--sun);
     display:grid;place-items:center;font-size:16px;flex:0 0 auto}
   h1{font-size:19px;margin:0;line-height:1.2}
   .sub{color:var(--muted);font-size:14px;margin-top:2px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
-    padding:20px 22px;margin:16px 0;box-shadow:0 2px 10px rgba(22,34,58,.05)}
+    padding:16px 18px;margin:12px 0;box-shadow:0 2px 10px rgba(22,34,58,.05)}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 12px}
   .badge{display:inline-block;background:var(--sun-soft);color:#8a6114;font-size:12px;
     font-weight:700;padding:3px 10px;border-radius:999px}
