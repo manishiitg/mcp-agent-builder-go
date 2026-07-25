@@ -588,14 +588,23 @@ func findMcpagentRoot() string {
 	return ""
 }
 
-// writeMinimalMCPConfig writes an empty MCP servers config to a temp file so
-// NewAgent has a valid config path regardless of cwd.
+// writeMinimalMCPConfig writes the MCP server config mcpagent connects to on
+// this Agent's behalf (NOT the coding CLI directly — see get_api_spec /
+// execute_shell_command in mcpagent's bridge-routing prompt, which discovers
+// and calls these servers through the bridge, the same mechanism AgentWorks
+// already uses in production via BaseOrchestrator.mcpConfigPath). Currently
+// exa-search: Exa's free, hosted, no-auth web-search MCP server
+// (https://mcp.exa.ai/mcp) — search-only, no code-execution capability, so it
+// does not introduce a bridge-only containment escape hatch the way a
+// code-exec-capable server would (see BuildBridgeMCPConfig's containment
+// caveat in mcpagent).
 func writeMinimalMCPConfig() (path string, cleanup func(), err error) {
 	f, err := os.CreateTemp("", "agentsession-mcp-*.json")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create temp MCP config: %w", err)
 	}
-	if _, err := f.WriteString(`{"mcpServers":{}}`); err != nil {
+	config := `{"mcpServers":{"exa-search":{"url":"https://mcp.exa.ai/mcp"}}}`
+	if _, err := f.WriteString(config); err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		return "", func() {}, fmt.Errorf("write temp MCP config: %w", err)
