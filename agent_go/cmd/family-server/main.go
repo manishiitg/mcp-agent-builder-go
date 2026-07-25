@@ -44,6 +44,15 @@ func main() {
 	os.Setenv("CODEX_CLI_STREAM_TRANSCRIPT", "1")
 	os.Setenv("CURSOR_CLI_STREAM_TRANSCRIPT", "1")
 
+	// Manual test knobs (see experiment_flags.go) — announce them loudly at
+	// startup since neither has any other visible effect until a turn runs.
+	if t := experimentCodingAgentTransport(); t != "" {
+		log.Printf("[experiment] FAMILY_CODING_TRANSPORT=%s — every turn (parent + child) runs the structured/JSON transport instead of tmux", t)
+	}
+	if experimentSteeringDisabled() {
+		log.Printf("[experiment] FAMILY_DISABLE_STEER set — live mid-turn steering is refused for every conversation")
+	}
+
 	defaultPort := "8010"
 	if envPort := strings.TrimSpace(os.Getenv("FAMILY_PORT")); envPort != "" {
 		defaultPort = envPort

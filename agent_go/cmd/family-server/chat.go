@@ -437,6 +437,7 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		SessionID:                 req.ConversationID,
 		SessionHandle:             loadSessionHandle("parent", req.ConversationID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
+		Transport:                 experimentCodingAgentTransport(),
 		StreamCallback: func(text string) {
 			trace.delta()
 			statusHubs.publishDelta("parent:"+req.ConversationID, text)

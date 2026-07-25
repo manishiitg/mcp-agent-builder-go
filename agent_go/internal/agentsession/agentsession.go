@@ -109,6 +109,14 @@ type Config struct {
 	// at process startup, not per-call. Nil is a no-op: the turn behaves exactly
 	// as before, reply available only once Ask returns.
 	StreamCallback func(text string)
+	// Transport, when set, overrides the provider contract's declared process
+	// transport for this one session — llm.CodingAgentTransportStructured runs
+	// the CLI's one-shot JSON mode (no tmux pane, no live steering — Deliver
+	// only queues) instead of the default llm.CodingAgentTransportTmux. Empty
+	// keeps the contract's default (tmux, for every coding-agent provider
+	// today). This exists to A/B the two transports from a live conversation;
+	// see mcpagent.WithCodingAgentTransport's own doc comment for the tradeoff.
+	Transport llm.CodingAgentTransport
 }
 
 // Session bundles a live agent with its in-process executor server. Not safe
@@ -210,10 +218,15 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 			},
 		}))
 	}
-	if resume {
+	if cfg.Transport != "" {
+		opts = append(opts, mcpagent.WithCodingAgentTransport(cfg.Transport))
+	}
+	if resume && cfg.Transport != llm.CodingAgentTransportStructured {
 		// Keep the coding agent's interactive (tmux) session alive so the next
 		// turn resumes it with full context instead of cold-starting. The
 		// provider owns that session in its registry and reaps it on idle.
+		// Meaningless under structured transport (no tmux process to keep warm
+		// — each turn is a one-shot CLI invocation resumed via SessionHandle).
 		switch cfg.Provider {
 		case llm.ProviderClaudeCode:
 			opts = append(opts, mcpagent.WithClaudeCodePersistentInteractiveSession(true))

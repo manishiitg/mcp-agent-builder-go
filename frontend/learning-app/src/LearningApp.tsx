@@ -3625,6 +3625,7 @@ export default function LearningApp() {
           </section>
         )}
       </section>
+      {startBurst && <StartBurst onDone={() => setStartBurst(false)} />}
     </main>
   )
 }

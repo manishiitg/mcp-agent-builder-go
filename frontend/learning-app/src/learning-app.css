@@ -842,10 +842,18 @@ audio.fl-viewer-media { background: var(--surface); }
   /* transform (the ray's angle) is set inline per star */ }
 .fl-start-burst-star { position: absolute; left: 0; top: 0; color: #e9b53c;
   filter: drop-shadow(0 2px 6px rgba(224, 165, 28, .45));
-  animation: fl-burst-out 1.25s cubic-bezier(.22, 1, .36, 1) both; }
+  /* linear, not eased — an eased timing-function applied to a whole multi-stop
+     keyframe sequence warps ITS internal timing too, not just the start/end:
+     cubic-bezier(.22,1,.36,1) reached 83% of this animation's progress by 30%
+     of its wall-clock duration, so the entire fly-out-and-fade happened in the
+     first ~300ms and the star then sat, already faded, doing nothing visible
+     for the remaining ~950ms — measured live, read as "no animation" even
+     though one was technically running. Linear makes 1.25s actually feel like
+     1.25s of motion. */
+  animation: fl-burst-out 1.25s linear both; }
 .fl-start-burst-core { position: absolute; color: #f6b93b;
   filter: drop-shadow(0 3px 10px rgba(224, 165, 28, .5));
-  animation: fl-burst-core 1.1s cubic-bezier(.22, 1, .36, 1) both; }
+  animation: fl-burst-core 1.1s linear both; }
 /* Fly outward along the ray's own axis while spinning, then fade. */
 @keyframes fl-burst-out {
   0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3) rotate(0deg); }

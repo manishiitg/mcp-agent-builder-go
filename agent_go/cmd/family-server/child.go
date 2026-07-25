@@ -276,6 +276,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		SessionID:                 activityDir,
 		SessionHandle:             loadSessionHandle("child", activityDir, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
+		Transport:                 experimentCodingAgentTransport(),
 		StreamCallback: func(text string) {
 			trace.delta()
 			statusHubs.publishDelta("child:"+activityDir, text)

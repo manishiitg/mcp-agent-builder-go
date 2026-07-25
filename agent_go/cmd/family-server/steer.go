@@ -76,6 +76,10 @@ func trySteer(ctx context.Context, conversationID, message string) bool {
 	if message == "" {
 		return false
 	}
+	if experimentSteeringDisabled() {
+		log.Printf("[steer] %q: refused — steering disabled via FAMILY_DISABLE_STEER", conversationID)
+		return false
+	}
 	activeTurnMu.Lock()
 	at := activeTurn
 	activeTurnMu.Unlock()
