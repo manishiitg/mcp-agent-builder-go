@@ -2155,6 +2155,50 @@
         <li><strong>React renders the result:</strong> ordinary explanations appear as tutor messages; hints, questions, source evidence, uncertainty, grading feedback, and progress updates use distinct cards from Reference C.</li>
       </ol>
 
+      <h3>The four ways to drive a coding CLI, and which we chose</h3>
+      <p>There are exactly four viable shapes for driving a coding agent. Two are supported, one is supported but wrong for interactive tutoring, and one is out of scope. Each forfeits something specific, so the choice is a tradeoff rather than a preference.</p>
+      <table>
+        <thead><tr><th>Approach</th><th>Live mid-turn steer</th><th>Per-turn process cost</th><th>Final reply fidelity</th><th>Tokens &amp; cost</th></tr></thead>
+        <tbody contenteditable="false">
+          <tr><td><strong>1. tmux, pane only</strong></td><td>Yes</td><td>One warm process</td><td><strong>Broken</strong> — terminal hard-wraps</td><td>Not available</td></tr>
+          <tr><td><strong>2. tmux + sidecar transcript</strong> — chosen</td><td>Yes</td><td>One warm process</td><td>Clean</td><td>From the sidecar file</td></tr>
+          <tr><td><strong>3. Structured / JSON mode</strong></td><td><strong>No — queues only</strong></td><td><strong>New process every turn</strong></td><td>Clean</td><td>Structured</td></tr>
+          <tr><td><strong>4. Direct provider API</strong></td><td>Not applicable</td><td>Not applicable</td><td>Clean</td><td>Native</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>1. tmux, pane only.</strong> Drive the CLI's terminal UI and read everything back off the pane. Steering works because a real stdin exists, and one warm process serves every turn. But a terminal wraps text at its width, and a soft wrap is indistinguishable from a newline the model actually typed — so the markdown structure of the final reply cannot be recovered. Heuristic "dewrapping" is not a fix: it corrupts deliberate structure, and lists suffer worst.</p>
+
+      <p><strong>2. tmux plus the sidecar transcript — what SparkQuill uses.</strong> The same tmux session, but the two jobs the pane was doing badly at once are split. The pane answers <em>"has the turn finished?"</em>, which it is genuinely reliable at. The CLI's own session file on disk answers <em>"what did it say?"</em>. Every provider writes such a file — three of them natively, because it is what powers their own resume feature, and Pi through a hook the adapter injects.</p>
+
+      <p><strong>3. Structured / JSON mode.</strong> The CLI's non-interactive JSON mode. Everything arrives clean and structured, but it spawns a new process for every turn — full CLI startup plus context reload on each message — and there is no stdin to write into, so a follow-up message can only be queued, never injected into a running turn. Right for batch work, wrong for a child who may interject halfway through.</p>
+
+      <p><strong>4. Direct provider API.</strong> Out of scope. It offers the best fidelity and the most control, but forfeits the reason for using CLIs at all: the family's own subscription authentication, the CLI's native tools, and its session management. Choosing it means rebuilding the agent loop rather than driving one.</p>
+
+      <div class="callout principle">
+        <strong>Why steering decides this</strong>
+        <p>Live mid-turn steering is the reason tmux wins, and it is a product requirement rather than a nicety. A child who types "I don't get it" ninety seconds into a three-minute turn should be heard immediately, not queued behind it. Only tmux has a real stdin, so only tmux can deliver that. Structured mode can queue and nothing more.</p>
+      </div>
+
+      <h4>What each provider's sidecar file contains</h4>
+      <table>
+        <thead><tr><th>Provider</th><th>Sidecar</th><th>Tokens</th><th>Timestamps</th><th>Retention</th></tr></thead>
+        <tbody contenteditable="false">
+          <tr><td>Claude Code</td><td><code>~/.claude/projects/&lt;cwd-slug&gt;/&lt;sessionID&gt;.jsonl</code></td><td>Yes</td><td>Yes</td><td>Prunes at 30 days</td></tr>
+          <tr><td>Codex CLI</td><td><code>~/.codex/sessions/&lt;date&gt;/rollout-*.jsonl</code></td><td>Yes, plus rate limits and plan</td><td>Yes</td><td><strong>Never prunes</strong></td></tr>
+          <tr><td>Cursor CLI</td><td><code>~/.cursor/chats/&lt;md5(cwd)&gt;/&lt;agent&gt;/store.db</code></td><td><strong>None</strong></td><td><strong>None</strong></td><td>Not observed</td></tr>
+          <tr><td>Pi CLI</td><td><code>~/.pi/agent/sessions/&lt;cwd&gt;/&lt;ts&gt;_&lt;id&gt;.jsonl</code></td><td>Yes, including cost</td><td>Yes</td><td>Not observed</td></tr>
+        </tbody>
+      </table>
+
+      <p>None of these files are delta-based: all record complete messages, so there is no reassembly step that can garble text. They are, however, written asynchronously — Cursor commits its database seconds after the pane has settled. Reading one therefore has to be defensive: take the sidecar text, verify it against the pane by comparing the two with whitespace collapsed, and fall back to the pane when they disagree or the file has not appeared yet. Trusting the sidecar blindly risks returning a <em>different turn's</em> reply, which is a worse failure than bad wrapping.</p>
+
+      <div class="callout warning">
+        <strong>Two caveats this creates</strong>
+        <p><strong>Cursor has no usage data.</strong> Unlike the other three, its sidecar carries neither token counts nor per-message timestamps. Anything reporting per-turn cost or timing on Cursor must come from our own recording, or be accepted as a gap on that provider.</p>
+        <p><strong>These files are plaintext, and retention becomes our problem.</strong> Every shell command an agent runs is recorded verbatim, so any command that interpolates a secret rather than passing it through the environment writes that value to disk. Codex CLI never prunes — measured at 2.27&nbsp;GB across 129 days, alongside a history file holding every prompt ever typed.</p>
+      </div>
+
       <h3>tmux session lifecycle and recovery</h3>
       <table>
         <thead><tr><th>Moment</th><th>Required behavior</th><th>Stored state</th><th>Failure behavior</th></tr></thead>

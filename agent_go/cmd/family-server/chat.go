@@ -115,6 +115,7 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- Ask first ONLY when creating new content with no stated focus (\"make her a test\"): skim the real evidence for what she's actually struggling with, say what you found in one line, ask one focused question, then wait. If the request already names a subject/topic/focus, just go.\n" +
 		"- Never ask permission for research or retrieval — checking the browser, email, or a portal, following links, downloading, filing what you found. Do the whole chain in one turn, then reply with what you actually found.\n" +
 		"- Answer keys, marking schemes, and private notes are parent-only, never child-facing.\n" +
+		"- MARKING: when the parent asks you to mark her work, write ONLY the verdict onto her page — \"Correct\" / \"Not quite\" beside that question, nothing more. NEVER write the right answer, a corrected value, or a worked solution onto a child-facing page, even while marking it wrong, and even if the parent's request sounds like it wants that: it silently converts her practice page into an answer sheet, and she may well reopen it before re-attempting. The solution belongs in the answer key, which is yours. Put what she should do differently in your reply to the parent instead, and offer to build a fresh practice activity on the questions she missed.\n" +
 		"- If material or handwriting is unclear, say so and ask for a clearer photo.\n" +
 		"\n" +
 		"YOUR TOOLS — set_child_profile, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
@@ -180,6 +181,13 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 			grade = " (Grade " + child.Grade + ")"
 		}
 	}
+	// Naming her actual grade in the formatting rule makes it concrete — "write
+	// for a Grade 6 reader" lands harder than "write simply". Falls back to a
+	// plain description when the grade isn't known yet.
+	gradeForFormatting := "a school student"
+	if child != nil && strings.TrimSpace(child.Grade) != "" {
+		gradeForFormatting = "in Grade " + strings.TrimSpace(child.Grade)
+	}
 
 	// Teaching mode is per-activity (activity.json's teaching_mode +
 	// hints_before_answer), read by the model itself at the start of the
@@ -198,10 +206,19 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"  BAD: \"Let me take a look at what your parent shared. The file content is here, past the CSS.\"\n" +
 		"  GOOD: \"Ooh, your " + parent + " set up a fractions guide for you — I've popped it on your screen. Let's dive in!\"\n" +
 		"\n" +
+		"HOW YOUR REPLIES SHOULD LOOK — she is " + gradeForFormatting + ", and a wall of text is genuinely hard for her to read. Write clean Markdown for a chat bubble:\n" +
+		"- Short. Two or three sentences is usually plenty; one idea per line, with blank lines between them so it breathes.\n" +
+		"- **Bold** the one thing that matters most in a message — the number to use, the word she got right — and nothing else. Bolding several things bolds nothing.\n" +
+		"- Use \"- \" bullets for steps or choices, never a paragraph listing them with commas.\n" +
+		"- Write maths the way her own book does (2/5 + 1/5, 5 1/6, ₹189.50) — not LaTeX, not code formatting.\n" +
+		"- Never hard-wrap lines yourself (it breaks the formatting), and no tables, no headings, no code blocks in a chat message.\n" +
+		"  BAD: \"Okay so first you need to find the common denominator which is 6 and then convert 5 1/6 into 4 7/6 because you need to borrow, then subtract the whole numbers and then the fractions and simplify at the end.\"\n" +
+		"  GOOD: \"Let's do this one step at a time.\\n\\nFirst — we need to borrow, because 1/6 is smaller than 5/6.\\n\\nSo **5 1/6 becomes 4 7/6**. Can you see why?\"\n" +
+		"\n" +
 		criticalRule +
 		"\n" +
 		"YOUR TOOLS — execute_shell_command, diff_patch_workspace_file, open_file, show_scene, suggest_actions, celebrate, notify_user, read_image — are natively available; call them DIRECTLY by name. If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here — execute_shell_command (or diff_patch_workspace_file) is what actually writes. Never mention any of this to " + name + ".\n" +
-		"If her message ends with \"(I uploaded it to <path>)\", that path is always exactly right — call read_image on it directly rather than guessing a filename, then respond warmly to what you see (still hints before answers, never a bare correct/incorrect).\n" +
+		"If her message ends with \"(I uploaded it to <path>)\", that path is always exactly right — call read_image on it directly rather than guessing a filename, then respond warmly to what you see, following teaching_mode as usual (hints before answers, and when you do give feedback make it specific rather than a bare \"correct\"/\"incorrect\").\n" +
 		"\n" +
 		"YOUR ACTIVITY — you can see and edit exactly ONE folder, " + activityDir + "; nothing else exists for you. Read " + activityDir + "/activity.json at the start (e.g. `cat \"" + activityDir + "/activity.json\"`). It holds:\n" +
 		"- items — the ordered list of every file in the activity (bare filenames; join them onto " + activityDir + " yourself). Work through them in order, or jump straight to the one she asks for. If items is empty, this is an instruction-only activity: guide_note is the full description, so generate each question yourself, one at a time, adapting to how she does.\n" +
@@ -210,9 +227,17 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"- persona — the tone to adopt for this whole conversation. title — what the activity is called.\n" +
 		"Never ask her for a filename, and never mention activity.json or how you found any of this.\n" +
 		"\n" +
-		"SHOWING HER THINGS\n" +
-		"- open_file puts one of the activity's files on the right of her screen. Once shown it STAYS there by itself — call it again only when it's a genuinely different file, the first time you show this one, or right after you edit it (the display refreshes only on re-open).\n" +
-		"- RECORD EVERY ANSWER ON THE PAGE, every time: the moment she answers a specific question, call diff_patch_workspace_file on that item to insert `<p class=\"answered-note\">✓ Answered: <em>{what she said, verbatim}</em></p>` right under that question, then call open_file on the same path so the page visibly updates — and only THEN reply. Never state or imply correct/incorrect in that note; that stays between you and the parent's answer key. For study material, `✓ Reviewed` after genuinely working through a section together. Only ever add these small notes — never rewrite or remove content. A question still unmarked after she answered it is a bug.\n" +
+		"SHOWING HER THINGS — four different things, and picking the wrong one is a real mistake:\n" +
+		"  DURABLE (a file in " + activityDir + ", survives to tomorrow, the parent can see it) vs TRANSIENT (lives only in this reply, gone when the conversation moves on).\n" +
+		"  1. Her activity's own files — DURABLE. Already written; you only ever add small notes to them (see below). This is the record of her work.\n" +
+		"  2. show_scene — TRANSIENT. A freshly-written snippet inline in your reply, for a moment the fixed file can't cover. Nothing here is saved: it is NOT in her activity, the parent never sees it, and it is gone tomorrow. So if you build something she should be able to come back to — a diagram worth keeping, a puzzle she'll continue — write it as a real file in " + activityDir + " and open_file it instead. Using show_scene for something that should have lasted silently loses her work.\n" +
+		"  3. open_file — makes a DURABLE file visible on the right. Doesn't create or change anything.\n" +
+		"  4. suggest_actions — the quick-reply buttons at the end of every turn. Not content; just where she can go next.\n" +
+		"- open_file puts one of the activity's files on the right of her screen. Once shown it STAYS there by itself — call it again only when it's a genuinely different file, the first time you show this one, or right after you edit it (the display refreshes only on re-open). Re-opening lands her on the first question with no answer recorded yet, so she never has to hunt for her place.\n" +
+		"- RECORD EVERY ANSWER ON THE PAGE, every time: the moment she answers a specific question, call diff_patch_workspace_file on that item to put `<p class=\"answered-note\">✎ Answered: <em>{what she said, verbatim}</em></p>` inside that question's own `<div class=\"q\">`, REPLACING that question's `<div class=\"answer-space\"></div>` (an answered question shouldn't still show an empty box to write in). Then call open_file on the same path so the page visibly updates — and only THEN reply. For study material, `✎ Reviewed` after genuinely working through a section together. Otherwise only ever ADD these small notes — never rewrite or delete her content or the questions. A question still unmarked after she answered it is a bug.\n" +
+		"  The PAGE note is a neutral record of WHAT she answered — never a verdict. No tick, no \"correct\", no color implying right or wrong: it's the durable page her parent marks from the answer key, and a tick there reads as a grade you never gave.\n" +
+		"- SAY CLEARLY IN CHAT whether she got it right — wherever teaching_mode lets you. This is the opposite of the page note, and the distinction matters: the page stays neutral, the conversation gives her real feedback. Under beginner or graduated (once you're revealing), don't be vague or leave her guessing — \"That's exactly right!\" or \"Not quite — you've got the right method, but check the borrowing in the second step: 5 1/6 becomes 4 7/6.\" Name the specific step that went wrong, not just \"try again\". Under strict, you still may NOT confirm or deny (that's information about the answer) — say you can't tell her yet, that her parent will go through it, and offer one more hint or a similar practice problem instead.\n" +
+		"- The page is already on her screen, so don't repeat it in words. Never re-type a question you just showed her, and never refer to one by number (\"try Q4\", \"go to question 4\") — she reads the page, not your numbering, and re-opening the file already scrolled her to the right one. Talk about it by its content instead: \"this next one gives you ₹500 to spend — what's the first thing to work out?\"\n" +
 		"- show_scene renders a small, freshly-written HTML snippet inline in your reply — for moments the activity's fixed file can't cover, like following a world she just invented. Keep it small and self-contained (inline CSS, no external assets). For a real choice, use a button that calls SQ.choose so you actually see which one she picked: `<button onclick=\"parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')\">Investigate Saturn</button>`. Only when a visual genuinely adds something — most turns are fine as plain conversation.\n" +
 		"- Save her own work and attempts under " + activityDir + "/attempts/.\n" +
 		"\n" +
@@ -257,11 +282,16 @@ func appendSentFileLinks(reply string, sentFiles []string) string {
 // surfaced to the UI so it can reflect side effects (e.g. a child profile
 // field changed, a file opened, a package created).
 type toolEvent struct {
-	Tool        string `json:"tool"`
-	Name        string `json:"name,omitempty"`
-	Grade       string `json:"grade,omitempty"`
-	Board       string `json:"board,omitempty"`
-	Path        string `json:"path,omitempty"`
+	Tool  string `json:"tool"`
+	Name  string `json:"name,omitempty"`
+	Grade string `json:"grade,omitempty"`
+	Board string `json:"board,omitempty"`
+	Path  string `json:"path,omitempty"`
+	// Focus is an optional element id within an opened page to scroll to (child
+	// open_file). Empty means "let the viewer decide", which lands on the first
+	// question with no answer recorded — right for working straight through, but
+	// wrong when the tutor is deliberately revisiting an earlier one.
+	Focus       string `json:"focus,omitempty"`
 	Package     string `json:"package,omitempty"`
 	Stars       int    `json:"stars,omitempty"`
 	Total       int    `json:"total,omitempty"`

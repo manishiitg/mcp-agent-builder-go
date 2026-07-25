@@ -32,6 +32,8 @@ import {
   Image as ImageIcon,
   Info,
   LockKeyhole,
+  Maximize2,
+  Minimize2,
   Music,
   Presentation,
   PanelLeftClose,
@@ -91,24 +93,9 @@ function autoGrowTextarea(el: HTMLTextAreaElement) {
 // The child/file viewer iframe is deliberately sandbox="allow-scripts" with
 // NO allow-same-origin (adding that would let a srcDoc page's script escape
 // the sandbox and touch the parent page/cookies) — which makes it a
-// cross-origin frame from the app's own perspective. Reading contentWindow.
-// scrollY or calling contentWindow.scrollTo() on a cross-origin frame throws
-// a SecurityError SYNCHRONOUSLY, uncaught, which crashes the whole React
-// render (a blank page) — so both directions must be wrapped, not just
-// best-effort skipped.
-function safeGetScrollY(win: Window | null | undefined): number {
-  try {
-    return win?.scrollY ?? 0
-  } catch {
-    return 0
-  }
-}
-function safeSetScrollY(win: Window | null | undefined, y: number) {
-  try {
-    win?.scrollTo(0, y)
-  } catch { /* cross-origin sandboxed frame — nothing to do */ }
-}
-
+// cross-origin frame from the app's own perspective. So the app can never read
+// or set that frame's scroll from outside; anything positional has to be done
+// by a script injected INTO the document (see withViewerPositionScript).
 function engineStatus(e: ApiEngine): { label: string; ready: boolean } {
   if (e.usable) return { label: 'Ready', ready: true }
   if (!e.runtime_available) return { label: 'Not set up', ready: false }
@@ -179,6 +166,41 @@ function readHandoffSide(): 'tutor' | 'parent' {
   try { return localStorage.getItem(HANDOFF_SIDE_KEY) === 'tutor' ? 'tutor' : 'parent' } catch { return 'parent' }
 }
 
+// How wide the child's right-hand pane is, in px, dragged by the divider between
+// her chat and her worksheet. Persisted because it's a per-child working
+// preference, not a per-session one: whoever likes a big worksheet and a narrow
+// chat should get that on every visit without re-dragging it.
+//
+// Bounds keep both panes usable — a pane dragged to nothing looks like a broken
+// layout rather than a deliberate choice, and there's no affordance to get it
+// back once the handle is off-screen.
+const CHILD_SIDE_WIDTH_KEY = 'sparkquill.child-side-width'
+const CHILD_SIDE_MIN = 320
+const CHILD_SIDE_DEFAULT = 592 // the previous fixed width (348 + 244)
+// The chat's floor is a PIXEL minimum, not a fraction of the window. A fraction
+// looks fine on a large display and collapses on a small one — 20% of 1100px is
+// 220px, which cannot hold a readable message bubble plus the composer. This is
+// the width below which the chat stops being usable, so the worksheet never gets
+// to claim it however wide it is asked to be.
+const CHILD_CHAT_MIN = 400
+
+// childSideMax is how wide the worksheet may get for a given window width.
+// Never negative: on a very narrow window the min wins and the layout falls back
+// to the single-column media query anyway.
+function childSideMax(windowWidth: number): number {
+  return Math.max(CHILD_SIDE_MIN, windowWidth - CHILD_CHAT_MIN)
+}
+
+function readChildSideWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_SIDE_WIDTH_KEY))
+    return Number.isFinite(n) && n >= CHILD_SIDE_MIN ? n : CHILD_SIDE_DEFAULT
+  } catch { return CHILD_SIDE_DEFAULT }
+}
+function persistChildSideWidth(px: number) {
+  try { localStorage.setItem(CHILD_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
+}
+
 // Dark/light theme — follows the OS/browser's own preference (or a
 // previously-stored explicit choice, from when there was an in-app toggle).
 // No in-app toggle for now; kept read-only.
@@ -231,6 +253,129 @@ function withSceneResizeScript(html: string): string {
   if (window.ResizeObserver) new ResizeObserver(report).observe(document.documentElement);
   setTimeout(report, 50);
 })();</script>`
+}
+
+// withViewerPositionScript keeps the child's place in her worksheet across the
+// re-opens the tutor triggers, and jumps to a specific question only when the
+// tutor deliberately asks for one.
+//
+// Why it has to run inside the frame: the viewer iframe is sandboxed
+// allow-scripts WITHOUT allow-same-origin, so it is cross-origin and the parent
+// can neither read nor write its scroll position. An earlier attempt restored
+// scroll from outside via contentWindow.scrollY, which silently returned 0 every
+// time (the read throws and is caught) — that is why re-opening a page after the
+// tutor recorded an answer always jumped back to the top.
+//
+// So the script reports its own scroll position out to the app as it changes, and
+// the app hands the last known offset back in on the next load. The iframe is
+// recreated whenever srcDoc changes, so the value has to live outside it.
+//
+// Priority, highest first:
+//  1. focusId — open_file's explicit `focus`. A deliberate act by the tutor
+//     ("let's look at that money one again"), so it outranks her scroll position.
+//  2. savedY — where she actually was. This is the common case: the tutor records
+//     an answer, re-opens the file to refresh it, and she should not lose her
+//     place. Restoring a position is strictly better than guessing a question,
+//     which is why the old "scroll to the first unanswered question" behaviour was
+//     dropped: it moved the page under her whenever she was reading elsewhere.
+//  3. Nothing — a genuinely new file opens at the top, as expected.
+function withViewerPositionScript(html: string, focusId?: string, savedY = 0): string {
+  const wanted = (focusId ?? '').replace(/[^A-Za-z0-9_-]/g, '')
+  return html + `
+<script>(function(){
+  var wanted = ${JSON.stringify(wanted)};
+  var savedY = ${Math.max(0, Math.round(savedY))};
+  function restore(){
+    try {
+      var target = wanted ? document.getElementById(wanted) : null;
+      if (target && !target.classList.contains('q')) {
+        // Allow pointing at anything with an id (a study-sheet section), but
+        // prefer its enclosing question so the highlight frames the whole thing.
+        target = target.closest('.q') || target;
+      }
+      if (target) {
+        target.scrollIntoView({ behavior: 'auto', block: 'center' });
+        target.classList.add('is-current');
+        setTimeout(function(){ target.classList.remove('is-current'); }, 2600);
+        return;
+      }
+      if (savedY > 0) window.scrollTo(0, savedY);
+    } catch (e) { /* never break the page over a nice-to-have */ }
+  }
+  window.addEventListener('load', restore);
+  setTimeout(restore, 60);
+  // Report position out so the next load can restore it. Throttled via rAF:
+  // scroll fires far too often to postMessage on every event.
+  var pending = false;
+  window.addEventListener('scroll', function(){
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function(){
+      pending = false;
+      parent.postMessage({ __sq: 1, op: 'viewer-scroll', y: window.scrollY }, '*');
+    });
+  }, { passive: true });
+})();</script>
+<style>
+  /* A brief, calm pulse so she can see WHERE the page landed when the tutor
+     pointed at a specific question. Respects reduced-motion. */
+  .q.is-current{animation:sqFocus 2.6s ease-out both}
+  @keyframes sqFocus{
+    0%{background:#fdeecb;box-shadow:0 0 0 6px #fdeecb}
+    100%{background:transparent;box-shadow:0 0 0 6px transparent}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .q.is-current{animation:none;background:#fdeecb}
+  }
+</style>`
+}
+
+// StartBurst is the moment the child begins an activity: a ring of stars flies
+// out from the centre, spins, and fades. Short (1.5s) and non-blocking — it sits
+// over the screen with pointer-events: none so it can never swallow a tap, and it
+// removes itself when finished.
+//
+// Two things here are deliberate, both learned from getting it wrong:
+//
+//  1. The timer is armed ONCE. onDone is a fresh closure on every parent render,
+//     so depending on it re-armed the timeout continuously — and a child turn
+//     re-renders on every streamed delta, so the burst never removed itself and
+//     the stars just sat on the page. The callback is held in a ref instead.
+//  2. Each star's direction is a static inline transform on a wrapper, NOT a
+//     custom property read inside @keyframes. Animating a transform built from
+//     var() is fragile; keeping the keyframe free of var() means the only thing
+//     animating is a plain translate/rotate/scale, which always works.
+//
+// Purely decorative, so it is skipped entirely under prefers-reduced-motion
+// rather than shown frozen.
+function StartBurst({ onDone }: { onDone: () => void }) {
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  useEffect(() => {
+    const t = window.setTimeout(() => doneRef.current(), 1500)
+    return () => window.clearTimeout(t)
+  }, [])
+  const count = 10
+  return (
+    <div className="fl-start-burst" aria-hidden="true">
+      {Array.from({ length: count }, (_, i) => (
+        <span
+          key={i}
+          className="fl-start-burst-ray"
+          style={{ transform: `rotate(${(360 / count) * i}deg)` }}
+        >
+          <Star
+            className="fl-start-burst-star"
+            size={i % 3 === 0 ? 30 : 20}
+            fill="currentColor"
+            strokeWidth={1}
+            style={{ animationDelay: `${(i % 5) * 0.06}s` }}
+          />
+        </span>
+      ))}
+      <Sparkles className="fl-start-burst-core" size={54} />
+    </div>
+  )
 }
 
 // SceneFrame renders one show_scene snippet, auto-sized to its actual content
@@ -387,6 +532,29 @@ function MermaidDiagram({ content }: { content: string }) {
   }
   if (!svg) return <div className="fl-mermaid-loading">Rendering diagram…</div>
   return <div className="fl-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
+}
+
+// stabilizeStreamingMarkdown hides markdown syntax that hasn't finished arriving.
+//
+// A stream delivers "**bo" before "**bold**", and react-markdown correctly
+// renders an unmatched "**" as literal asterisks — so mid-stream the reply
+// flickers raw markdown characters (**, `, _, #) that vanish once the closing
+// token lands. The text is never wrong, it just looks broken while it types.
+//
+// So for the STREAMING bubble only, drop a trailing token that is still
+// unbalanced. Applied to the live preview, never to the stored message — the
+// final render always gets the untouched text.
+function stabilizeStreamingMarkdown(text: string): string {
+  let out = text
+  // An odd count means the run that's still open is the last one; cut from there.
+  for (const token of ['**', '`', '*', '_']) {
+    const parts = out.split(token)
+    if (parts.length > 1 && (parts.length - 1) % 2 === 1) {
+      out = parts.slice(0, -1).join(token)
+    }
+  }
+  // A heading or list marker alone on the final line has no content yet.
+  return out.replace(/\n[#>\-*+]+[ \t]*$/, '')
 }
 
 // Markdown renders the agent's reply with react-markdown + GFM — the same
@@ -859,7 +1027,27 @@ export default function LearningApp() {
   const childThreadEndRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const childIframeRef = useRef<HTMLIFrameElement>(null)
-  const childScrollRestoreRef = useRef(0)
+
+  // Child-mode split: how much room her worksheet gets versus the chat. Set only
+  // by the widen/restore button in the worksheet's own toolbar — deliberately not
+  // draggable, because a 6px handle is a poor target on a child-facing screen and
+  // the two useful states (normal, and "big while I work on this") are a toggle.
+  const [childSideWidthPref, setChildSideWidth] = useState(readChildSideWidth)
+  // Track the window width so the stored preference can be re-clamped when the
+  // window shrinks. Without this, widening on a large display and then resizing
+  // smaller would leave the chat below its minimum (or push it off-screen), since
+  // the preference is an absolute pixel value.
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  // The preference is what the child chose; this is what the layout can honour.
+  const childSideWidth = Math.min(Math.max(childSideWidthPref, CHILD_SIDE_MIN), childSideMax(windowWidth))
+  // "Wide" once past the midpoint between default and max, so the button's icon
+  // always shows which way the next tap will move it.
+  const childSideWide = childSideWidth > (CHILD_SIDE_DEFAULT + childSideMax(windowWidth)) / 2
   const drawerTab = useWorkspaceStore((s) => s.drawerTab)
   const setDrawerTab = useWorkspaceStore((s) => s.setDrawerTab)
   // The ONE activity the child is currently bound to (/api/child/activity) —
@@ -872,6 +1060,26 @@ export default function LearningApp() {
   // the child's own active/ copy after editing it to add a progress note, and
   // a same-string setChildViewerPath wouldn't otherwise trigger a refetch.
   const [childViewerRefreshKey, setChildViewerRefreshKey] = useState(0)
+  // Optional element id the tutor asked us to scroll to inside the opened page
+  // (open_file's `focus`). Empty = let the viewer pick the first unanswered question.
+  const [childViewerFocus, setChildViewerFocus] = useState('')
+  const [startBurst, setStartBurst] = useState(false)
+  // Last known scroll offset per file, reported out of the sandboxed iframe (see
+  // withViewerPositionScript). A ref, not state: it updates on every scroll frame
+  // and must never trigger a re-render, which would reload the iframe and destroy
+  // the very position being tracked.
+  const childViewerPathRef = useRef<string | null>(null)
+  const childViewerScrollRef = useRef<Record<string, number>>({})
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const m = ev.data as { __sq?: number; op?: string; y?: number } | null
+      if (!m || m.__sq !== 1 || m.op !== 'viewer-scroll' || typeof m.y !== 'number') return
+      const path = childViewerPathRef.current
+      if (path) childViewerScrollRef.current[path] = m.y
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [])
   const childViewerContent = useChildChatStore((s) => s.childViewerContent)
   const setChildViewerContent = useChildChatStore((s) => s.setChildViewerContent)
   const childTreeRefreshKey = useChildChatStore((s) => s.childTreeRefreshKey)
@@ -1229,19 +1437,19 @@ export default function LearningApp() {
     if (first) { setChildViewerPath(first.path); setChildViewerRefreshKey((k) => k + 1) }
   }, [screen, childActivity])
 
-  // Load the selected file for the child's own inline viewer. Re-opening the
-  // SAME file (e.g. Quill re-calling open_file after editing in a progress
-  // note) reloads the iframe's document, which resets its scroll to the top
-  // by itself — jarring if the child was actually reading further down the
-  // page. So: capture the current scroll position before a same-path
-  // refresh (not for a genuinely different file, where starting at the top
-  // is correct), and restore it once the refreshed content has loaded.
-  const childPrevViewerPathRef = useRef<string | null>(null)
+  // Load the selected file for the child's own inline viewer.
+  //
+  // Re-opening the SAME file (Quill re-calls open_file after recording an
+  // answer) reloads the iframe's document and resets its scroll to the top.
+  // That used to be handled by capturing contentWindow.scrollY before the
+  // refresh and restoring it after — which never worked: the iframe is
+  // sandboxed WITHOUT allow-same-origin, so the read throws, gets caught, and
+  // returns 0. The page reliably jumped to the top.
+  // withViewerPositionScript now handles this from INSIDE the frame, restoring
+  // the offset she was actually at (reported out of the frame as she scrolls).
+  useEffect(() => { childViewerPathRef.current = childViewerPath }, [childViewerPath])
   useEffect(() => {
-    if (!childViewerPath) { setChildViewerContent(null); childPrevViewerPathRef.current = null; return }
-    const samePath = childPrevViewerPathRef.current === childViewerPath
-    childScrollRestoreRef.current = samePath ? safeGetScrollY(childIframeRef.current?.contentWindow) : 0
-    childPrevViewerPathRef.current = childViewerPath
+    if (!childViewerPath) { setChildViewerContent(null); return }
     let cancelled = false
     setChildViewerContent(null)
     fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(childViewerPath)}`)
@@ -1700,10 +1908,10 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
         const events = data.tool_events ?? []
         const of = events.find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
+        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
         setChildSuggestions(data.suggestions ?? [])
         setChildMessages((cur) => {
@@ -1752,10 +1960,10 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
         const events = data.tool_events ?? []
         const of = events.find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
+        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
         setChildSuggestions(data.suggestions ?? [])
         // Append to base (not hidden) — the synthetic kickoff message never
@@ -2199,7 +2407,7 @@ export default function LearningApp() {
                   <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
                   <div className="fl-msg-col">
                     {streamingReply && (
-                      <div className="fl-bubble is-streaming"><Markdown text={streamingReply} /></div>
+                      <div className="fl-bubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(streamingReply)} /></div>
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
@@ -2972,7 +3180,10 @@ export default function LearningApp() {
     return (
       <main className="learning-app" data-theme={theme}>
         <div className="fl-child">
-          <div className="fl-child-body">
+          <div
+            className="fl-child-body"
+            style={{ ['--child-side-w' as string]: `${Math.round(childSideWidth)}px` }}
+          >
             <section className="fl-child-chat">
               <header className="fl-child-top">
                 <div className="fl-child-id">
@@ -3005,7 +3216,7 @@ export default function LearningApp() {
                   )
                 })()}
                 <div className="fl-child-top-right">
-                  <button className="fl-parent-return" type="button" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /> Parent Mode</button>
+                  <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
               <div className="fl-child-thread" aria-label="Tutor conversation">
@@ -3052,7 +3263,7 @@ export default function LearningApp() {
                     <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                     <div className="fl-tbubble-col">
                       {childStreamingReply && (
-                        <div className="fl-tbubble is-streaming"><Markdown text={childStreamingReply} /></div>
+                        <div className="fl-tbubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(childStreamingReply)} /></div>
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
@@ -3088,10 +3299,9 @@ export default function LearningApp() {
                 <textarea
                   ref={childTextareaRef}
                   aria-label="Message your tutor"
-                  placeholder="Type your answer or ask for help…"
+                  placeholder={childSending ? 'You can still type — Quill will hear you…' : 'Type your answer or ask for help…'}
                   value={childInput}
                   rows={1}
-                  disabled={childSending}
                   onChange={(e) => { setChildInput(e.target.value); autoGrowTextarea(e.target) }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -3100,7 +3310,7 @@ export default function LearningApp() {
                     }
                   }}
                 />
-                <button className="composer-send" type="submit" aria-label="Send message" disabled={childSending}><Send size={18} /></button>
+                <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
             </section>
             <aside className="fl-child-side">
@@ -3110,6 +3320,26 @@ export default function LearningApp() {
                   <div className="fl-viewer-bar">
                     <button className="fl-viewer-back" type="button" onClick={() => setChildViewerPath(null)}><ArrowLeft size={15} /> Back</button>
                     <span className="fl-viewer-name">{labelFromFilename(childViewerPath.split('/').pop() || childViewerPath).label}</span>
+                    {/* Widen/restore the worksheet, beside refresh and print.
+                        A toggle rather than a draggable divider: the two useful
+                        states are "normal" and "big while I work on this", and a
+                        thin drag handle is a poor target on a child's screen. */}
+                    <button
+                      className={`fl-icon-btn fl-widen-btn${childSideWide ? ' is-on' : ''}`}
+                      type="button"
+                      aria-label={childSideWide ? 'Shrink the worksheet' : 'Widen the worksheet'}
+                      title={childSideWide ? 'Give the chat more room' : 'Give the worksheet more room'}
+                      aria-pressed={childSideWide}
+                      onClick={() => {
+                        const next = childSideWide
+                          ? CHILD_SIDE_DEFAULT
+                          : childSideMax(windowWidth)
+                        setChildSideWidth(next)
+                        persistChildSideWidth(next)
+                      }}
+                    >
+                      {childSideWide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
                     <button
                       className="fl-icon-btn"
                       type="button"
@@ -3150,8 +3380,7 @@ export default function LearningApp() {
                       className="fl-viewer-frame"
                       title="Preview"
                       sandbox="allow-scripts"
-                      srcDoc={childViewerContent.content}
-                      onLoad={(e) => safeSetScrollY(e.currentTarget.contentWindow, childScrollRestoreRef.current)}
+                      srcDoc={withViewerPositionScript(childViewerContent.content, childViewerFocus, childViewerScrollRef.current[childViewerPath] ?? 0)}
                     />
                   ) : childViewerPath.endsWith('.md') ? (
                     <div className="fl-viewer-md"><Markdown text={childViewerContent.content} /></div>
@@ -3181,7 +3410,7 @@ export default function LearningApp() {
                             <div className="fl-child-package">
                               <div className="fl-package-title"><BookOpen size={16} /><span>{childActivity?.title || 'Your activity'}<small>{currentItems.length} part{currentItems.length === 1 ? '' : 's'}{dateTimeLabel(childActivity?.created_at) ? ` · ${dateTimeLabel(childActivity?.created_at)}` : ''}</small></span></div>
                               {currentItems.map((item, i) => (
-                                <button key={item.path} type="button" className="fl-file-item fl-package-item" onClick={() => setChildViewerPath(item.path)}>
+                                <button key={item.path} type="button" className="fl-file-item fl-package-item" onClick={() => { setChildViewerFocus(''); setChildViewerPath(item.path) }}>
                                   <span className="fl-package-step">{i + 1}</span>
                                   <FileGlyph name={item.name} size={15} />
                                   <span>{labelFromFilename(item.name).label}</span>
@@ -3193,7 +3422,11 @@ export default function LearningApp() {
                           // Instruction-only activity (no files): kick off the live activity in chat.
                           <section className="fl-asset-group">
                             <p className="fl-drawer-label">From your parent</p>
-                            <button type="button" className="fl-file-item is-package" onClick={() => { setChildViewerPath(null); sendChildText(`Let's start ${childActivity?.title || 'my activity'}!`) }}>
+                            <button type="button" className="fl-file-item is-package" onClick={() => {
+                              if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) setStartBurst(true)
+                              setChildViewerPath(null)
+                              sendChildText(`Let's start ${childActivity?.title || 'my activity'}!`)
+                            }}>
                               <BookOpen size={16} /><span>{childActivity?.title || 'Your activity'}<small>Adaptive practice{dateTimeLabel(childActivity?.created_at) ? ` · ${dateTimeLabel(childActivity?.created_at)}` : ''}</small></span>
                             </button>
                           </section>

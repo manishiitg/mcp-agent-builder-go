@@ -227,6 +227,12 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-toolbar-right { display: flex; align-items: center; gap: 10px; }
 .fl-icon-btn { display: grid; place-items: center; flex: 0 0 auto; width: 38px; height: 38px; border: 1px solid #d7e0ec; border-radius: 11px; background: var(--surface); color: #3d567a; cursor: pointer; }
 .fl-icon-btn:hover { border-color: #9db2ca; background: #f7faff; color: var(--heading); }
+/* The widen/restore toggle sits beside refresh and print. Tinted so it doesn't
+   read as a third identical grey button, and filled while the worksheet is
+   widened so its state is visible at a glance. */
+.fl-widen-btn { border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
+.fl-widen-btn:hover { border-color: #d9c79c; background: #fbe6bd; color: #6f4e10; }
+.fl-widen-btn.is-on { background: var(--sun, #f6b93b); border-color: var(--sun, #f6b93b); color: #3a2a00; }
 .fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(16px, 2.5vw, 36px); }
 .fl-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(16px, 2.5vw, 36px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
@@ -368,8 +374,8 @@ html, body, #root { margin: 0; height: 100%; }
    clickable (when it has a goal/plan to show) to reveal it in a small
    popover, so the child always sees what they're working on without extra
    clutter, but can still check the goal without asking. */
-.fl-child-assignment-wrap { position: relative; }
-.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 42vw; padding: 6px 13px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+.fl-child-assignment-wrap { position: relative; flex: 0 1 auto; min-width: 0; }
+.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 42vw; min-width: 0; padding: 6px 13px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .fl-child-assignment-pill:hover { background: #fdecc4; border-color: #e8cf94; box-shadow: 0 2px 8px rgba(138, 109, 31, .12); }
 .fl-child-assignment-pill:disabled { cursor: default; }
 .fl-child-assignment-pill:disabled:hover { background: #fff7e6; border-color: #f2e2bd; box-shadow: none; }
@@ -453,10 +459,25 @@ html, body, #root { margin: 0; height: 100%; }
 /* Child mode has no left rail, so its side panel matches parent mode's usual
    (rail-closed) width — chat gets 1fr, side panel gets 348px + the 244px the
    rail would otherwise take, exactly like .fl-shell[data-rail="closed"]. */
-.fl-child-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) calc(348px + 244px); }
-.fl-child-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* The right pane's width is set by the widen/restore button in the worksheet
+   toolbar (--child-side-w, from the persisted preference). Not draggable on
+   purpose — see the comment in LearningApp.tsx. */
+.fl-child-body { flex: 1; min-height: 0; display: grid;
+  /* The chat's 400px floor is enforced here as well as in JS. The grid wins if
+     the two ever disagree, so the chat can never be crushed to unusable by a
+     stale stored width — it just gives the worksheet less than it asked for. */
+  grid-template-columns: minmax(min(400px, 100%), 1fr) var(--child-side-w, calc(348px + 244px)); }
+/* Animate the change so a tap reads as the panel growing, not as a jump. */
+.fl-child-body { transition: grid-template-columns .18s ease; }
+@media (prefers-reduced-motion: reduce) { .fl-child-body { transition: none; } }
+.fl-child-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; container-name: childchat; }
 .fl-child-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 10px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
-.fl-child-id { display: flex; align-items: center; gap: 12px; }
+.fl-child-id { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; }
+/* Never wrap the greeting mid-phrase: with flex shrink allowed it collapsed to
+   one word per line once the worksheet was widened. The activity pill is the
+   element that gives way instead (it truncates). */
+.fl-child-hi { min-width: 0; }
+.fl-child-hi strong, .fl-child-hi small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-child-avatar.is-big { width: 46px; height: 46px; font-size: var(--text-subheading); }
 .fl-child-hi strong { display: block; color: var(--heading); font-size: var(--text-subheading); font-weight: 800; }
 .fl-child-hi small { color: #5f708d; font-size: var(--text-secondary); }
@@ -794,6 +815,38 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-celebration-star { color: #e0a51c; filter: drop-shadow(0 1px 2px rgba(224, 165, 28, .35)); animation: fl-star-pop .5s cubic-bezier(.34, 1.56, .64, 1) backwards; }
 .fl-celebration-text { color: #8a5c0a; font-weight: 650; font-size: var(--text-secondary); }
 @keyframes fl-celebration-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* --- StartBurst: the moment she begins an activity ---------------------------
+   Sits over the whole child screen; pointer-events:none throughout so it can
+   never intercept a tap. Same amber as .fl-celebration so the two celebratory
+   moments feel like one product.
+
+   Each ray carries the DIRECTION as a static inline transform, and the star
+   inside it animates only fixed values. No var() inside @keyframes — animating a
+   transform assembled from custom properties is fragile and silently produced
+   motionless stars. */
+.fl-start-burst { position: fixed; inset: 0; z-index: 60; pointer-events: none;
+  display: grid; place-items: center; }
+.fl-start-burst-ray { position: absolute; display: block; width: 0; height: 0;
+  /* transform (the ray's angle) is set inline per star */ }
+.fl-start-burst-star { position: absolute; left: 0; top: 0; color: #e9b53c;
+  filter: drop-shadow(0 2px 6px rgba(224, 165, 28, .45));
+  animation: fl-burst-out 1.25s cubic-bezier(.22, 1, .36, 1) both; }
+.fl-start-burst-core { position: absolute; color: #f6b93b;
+  filter: drop-shadow(0 3px 10px rgba(224, 165, 28, .5));
+  animation: fl-burst-core 1.1s cubic-bezier(.22, 1, .36, 1) both; }
+/* Fly outward along the ray's own axis while spinning, then fade. */
+@keyframes fl-burst-out {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3) rotate(0deg); }
+  30%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -46vmin) scale(1) rotate(540deg); }
+}
+@keyframes fl-burst-core {
+  0%   { opacity: 0; transform: scale(.4) rotate(-30deg); }
+  40%  { opacity: 1; transform: scale(1.15) rotate(10deg); }
+  100% { opacity: 0; transform: scale(.9) rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) { .fl-start-burst { display: none; } }
 @keyframes fl-star-pop { 0% { opacity: 0; transform: scale(0) rotate(-25deg); } 60% { opacity: 1; transform: scale(1.25) rotate(8deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
 .fl-child-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
 .fl-child-composer textarea { min-width: 0; min-height: 42px; max-height: 160px; padding: 10px 0 10px 8px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
@@ -810,6 +863,32 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-child-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 14px; border-radius: 14px; background: #effbf4; color: #2c6b49; font-size: var(--text-secondary); line-height: 1.5; }
 .fl-child-note svg { flex: 0 0 auto; margin-top: 2px; color: #2aa96a; }
 
+.fl-child-assignment-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Progressive steps as the CHAT pane narrows (the worksheet being widened is the
+   usual cause). Each step drops the least useful thing next, so the greeting and
+   the activity name survive longest.
+   Keyed to the pane, not the viewport — the window can be wide while this pane is
+   400px, which a media query cannot see. */
+@container childchat (max-width: 560px) {
+  .fl-child-hi small { display: none; }              /* subtitle first */
+}
+@container childchat (max-width: 470px) {
+  .fl-parent-return > span { display: none; }        /* then the button's label */
+  .fl-parent-return { padding: 7px 9px; }
+}
+@container childchat (max-width: 440px) {
+  .fl-child-top { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  /* Collapse the activity pill to its icon. The activity's name is already shown
+     in the worksheet's own toolbar right beside this, so the text is the redundant
+     part — but keep the button itself, because it is the only way to the
+     Goal/Plan popover. */
+  .fl-child-assignment-pill > span { display: none; }
+  .fl-child-assignment-pill { padding: 6px 9px; }
+}
+@container childchat (max-width: 360px) {
+  .fl-child-hi strong { font-size: 15px; }
+  .fl-header-logo { display: none; }
+}
 @media (max-width: 900px) { .fl-child-body { grid-template-columns: 1fr; } }
 
 @media (max-width: 1180px) {

@@ -20,7 +20,22 @@ images, or network calls.
   into it expecting something to happen, and nothing will. Write "try it yourself"
   questions as plain text with space to work on paper.
   - BAD: `<input type="text" placeholder="Type your answer...">`
-  - GOOD: `<p><strong>1. What is 2/5 + 1/5?</strong></p><div class="answer-space"></div>`
+- **Wrap every question in `<div class="q" id="q1">`**, the id's number matching the
+  question's own. This is load-bearing, not tidiness: the app opens the page AT the
+  first `.q` that has no answer recorded inside it, so the child lands on the question
+  she's up to instead of back at the top every time the tutor records something. A
+  question outside a `.q` is invisible to that, and the page keeps reopening at the top.
+  - GOOD:
+    ```html
+    <div class="q" id="q1">
+      <p><strong>1. What is 2/5 + 1/5?</strong> <span class="badge">2 marks</span></p>
+      <div class="answer-space"></div>
+    </div>
+    ```
+- **`.answer-space` is the blank for working on paper, and belongs to an UNANSWERED
+  question only.** When the tutor records an answer it replaces that question's
+  `.answer-space` with the `.answered-note`. Leaving both makes a finished question
+  look unfinished and invites her to answer it twice.
 - **No click-to-REVEAL** — no `<details>/<summary>`, no tap-to-flip cards. They
   silently show hidden content with no record it happened, so Quill never learns she
   looked or what she guessed. Write the "guess before you peek" moment as plain text
@@ -71,7 +86,11 @@ images, or network calls.
   ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
   .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
   .note{background:var(--sun-soft);border-radius:12px;padding:12px 16px;color:#6f5a2a;font-size:14px;margin-top:14px}
-  .answered-note{color:var(--good);font-size:13px;font-weight:600;margin:8px 0 0}
+  /* Deliberately NEUTRAL — not green, no tick. This records WHAT she answered,
+     never whether it was right; a green tick was being read as "correct" by both
+     parent and child. Reads as a pencil note in the margin. */
+  .answered-note{color:var(--muted);font-size:13px;margin:8px 0 0;
+    padding:7px 11px;background:#f4f1ea;border-left:3px solid #d9d2c4;border-radius:8px}
   .foot{color:var(--muted);font-size:13px;margin-top:26px;text-align:center}
   /* --- showing data: a meter row + status chip. See "Showing data" below. --- */
   .rows{display:flex;flex-direction:column;gap:10px;margin:10px 0}
@@ -119,6 +138,13 @@ images, or network calls.
 Use `.card` for each section, `.badge` for marks or a "Current" tag, `.good`/`.focus`
 for going-well / to-practise, a `.grid` of `.card`s for the academic map's subjects,
 `.note` for honest caveats, and `.answered-note` for the tutor's progress marks.
+
+`.answered-note` records WHAT she answered and never whether it was right. Write it
+as `✎ Answered: <em>her words</em>` — a pencil, never a tick, and never green. A tick
+and a green note were both being read as "correct" by the parent AND the child, which
+quietly turns a neutral record into a grade the tutor never gave — and under a strict
+`teaching_mode` the tutor must not reveal correctness at all. Marking is the parent's
+job, from the answer key.
 
 ## Showing data
 

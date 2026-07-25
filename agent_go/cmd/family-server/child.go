@@ -77,12 +77,21 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		Name: "open_file",
 		Description: "Show a lesson, worksheet, or one of your own saved pages to " + childDisplayName(s.Child) +
 			" on the right side of their screen. Call this when you want them to look at a specific study sheet, " +
-			"practice test, or their own work while you talk about it. Pass the workspace-relative path.",
+			"practice test, or their own work while you talk about it. Pass the workspace-relative path. " +
+			"By default the page scrolls to the first question with no answer recorded yet — the one they're up to — " +
+			"so you do NOT need to do anything for normal front-to-back work. Pass focus ONLY when you mean a " +
+			"different spot: revisiting a question they already answered, or pointing at a specific section of a " +
+			"study sheet.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"},
+				"focus": map[string]interface{}{
+					"type": "string",
+					"description": "OPTIONAL id of the element to scroll to, e.g. \"q4\" for question 4 (questions are wrapped in <div class=\"q\" id=\"q4\">). " +
+						"Omit to land on the first unanswered question automatically. Ignored if no such id exists on the page.",
+				},
 			},
 			"required": []string{"path"},
 		},
@@ -92,8 +101,17 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 			if !childCanSee(p) {
 				return "", fmt.Errorf("that file isn't available on the child's screen")
 			}
+			// Accept "q4", "#q4" or "4" — the model reaches for all three, and
+			// normalizing here beats an id that silently doesn't match.
+			focus := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(fmt.Sprint(args["focus"])), "#"))
+			if focus == "<nil>" {
+				focus = ""
+			}
+			if focus != "" && focus[0] >= '0' && focus[0] <= '9' {
+				focus = "q" + focus
+			}
 			evMu.Lock()
-			events = append(events, toolEvent{Tool: "open_file", Path: p})
+			events = append(events, toolEvent{Tool: "open_file", Path: p, Focus: focus})
 			evMu.Unlock()
 			return fmt.Sprintf(`{"status":"ok","opened":%q}`, p), nil
 		},
@@ -221,12 +239,24 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider: provider,
-		// CHILD Mode uses the fast tier (Claude Code -> haiku; codex-cli ->
-		// gpt-5.6-terra, see lowTierModelID) for short, one-at-a-time tutoring
-		// turns, paired with LOW reasoning effort — latency matters far more
-		// than deep reasoning for this kind of short back-and-forth turn.
-		ModelID:         lowTierModelID(provider),
-		ReasoningEffort: "low",
+		// Child Mode now runs the SAME model and reasoning effort as Parent Mode.
+		//
+		// It used to take a deliberately cheaper tier (lowTierModelID — haiku for
+		// Claude Code, composer-2.5 for Cursor) with "low" effort, on the theory
+		// that short one-at-a-time tutoring turns want latency over depth. That
+		// traded away quality on exactly the judgment that has to be right: how
+		// much to reveal under teaching_mode, whether her answer is actually
+		// correct, and which specific step to point at when it isn't. A weaker
+		// model being vague about right-vs-wrong is a worse experience than a
+		// slightly slower one being clear.
+		//
+		// This is ONLY the model/effort. The child's sandbox, narrow tool set and
+		// separate prompt are unchanged and deliberately stay that way — she must
+		// never reach the *-KEY.md answer keys, other activities, or the parent's
+		// connectors. See parent_tools.go on why Child Mode is excluded from the
+		// shared parent manifest.
+		ModelID:         mediumTierModelID(provider),
+		ReasoningEffort: "medium",
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle
