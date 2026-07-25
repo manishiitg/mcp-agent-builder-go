@@ -26,7 +26,11 @@ type debugToolCall struct {
 // tool calls could otherwise look totally silent for minutes, then dump every
 // debug bubble at once right at the end). Purely observational: never changes
 // a tool's behavior, arguments, or return value.
-func withToolCallDebug(mu *sync.Mutex, calls *[]debugToolCall, conversationID string, tools []agentsession.Tool) []agentsession.Tool {
+// It also feeds the turn's latency trace (turntrace.go) — this is already the
+// one place every tool call funnels through, so timing them here keeps that
+// measurement identical across surfaces and engines instead of per-tool.
+// trace may be nil.
+func withToolCallDebug(mu *sync.Mutex, calls *[]debugToolCall, conversationID string, trace *turnTrace, tools []agentsession.Tool) []agentsession.Tool {
 	out := make([]agentsession.Tool, len(tools))
 	for i, t := range tools {
 		name := t.Name
@@ -36,6 +40,7 @@ func withToolCallDebug(mu *sync.Mutex, calls *[]debugToolCall, conversationID st
 			mu.Lock()
 			*calls = append(*calls, debugToolCall{Tool: name, Args: argSummary})
 			mu.Unlock()
+			trace.tool(name)
 			statusHubs.publishToolCall(conversationID, name, argSummary)
 			return orig(ctx, args)
 		}

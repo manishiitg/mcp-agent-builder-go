@@ -58,6 +58,7 @@ var reservedTopLevel = map[string]bool{
 	"backup":                  true,
 	"publish":                 true,
 	"workspace.pre-v2-backup": true,
+	archiveDir:                true, // see archive.go — retired activities, excluded from routine scans
 }
 
 // isSubjectDir reports whether a top-level entry name is a Subject folder

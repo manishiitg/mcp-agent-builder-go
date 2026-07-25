@@ -217,6 +217,8 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
 
+	trace := newTurnTrace("child", s.Engine)
+
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider: provider,
 		// CHILD Mode uses the fast tier (Claude Code -> haiku; codex-cli ->
@@ -234,9 +236,10 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		SessionHandle:             loadSessionHandle("child", activityDir, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
 		StreamCallback: func(text string) {
+			trace.delta()
 			statusHubs.publishDelta("child:"+activityDir, text)
 		},
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "child:"+activityDir, withLiveStatus("child:"+activityDir, []agentsession.Tool{
+		Tools: withToolCallDebug(&debugMu, &debugCalls, "child:"+activityDir, trace, withLiveStatus("child:"+activityDir, []agentsession.Tool{
 			childShellTool(), childOpenFile, childSuggestActions, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
 			childShowSceneTool(func(html string) {
 				sceneMu.Lock()
@@ -246,11 +249,13 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		})),
 	})
 	if err != nil {
+		trace.finish("", err)
 		msg := friendlyTurnError(err)
 		persistConversation("child", activityDir, withReply(req.Messages, msg))
 		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
 		return
 	}
+	trace.sessionReady(sess.Resumed())
 	defer sess.Close()
 
 	history := make([]agentsession.Message, 0, len(req.Messages))
@@ -268,6 +273,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)
+	trace.finish(reply, err)
 	if err != nil {
 		// Persist the turn even on failure — see chat.go's parent handler for why.
 		msg := friendlyTurnError(err)

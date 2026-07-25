@@ -511,6 +511,21 @@ func sanitizeReply(reply string) string {
 // usage stats). May be nil after Close.
 func (s *Session) Agent() *mcpagent.Agent { return s.agent }
 
+// Resumed reports whether this session continues an existing coding-agent
+// session — a warm tmux owner in this process, or a restored provider-native
+// --resume handle — rather than cold-starting the CLI.
+//
+// Exposed for latency attribution. A cold start pays the coding CLI's entire
+// launch cost (spawn tmux, boot the CLI, load its own context) before the model
+// sees a single token, and in a turn's total duration that is indistinguishable
+// from a slow model unless it's recorded separately. See turntrace.go.
+func (s *Session) Resumed() bool {
+	if s == nil {
+		return false
+	}
+	return s.holdsPriorContext
+}
+
 // Handle returns the coding agent's latest provider-native continuation handle
 // (Claude Code's `--resume` UUID, etc.), captured from the just-completed turn.
 // Persist it per conversation and pass it back via Config.SessionHandle next turn

@@ -12,14 +12,19 @@ learning, AND how the parent can help them learn it better.
    - List `materials/` — every subject and its topics.
    - Read the `.meta.json` files for each material (subject, topic, type, summary).
    - Note generated work: walk the top-level Subject folders (everything except
-     `materials/`, `reports/`, `memory/`, `conversations/`, `inbox/`, `skills/`) for
-     activity folders — each has an `activity.json` (which topic study material /
-     tests exist for).
+     `materials/`, `reports/`, `memory/`, `conversations/`, `inbox/`, `skills/`,
+     `archive/`) for activity folders — each has an `activity.json` (which topic
+     study material / tests exist for). `archive/` holds activities untouched for a
+     while, retired out of this map on purpose to keep it a snapshot of what's
+     actually current — skip it here (the Progress Report's cumulative Overall
+     section is where lifetime totals live, and it does still include it).
    - Check for real attempt evidence per topic: read each activity's own
      `attempts/*.json` (the child's saved answers) and skim its `conversation.json`
-     (plus the parent's own `conversations/parent.json`) for anything you observed
-     about that topic (e.g. "solved the a=1 case, stuck on a≠1"). Use this for a
-     short, honest status per topic — never a numeric score, never invented.
+     for anything you observed about that topic (e.g. "solved the a=1 case, stuck on
+     a≠1"). Use this for a short, honest status per topic — never a numeric score,
+     never invented. The parent's own thread (`conversations/parent.json`) only grows,
+     so don't `cat` it in full here — `tail -c 20000` is enough to catch anything
+     recent worth folding in; you're not relying on it as your primary evidence anyway.
    - **For the coaching section**: read activity `conversation.json` files for real
      patterns — what she responds well to (e.g. word problems, worked examples),
      what trips her up (e.g. abstract notation, a specific step), how many attempts

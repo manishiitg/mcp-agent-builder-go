@@ -73,6 +73,26 @@ images, or network calls.
   .note{background:var(--sun-soft);border-radius:12px;padding:12px 16px;color:#6f5a2a;font-size:14px;margin-top:14px}
   .answered-note{color:var(--good);font-size:13px;font-weight:600;margin:8px 0 0}
   .foot{color:var(--muted);font-size:13px;margin-top:26px;text-align:center}
+  /* --- showing data: a meter row + status chip. See "Showing data" below. --- */
+  .rows{display:flex;flex-direction:column;gap:10px;margin:10px 0}
+  .row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:baseline}
+  .row .name{font-size:14px;font-weight:600}
+  .row .val{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+  /* Track + fill. The fill is a thin mark anchored to the left with rounded
+     data-ends, per the shared mark spec. Width is set inline as a percentage. */
+  .meter{grid-column:1/-1;height:9px;border-radius:999px;background:#efe7d8;overflow:hidden}
+  .meter>span{display:block;height:100%;border-radius:999px;background:var(--good);
+    /* grows on load so the page feels alive without anything to click */
+    animation:grow .8s ease-out both}
+  .meter.is-focus>span{background:var(--focus)}
+  .meter.is-none>span{background:#c9d0dc}
+  @keyframes grow{from{width:0 !important}}
+  @media (prefers-reduced-motion:reduce){.meter>span{animation:none}}
+  /* Status chip. ALWAYS carries its word + mark — never colour alone. */
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;
+    padding:3px 10px;border-radius:999px;background:#eaf7ee;color:#26765a}
+  .chip.is-focus{background:var(--sun-soft);color:#8a6114}
+  .chip.is-none{background:#eef1f6;color:#5c6d88}
 </style>
 </head>
 <body>
@@ -99,6 +119,43 @@ images, or network calls.
 Use `.card` for each section, `.badge` for marks or a "Current" tag, `.good`/`.focus`
 for going-well / to-practise, a `.grid` of `.card`s for the academic map's subjects,
 `.note` for honest caveats, and `.answered-note` for the tutor's progress marks.
+
+## Showing data
+
+Prefer something a parent can SEE over a paragraph they have to read. Where a page
+reports how things stand per subject or topic, lead with the visual and let prose
+explain only what a picture can't.
+
+Aim for a warm **teacher's report to a family** — not a business dashboard. The
+child reads these pages too, so keep the feel of something a favourite teacher
+wrote: a subject icon or emoji beside each heading, rounded cards, a kind sentence
+next to the numbers, and the child addressed by name where it fits. Imaginative and
+encouraging beats clinical and dense. What must stay strict is the *honesty* of the
+numbers, never the tone around them: no KPI walls, no grades-as-verdict, no red.
+
+- **A meter row per topic** is the workhorse — name, a short value, and a bar:
+  ```html
+  <div class="row"><span class="name">Fractions</span><span class="val">2 of 8 · needs work</span>
+    <span class="meter is-focus"><span style="width:25%"></span></span></div>
+  ```
+  Wrap a set in `<div class="rows">`. Bars sharing a card must share one scale, so
+  their lengths are comparable at a glance.
+- **Three states only**, each with its own class AND its own word: secure
+  (`.meter`/`.chip`, "confident"), needs work (`.is-focus`), not started
+  (`.is-none`). Never a fourth colour.
+- **Always label the number.** Every bar carries its real value as text, and every
+  chip carries its word — never colour alone. This is not decoration: the green and
+  amber are only ΔE 6.2 apart for red-blind (protanopia) readers, measured, so the
+  colour is a hint and the text is the actual information. A bar with no number is a
+  bug.
+- **Never invent a number to make a bar.** A bar needs a real count ("2 of 8
+  attempted"). With no evidence, use `.is-none` and the word "not started" — an
+  honest empty state beats a fabricated 40%.
+- **No pie or donut charts** (angles are hard to compare, and topic counts are
+  usually too small to be meaningful), and never two different scales in one chart.
+  A simple bar or a count is almost always the right answer here.
+- Motion is passive and already handled: bars grow on load, and reduced-motion is
+  respected. Nothing here is clickable, so none of the SQ.choose rules apply.
 
 The parent can print any page from the print icon in the app's viewer — no print
 button belongs in the generated page itself.

@@ -148,7 +148,7 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"SKILLS — short how-to guides in skills/. Read the relevant one before doing that kind of work:\n" +
 		"- read-file — extract content from any format (PDF, Word, Excel, images, scans).\n" +
 		"- process-file — file what the parent uploaded into materials/.\n" +
-		"- create-study-material, create-test — the two main activity types.\n" +
+		"- create-study-material, create-test — the two main activity types. BOTH start by reading reports/progress.html, so what you build targets the specific moves " + name + " is actually stuck on rather than being generically right for her grade. If that report looks stale against the evidence you can see, refresh it first (create-progress-report) and then build from it.\n" +
 		"- teach-coding — read FIRST, alongside the above, when the topic is coding; the right approach differs sharply by age.\n" +
 		"- discover-something-new — a fun, off-syllabus curiosity activity.\n" +
 		"- create-progress-report, create-academic-map — the two pages in reports/.\n" +
@@ -390,6 +390,8 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
 
+	trace := newTurnTrace("parent", s.Engine)
+
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:        provider,
 		ModelID:         mediumTierModelID(provider),
@@ -406,12 +408,13 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		SessionHandle:             loadSessionHandle("parent", req.ConversationID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
 		StreamCallback: func(text string) {
+			trace.delta()
 			statusHubs.publishDelta("parent:"+req.ConversationID, text)
 		},
 		// The ONE canonical parent manifest (parent_tools.go) — identical across
 		// web chat, WhatsApp, and Pulse, because all of them share this same
 		// warm "parent" session.
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+req.ConversationID, withLiveStatus("parent:"+req.ConversationID,
+		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+req.ConversationID, trace, withLiveStatus("parent:"+req.ConversationID,
 			parentTools(s.Engine, childLabel, parentToolSinks{
 				onEvent: func(ev toolEvent) {
 					evMu.Lock()
@@ -436,11 +439,13 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 			}))),
 	})
 	if err != nil {
+		trace.finish("", err)
 		msg := friendlyTurnError(err)
 		persistConversationReply("parent", req.ConversationID, req.Messages, msg)
 		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
 		return
 	}
+	trace.sessionReady(sess.Resumed())
 	defer sess.Close() // per-turn agent only; shared bridge + warm tmux persist
 
 	history := make([]agentsession.Message, 0, len(req.Messages))
@@ -459,6 +464,7 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)
+	trace.finish(reply, err)
 	if err != nil {
 		// Persist the turn even on failure: the parent's own message must never
 		// silently vanish from the transcript, and any background work the agent

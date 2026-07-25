@@ -40,6 +40,7 @@ func emailHTMLFromText(title, body string) string {
 			inList = false
 		}
 	}
+	sawHeading := false
 	for _, ln := range strings.Split(body, "\n") {
 		t := strings.TrimSpace(ln)
 		if t == "" {
@@ -55,7 +56,16 @@ func emailHTMLFromText(title, body string) string {
 			b.WriteString(`<li style="margin:4px 0">` + inline(strings.TrimSpace(t[2:])) + `</li>`)
 		case strings.HasPrefix(t, "## "):
 			closeList()
-			b.WriteString(`<h3 style="font-size:16px;color:#1f2d45;margin:14px 0 6px">` + inline(strings.TrimSpace(t[3:])) + `</h3>`)
+			// A hairline divider ABOVE every heading but the first turns a
+			// multi-check digest into visually distinct blocks instead of
+			// same-weight headings running together down the page — the
+			// actual complaint this was built to fix ("one long paragraph").
+			style := "font-size:16px;color:#1f2d45;margin:16px 0 8px"
+			if sawHeading {
+				style = "font-size:16px;color:#1f2d45;margin:20px 0 8px;padding-top:16px;border-top:1px solid #e7ebf3"
+			}
+			b.WriteString(`<h3 style="` + style + `">` + inline(strings.TrimSpace(t[3:])) + `</h3>`)
+			sawHeading = true
 		default:
 			closeList()
 			b.WriteString(`<p style="margin:8px 0">` + inline(t) + `</p>`)
@@ -77,19 +87,21 @@ type notifyResult struct {
 	Failed    map[string]string `json:"failed,omitempty"`
 }
 
-// deliverNotification fans a notification out to every channel available right
-// now — the local desktop, WhatsApp (the paired "message yourself" chat), and
-// Gmail (an email to the connected account itself). This mirrors AgentWorks'
+// deliverNotificationHTML fans a notification out to every channel available
+// right now — the local desktop, WhatsApp (the paired "message yourself" chat),
+// and Gmail (an email to the connected account itself). This mirrors AgentWorks'
 // notify_user multi-channel fan-out, simplified for a single family: every
 // channel targets the parent's own device/account, so there's no per-user
 // routing. A channel that isn't set up is skipped (not a failure); a channel
 // that's set up but errors is recorded as failed.
-func deliverNotification(ctx context.Context, title, msg string) notifyResult {
-	return deliverNotificationHTML(ctx, title, msg, "")
-}
-
-// deliverNotificationHTML is deliverNotification with an explicit HTML email
-// body (inline-styled, as Gmail strips <style>/<head>/class CSS — the same
+//
+// (A plain deliverNotification(ctx, title, msg) wrapper used to sit here for
+// callers with no HTML body. Pulse was its last user and now has the agent call
+// notify_user itself, so it went with that change rather than lingering as dead
+// code — pass "" for htmlBody to get the same auto-formatting.)
+//
+// It takes an explicit HTML email body (inline-styled, as Gmail strips
+// <style>/<head>/class CSS — the same
 // contract AgentWorks' notify_user email_html uses). When htmlBody is empty the
 // plain message is auto-wrapped into a simple inline-styled HTML email, so every
 // notification email renders richly (not a bare plain-text blob) — this is what
