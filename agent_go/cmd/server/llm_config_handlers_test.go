@@ -274,8 +274,8 @@ func TestPiCLIIsPublishedAsCodingAgent(t *testing.T) {
 	if candidate.Usable {
 		t.Fatal("usable = true, want false when pi/npx runtime is missing")
 	}
-	if len(candidate.Options) != len(piFallbackModels()) || candidate.Options[0] != "google/gemini-3.5-flash" {
-		t.Fatalf("options = %v, want curated Pi shortlist starting with google/gemini-3.5-flash", candidate.Options)
+	if len(candidate.Options) != len(piFallbackModels()) || candidate.Options[0] != "google/gemini-3.6-flash" {
+		t.Fatalf("options = %v, want curated Pi shortlist starting with google/gemini-3.6-flash", candidate.Options)
 	}
 	foundOpenRouter := false
 	for _, option := range candidate.Options {

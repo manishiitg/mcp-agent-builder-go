@@ -4,6 +4,7 @@ import "testing"
 
 func TestParsePiCLIModelList(t *testing.T) {
 	output := `provider       model                          context  max-out  thinking  images
+google         gemini-3.6-flash               1.0M     65.5K    yes       yes
 google         gemini-3.5-flash               1.0M     65.5K    yes       yes
 google         gemma-4-26b-a4b-it             262.1K   32.8K    yes       yes
 google-vertex  gemini-3.5-flash               1.0M     65.5K    yes       yes
@@ -13,32 +14,35 @@ kimi-coding    k2p7                           262.1K   32.8K    yes       yes
 `
 
 	models := parsePiCLIModelList(output)
-	if len(models) != 6 {
-		t.Fatalf("models len = %d, want 6: %#v", len(models), models)
+	if len(models) != 7 {
+		t.Fatalf("models len = %d, want 7: %#v", len(models), models)
 	}
-	if models[0].ModelID != "google/gemini-3.5-flash" {
+	if models[0].ModelID != "google/gemini-3.6-flash" {
 		t.Fatalf("first model id = %q", models[0].ModelID)
 	}
 	if !models[0].IsDefault {
-		t.Fatal("google/gemini-3.5-flash should be marked default")
+		t.Fatal("google/gemini-3.6-flash should be marked default")
 	}
 	if models[0].ContextWindow != 1_000_000 {
 		t.Fatalf("context = %d, want 1000000", models[0].ContextWindow)
 	}
-	if models[1].ContextWindow != 262_100 {
-		t.Fatalf("context = %d, want 262100", models[1].ContextWindow)
+	if models[1].IsDefault {
+		t.Fatal("google/gemini-3.5-flash should not be marked default")
 	}
-	if models[2].Group != "Google Vertex" {
-		t.Fatalf("group = %q, want Google Vertex", models[2].Group)
+	if models[2].ContextWindow != 262_100 {
+		t.Fatalf("context = %d, want 262100", models[2].ContextWindow)
 	}
-	if models[3].ModelID != "zai/glm-5.2" || models[3].Group != "Z.AI" {
-		t.Fatalf("zai model = %#v, want zai/glm-5.2 in Z.AI group", models[3])
+	if models[3].Group != "Google Vertex" {
+		t.Fatalf("group = %q, want Google Vertex", models[3].Group)
 	}
-	if models[4].ModelID != "minimax/MiniMax-M3" || models[4].Group != "MiniMax" {
-		t.Fatalf("minimax model = %#v, want minimax/MiniMax-M3 in MiniMax group", models[4])
+	if models[4].ModelID != "zai/glm-5.2" || models[4].Group != "Z.AI" {
+		t.Fatalf("zai model = %#v, want zai/glm-5.2 in Z.AI group", models[4])
 	}
-	if models[5].ModelID != "kimi-coding/k2p7" || models[5].Group != "Kimi" {
-		t.Fatalf("kimi model = %#v, want kimi-coding/k2p7 in Kimi group", models[5])
+	if models[5].ModelID != "minimax/MiniMax-M3" || models[5].Group != "MiniMax" {
+		t.Fatalf("minimax model = %#v, want minimax/MiniMax-M3 in MiniMax group", models[5])
+	}
+	if models[6].ModelID != "kimi-coding/k2p7" || models[6].Group != "Kimi" {
+		t.Fatalf("kimi model = %#v, want kimi-coding/k2p7 in Kimi group", models[6])
 	}
 }
 
@@ -56,7 +60,7 @@ func TestPiFallbackModelsKeepProviderShortlistsSmall(t *testing.T) {
 		if counts[group] == 0 {
 			t.Fatalf("Pi shortlist group %q is empty: %#v", group, counts)
 		}
-		max := 2
+		max := 3
 		if group == "OpenRouter" {
 			max = 10
 		}
@@ -73,6 +77,28 @@ func TestPiFallbackModelsKeepProviderShortlistsSmall(t *testing.T) {
 	}
 	if !foundOpenRouterTopModel {
 		t.Fatal("Pi shortlist missing OpenRouter MiniMax M3 top model")
+	}
+}
+
+func TestPiFallbackModelsIncludeCurrentProviderCatalog(t *testing.T) {
+	models := piFallbackModels()
+	for _, modelID := range []string{
+		"google/gemini-3.6-flash",
+		"google/gemini-3.5-flash-lite",
+	} {
+		found := false
+		for _, model := range models {
+			if model.ModelID == modelID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Pi shortlist missing provider catalog model %q: %#v", modelID, models)
+		}
+	}
+	if models[0].ModelID != "google/gemini-3.6-flash" || !models[0].IsDefault {
+		t.Fatalf("first Pi model = %#v, want Gemini 3.6 Flash default", models[0])
 	}
 }
 
@@ -108,14 +134,14 @@ func TestProviderModelMetadataIncludesClaudeCodeSonnet5(t *testing.T) {
 func TestMergePiModelEntriesKeepsCuratedModelsFirst(t *testing.T) {
 	curated := piFallbackModels()
 	listed := []dynamicModelEntry{
-		{ModelID: "google/gemini-3.5-flash", Group: "Google"},
+		{ModelID: "google/gemini-3.6-flash", Group: "Google"},
 		{ModelID: "anthropic/claude-sonnet-4-6", Group: "Anthropic"},
 	}
 	merged := mergePiModelEntries(curated, listed)
 	if len(merged) != len(curated)+1 {
 		t.Fatalf("merged len = %d, want %d", len(merged), len(curated)+1)
 	}
-	if merged[0].ModelID != "google/gemini-3.5-flash" || !merged[0].IsDefault {
+	if merged[0].ModelID != "google/gemini-3.6-flash" || !merged[0].IsDefault {
 		t.Fatalf("first merged model = %#v, want curated default first", merged[0])
 	}
 	if merged[len(merged)-1].ModelID != "anthropic/claude-sonnet-4-6" {
