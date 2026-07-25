@@ -81,7 +81,6 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 	case "coding_agent_tmux_lifecycle":
 		ac.CodingAgentTmuxLifecycle = ""
 	case "transport":
-		ac.Transport = ""
 
 	default:
 		return false

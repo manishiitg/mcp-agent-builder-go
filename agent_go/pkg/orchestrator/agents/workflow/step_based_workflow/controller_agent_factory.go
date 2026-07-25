@@ -49,56 +49,41 @@ func forceWorkflowClaudeCodeInteractiveTransport(config *agents.OrchestratorAgen
 	}
 }
 
+// applyWorkflowTransportToAgentConfig sets the coding-agent CLI transport for a
+// workflow EXECUTION agent (steps, message_sequence/execution-only, KB agents,
+// todo-task orchestrator). It does NOT apply to the interactive
+// workflow-builder agent, which stays on tmux because a human chats with it —
+// see forceWorkflowClaudeCodeInteractiveTransport.
+//
+// Coding-agent CLIs in a workflow ALWAYS use structured JSON. There is no
+// per-step choice: a workflow step is unattended, one-shot work, so the
+// properties that matter are the ones structured JSON gives directly rather
+// than by interpreting a terminal pane — explicit completion events (when the
+// turn is done / when to send the next message), reliable token-usage and
+// tool-call reporting, and a clean final response with no terminal wrapping or
+// ANSI. Every workflow-execution bug class this project has hit
+// (premature/missed completion, prompt text leaking into the reply, garbled
+// reassembly) comes from scraping a pane. tmux earns its place only where a
+// human can steer mid-turn — i.e. the builder/chat agents, not here.
+//
+// This reverses an earlier "always tmux for workflows" decision, which rested
+// on a belief written into this file that "Claude Code no longer supports the
+// old print/stream-json transport". That is stale: Claude Code structured is
+// live-verified and P0-certified in mcpagent
+// (TestStructuredTransportMultiTurn/Claude, multi-turn over native --resume).
 func (hcpo *StepBasedWorkflowOrchestrator) applyWorkflowTransportToAgentConfig(config *agents.OrchestratorAgentConfig, stepConfig *AgentConfigs, agentKind string) string {
 	if config == nil {
 		return ""
 	}
 	provider := config.LLMConfig.Primary.Provider
-	config.ForceStructuredCodingAgent = false
-	effectiveTransport := ""
-
-	// Workflow execution uses tmux for every CLI provider. The app repo no
-	// longer selects structured/print transports for workflow steps.
-	if common.IsCLIProvider(provider) {
-		effectiveTransport = "tmux"
-	}
-
-	if stepConfig != nil {
-		switch strings.ToLower(strings.TrimSpace(stepConfig.Transport)) {
-		case "":
-			// inherit the default computed above
-		case "tmux":
-			if common.IsCLIProvider(provider) {
-				config.ForceStructuredCodingAgent = false
-				effectiveTransport = "tmux"
-				hcpo.GetLogger().Info(fmt.Sprintf("🔧 %s transport override: tmux for CLI provider '%s'", agentKind, provider))
-			} else {
-				hcpo.GetLogger().Info(fmt.Sprintf("🔧 %s transport=tmux ignored for non-CLI provider '%s'", agentKind, provider))
-				effectiveTransport = ""
-			}
-		case "structured", "json":
-			if common.IsCLIProvider(provider) {
-				config.ForceStructuredCodingAgent = false
-				effectiveTransport = "tmux"
-				hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ %s legacy transport=%s ignored for CLI provider '%s'; using tmux", agentKind, stepConfig.Transport, provider))
-			} else {
-				hcpo.GetLogger().Info(fmt.Sprintf("🔧 %s legacy transport=%s ignored for non-CLI provider '%s'", agentKind, stepConfig.Transport, provider))
-				effectiveTransport = ""
-			}
-		default:
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Unknown %s transport=%q (allowed: 'tmux'); inheriting default", agentKind, stepConfig.Transport))
-		}
-	}
-
-	// Claude Code uses tmux only. Keep this as a final safety net for old saved
-	// step configs and fallbacks so no workflow path can request the removed
-	// print/stream-json adapter.
-	if workflowAgentConfigUsesClaudeCode(config) {
+	if !common.IsCLIProvider(provider) {
+		// Non-CLI (API) providers have no process transport at all.
 		config.ForceStructuredCodingAgent = false
-		config.ClaudeCodeTransport = mcpllm.ClaudeCodeTransportTmux
+		return ""
 	}
-
-	return effectiveTransport
+	config.ForceStructuredCodingAgent = true
+	hcpo.GetLogger().Info(fmt.Sprintf("🔧 %s transport: structured JSON for CLI provider '%s'", agentKind, provider))
+	return "structured"
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) publishWorkflowTransportContext(effectiveTransport string, stepConfig *AgentConfigs) {
@@ -921,7 +906,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBUpdateAgent(ctx context.Conte
 	// Cap below learning's 50 — KB merges should converge quickly.
 	maxTurns := 40
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	forceWorkflowClaudeCodeInteractiveTransport(config)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB update agent")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 	config.ServerNames = []string{mcpclient.NoServers}
@@ -1021,7 +1005,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	// the same headroom as reorganize (60 turns).
 	maxTurns := 60
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	forceWorkflowClaudeCodeInteractiveTransport(config)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB consolidate agent")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 	config.ServerNames = []string{mcpclient.NoServers}
@@ -1080,7 +1063,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	// but still cap to prevent runaway agents under ambiguous instructions.
 	maxTurns := 60
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	forceWorkflowClaudeCodeInteractiveTransport(config)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB reorganize agent")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 	config.ServerNames = []string{mcpclient.NoServers}
@@ -1231,7 +1213,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 4. Create config
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	forceWorkflowClaudeCodeInteractiveTransport(config)
+	// Execution-only agents (plain execution steps, message_sequence steps, repair
+	// agents, continuation recovery) are workflow steps like any other, so they
+	// follow the same transport rule instead of being pinned to tmux. This path
+	// previously never consulted the resolver at all — harmless while everything
+	// was tmux, but it would silently diverge now that structured is the default.
+	execTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "execution-only agent")
+	hcpo.publishWorkflowTransportContext(execTransport, stepConfig)
 	hcpo.disableParentAgentTimeout(config, "execution-only agent")
 
 	// Execution-only steps can run in parallel inside a group. If they all reuse the
@@ -1519,7 +1507,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 
 	// Create agent config with custom LLM if needed
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	forceWorkflowClaudeCodeInteractiveTransport(config)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "todo task orchestrator agent")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 	hcpo.disableParentAgentTimeout(config, "todo task orchestrator agent")

@@ -246,18 +246,14 @@ type AgentConfigs struct {
 	TodoTaskOrchestratorTier     *int            `json:"todo_task_orchestrator_tier,omitempty"`     // Tier for todo task orchestrator agent (1/2/3) in tiered mode
 	DisableParallelToolExecution *bool           `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
 	CodingAgentTmuxLifecycle     string          `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
-	// Transport is a legacy field kept so old step_config.json files still
-	// unmarshal. Workflow execution now uses tmux for CLI providers; old
-	// "structured"/"json" values are ignored at runtime.
-	Transport                   string `json:"transport,omitempty"`
-	DisableTierOptimization     *bool  `json:"disable_tier_optimization,omitempty"`      // If true, execution agents always use Tier 1 (high reasoning)
-	SuccessfulRuns              *int   `json:"successful_runs,omitempty"`                // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
-	ScriptedMaxFixIter          *int   `json:"learn_code_max_fix_iterations,omitempty"`  // Max LLM fix iterations when main.py execution fails (default: 5)
-	DeclaredExecutionMode       string `json:"declared_execution_mode,omitempty"`        // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
-	DeclaredExecutionModeReason string `json:"declared_execution_mode_reason,omitempty"` // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
-	DescriptionReviewed         *bool  `json:"description_reviewed,omitempty"`           // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
-	ReviewNotes                 string `json:"review_notes,omitempty"`                   // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
-	GlobalSkillObjective        string `json:"global_skill_objective,omitempty"`         // Objective for the global skill — what domain knowledge should it capture and why
+	DisableTierOptimization      *bool           `json:"disable_tier_optimization,omitempty"`       // If true, execution agents always use Tier 1 (high reasoning)
+	SuccessfulRuns               *int            `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
+	ScriptedMaxFixIter           *int            `json:"learn_code_max_fix_iterations,omitempty"`   // Max LLM fix iterations when main.py execution fails (default: 5)
+	DeclaredExecutionMode        string          `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
+	DeclaredExecutionModeReason  string          `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
+	DescriptionReviewed          *bool           `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
+	ReviewNotes                  string          `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	GlobalSkillObjective         string          `json:"global_skill_objective,omitempty"`          // Objective for the global skill — what domain knowledge should it capture and why
 }
 
 // ============================================================================

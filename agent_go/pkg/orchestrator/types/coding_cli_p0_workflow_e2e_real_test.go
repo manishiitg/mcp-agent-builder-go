@@ -104,7 +104,7 @@ func codingCLIP0Providers(t *testing.T) map[string]codingCLIP0Provider {
 		"codex-cli": {
 			name:        "codex-cli",
 			provider:    llm.ProviderCodexCLI,
-			model:       model("CODEX_CLI_WORKFLOW_P0_MODEL", "gpt-5.4-mini"),
+			model:       model("CODEX_CLI_WORKFLOW_P0_MODEL", "gpt-5.6-luna"),
 			requiredBin: "codex",
 			apiKeys:     &llm.ProviderAPIKeys{CodexCLI: optional(os.Getenv("CODEX_API_KEY"))},
 			cleanup:     func(ctx context.Context) { _ = llmproviders.CleanupCodexCLIInteractiveSessions(ctx) },

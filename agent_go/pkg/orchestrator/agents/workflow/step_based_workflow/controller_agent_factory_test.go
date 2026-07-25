@@ -241,50 +241,26 @@ func TestAllWorkflowAgentFactoriesEnableWorkspaceIsolation(t *testing.T) {
 	}
 }
 
-func TestApplyStepConfigToAgentConfigKeepsTmuxDefaultForOtherCLIWorkflowSteps(t *testing.T) {
+// TestWorkflowCLIStepsAlwaysUseStructuredTransport pins the workflow transport
+// contract: a coding-agent CLI running a workflow step ALWAYS uses structured
+// JSON, and there is no per-step override (the step_config "transport" field
+// was removed). Non-CLI providers have no process transport at all.
+//
+// This replaces the previous always-tmux tests. The old rule was justified by a
+// belief that Claude Code had dropped print/stream-json support; that is stale
+// (mcpagent P0-certifies Claude structured multi-turn over native --resume).
+func TestWorkflowCLIStepsAlwaysUseStructuredTransport(t *testing.T) {
 	tests := []struct {
 		name                string
 		provider            string
-		stepConfig          *AgentConfigs
-		wantForceStructured bool
-	}{
-		{name: "codex default", provider: string(mcpllm.ProviderCodexCLI), stepConfig: nil},
-		{name: "codex explicit tmux", provider: string(mcpllm.ProviderCodexCLI), stepConfig: &AgentConfigs{Transport: "tmux"}},
-		{name: "codex explicit structured is ignored", provider: string(mcpllm.ProviderCodexCLI), stepConfig: &AgentConfigs{Transport: "structured"}},
-		{name: "claude default", provider: string(mcpllm.ProviderClaudeCode), stepConfig: nil},
-		{name: "claude explicit structured is ignored", provider: string(mcpllm.ProviderClaudeCode), stepConfig: &AgentConfigs{Transport: "structured"}},
-		{name: "cursor default", provider: string(mcpllm.ProviderCursorCLI), stepConfig: nil},
-		{name: "cursor explicit structured is ignored", provider: string(mcpllm.ProviderCursorCLI), stepConfig: &AgentConfigs{Transport: "structured"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			hcpo := newAgentFactoryTestOrchestrator(t)
-			config := agents.NewOrchestratorAgentConfig("step-agent")
-			config.LLMConfig.Primary.Provider = tt.provider
-
-			hcpo.applyStepConfigToAgentConfig(config, tt.stepConfig, false)
-
-			if config.ForceStructuredCodingAgent != tt.wantForceStructured {
-				t.Fatalf("ForceStructuredCodingAgent = %v, want %v", config.ForceStructuredCodingAgent, tt.wantForceStructured)
-			}
-		})
-	}
-}
-
-func TestWorkflowTransportResolverAppliesDedicatedModes(t *testing.T) {
-	tests := []struct {
-		name                string
-		provider            string
-		stepConfig          *AgentConfigs
 		wantTransport       string
 		wantForceStructured bool
 	}{
-		{name: "codex defaults tmux", provider: string(mcpllm.ProviderCodexCLI), wantTransport: "tmux"},
-		{name: "codex explicit structured ignored", provider: string(mcpllm.ProviderCodexCLI), stepConfig: &AgentConfigs{Transport: "structured"}, wantTransport: "tmux"},
-		{name: "claude explicit structured ignored", provider: string(mcpllm.ProviderClaudeCode), stepConfig: &AgentConfigs{Transport: "structured"}, wantTransport: "tmux"},
-		{name: "cursor explicit structured ignored", provider: string(mcpllm.ProviderCursorCLI), stepConfig: &AgentConfigs{Transport: "structured"}, wantTransport: "tmux"},
-		{name: "api ignores tmux", provider: "anthropic", stepConfig: &AgentConfigs{Transport: "tmux"}, wantTransport: ""},
+		{name: "codex", provider: string(mcpllm.ProviderCodexCLI), wantTransport: "structured", wantForceStructured: true},
+		{name: "claude", provider: string(mcpllm.ProviderClaudeCode), wantTransport: "structured", wantForceStructured: true},
+		{name: "cursor", provider: string(mcpllm.ProviderCursorCLI), wantTransport: "structured", wantForceStructured: true},
+		{name: "pi", provider: string(mcpllm.ProviderPiCLI), wantTransport: "structured", wantForceStructured: true},
+		{name: "api provider has no transport", provider: "anthropic", wantTransport: "", wantForceStructured: false},
 	}
 
 	for _, tt := range tests {
@@ -293,7 +269,7 @@ func TestWorkflowTransportResolverAppliesDedicatedModes(t *testing.T) {
 			config := agents.NewOrchestratorAgentConfig("step-agent")
 			config.LLMConfig.Primary.Provider = tt.provider
 
-			got := hcpo.applyWorkflowTransportToAgentConfig(config, tt.stepConfig, "test agent")
+			got := hcpo.applyWorkflowTransportToAgentConfig(config, nil, "test agent")
 
 			if got != tt.wantTransport {
 				t.Fatalf("transport = %q, want %q", got, tt.wantTransport)
@@ -627,21 +603,26 @@ func TestClaudeCodeTransportHelpers(t *testing.T) {
 	}
 }
 
-func TestWorkflowClaudeCodeIgnoresLegacyStructuredTransport(t *testing.T) {
+// TestWorkflowClaudeCodeUsesStructuredTransport pins that Claude Code in a
+// workflow step gets structured JSON like every other CLI provider, and that
+// ClaudeCodeTransport (which only distinguishes tmux variants and has no
+// structured value) is NOT pinned to tmux in that case — pinning it there would
+// leave the config self-contradictory.
+func TestWorkflowClaudeCodeUsesStructuredTransport(t *testing.T) {
 	hcpo := newAgentFactoryTestOrchestrator(t)
 	c := agents.NewOrchestratorAgentConfig("workflow-runtime-agent")
 	c.LLMConfig.Primary.Provider = string(mcpllm.ProviderClaudeCode)
 
-	got := hcpo.applyWorkflowTransportToAgentConfig(c, &AgentConfigs{Transport: "structured"}, "runtime")
+	got := hcpo.applyWorkflowTransportToAgentConfig(c, nil, "runtime")
 
-	if got != "tmux" {
-		t.Fatalf("transport=structured = %q, want tmux", got)
+	if got != "structured" {
+		t.Fatalf("transport = %q, want structured", got)
 	}
-	if c.ForceStructuredCodingAgent {
-		t.Fatal("ForceStructuredCodingAgent = true, want false")
+	if !c.ForceStructuredCodingAgent {
+		t.Fatal("ForceStructuredCodingAgent = false, want true")
 	}
-	if c.ClaudeCodeTransport != mcpllm.ClaudeCodeTransportTmux {
-		t.Fatalf("ClaudeCodeTransport = %q, want %q", c.ClaudeCodeTransport, mcpllm.ClaudeCodeTransportTmux)
+	if c.ClaudeCodeTransport == mcpllm.ClaudeCodeTransportTmux {
+		t.Fatal("ClaudeCodeTransport pinned to tmux while running structured; that contradicts the selected transport")
 	}
 }
 
