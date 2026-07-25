@@ -12,6 +12,7 @@ import (
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/mcpagent/llm"
+	mcpllm "github.com/manishiitg/mcpagent/llm"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/mcpagent/mcpclient"
 	"github.com/manishiitg/mcpagent/observability"
@@ -456,8 +457,8 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		logger.Info("🔗 Cursor CLI bridge tools mode enabled (--mode ask blocks built-in Write/Shell)")
 	}
 	if config.ForceStructuredCodingAgent {
-		agentOptions = append(agentOptions, mcpagent.WithForceStructuredCodingAgent(true))
-		logger.Info("🔧 Coding-agent CLI: forcing structured (JSON / --print) transport for this agent")
+		agentOptions = append(agentOptions, mcpagent.WithCodingAgentTransport(mcpllm.CodingAgentTransportStructured))
+		logger.Info("🔧 Coding-agent CLI: structured (JSON / --print) transport selected for this agent")
 	}
 	// Add session ID for stateful MCP connection reuse.
 	if config.SessionID != "" {

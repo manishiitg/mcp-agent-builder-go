@@ -317,8 +317,8 @@ func NewBaseAgent(
 			loggerv2.String("agent_name", name))
 	}
 	if forceStructuredCodingAgent {
-		options = append(options, mcpagent.WithForceStructuredCodingAgent(true))
-		logger.Info("🔧 Forcing structured JSON transport for coding-agent CLIs (step transport=structured)",
+		options = append(options, mcpagent.WithCodingAgentTransport(internalLLM.CodingAgentTransportStructured))
+		logger.Info("🔧 Structured JSON transport selected for coding-agent CLIs (step transport=structured)",
 			loggerv2.String("agent_name", name))
 	}
 
