@@ -16,6 +16,7 @@ import (
 	llm "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/claudecode"
+	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/picli"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/utils"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -770,7 +771,7 @@ func parsePiCLIModelList(output string) []dynamicModelEntry {
 			ModelID:   modelID,
 			ModelName: piModelDisplayName(provider, model),
 			Group:     piModelGroup(provider),
-			IsDefault: modelID == "google/gemini-3.5-flash",
+			IsDefault: modelID == picli.DefaultModelID,
 		}
 		if len(fields) >= 3 {
 			entry.ContextWindow = parsePiCompactCount(fields[2])
@@ -871,32 +872,7 @@ func dynamicModelGroups(models []dynamicModelEntry) []string {
 }
 
 func piFallbackModels() []dynamicModelEntry {
-	return []dynamicModelEntry{
-		{
-			ModelID:       "google/gemini-3.5-flash",
-			ModelName:     "Gemini 3.5 Flash",
-			Group:         "Recommended Gemini",
-			IsDefault:     true,
-			ContextWindow: 1048576,
-			CostInput:     1.5,
-			CostOutput:    9,
-		},
-		{
-			ModelID:       "google/gemini-3.1-pro-preview",
-			ModelName:     "Gemini 3.1 Pro Preview",
-			Group:         "Recommended Gemini",
-			ContextWindow: 1048576,
-			CostInput:     2,
-			CostOutput:    12,
-		},
-		{
-			ModelID:       "zai/glm-5.2",
-			ModelName:     "GLM-5.2",
-			Group:         "Z.AI",
-			ContextWindow: 1000000,
-			CostInput:     1.5,
-			CostOutput:    4.5,
-		},
+	additional := []dynamicModelEntry{
 		{
 			ModelID:       "zai-coding-cn/glm-5.2",
 			ModelName:     "GLM-5.2 (CN)",
@@ -924,12 +900,6 @@ func piFallbackModels() []dynamicModelEntry {
 		{
 			ModelID:       "kimi-coding/k2p7",
 			ModelName:     "Kimi K2.7 Code",
-			Group:         "Kimi",
-			ContextWindow: 262144,
-		},
-		{
-			ModelID:       "moonshotai/kimi-k2.7-code",
-			ModelName:     "Kimi K2.7 Code (Moonshot)",
 			Group:         "Kimi",
 			ContextWindow: 262144,
 		},
@@ -1000,6 +970,36 @@ func piFallbackModels() []dynamicModelEntry {
 			Group:     "OpenRouter",
 		},
 	}
+	return mergePiModelEntries(piProviderCatalogModels(), additional)
+}
+
+func piProviderCatalogModels() []dynamicModelEntry {
+	metadata := picli.GetAllPiCLIModels()
+	models := make([]dynamicModelEntry, 0, len(metadata))
+	for _, model := range metadata {
+		if model == nil || strings.TrimSpace(model.ModelID) == "" {
+			continue
+		}
+		provider, _, _ := strings.Cut(model.ModelID, "/")
+		group := piModelGroup(provider)
+		if provider == "google" {
+			group = "Recommended Gemini"
+		}
+		name := strings.TrimSpace(model.ModelName)
+		if strings.HasPrefix(name, "Pi CLI (") && strings.HasSuffix(name, ")") {
+			name = strings.TrimSuffix(strings.TrimPrefix(name, "Pi CLI ("), ")")
+		}
+		models = append(models, dynamicModelEntry{
+			ModelID:       model.ModelID,
+			ModelName:     name,
+			Group:         group,
+			IsDefault:     model.ModelID == picli.DefaultModelID,
+			ContextWindow: model.ContextWindow,
+			CostInput:     model.InputCostPer1MTokens,
+			CostOutput:    model.OutputCostPer1MTokens,
+		})
+	}
+	return models
 }
 
 func piCuratedModelIDs() []string {
