@@ -4,9 +4,9 @@ Run one standalone Pulse review now against retained workflow evidence. This is
 for testing and investigation; it does not participate in the scheduler's
 durable worklist, cadence, timeout, or final-command state machine. Use the
 Pulse toolbar Run action for the full scheduler-equivalent workflow + Pulse
-pipeline. This command must not create, edit, enable, or disable a schedule,
-change `post_run_monitor`, or run the workflow itself. Use `/pulse-setup` when
-recurring Pulse needs configuration.{{if .Focus}}
+pipeline. Use `/pulse-setup` when recurring Pulse needs configuration. The
+Manual-run boundary below is the authoritative list of what this command must
+not do.{{if .Focus}}
 
 User focus: {{.Focus}}.{{end}}{{if .RunFolder}}
 
@@ -37,8 +37,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    Read-only maintenance-review results are **Signals / Kizuki**. Add Reflection
    / Hansei for run interpretation, cadence, and answered questions; add
    Improvements / Kaizen for verified Pulse Fixer work or Goal Advisor
-   proposals/decisions. Never
-   let a reviewer mutate the workflow.
+   proposals/decisions.
 6. Record every selected module's clean, changed, blocked, or failed outcome in
    `builder/improve.html`. A failed reviewer fails only its own module; continue
    independent safe work.
@@ -49,6 +48,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 ## Manual-run boundary
 
 - Do not call schedule create/update/delete/trigger tools.
+- Do not change `post_run_monitor`.
 - Do not call `run_full_workflow` or `execute_step`.
 - Do not enable Pulse as a side effect.
 - Do not turn an operational correctness repair into a user decision.

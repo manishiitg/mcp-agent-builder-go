@@ -2218,7 +2218,7 @@ Each workflow has three separate stores that survive across runs: `+"`learnings/
 
 **Foundation check:** verify `+"`soul/soul.md`"+` has both `+"`## Objective`"+` and `+"`## Success Criteria`"+` sections. If either is missing, ask the user and write via shell. Keep soul.md limited to stable intent; the current architecture and implementation belong in plan/config and remain open to improvement. `+"`planning/plan.json`"+` no longer stores root objective/success fields.
 
-**Read previous builder conversations** from `+"`builder/`"+` folder (`+"`ls -t builder/*.json | head -3`"+`) to avoid repeating failed approaches.
+**Read previous builder conversations** from `+"`builder/`"+` folder (`+"`ls -t {{.AbsWorkspacePath}}/builder/*.json | head -3`"+`) to avoid repeating failed approaches.
 
 **Core loop:** run → eval → classify → review → fix → verify. Treat Bug Review, approved plan change/proposal, eval improvement, and no-action/blocker as peer outcomes. Load `+"`get_reference_doc(kind=\"post-run-monitor\")`"+` for the parallel read-only reviewer and single Pulse Fixer contract.
 {{else}}
@@ -2296,12 +2296,12 @@ Read-only review commands such as `+"`/review-plan`"+` are available if the user
 {{if .PlanJSON}}`+"```json\n{{.PlanJSON}}\n```"+`{{else}}Do NOT dump the full `+"`planning/plan.json`"+` by default. Read it precisely with targeted `+"`jq`"+` queries. The structure is: root `+"`steps[]`"+` for top-level steps, nested sub-agents in `+"`predefined_routes[].sub_agent_step`"+`, reusable definitions through `+"`predefined_routes[].orphan_step_ref`"+`, and deterministic transitions through `+"`routes[].next_step_id`"+` plus step-level `+"`next_step_id`"+`. Reusable orphan definitions live under `+"`orphan_steps[]`"+` and may expose `+"`shared_with.orchestrator_ids`"+` to allow specific todo_task steps to reuse them.
 
 Use `+"`execute_shell_command`"+` with focused queries like:
-- **Top-level overview only**: `+"`jq '[.steps[] | {id, title, type}]' planning/plan.json`"+`
-- **Single step by `+"`step_id`"+` anywhere in the plan**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid)' planning/plan.json`"+`
-- **Only the fields you need from one step**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid) | {id, title, type, description, context_dependencies, context_output}' planning/plan.json`"+`
-- **Inspect only route structure for a todo_task or routing step**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid) | {id, type, predefined_routes, routes}' planning/plan.json`"+`
+- **Top-level overview only**: `+"`jq '[.steps[] | {id, title, type}]' {{.AbsWorkspacePath}}/planning/plan.json`"+`
+- **Single step by `+"`step_id`"+` anywhere in the plan**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid)' {{.AbsWorkspacePath}}/planning/plan.json`"+`
+- **Only the fields you need from one step**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid) | {id, title, type, description, context_dependencies, context_output}' {{.AbsWorkspacePath}}/planning/plan.json`"+`
+- **Inspect only route structure for a todo_task or routing step**: `+"`jq --arg sid \"step-id\" '.. | objects | select(.id? == $sid) | {id, type, predefined_routes, routes}' {{.AbsWorkspacePath}}/planning/plan.json`"+`
 
-Use `+"`cat planning/plan.json`"+` only when you genuinely need the entire file.{{end}}
+Use `+"`cat {{.AbsWorkspacePath}}/planning/plan.json`"+` only when you genuinely need the entire file.{{end}}
 
 {{if eq .WorkshopMode "workshop"}}
 ## Planning steps
@@ -2315,7 +2315,7 @@ For the design playbook (8-step walkthrough, step-type trade-offs, validation de
 
 ## Running steps
 
-Workshop builder always uses `+"`iteration-0`"+`. Every `+"`execute_step`"+` re-reads the latest `+"`plan.json`"+`. Before running anything, read `+"`cat variables/variables.json`"+` for `+"`group_name`"+` values and ALWAYS pass an explicit `+"`group_name`"+`. {{if .AvailableGroups}}Available groups: **{{.AvailableGroups}}**.{{end}}
+Workshop builder always uses `+"`iteration-0`"+`. Every `+"`execute_step`"+` re-reads the latest `+"`plan.json`"+`. Before running anything, read `+"`cat {{.AbsWorkspacePath}}/variables/variables.json`"+` for `+"`group_name`"+` values and ALWAYS pass an explicit `+"`group_name`"+`. {{if .AvailableGroups}}Available groups: **{{.AvailableGroups}}**.{{end}}
 
 Pass `+"`human_input`"+` to human-input steps inline (don't block on UI). **Always follow up after the automatic completion notification**; launching background work is not a completed final response. End the current agent turn while it runs—do not keep that turn open with `+"`query_step`"+` / `+"`list_executions`"+` polling. **To stop:** call `+"`stop_all_executions()`"+` or `+"`stop_step(execution_id)`"+` — text alone does NOT stop background tasks. Auto-notifications arrive prefixed `+"`[AUTO-NOTIFICATION]`"+` and are system-generated, not user messages.
 
@@ -2342,6 +2342,10 @@ For the full playbook (validation design, learning config, three-locks decision 
 {{end}}
 
 {{if eq .UseProjectedReferenceSkills "true"}}
+## Reference docs — read them from disk
+
+Every `+"`get_reference_doc(kind=\"X\")`"+` pointer below is also a file: `+"`references/X.md`"+` in the attached `+"`workflow-reference`"+` skill, rendered from the same template and byte-identical. Read the file. It is one native read, whereas the tool is not bridge-native here and costs a `+"`get_api_spec`"+` call plus a curl to return content already on disk. Call the tool only if the file is missing.
+
 ## Tools
 
 For `+"`human_feedback`"+`, use a foreground curl. Never use `+"`nohup`"+`, background the call, or poll a result file; the foreground response resumes the agent automatically. Cursor agents must keep `+"`timeout_seconds <= 45`"+`.
@@ -2375,7 +2379,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 
 ## File layout
 
-**Shell working directory**: `+"`{{.AbsWorkspacePath}}/`"+`. Always use absolute paths in shell commands — prefix every path with `+"`{{.AbsWorkspacePath}}/`"+`. Do not use `+"`cd`"+` or relative paths.
+**Shell working directory is not guaranteed.** In `+"`execute_shell_command`"+`, always write absolute paths — prefix every path with `+"`{{.AbsWorkspacePath}}/`"+`. Do not use `+"`cd`"+` or relative paths. Workspace **file tools** are different: they take workflow-root-qualified paths (`+"`{{.WorkspacePath}}/planning/...`"+`). Bare paths in this prompt (`+"`planning/plan.json`"+`, `+"`runs/`"+`) name files for discussion — they are never commands to paste.
 
 Workspace roots: `+"`planning/`"+` (plan + step configs), `+"`runs/{iter}/{group}/execution|logs/{step-id}/`"+` (per-run outputs + logs), `+"`learnings/`"+` (saved scripts + global SKILL.md), `+"`evaluation/`"+` (eval plan + reports), `+"`db/`"+` (persistent state + assets + README.md schemas), `+"`knowledgebase/`"+` (context + notes), `+"`soul/soul.md`"+` (objective + success criteria), `+"`reports/report_plan.json`"+` (registers the report's HTML document(s)).
 
@@ -8008,7 +8012,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 			},
 			"required": []string{"mode"},
 		},
-		guidance.WithDocPrecondition([]string{"llm-selection"}, guidance.DefaultTracker(), func(ctx context.Context, args map[string]interface{}) (string, error) {
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			wsPath := iwm.controller.GetWorkspacePath()
 			if wsPath == "" {
 				return "Cannot determine workspace path.", nil
@@ -8145,7 +8149,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 
 			logger.Info(fmt.Sprintf("✅ Workshop: workflow LLM config updated: %s", strings.Join(updated, ", ")))
 			return fmt.Sprintf("Saved to workflow.json capabilities.llm_config:\n%s\n\nChanges take effect on the next workflow run.", strings.Join(updated, "\n")), nil
-		}),
+		},
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register set_workflow_llm_config tool: %v", err))

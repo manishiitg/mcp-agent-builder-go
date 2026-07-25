@@ -10,14 +10,16 @@ The reviewer returns analysis, never HTML: `module=goal_advisor`, `verdict`,
 `next_check`, decisions that look sound, and ordered findings. Each finding needs
 a stable `finding_id`, `target_key`, severity, plain-language summary, exact
 evidence, bounded `recommended_fix`, verification, and
-`user_judgment_required` with reason. It must not inspect Pulse CSS, load
-`html-output` or the Pulse skeleton, migrate markup, or format cards.
+`user_judgment_required` with reason.
+
+Do not load `html-output` or the Pulse skeleton for the reviewer, inspect Pulse
+CSS, or ask it to migrate markup or format cards.
 
 `review_plan` returns an `execution_id`. Capture it. Do not babysit it with `sleep`, repeated `list_executions`, or repeated `query_step` calls. You may call `query_step(step_id="review-plan", execution_id="<returned execution_id>")` once for an immediate check. If it is still running, stop and rely on `[AUTO-NOTIFICATION]` to resume. Do not continue to Phase 2 or write the review log until the review completes and you have its findings.
 
 Treat the completed review as evidence, not as the final answer. Group its real findings by severity, preserve decisions it found sound, and use those findings in the design analysis below. Do not repeat the same artifact scan unless you need a specific fact to draw the map or explain a recommendation.
 
-The `review_plan` agent never writes `builder/improve.html`; that is deliberate. After its completion notification, the coordinating `/design-plan` turn MUST resume, complete Phase 2, and perform the Workshop review-log write below. Do not report the command complete merely because the read-only reviewer completed.
+The `review_plan` agent never writes `builder/improve.html`; that is deliberate. When its completion notification arrives, the command is not finished: Phase 2 and the Workshop review-log write below still remain. Do not report the command complete merely because the read-only reviewer completed.
 
 ## PHASE 2 — DESIGN SYNTHESIS
 
@@ -74,7 +76,17 @@ PART 5 — GROUPS
 Variable groups (e.g. per-account/per-client) run the SAME plan with different variable values. The plan must NOT branch on group identity in prose ("for Saurabh do X, for Anika do Y") — that's either a variable (`$VAR_*`) or, if the flow genuinely differs, a routing step. Flag descriptions that hardcode per-group logic. Check that group-specific values are variables, not literals.
 
 PART 6 — DESIGN LENSES (recommend the better shape, even when nothing is broken)
-- **Agentic span / durable-boundary fit** — start with one large `message_sequence` per coherent shared-context span. Modern agents can own a substantial end-to-end outcome in one step. Put proof/provenance requirements, top-level validation, evidence-based double-checking, and repair inside that sequence; never split by tool call, source, screen action, checklist item, proof check, or routine subtask. Multiple large sequences are correct when contexts should not be shared because of credentials/security, independent outputs/retries, clean-room independence, human/routing boundaries, or context contamination. Require the plan to state that boundary. Combine adjacent steps that share a context/objective/output and only create pass-through artifacts.
+- **Agentic span / durable-boundary fit** — start with one large `message_sequence` per coherent shared-context span. Modern agents can own a substantial end-to-end outcome in one step, so put proof/provenance requirements, top-level validation, evidence-based double-checking, and repair *inside* that sequence. A step boundary is a **context** boundary: split only when the contexts genuinely must not be shared.
+
+  | Not a reason to split | A real reason to split |
+  | --- | --- |
+  | a tool call, a source, a screen action | credentials / security separation |
+  | a checklist item, a proof check | independent outputs or retries |
+  | a routine subtask | clean-room independence |
+  | | a human or routing boundary |
+  | | context contamination |
+
+  Require the plan to name which right-hand reason applies. Combine adjacent steps that share a context/objective/output and only create pass-through artifacts.
 - **Validation sequence, not micro-steps** — 2+ regular steps that reread the same context and need each other's transient reasoning → one `message_sequence`. Split only when the context should not be shared or the boundary buys independently rerunnable validation/retry isolation, clean-room auditability, a downstream artifact, or tool/security separation. Give its first work turn the complete outcome, then add only evidence-based verification/critique/repair turns or genuine intermediate gates; flag one-message-per-routine-action sequences too.
 - **Scripted acquisition, agentic processing** — fixed API/SDK calls, CLI commands, deterministic pagination, fetch/parse/normalize logic, and mechanical persistence belong in scripted regular steps. Batch related fetching under one source/auth/retry/output contract, validate freshness/provenance/errors, then feed the durable rows/artifacts into a large message sequence for judgment. Flag plans that repeatedly spend LLM turns on deterministic retrieval or parsing.
 - **Gate everything** — every produces-output step needs a `validation_schema`; prefer db checks on the source of truth. A gate catches drift the moment it lands, not three steps downstream.

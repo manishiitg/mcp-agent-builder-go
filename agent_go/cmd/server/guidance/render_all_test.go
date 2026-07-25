@@ -113,7 +113,10 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	tests := map[string][]string{
 		"pulse": {
 			"MANUAL ONE-OFF PULSE",
-			"must not create, edit, enable",
+			// The schedule/config boundary moved out of the intro prose and
+			// into the authoritative "Manual-run boundary" list, so assert on
+			// the bullet rather than the removed sentence.
+			"Do not call schedule create/update/delete/trigger tools",
 			"change `post_run_monitor`",
 			"record_pulse_worklist",
 			"call_generic_agent",

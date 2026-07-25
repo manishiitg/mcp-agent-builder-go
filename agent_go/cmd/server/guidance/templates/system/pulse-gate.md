@@ -9,18 +9,22 @@ Read `soul/soul.md`, the authoritative current/history state in
 planning changelog names/review flags, compact plan/eval/report/DB/KB/learning
 freshness metadata, resolved workflow LLM/tier/fallback signature,
 backup/publish/notification readiness, open/answered `report_human_inputs`, and
-pending human decisions. Do not load complete reports, broad DB
-rows, full KB/learnings, conversations, prompts, or tool logs unless a compact
-signal makes one targeted fact necessary.
+pending human decisions. Stay on compact signals; open a full artifact
+(complete reports, broad DB rows, full KB/learnings, conversations, prompts,
+tool logs) only when a compact signal makes one targeted fact necessary.
 
 For the supplied run folder, inspect every executed step/item's compact final
-result for literal `CONCERNS:`. Prefer regular/todo-task
-`logs/<step>/execution/execution-final-summary.json`; only for failed,
-incomplete, or legacy runs without that file use the latest applicable final
-retry `execution-attempt-*.json`. For message-sequence steps use
-`execution/<step>/session.json` entry summaries. A completed step does not erase
-a concern. Deduplicate against durable history and preserve step/item plus
-evidence path. `CONCERNS:` is evidence to classify, not automatic run failure.
+result for literal `CONCERNS:`. Read that result from:
+
+| Step kind / run state | Evidence file |
+| --- | --- |
+| regular, todo_task | `logs/<step>/execution/execution-final-summary.json` |
+| message_sequence | `execution/<step>/session.json` entry summaries |
+| failed, incomplete, or legacy run with no final-summary file | latest applicable final retry `execution-attempt-*.json` |
+
+A completed step does not erase a concern. Deduplicate against durable history
+and preserve step/item plus evidence path. `CONCERNS:` is evidence to classify,
+not automatic run failure.
 
 Update `builder/improve.html` once with a compact plain-English Gate/Worklist
 entry and refresh Today's outcome without duplicating the latest-run row.

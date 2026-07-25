@@ -89,8 +89,8 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // AttachReferenceSurface attaches the consolidated reference surface to the
 // agent — at most three skills:
 //
-//   - system-tools (existing meta-skill: explains the tool surface,
-//     get_reference_doc, precondition gates)
+//   - system-tools (existing meta-skill: explains the tool surface and
+//     get_reference_doc)
 //   - workflow-reference / multiagent-reference (mega-skill bundling every
 //     reference doc allowed in the current mode; SKILL.md TOC +
 //     references/<kind>.md per topic)
@@ -103,10 +103,10 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // skill with references/ subfiles is exactly the progressive-disclosure
 // shape Anthropic's skill spec is designed for.
 //
-// Both surfaces still coexist with the get_reference_doc tool path — the
-// DocReadTracker only marks a kind loaded when the tool is actually
-// called, so precondition gates on deep maintenance and store tools
-// mutations keep enforcing regardless of what the agent reads off disk.
+// Both surfaces coexist with the get_reference_doc tool path and are
+// equivalent: the tool renders the same template these files are built from,
+// so reading references/<kind>.md off disk is a complete substitute for
+// calling the tool. Nothing tracks or requires one over the other.
 func AttachReferenceSurface(mode string, attach func(*llmtypes.Skill)) {
 	if meta := BuildSystemToolsSkill(mode); meta != nil {
 		attach(meta)

@@ -412,12 +412,18 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			log.Printf("[WORKFLOW_PHASE] Registered get_reference_doc in %s (mode=%s)", workflowPhaseID, workshopMode)
 
 			// Attach the full reference surface: system-tools meta-skill
-			// (advertises get_reference_doc and the precondition gates)
-			// plus one materialized SKILL.md per reference doc / guided
-			// flow. Both coexist — the static skills give each CLI a
-			// browseable, file-mounted view via its native skill UI; the
-			// meta-skill + tool path remains the authoritative way to
-			// satisfy guidance precondition gates.
+			// (advertises get_reference_doc) plus one materialized SKILL.md
+			// per reference doc / guided flow.
+			//
+			// Both surfaces are registered unconditionally, but only one is
+			// load-bearing per transport. CLI adapters implement
+			// SkillProjector and write SKILL.md + references/*.md to disk,
+			// so the agent reads the content directly and get_reference_doc
+			// is redundant there (and costs an extra hop in code-execution
+			// mode, where it is not a bridge-native tool). API transports do
+			// not implement SkillProjector — they get only the name +
+			// description listing in the system prompt — so for them
+			// get_reference_doc is the ONLY way to reach the bodies.
 			guidance.AttachReferenceSurface(workshopMode, underlyingAgent.AttachSkill)
 		}
 	default:

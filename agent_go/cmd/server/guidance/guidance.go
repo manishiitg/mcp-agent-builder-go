@@ -93,15 +93,16 @@ var allKinds = map[string]kindMeta{
 // referenceKinds is the registry of system reference docs — content that
 // used to live inline in the workshop system prompt and is now loaded on
 // demand by the agent via get_reference_doc(kind). These are not procedural
-// flows (those live in allKinds); they are gated reference material the
-// agent reads before performing certain actions (e.g. read "code-authoring"
-// before patching main.py).
+// flows (those live in allKinds); they are reference material the agent reads
+// before performing certain actions (e.g. read "code-authoring" before
+// patching main.py). Which docs to read is the agent's judgment call: every
+// kind is also materialized into the projected reference skill, so the agent
+// can reach the same content by reading references/<kind>.md directly.
 //
 // Adding a new reference doc:
 //
 //  1. Drop a markdown file in templates/system/<kind>.md.
 //  2. Add an entry here with description + allowed modes.
-//  3. Optionally wire a precondition gate on the tool that should require it.
 //
 // Modes use the same workshop mode strings as allKinds. "workshop" is the
 // unified editable mode; "run" is constrained runtime; "reporting"
@@ -434,7 +435,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 ## Tool / API discovery
 
 - ` + "`get_api_spec(server_name, tool_name)`" + ` — when you do not know an MCP tool's parameters or response shape, call this first.
-- ` + "`get_reference_doc(kind, focus?)`" + ` — system reference docs. Load the matching doc before any deep action (e.g. read ` + "`post-run-monitor`" + ` before Pulse review/fix work; read ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `; read ` + "`llm-selection`" + ` before ` + "`set_workflow_llm_config`" + `). Some tools refuse to run until their precondition doc has been loaded — the error will name the kind.
+- ` + "`get_reference_doc(kind, focus?)`" + ` — system reference docs. Load the matching doc before any deep action (e.g. read ` + "`post-run-monitor`" + ` before Pulse review/fix work; read ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `; read ` + "`llm-selection`" + ` before ` + "`set_workflow_llm_config`" + `). The same content is also on disk as ` + "`references/<kind>.md`" + ` in the projected reference skill — reading it there is equivalent.
 - ` + "`get_workflow_command_guidance(kind, focus?)`" + ` — canonical procedural flows (design-plan, improve-evaluation, goal-advisor, define-success, etc.). The returned text is your instructions for that turn; follow it verbatim.
 - ` + "`run_goal_advisor_review(pulse_run_id?, focus?)`" + ` — when available, spawn Goal Advisor as a dedicated background agent instead of doing expensive strategic review inline in the parent Pulse/workshop turn.
 
@@ -598,12 +599,6 @@ func RegisterReferenceDocTool(agent *mcpagent.Agent, currentMode string, logger 
 		if err != nil {
 			return fmt.Sprintf("error rendering reference doc %q: %v", kind, err), nil
 		}
-
-		// Record the load so gated tool calls (see WithDocPrecondition) can
-		// verify the agent has read the prerequisite docs. Session ID comes
-		// from ctx via common.ChatSessionIDKey — if it's missing, MarkLoaded
-		// is a no-op (tracker can't key the load to any session).
-		DefaultTracker().MarkLoaded(SessionIDFromContext(ctx), kind)
 
 		// Same envelope shape as get_workflow_command_guidance so the agent
 		// sees a consistent return contract across both tools.

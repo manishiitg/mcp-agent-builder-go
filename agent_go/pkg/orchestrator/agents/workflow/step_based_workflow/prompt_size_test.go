@@ -91,6 +91,101 @@ const MaxWorkshopPromptBytes = 27_000
 // + running-steps + planning-steps batch (~9KB additional).
 const MinWorkshopPromptBytes = 14_000
 
+// shellVerbs are command names that, when they open an inline code span in the
+// workshop prompt, mark that span as a shell command the agent may paste.
+//
+// Every such span must carry an absolute path. The shell's working directory is
+// NOT guaranteed: workspace/execute_shell_command.go resolves cwd through a
+// four-level fallback (explicit param → session config → client default →
+// _DEFAULT_WORKING_DIR → unset), and mcpagent's codeexec/shell.go leaves
+// cmd.Dir unset when no working_directory is passed, so the child inherits the
+// server process cwd rather than the workspace. A relative example that happens
+// to resolve under one fallback silently reads the wrong file under another.
+// The prompt therefore states one rule — always prefix with
+// {{.AbsWorkspacePath}}/ — and this test keeps the prompt's own examples honest.
+var shellVerbs = []string{
+	"jq", "cat", "ls", "sqlite3", "python3", "python", "head", "tail",
+	"grep", "sed", "awk", "rm", "mv", "cp", "mkdir", "touch", "cd",
+}
+
+// inlineCodeSpans returns the contents of every single-line `inline code` span
+// in text, skipping fenced blocks (illustrative code, not commands pasted as-is)
+// and multi-line spans.
+func inlineCodeSpans(text string) []string {
+	var spans []string
+	// Segments at odd indices sit inside a fence — drop them.
+	for i, segment := range strings.Split(text, "```") {
+		if i%2 == 1 {
+			continue
+		}
+		parts := strings.Split(segment, "`")
+		for j := 1; j < len(parts); j += 2 {
+			if s := strings.TrimSpace(parts[j]); s != "" && !strings.Contains(s, "\n") {
+				spans = append(spans, s)
+			}
+		}
+	}
+	return spans
+}
+
+// TestWorkshopPromptShellExamplesUseAbsolutePaths locks in the path convention
+// declared under "## File layout". The prompt previously said "always use
+// absolute paths… do not use relative paths" while handing out seven relative
+// example commands (jq/cat over planning/plan.json, ls over builder/, cat over
+// variables/variables.json) — a self-contradiction of exactly the kind that
+// makes a model burn reasoning reconciling its own instructions.
+//
+// Nouns are still allowed to be bare: `planning/plan.json` naming a file for
+// discussion is fine, and this test ignores it. Only spans that open with a
+// shell verb are treated as commands.
+func TestWorkshopPromptShellExamplesUseAbsolutePaths(t *testing.T) {
+	// Must match the AbsWorkspacePath passed by the size-test helper.
+	const absWorkspace = "/app/workspace-docs/Workflow/example"
+
+	prompt := executeRealisticWorkshopPromptForMode(t, "workshop")
+	if !strings.Contains(prompt, absWorkspace) {
+		t.Fatalf("rendered prompt never mentions %q — executeRealisticWorkshopPromptForMode's "+
+			"AbsWorkspacePath changed; update absWorkspace in this test to match", absWorkspace)
+	}
+
+	// A stray unmatched backtick silently re-pairs every span after it, which
+	// would both mangle the prompt's own formatting and blind the scan below.
+	// Catch it as its own failure rather than letting it degrade this test.
+	if n := strings.Count(prompt, "`"); n%2 != 0 {
+		t.Errorf("rendered prompt has %d backticks (odd) — an unmatched backtick mangles "+
+			"inline-code formatting and mis-pairs every span after it", n)
+	}
+
+	isShellVerb := func(s string) bool {
+		for _, v := range shellVerbs {
+			if s == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, span := range inlineCodeSpans(prompt) {
+		verb, rest, _ := strings.Cut(span, " ")
+		if rest == "" || !isShellVerb(verb) {
+			continue // a bare tool name or a filename noun, not a command
+		}
+		if verb == "cd" {
+			t.Errorf("workshop prompt contains a `cd` command (%q), which the same prompt forbids. "+
+				"Use an absolute path instead.", span)
+			continue
+		}
+		// $-anchored paths ($DB_PATH, $STEP_OUTPUT_DIR, $MCP_*) are absolute by
+		// construction — the runtime exports them.
+		if strings.Contains(span, absWorkspace) || strings.Contains(span, "$") {
+			continue
+		}
+		t.Errorf("shell example %q uses a relative path. The shell working directory is not "+
+			"guaranteed — prefix the path with {{.AbsWorkspacePath}}/ (renders as %s).",
+			span, absWorkspace)
+	}
+}
+
 // TestWorkshopPromptSize logs the current rendered size for the canonical
 // workshop mode and fails if it exceeds MaxWorkshopPromptBytes. The legacy
 // modes ("builder", "optimizer", "reporting") were merged into "workshop"
