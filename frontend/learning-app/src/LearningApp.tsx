@@ -2696,6 +2696,7 @@ export default function LearningApp() {
                               autoSpeak={autoSpeak}
                               onToggleSpeak={() => speakParentReply(i, m.text ?? '')}
                               onAutoSpeakChange={setAutoSpeak}
+                              onOpenSettings={() => setSettingsOpen(true)}
                             />
                           </div>
                         </div>
@@ -3588,6 +3589,7 @@ export default function LearningApp() {
                           autoSpeak={autoSpeak}
                           onToggleSpeak={() => speakReply(i, m.text ?? '')}
                           onAutoSpeakChange={setAutoSpeak}
+                          onOpenSettings={() => setSettingsOpen(true)}
                         />
                       </div>
                     </div>

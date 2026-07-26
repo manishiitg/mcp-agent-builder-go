@@ -885,6 +885,11 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-speak-btn.is-speaking { background: var(--sun-soft, #fdeecb); border-color: #e6c877; color: #8a6114; }
 .fl-speak-auto { display: inline-flex; align-items: center; gap: 5px; color: var(--muted, #8a8478); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
 .fl-speak-auto input { margin: 0; }
+/* Route to the fuller voice options from where the feature is actually used —
+   a parent who just discovered "Listen" shouldn't have to guess that voice
+   choice and mic setup live behind the gear icon. */
+.fl-speak-settings { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--muted, #8a8478); font: inherit; font-size: var(--text-caption); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.fl-speak-settings:hover { color: var(--heading); }
 .fl-settings-engine-name { flex: 1; font-weight: 700; }
 .fl-settings-engine-status { font-size: var(--text-caption); font-weight: 650; color: #b23b3b; }
 .fl-settings-engine-status.is-ready { color: #2f8a52; }

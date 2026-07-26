@@ -1,4 +1,4 @@
-import { Volume2, Square } from 'lucide-react'
+import { Volume2, Square, Settings2 } from 'lucide-react'
 import { persistAutoSpeak } from './speech'
 
 /**
@@ -20,12 +20,16 @@ export function ReplySpeakControls({
   autoSpeak,
   onToggleSpeak,
   onAutoSpeakChange,
+  onOpenSettings,
 }: {
   speaking: boolean
   isLatest: boolean
   autoSpeak: boolean
   onToggleSpeak: () => void
   onAutoSpeakChange: (on: boolean) => void
+  /** Opens Settings → Voice, so the fuller options are discoverable from
+   *  where the feature is actually used rather than only from the gear. */
+  onOpenSettings: () => void
 }) {
   return (
     <div className="fl-speak-row">
@@ -48,6 +52,17 @@ export function ReplySpeakControls({
           />
           <span>Read every reply</span>
         </label>
+      )}
+      {isLatest && (
+        <button
+          className="fl-speak-settings"
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="Voice settings"
+          title="Choose a voice, or set up talking instead of typing"
+        >
+          <Settings2 size={12} /> Voice settings
+        </button>
       )}
     </div>
   )
