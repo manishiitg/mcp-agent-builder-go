@@ -869,16 +869,22 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-voice-toggle strong { font-size: var(--text-secondary); font-weight: 700; color: var(--heading); }
 .fl-voice-toggle small { font-size: var(--text-caption); color: var(--muted, #8a8478); }
 
-/* Read-aloud button on a tutor reply. Quiet until the bubble is hovered —
-   it's an occasional control, and a child reading normally shouldn't have an
-   icon competing with the words on every single message. */
-.fl-tmsg.is-tutor .fl-tbubble { position: relative; }
-.fl-speak-btn { position: absolute; right: 8px; bottom: 6px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--muted, #8a8478); cursor: pointer; opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }
-.fl-tmsg.is-tutor:hover .fl-speak-btn,
-.fl-speak-btn:focus-visible { opacity: 1; }
-.fl-speak-btn:hover { background: #f4efe4; color: var(--heading); }
-/* Always visible while speaking — it's the only way to stop it. */
-.fl-speak-btn.is-speaking { opacity: 1; background: var(--sun-soft, #fdeecb); color: #8a6114; }
+/* Read-aloud controls under an agent reply. In-flow (not an overlay) so the
+   auto-read toggle sits where the behaviour it controls actually happens —
+   next to the reply being read — rather than hidden in Settings. Quiet until
+   the bubble is hovered: an occasional control shouldn't compete with the
+   words on every message. */
+.fl-speak-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; opacity: 0; transition: opacity .12s ease; }
+.fl-msg.is-agent:hover .fl-speak-row,
+.fl-tmsg.is-tutor:hover .fl-speak-row,
+.fl-speak-row:focus-within { opacity: 1; }
+/* Stays visible while speaking — it's the only way to stop it. */
+.fl-speak-row:has(.is-speaking) { opacity: 1; }
+.fl-speak-btn { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted, #8a8478); font: inherit; font-size: var(--text-caption); font-weight: 700; cursor: pointer; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.fl-speak-btn:hover { background: #f4efe4; border-color: #e6c877; color: var(--heading); }
+.fl-speak-btn.is-speaking { background: var(--sun-soft, #fdeecb); border-color: #e6c877; color: #8a6114; }
+.fl-speak-auto { display: inline-flex; align-items: center; gap: 5px; color: var(--muted, #8a8478); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
+.fl-speak-auto input { margin: 0; }
 .fl-settings-engine-name { flex: 1; font-weight: 700; }
 .fl-settings-engine-status { font-size: var(--text-caption); font-weight: 650; color: #b23b3b; }
 .fl-settings-engine-status.is-ready { color: #2f8a52; }

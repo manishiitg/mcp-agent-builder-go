@@ -77,6 +77,7 @@ import { FAMILY_API } from './apiBase'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readAutoSpeak, speakText } from './voice/speech'
 import { useSpeakReply } from './voice/useSpeakReply'
+import { ReplySpeakControls } from './voice/ReplySpeakControls'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
@@ -2688,15 +2689,13 @@ export default function LearningApp() {
                         <div className="fl-msg-col">
                           <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
                             <Markdown text={m.text ?? ''} />
-                            <button
-                              className={`fl-speak-btn${parentSpeakingIdx === i ? ' is-speaking' : ''}`}
-                              type="button"
-                              aria-label={parentSpeakingIdx === i ? 'Stop reading' : 'Read this out loud'}
-                              title={parentSpeakingIdx === i ? 'Stop reading' : 'Read this out loud'}
-                              onClick={() => speakParentReply(i, m.text ?? '')}
-                            >
-                              {parentSpeakingIdx === i ? <Square size={13} /> : <Volume2 size={13} />}
-                            </button>
+                            <ReplySpeakControls
+                              speaking={parentSpeakingIdx === i}
+                              isLatest={i === parentMessages.length - 1}
+                              autoSpeak={autoSpeak}
+                              onToggleSpeak={() => speakParentReply(i, m.text ?? '')}
+                              onAutoSpeakChange={setAutoSpeak}
+                            />
                           </div>
                         </div>
                       </>
@@ -3431,12 +3430,7 @@ export default function LearningApp() {
                     </div>
                   )}
 
-                  <VoiceSettings
-                    status={voiceStatus}
-                    childName={childName}
-                    autoSpeak={autoSpeak}
-                    onAutoSpeakChange={setAutoSpeak}
-                  />
+                  <VoiceSettings status={voiceStatus} childName={childName} />
 
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Secrets</p>
                   <p className="fl-note">Credentials Quill's tools can use — e.g. a school portal login. Saved here, never through chat, so a value you type below never appears in any saved conversation. Quill only ever sees the name, never the value.</p>
@@ -3582,15 +3576,13 @@ export default function LearningApp() {
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                       <div className="fl-tbubble">
                         <Markdown text={m.text ?? ''} />
-                        <button
-                          className={`fl-speak-btn${speakingIdx === i ? ' is-speaking' : ''}`}
-                          type="button"
-                          aria-label={speakingIdx === i ? 'Stop reading' : 'Read this out loud'}
-                          title={speakingIdx === i ? 'Stop reading' : 'Read this out loud'}
-                          onClick={() => speakReply(i, m.text ?? '')}
-                        >
-                          {speakingIdx === i ? <Square size={13} /> : <Volume2 size={13} />}
-                        </button>
+                        <ReplySpeakControls
+                          speaking={speakingIdx === i}
+                          isLatest={i === childMessages.length - 1}
+                          autoSpeak={autoSpeak}
+                          onToggleSpeak={() => speakReply(i, m.text ?? '')}
+                          onAutoSpeakChange={setAutoSpeak}
+                        />
                       </div>
                     </div>
                   ) : (

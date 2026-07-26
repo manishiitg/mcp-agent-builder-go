@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { Volume2 } from 'lucide-react'
 import type { VoiceStatus, VoiceTier } from '../stores'
-import { speakText, persistAutoSpeak } from './speech'
+import { speakText } from './speech'
 
 /**
  * One STT/TTS option. Deliberately shows the REAL tradeoff rather than just a
@@ -51,13 +51,9 @@ export function VoiceTierCard({ tier }: { tier: VoiceTier }) {
 export function VoiceSettings({
   status,
   childName,
-  autoSpeak,
-  onAutoSpeakChange,
 }: {
   status: VoiceStatus | null
   childName: string
-  autoSpeak: boolean
-  onAutoSpeakChange: (on: boolean) => void
 }) {
   const [previewing, setPreviewing] = useState(false)
 
@@ -99,18 +95,6 @@ export function VoiceSettings({
           <div className="fl-settings-engines">
             {status.tts_tiers.map((t) => <VoiceTierCard key={t.id} tier={t} />)}
           </div>
-
-          <label className="fl-voice-toggle">
-            <input
-              type="checkbox"
-              checked={autoSpeak}
-              onChange={(e) => { onAutoSpeakChange(e.target.checked); persistAutoSpeak(e.target.checked) }}
-            />
-            <span>
-              <strong>Read every reply out loud automatically</strong>
-              <small>Off by default. You can always tap the speaker on any single reply instead.</small>
-            </span>
-          </label>
 
           <button className="fl-ghost-btn" type="button" style={{ marginTop: '8px' }} onClick={preview} disabled={previewing}>
             <Volume2 size={14} /> {previewing ? 'Playing…' : 'Hear a sample'}
