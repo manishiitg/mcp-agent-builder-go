@@ -328,9 +328,19 @@ function withViewerPositionScript(html: string, focusId?: string, savedY = 0, zo
   // Zoom shrinks the effective viewport, so a page whose .wrap is capped at a
   // fixed px width would overflow sideways instead of reflowing. Releasing that
   // cap lets the content just fill the pane at any size.
+  //
+  // Applied to <html>, NOT <body> — confirmed live: zooming body left the page
+  // completely stuck, unable to scroll past whatever fit in one un-zoomed
+  // screen's worth of height. Chromium's `zoom` grows the zoomed element's own
+  // rendered box, but doesn't reliably widen its PARENT's scrollable extent to
+  // match — so with body zoomed, <html> (the actual scrolling element here)
+  // kept thinking the document was only as tall as it was at 100%, and
+  // silently clipped everything past that with no way to reach it. Zooming
+  // the root itself sidesteps the mismatch: there's no parent left to fall
+  // out of sync with.
   const zoomStyle = zoom === 1 ? '' : `
 <style>
-  body { zoom: ${zoom}; }
+  html { zoom: ${zoom}; }
   .wrap { max-width: none !important; }
 </style>`
   return html + zoomStyle + `

@@ -187,10 +187,14 @@ func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filenam
 // download or transcription just degrades gracefully (any accompanying text
 // still gets handled normally; a voice note that fails to transcribe still
 // gets saved and silently acknowledged, same as an image/document).
-func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceText string) {
+// savedPath is the workspace-relative path of what's left in inbox/ after this
+// call, or "" when nothing remains there (download failed, or a voice note
+// was transcribed and its audio removed) — the caller uses it to tell the
+// NEXT real turn what's waiting, see waBot.noteUpload.
+func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceText string, savedPath string) {
 	m := evt.Message
 	if m == nil {
-		return false, ""
+		return false, "", ""
 	}
 	var dl whatsmeow.DownloadableMessage
 	var name string
@@ -210,17 +214,17 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 		isVoice = true
 		name = "wa-voice-" + evt.Info.ID + extForMime(m.AudioMessage.GetMimetype(), ".ogg")
 	default:
-		return false, ""
+		return false, "", ""
 	}
 	if a.client == nil {
-		return false, ""
+		return false, "", ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	data, err := a.client.Download(ctx, dl)
 	if err != nil {
 		log.Printf("[whatsapp] media download failed: %v", err)
-		return false, ""
+		return false, "", ""
 	}
 
 	name = sanitizeInboxName(name)
@@ -228,15 +232,16 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 	absDir := filepath.Join(familyDataDir(), "workspace", relDir)
 	if err := os.MkdirAll(absDir, 0o700); err != nil {
 		log.Printf("[whatsapp] inbox mkdir failed: %v", err)
-		return false, ""
+		return false, "", ""
 	}
 	absPath := filepath.Join(absDir, name)
 	if err := os.WriteFile(absPath, data, 0o600); err != nil {
 		log.Printf("[whatsapp] media save failed: %v", err)
-		return false, ""
+		return false, "", ""
 	}
 	relPath := filepath.ToSlash(filepath.Join(relDir, name))
 	log.Printf("[whatsapp] saved attachment to %s (%d bytes)", relPath, len(data))
+	savedPath = relPath
 
 	if isVoice {
 		stateMu.Lock()
@@ -265,11 +270,12 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 					log.Printf("[whatsapp] could not remove transcribed voice note %s: %v", relPath, err)
 				} else {
 					log.Printf("[whatsapp] removed transcribed voice note %s (transcript kept in the conversation)", relPath)
+					savedPath = ""
 				}
 			}
 		}
 	}
-	return true, voiceText
+	return true, voiceText, savedPath
 }
 
 // waBot manages every linked WhatsApp account (one per parent) via whatsmeow
@@ -309,6 +315,23 @@ type waBot struct {
 	// resync can all redeliver an already-handled message). See alreadyHandled.
 	seenMu   sync.Mutex
 	seenMsgs map[string]time.Time
+
+	// pendingUploads names bare (no-caption) attachments saved to inbox/ since
+	// the last real turn — batched, not fired per-upload: a parent can send
+	// several photos in a row and then a voice note, and firing a separate turn
+	// per attachment would be wasteful and could race with each other. Drained
+	// (read and cleared) by the very next real turn, which gets told plainly
+	// that these arrived — see the per-turn note built from this in
+	// handleIncomingMessage. Fixes a real bug: a bare photo used to sit in
+	// inbox/ relying ONLY on the system prompt's "check inbox before every
+	// reply" habit to notice it, and that habit ran INSIDE whatever the next
+	// message happened to be about — confirmed live, "generate these questions"
+	// (referring to something three messages earlier) got silently answered
+	// from the new photo instead, because noticing it took over the whole
+	// reply. An explicit, structural note next to the actual request removes
+	// the ambiguity that prompt wording alone left room for.
+	pendingUploadsMu sync.Mutex
+	pendingUploads   []string
 }
 
 // alreadyHandled reports whether this WhatsApp message ID was already
@@ -340,6 +363,28 @@ func (w *waBot) alreadyHandled(msgID string) bool {
 	}
 	w.seenMsgs[msgID] = now
 	return false
+}
+
+// noteUpload records a bare (no-caption) attachment for the next real turn to
+// be told about explicitly — see pendingUploads' own doc comment.
+func (w *waBot) noteUpload(relPath string) {
+	w.pendingUploadsMu.Lock()
+	w.pendingUploads = append(w.pendingUploads, relPath)
+	w.pendingUploadsMu.Unlock()
+}
+
+// drainPendingUploads returns and clears whatever bare attachments have
+// accumulated since the last real turn — read once, by whichever turn comes
+// next, so the same batch is never mentioned twice.
+func (w *waBot) drainPendingUploads() []string {
+	w.pendingUploadsMu.Lock()
+	defer w.pendingUploadsMu.Unlock()
+	if len(w.pendingUploads) == 0 {
+		return nil
+	}
+	out := w.pendingUploads
+	w.pendingUploads = nil
+	return out
 }
 
 var whatsAppBot = &waBot{}
@@ -774,12 +819,12 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	// An image or document attachment: save it straight into the inbox and
 	// stop there — only text messages ever reach the agent. A bare attachment
 	// with no caption just gets acknowledged (👀) below and never starts a
-	// turn; the file sits in the inbox until the next real text message, at
-	// which point the process-file skill's own "check inbox/ before
-	// every reply" habit picks it up like any other inbox arrival. A voice
-	// note is the exception: its local transcript (see ingestWhatsAppMedia)
-	// stands in for typed text below, so it drives a turn just like normal.
-	gotMedia, voiceText := acct.ingestWhatsAppMedia(evt)
+	// turn; the file waits in the inbox, NAMED in w.pendingUploads, until the
+	// next real turn — which gets told about it explicitly (see below), not
+	// left to notice it on its own. A voice note is the exception: its local
+	// transcript (see ingestWhatsAppMedia) stands in for typed text below, so
+	// it drives a turn just like normal.
+	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt)
 	if strings.TrimSpace(text) == "" && voiceText != "" {
 		text = "🎙️ " + voiceText
 		// Confirm what was actually heard right away, decoupled from the real
@@ -797,6 +842,9 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 
 	if strings.TrimSpace(text) == "" {
 		if gotMedia {
+			if savedPath != "" {
+				w.noteUpload(savedPath)
+			}
 			acct.react(info.Chat, info.Sender, info.ID, "👀")
 		}
 		return
@@ -894,11 +942,23 @@ func (w *waBot) runTurn(text string) (string, error) {
 			history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
 		}
 	}
+	// Drained once, right here, so whichever real turn comes next — this one —
+	// is told PLAINLY that file(s) are waiting, instead of leaving it to notice
+	// on its own via the system prompt's general "check inbox" habit (which
+	// runs inside whatever this message is actually about, and can hijack an
+	// unrelated request — confirmed live, see pendingUploads' own comment).
+	// Explicit and separate from "the request" on purpose: filing them is
+	// background housekeeping, not necessarily what this message is asking for.
+	uploadNote := ""
+	if pending := w.drainPendingUploads(); len(pending) > 0 {
+		uploadNote = fmt.Sprintf(" Also, separately: %d file(s) landed in your inbox with no caption before this message (%s) — file them with the process-file skill at some point in this turn, but that is NOT necessarily what this message is about; answer what's actually being asked first.",
+			len(pending), strings.Join(pending, ", "))
+	}
 	// Per-turn WhatsApp formatting hint sent to the model but NOT persisted (so
 	// the stored/visible message stays clean). Because the tmux session is shared
 	// with the web chat, the base system prompt may be the web one; this keeps
 	// replies phone-appropriate regardless.
-	history = append(history, agentsession.Message{Role: "user", Text: text + "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did.)"})
+	history = append(history, agentsession.Message{Role: "user", Text: text + "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did." + uploadNote + ")"})
 
 	// Persist the parent's message the INSTANT the turn starts (not just at
 	// completion) — same fix as the web chat path (see persistNewMessages'
@@ -916,8 +976,18 @@ func (w *waBot) runTurn(text string) (string, error) {
 	var sentFiles []string
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
-		Provider:   provider,
-		WorkingDir: workDir,
+		Provider: provider,
+		// Was unset here — the ONE parent-session construction site missing it
+		// (chat.go and pulse.go both pin this same tier). Confirmed live: a
+		// WhatsApp turn logged "model=high" for codex-cli with nobody having
+		// asked for that, which is just whatever the underlying library
+		// defaults to when ModelID is left empty — not a real, deliberate
+		// choice. Pinned to match every other surface of this same
+		// conversation, so which channel a message arrives on never changes
+		// which model answers it.
+		ModelID:         mediumTierModelID(provider),
+		ReasoningEffort: "high",
+		WorkingDir:      workDir,
 		// Same base persona as the web chat — it's one unified conversation, so
 		// the prompt shouldn't fork by channel; WhatsApp formatting is the per-turn
 		// hint appended to the message above.

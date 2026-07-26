@@ -215,7 +215,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
 		ModelID:         mediumTierModelID(provider),
-		ReasoningEffort: "medium",
+		ReasoningEffort: "high",
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle
