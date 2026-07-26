@@ -264,6 +264,43 @@ type waBot struct {
 	qrMu      sync.RWMutex
 	lastQR    string
 	qrExpires time.Time
+
+	// seenMsgs dedupes WhatsApp's own redelivery of the same event — a real,
+	// documented whatsmeow/multi-device behavior (reconnect, retry, multi-device
+	// resync can all redeliver an already-handled message). See alreadyHandled.
+	seenMu   sync.Mutex
+	seenMsgs map[string]time.Time
+}
+
+// alreadyHandled reports whether this WhatsApp message ID was already
+// processed, recording it if this is the first time. Without this, a
+// redelivered event started a brand-new turn each time — confirmed live: the
+// same voice note ("process this again like the images...") triggered two
+// separate turns 25 seconds apart, each with its own "🎙️ I heard: ..."
+// confirmation and its own reply. Entries older than the window are pruned
+// opportunistically on each call rather than via a separate goroutine, since
+// traffic here is low-volume.
+func (w *waBot) alreadyHandled(msgID string) bool {
+	if msgID == "" {
+		return false
+	}
+	const window = 10 * time.Minute
+	now := time.Now()
+	w.seenMu.Lock()
+	defer w.seenMu.Unlock()
+	if w.seenMsgs == nil {
+		w.seenMsgs = map[string]time.Time{}
+	}
+	for id, t := range w.seenMsgs {
+		if now.Sub(t) > window {
+			delete(w.seenMsgs, id)
+		}
+	}
+	if _, ok := w.seenMsgs[msgID]; ok {
+		return true
+	}
+	w.seenMsgs[msgID] = now
+	return false
 }
 
 var whatsAppBot = &waBot{}
@@ -688,6 +725,10 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 	if !acct.isSelfChat(info.Chat) {
 		return // a real contact DMed this linked account — never reply as Quill
+	}
+	if w.alreadyHandled(info.ID) {
+		log.Printf("[whatsapp] skipping redelivered message %s", info.ID)
+		return
 	}
 	text := extractWhatsAppMessageText(evt.Message)
 

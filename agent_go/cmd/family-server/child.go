@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,7 +49,26 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workDir := filepath.Join(familyDataDir(), "workspace")
+	// The coding-agent CLI's own launch directory — where IT (not our tools)
+	// discovers its project config and drops its own session-scoped files
+	// (Cursor's .cursor/hooks.json + hooks/mlp-deny-builtin.sh, a git marker,
+	// etc.). Scoped to THIS activity's own folder, not the shared workspace
+	// root: every custom tool (execute_shell_command, diff_patch_workspace_file,
+	// open_file, read_image) resolves its paths independently via
+	// resolveWorkspacePath/workspaceRoot() regardless of this value, so
+	// nothing about what the child can read/write changes — but the
+	// underlying CLI process itself no longer shares a physical .cursor/
+	// folder with the parent's session or any other activity's. Confirmed
+	// live: two different sessions sharing that folder raced on cleanup,
+	// deleting a hook script a still-running turn depended on ("I can't
+	// reach the workspace tools" — see agentsession.closeOtherInteractiveSessions,
+	// which stays as defense in depth for parent-vs-child, but this removes
+	// the collision at its root for child-vs-child too).
+	workDir := filepath.Join(familyDataDir(), "workspace", activityDir)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, parentMessageResponse{Error: "could not prepare the activity folder"})
+		return
+	}
 
 	// Persist the message(s) that kick off this turn right away, mirroring the
 	// parent flow (chat.go) — see persistConversationReplyWithExtras's own
@@ -125,81 +145,6 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 			events = append(events, toolEvent{Tool: "open_file", Path: p, Focus: focus})
 			evMu.Unlock()
 			return fmt.Sprintf(`{"status":"ok","opened":%q}`, p), nil
-		},
-	}
-
-	// Same suggest_actions tool as the parent (chat.go) — already in mcpagent's
-	// bridgeTools allowlist under that name, so no bridge change is needed here.
-	var sugMu sync.Mutex
-	var suggestions []suggestion
-	childSuggestActions := agentsession.Tool{
-		Name: "suggest_actions",
-		Description: "Offer " + childDisplayName(s.Child) + " 2–4 quick-reply buttons based on the conversation so far — " +
-			"call this at the END of every turn. Each has a short, simple button label (2–4 words, e.g. \"Give me a hint\", " +
-			"\"Check my answer\", \"I'm stuck\") and the exact message sent as if " + childDisplayName(s.Child) + " typed it when clicked. " +
-			"Make them colorful and fun: pick a fitting emoji and a tone for each (hint, success, fun, celebrate, stuck, or neutral) " +
-			"— these drive the button's color. You may also add a tiny optional decorative html snippet (plain inline-styled text/spans " +
-			"only, e.g. <span style=\"color:#e0a51c\">✨ nice!</span>) for extra flair — it's shown for decoration only, never clickable itself.",
-		Category: "family_tools",
-		Params: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"actions": map[string]interface{}{
-					"type": "array",
-					"items": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"label":   map[string]interface{}{"type": "string", "description": "short button text, 2–4 words"},
-							"message": map[string]interface{}{"type": "string", "description": "the message sent as the child when clicked"},
-							"emoji":   map[string]interface{}{"type": "string", "description": "one emoji that fits this action, e.g. 💡"},
-							"tone": map[string]interface{}{
-								"type":        "string",
-								"description": "which color this button should be",
-								"enum":        []string{"hint", "success", "fun", "celebrate", "stuck", "neutral"},
-							},
-							"html": map[string]interface{}{"type": "string", "description": "optional tiny decorative HTML/inline-CSS fragment shown alongside the label, purely decorative"},
-						},
-						"required": []string{"label", "message"},
-					},
-				},
-			},
-			"required": []string{"actions"},
-		},
-		Handler: func(_ context.Context, args map[string]interface{}) (string, error) {
-			raw, _ := args["actions"].([]interface{})
-			allowedTones := map[string]bool{"hint": true, "success": true, "fun": true, "celebrate": true, "stuck": true, "neutral": true}
-			out := []suggestion{}
-			for _, it := range raw {
-				m, ok := it.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				label, _ := m["label"].(string)
-				msg, _ := m["message"].(string)
-				emoji, _ := m["emoji"].(string)
-				tone, _ := m["tone"].(string)
-				htmlSnippet, _ := m["html"].(string)
-				label, msg = strings.TrimSpace(label), strings.TrimSpace(msg)
-				emoji, tone = strings.TrimSpace(emoji), strings.TrimSpace(tone)
-				htmlSnippet = strings.TrimSpace(htmlSnippet)
-				if label == "" || msg == "" {
-					continue
-				}
-				if !allowedTones[tone] {
-					tone = "neutral"
-				}
-				if len(htmlSnippet) > 400 {
-					htmlSnippet = "" // decorative only — drop anything unreasonably large rather than truncate mid-tag
-				}
-				out = append(out, suggestion{Label: label, Message: msg, Emoji: emoji, Tone: tone, HTML: htmlSnippet})
-				if len(out) >= 4 {
-					break
-				}
-			}
-			sugMu.Lock()
-			suggestions = out
-			sugMu.Unlock()
-			return fmt.Sprintf(`{"status":"ok","count":%d}`, len(out)), nil
 		},
 	}
 
@@ -282,7 +227,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 			statusHubs.publishDelta("child:"+activityDir, text)
 		},
 		Tools: withToolCallDebug(&debugMu, &debugCalls, "child:"+activityDir, trace, withLiveStatus("child:"+activityDir, []agentsession.Tool{
-			childShellTool(), childOpenFile, childSuggestActions, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
+			childShellTool(), childOpenFile, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
 			childShowSceneTool(func(html string) {
 				sceneMu.Lock()
 				scene = html
@@ -330,9 +275,6 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	evMu.Lock()
 	evs := events
 	evMu.Unlock()
-	sugMu.Lock()
-	sug := suggestions
-	sugMu.Unlock()
 	debugMu.Lock()
 	debugOut := append([]debugToolCall(nil), debugCalls...)
 	debugMu.Unlock()
@@ -356,7 +298,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	persistConversationReplyWithExtras("child", activityDir, req.Messages, reply, extra...)
 
-	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: evs, Suggestions: sug, DebugCalls: debugOut, Scene: sceneOut})
+	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut})
 }
 
 func findCelebrateEvent(evs []toolEvent) *toolEvent {

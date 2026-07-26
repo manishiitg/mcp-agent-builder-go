@@ -491,7 +491,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-parent-return { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 13px; border: 1px solid #d7e0ec; border-radius: 12px; background: var(--surface); color: #3d567a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
 .fl-parent-return:hover { border-color: #9db2ca; color: var(--heading); }
 .fl-child-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px) 20px; }
-.fl-child-actions, .fl-child-composer, .fl-child-disclaimer { margin-left: clamp(16px, 2.5vw, 36px); margin-right: clamp(16px, 2.5vw, 36px); }
+.fl-child-composer, .fl-child-disclaimer { margin-left: clamp(16px, 2.5vw, 36px); margin-right: clamp(16px, 2.5vw, 36px); }
 .fl-child-composer { margin-bottom: 22px; }
 .fl-child-side { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--surface-2); }
 /* The generated worksheet page already has its own comfortable body+card padding
@@ -514,6 +514,11 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-tbubble { padding: 14px 16px; border-radius: 18px 18px 18px 6px; background: var(--surface); color: var(--reply-bubble-text); font-size: var(--text-body); line-height: 1.6; box-shadow: 0 6px 16px rgba(13, 35, 76, .06); }
 .fl-tbubble.is-streaming::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: fl-cursor-blink 1s step-end infinite; }
 .fl-tbubble strong { color: var(--heading); }
+/* A thin dashed rule above every tutor reply — live (streaming) or reloaded
+   from history alike, since both share this same .fl-tmsg.is-tutor .fl-tbubble
+   shape. Marks where Quill's actual answer starts, distinct from the
+   avatar/status area above it. Never on her own (.is-child) bubble. */
+.fl-tmsg.is-tutor .fl-tbubble { border-top: 2px dashed #e6c877; padding-top: 12px; }
 .fl-tmsg.is-child .fl-tbubble { border-radius: 18px 18px 6px 18px; background: var(--navy); color: #fff; box-shadow: none; }
 
 /* ---- Readability polish: notebook-style chat + markdown rendering + fonts ---- */
@@ -669,6 +674,11 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-mermaid-error { margin: 10px 0; padding: 12px 14px; border-radius: 10px; border: 1px solid #e2a5a5; background: rgba(226, 90, 90, .08); font-size: .8rem; color: #a33; }
 .fl-mermaid-error pre { white-space: pre-wrap; margin: 6px 0 0; }
 
+/* "Load earlier messages" — only the most recent slice of the parent↔Quill
+   history renders by default (see parentVisibleCount); this reveals more. */
+.fl-load-earlier { display: block; margin: 4px auto 14px; padding: 7px 16px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted, #8a8478); font: inherit; font-size: var(--text-caption); font-weight: 650; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+.fl-load-earlier:hover { background: var(--surface-2); border-color: #d9d2c4; }
+
 /* Agent-suggested next-step pills, shown after a reply */
 .fl-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
 .fl-suggestion { display: inline-flex; align-items: center; gap: 6px; padding: 8px 15px; border: 1px solid #ecdcb4; border-radius: 999px; background: #fffaf0; color: #7a5c1a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
@@ -714,9 +724,19 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-pulse-divider::before, .fl-pulse-divider::after { content: ""; flex: 0 0 26px; height: 1px; background: #c9d5ef; }
 .fl-pulse-divider span { white-space: normal; text-align: center; }
 
-/* TEMPORARY: raw tool-call visibility debug bubble (see debugToolMsgs in
-   LearningApp.tsx) — remove alongside that code once no longer needed. */
-.fl-debug-call { margin: 4px 0 4px 44px; padding: 4px 10px; border: 1px dashed #c7c2b8; border-radius: 8px; background: #faf8f3; color: #7a7466; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; width: fit-content; max-width: 80%; overflow-wrap: break-word; }
+/* Tool-call visibility — collapsed "N tools" chip; expand to see each call,
+   click a call to see its actual response. See ToolCallSummary in
+   LearningApp.tsx. */
+.fl-tool-summary { margin: 4px 0 4px 44px; width: fit-content; max-width: 90%; }
+.fl-tool-summary-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px dashed #c7c2b8; border-radius: 999px; background: #faf8f3; color: #7a7466; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.fl-tool-summary-toggle:hover { background: #f3f0e8; }
+.fl-tool-summary-caret { font-size: 9px; opacity: .7; }
+.fl-tool-summary-list { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; padding: 6px 8px; border: 1px dashed #c7c2b8; border-radius: 10px; background: #faf8f3; }
+.fl-tool-call-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 4px; border: 0; background: transparent; text-align: left; cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #7a7466; border-radius: 6px; }
+.fl-tool-call-row:hover { background: #f3f0e8; }
+.fl-tool-call-name { font-weight: 700; color: #5c5648; flex: 0 0 auto; }
+.fl-tool-call-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
+.fl-tool-call-response { margin: 2px 4px 6px; padding: 8px 10px; border-radius: 8px; background: #16223a; color: #e8e4d8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; max-height: 260px; overflow-y: auto; }
 .fl-pulse-popover-link { display: block; width: 100%; margin-top: 12px; padding: 10px 14px; border: 0; border-top: 1px solid var(--line); background: var(--surface-2); color: #2f6db0; font: inherit; font-weight: 700; font-size: var(--text-caption); text-align: left; cursor: pointer; }
 .fl-pulse-popover-link:hover { background: #eef4fb; }
 .fl-pulse-popover-config { margin-top: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); background: var(--surface-2); }
@@ -803,21 +823,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-header-handoff:active { transform: translateY(2px); box-shadow: 0 1px 0 #d5a307; }
 .fl-header-handoff:disabled { background: var(--border, #e2ddd0); color: var(--muted, #8a8478); box-shadow: none; cursor: not-allowed; transform: none; }
 .fl-hint-label { display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; padding: 2px 8px; border-radius: 999px; background: #fff3d6; color: #a9781a; font-size: var(--text-caption); font-weight: 800; vertical-align: 1px; }
-.fl-child-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; margin-bottom: 12px; }
-.fl-child-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 14px; border: 1px solid #cfe0f2; border-radius: 999px; background: var(--surface); color: #2f6db0; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
-.fl-child-actions button:hover { background: #eef6ff; }
-.fl-pill-emoji { font-size: 1.05em; line-height: 1; }
-/* Tone colors — always a fixed, known set; the LLM only ever picks among these. */
-.fl-child-actions button.tone-hint { border-color: #f0dba0; background: #fffaf0; color: #a9781a; }
-.fl-child-actions button.tone-hint:hover { background: #fdf1d6; }
-.fl-child-actions button.tone-success { border-color: #b7e2c4; background: #f1fbf5; color: #1f8a4c; }
-.fl-child-actions button.tone-success:hover { background: #e4f7ea; }
-.fl-child-actions button.tone-fun { border-color: #e3c9f0; background: #faf3ff; color: #8a3fb0; }
-.fl-child-actions button.tone-fun:hover { background: #f3e4ff; }
-.fl-child-actions button.tone-celebrate { border-color: #f3d385; background: #fff8e6; color: #b6790b; }
-.fl-child-actions button.tone-celebrate:hover { background: #ffefc7; }
-.fl-child-actions button.tone-stuck { border-color: #cfd8e6; background: #f6f8fb; color: #4a5b78; }
-.fl-child-actions button.tone-stuck:hover { background: #eaeef4; }
 .fl-star-badge { display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px; border-radius: 999px; background: linear-gradient(135deg, #fff3d6, #ffe6a8); color: #a9781a; font-size: var(--text-secondary); font-weight: 800; box-shadow: 0 1px 3px rgba(169, 120, 26, .18); }
 .fl-star-badge svg { color: #e0a51c; }
 .fl-child-top-right { display: flex; align-items: center; gap: 10px; }

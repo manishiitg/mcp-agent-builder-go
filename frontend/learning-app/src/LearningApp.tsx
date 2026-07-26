@@ -63,9 +63,9 @@ import {
   type ApiEngine,
   type ParentMsg,
   type StoredMsg,
+  type DebugToolCall,
   type TreeNode,
   type WsFile,
-  type ChildSuggestion,
   type Activity,
 } from './stores'
 
@@ -85,6 +85,9 @@ const FAMILY_API =
 // back down too (e.g. after deleting text), then grows to fit content up to
 // a cap, beyond which the textarea's own CSS overflow-y:auto takes over.
 const COMPOSER_MAX_HEIGHT = 160
+// How many of the parent's most recent messages render by default — see the
+// parentVisibleCount comment further down for why.
+const PARENT_HISTORY_PAGE_SIZE = 40
 function autoGrowTextarea(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + 'px'
@@ -374,6 +377,40 @@ function StartBurst({ onDone }: { onDone: () => void }) {
         </span>
       ))}
       <Sparkles className="fl-start-burst-core" size={54} />
+    </div>
+  )
+}
+
+// ToolCallSummary shows what the agent actually called this turn — collapsed
+// to "N tools" by default so a busy turn doesn't clutter the thread; expand to
+// see each call, then click one to see its actual response. Used for BOTH the
+// live in-flight indicator (calls have no result/err yet — still streaming)
+// and the final persisted summary (result/err filled in once the turn
+// completes) — same shape, so nothing has to change when it switches over.
+function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
+  const [open, setOpen] = useState(false)
+  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  if (calls.length === 0) return null
+  return (
+    <div className="fl-tool-summary">
+      <button type="button" className="fl-tool-summary-toggle" onClick={() => setOpen((v) => !v)}>
+        🔧 {calls.length} tool{calls.length === 1 ? '' : 's'} <span className="fl-tool-summary-caret">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="fl-tool-summary-list">
+          {calls.map((c, i) => (
+            <div key={i} className="fl-tool-call">
+              <button type="button" className="fl-tool-call-row" onClick={() => setOpenIdx((cur) => (cur === i ? null : i))}>
+                <span className="fl-tool-call-name">{c.tool}</span>
+                {c.args && <span className="fl-tool-call-args">{c.args}</span>}
+              </button>
+              {openIdx === i && (
+                <pre className="fl-tool-call-response">{c.err ? `Error: ${c.err}` : (c.result || '(still running…)')}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -799,27 +836,6 @@ function NonPreviewableFile({ path, meta }: { path: string; meta: Record<string,
   )
 }
 
-// sanitizeDecorativeHtml allows a tiny, LLM-authored decorative fragment (a
-// dash of inline color/styling around the label) inside a suggestion pill,
-// without letting it execute anything: script/style blocks and their content
-// are stripped entirely, event-handler attributes and javascript: URLs are
-// stripped, and only a small inline-formatting tag whitelist survives — any
-// other tag is dropped (its text content is kept, just not the markup).
-// Click-to-send behavior always lives in the wrapping React <button>, never
-// in this content, so even a maximally hostile fragment can't do more than
-// render inert, differently-colored text.
-function sanitizeDecorativeHtml(html: string): string {
-  if (!html || html.length > 400) return ''
-  let safe = html
-  safe = safe.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
-  safe = safe.replace(/<\/?(script|style)[^>]*>/gi, '')
-  safe = safe.replace(/\son\w+\s*=\s*"(?:[^"\\]|\\.)*"/gi, '')
-  safe = safe.replace(/\son\w+\s*=\s*'(?:[^'\\]|\\.)*'/gi, '')
-  safe = safe.replace(/(href|src)\s*=\s*["']\s*javascript:[^"']*["']/gi, '')
-  safe = safe.replace(/<(?!\/?(span|strong|em|b|i|br|small)\b)[^>]*>/gi, '')
-  return safe
-}
-
 // labelFromFilename turns a bare filename like
 // "2026-07-21-fractions-revision-worksheet.md" into a date + human label.
 // Filenames are sometimes auto-generated noise (WhatsApp Image ..., s02.png),
@@ -899,11 +915,31 @@ export default function LearningApp() {
   const setStreamingReply = useParentChatStore((s) => s.setStreamingReply)
   const suggestions = useParentChatStore((s) => s.suggestions)
   const setSuggestions = useParentChatStore((s) => s.setSuggestions)
+  // Rendering the WHOLE parent↔Quill history (one long-running thread, can
+  // grow to hundreds of messages over months) made every keystroke in the
+  // composer reconcile every bubble in the DOM — visibly laggy typing, and a
+  // heavy initial paint. Show only the most recent PARENT_HISTORY_PAGE_SIZE by
+  // default; "Load earlier messages" reveals more in the same-size chunks.
+  // Growing this only ever reveals OLDER messages — new ones arriving still
+  // show immediately since the window is always "last N", not "first N".
+  const [parentVisibleCount, setParentVisibleCount] = useState(PARENT_HISTORY_PAGE_SIZE)
+  const visibleParentMessages = parentMessages.length > parentVisibleCount ? parentMessages.slice(-parentVisibleCount) : parentMessages
+  // Absolute offset of the visible window's first item within the FULL
+  // history — used as the React key base so a bubble's identity stays stable
+  // across "load more" clicks (which shift every relative index) instead of
+  // remounting everything already on screen.
+  const hiddenParentCount = parentMessages.length - visibleParentMessages.length
   // Before actually switching into Child Mode, ask the parent whether to
   // continue Myra's existing conversation or start a brand-new one — handing
   // off an activity often means "just carry on the same chat", not a fresh
   // start, so this is the parent's call rather than a silent guess.
   const [pendingChildEntry, setPendingChildEntry] = useState<{ dir: string; greetingText: string } | null>(null)
+  // The current turn's tool calls, live — no result yet (still running), shown
+  // as a collapsible "N tools" chip next to the thinking indicator. Reset at
+  // turn start; replaced by a persisted debug_summary message (WITH results,
+  // from the final response) once the turn completes — see sendChildMessage.
+  const [childLiveToolCalls, setChildLiveToolCalls] = useState<DebugToolCall[]>([])
+  const [liveToolCalls, setLiveToolCalls] = useState<DebugToolCall[]>([])
   const menuOpen = useParentChatStore((s) => s.menuOpen)
   const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -963,8 +999,6 @@ export default function LearningApp() {
   const setChildSending = useChildChatStore((s) => s.setChildSending)
   const childInput = useChildChatStore((s) => s.childInput)
   const setChildInput = useChildChatStore((s) => s.setChildInput)
-  const childSuggestions = useChildChatStore((s) => s.childSuggestions)
-  const setChildSuggestions = useChildChatStore((s) => s.setChildSuggestions)
   const childLiveStatus = useChildChatStore((s) => s.childLiveStatus)
   const setChildLiveStatus = useChildChatStore((s) => s.setChildLiveStatus)
   const childStreamingReply = useChildChatStore((s) => s.childStreamingReply)
@@ -1746,6 +1780,7 @@ export default function LearningApp() {
     setSending(true)
     setLiveStatus('')
     setStreamingReply('')
+    setLiveToolCalls([])
     // Live status labels AND real streamed reply content share one SSE
     // connection (see status_stream.go's sseEvent) — "status" replaces the
     // cosmetic "Quill is: …" line, "delta" appends to the live reply preview
@@ -1759,10 +1794,11 @@ export default function LearningApp() {
         const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
         if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
-        // TEMPORARY tool-call visibility, live as each call happens (not
-        // batched at the end) — see tool_call_debug.go.
+        // Live tool-call visibility as each call happens (not batched at the
+        // end) — see tool_call_debug.go. No result yet; the final response
+        // replaces this with the same calls, results filled in.
         else if (parsed.type === 'tool_call' && parsed.tool) {
-          setParentMessages((cur) => [...cur, { role: 'tool', tool: 'debug_call', text: parsed.tool + (parsed.args ? ' ' + parsed.args : '') }])
+          setLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
         }
       } catch { /* ignore malformed event */ }
     }
@@ -1780,7 +1816,7 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: conversationId, viewer_path: currentViewerPath || undefined }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[] }) => {
+      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[]; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
         const toolMsgs: ParentMsg[] = events.filter((e) => e.tool === 'set_child_profile').map((e) => ({ role: 'tool', tool: e.tool, name: e.name, grade: e.grade, board: e.board }))
         const cp = events.find((e) => e.tool === 'set_child_profile')
@@ -1795,10 +1831,11 @@ export default function LearningApp() {
         // until the parent notices and clicks the (easy-to-miss) chevron.
         if (op?.path) { setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(op.path); setExpandedActivity(op.path) }
         setSuggestions(data.suggestions ?? [])
+        if (data.debug_tool_calls?.length) toolMsgs.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
         setParentMessages((cur) => [...cur, ...toolMsgs, { role: 'assistant', text: data.error ? `Sorry — ${data.error}` : (data.reply || '(no response)') }])
       })
       .catch(() => setParentMessages((cur) => [...cur, { role: 'assistant', text: 'Sorry — I couldn’t reach the learning engine.' }]))
-      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); statusSource.close(); setMapRefreshKey((k) => k + 1) })
+      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); setLiveToolCalls([]); statusSource.close(); setMapRefreshKey((k) => k + 1) })
   }
 
   const sendParentMessage = (event: FormEvent<HTMLFormElement>) => {
@@ -1881,10 +1918,10 @@ export default function LearningApp() {
     const next: ParentMsg[] = [...(base ?? childMessages), { role: 'user', text }]
     setChildMessages(next)
     setChildInput('')
-    setChildSuggestions([])
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
+    setChildLiveToolCalls([])
     const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
     statusSource.onmessage = (ev) => {
       // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
@@ -1893,7 +1930,7 @@ export default function LearningApp() {
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
         else if (parsed.type === 'tool_call' && parsed.tool) {
-          setChildMessages((cur) => [...cur, { role: 'tool', tool: 'debug_call', text: parsed.tool + (parsed.args ? ' ' + parsed.args : '') }])
+          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
         }
       } catch { /* ignore malformed event */ }
     }
@@ -1908,21 +1945,33 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
         const of = events.find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
-        setChildSuggestions(data.suggestions ?? [])
+        // Snap the still-visible streaming bubble to the FINAL reply text
+        // before swapping it for the real message. The live stream tails a
+        // raw tmux pane (hard-wrapped, markdown stripped); the final reply is
+        // the reconciled, properly-formatted version (see ReconcileFinalAnswer
+        // in multi-llm-provider-go) — without this, the words she was
+        // reading visibly change the instant the turn finishes, which reads
+        // as the tutor's "thinking" being deleted and replaced. Setting this
+        // first means the streaming bubble already shows the exact final
+        // text by the time it's swapped for the real message, so nothing
+        // visibly changes — only the bubble's own styling settles.
+        if (data.reply) setChildStreamingReply(data.reply)
         setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur, { role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') }]
+          const next: ParentMsg[] = [...cur]
+          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // sendChildKickoff silently starts a turn after a handoff WITHOUT showing a
@@ -1937,16 +1986,19 @@ export default function LearningApp() {
     const convId = childActivity?.dir ?? ''
     const hidden: ParentMsg[] = [...base, { role: 'user', text }]
     setChildInput('')
-    setChildSuggestions([])
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
+    setChildLiveToolCalls([])
     const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
     statusSource.onmessage = (ev) => {
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
+        else if (parsed.type === 'tool_call' && parsed.tool) {
+          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        }
       } catch { /* ignore malformed event */ }
     }
     statusSource.onerror = () => statusSource.close()
@@ -1960,24 +2012,29 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
         const of = events.find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
-        setChildSuggestions(data.suggestions ?? [])
+        // Snap the still-visible streaming bubble to the FINAL reply text
+        // before swapping it for the real message — see sendChildMessage's
+        // identical comment above for why.
+        if (data.reply) setChildStreamingReply(data.reply)
         // Append to base (not hidden) — the synthetic kickoff message never
         // joins the visible thread, only Quill's real reply (and any debug
         // tool-call bubbles / scene) do.
         setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur, { role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') }]
+          const next: ParentMsg[] = [...cur]
+          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // The SQ postMessage bridge (below) is registered once on mount, so it
@@ -2010,7 +2067,6 @@ export default function LearningApp() {
       ? `(For you, Quill — not from ${childName || 'the child'}: the parent's own instructions for${activityTitle ? ` "${activityTitle}"` : ' this'}: ${guideNote} Follow this pacing/order exactly.${newSession ? ` Open your very first reply with one short, plain sentence stating the actual plan in your own words (e.g. "Here's our plan: ...") before anything else — this is the only place ${childName || 'the child'} sees what this session is about, so state it concretely, not generically.` : ''})`
       : undefined
     if (newSession) {
-      setChildSuggestions([])
       setChildMessages([])
       sendChildKickoff(greeting, [], modelExtra)
     } else {
@@ -2346,11 +2402,20 @@ export default function LearningApp() {
                 </div>
               </div>
 
-              {parentMessages.map((m, i) => {
+              {hiddenParentCount > 0 && (
+                <button
+                  type="button"
+                  className="fl-load-earlier"
+                  onClick={() => setParentVisibleCount((c) => c + PARENT_HISTORY_PAGE_SIZE)}
+                >
+                  Load {Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE)} earlier message{Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE) === 1 ? '' : 's'}
+                </button>
+              )}
+              {visibleParentMessages.map((m, idx) => {
+                const i = hiddenParentCount + idx
                 if (m.role === 'tool') {
-                  if (m.tool === 'debug_call') {
-                    // TEMPORARY: raw tool-call visibility, live via SSE tool_call events.
-                    return <div key={i} className="fl-debug-call">🔧 {m.text}</div>
+                  if (m.tool === 'debug_summary') {
+                    return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   }
                   if (m.tool === 'upload' || m.tool === 'upload_error') {
                     const bad = m.tool === 'upload_error'
@@ -2413,6 +2478,7 @@ export default function LearningApp() {
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
                       <span>{liveStatus ? `Quill is: ${liveStatus}…` : PARENT_WAIT_HINTS[parentHintIndex]}</span>
                     </div>
+                    <ToolCallSummary calls={liveToolCalls} />
                   </div>
                 </div>
               )}
@@ -3221,9 +3287,8 @@ export default function LearningApp() {
               </header>
               <div className="fl-child-thread" aria-label="Tutor conversation">
                 {childMessages.map((m, i) => (
-                  // TEMPORARY: raw tool-call visibility, live via SSE tool_call events.
-                  m.role === 'tool' && m.tool === 'debug_call' ? (
-                    <div key={i} className="fl-debug-call">🔧 {m.text}</div>
+                  m.role === 'tool' && m.tool === 'debug_summary' ? (
+                    <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   ) : m.role === 'tool' && (m.tool === 'upload' || m.tool === 'upload_error') ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
@@ -3269,6 +3334,7 @@ export default function LearningApp() {
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
                         <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : CHILD_WAIT_HINTS[childHintIndex]}</span>
                       </div>
+                      <ToolCallSummary calls={childLiveToolCalls} />
                     </div>
                   </div>
                 )}
@@ -3280,19 +3346,6 @@ export default function LearningApp() {
                 ))}
                 <div ref={childThreadEndRef} />
               </div>
-              {childSuggestions.length > 0 && !childSending && (
-                <div className="fl-child-actions" aria-label="Quick replies">
-                  {childSuggestions.map((s, i) => {
-                    const safeHtml = s.html ? sanitizeDecorativeHtml(s.html) : ''
-                    return (
-                      <button key={i} type="button" className={`tone-${s.tone || 'neutral'}`} onClick={() => sendChildText(s.message)}>
-                        {s.emoji && <span className="fl-pill-emoji">{s.emoji}</span>}
-                        {safeHtml ? <span dangerouslySetInnerHTML={{ __html: safeHtml }} /> : <span>{s.label}</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
               <form className="fl-child-composer" onSubmit={sendChildMessage}>
                 <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
                 <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>

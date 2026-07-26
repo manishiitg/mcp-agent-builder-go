@@ -16,14 +16,13 @@ export type ApiEngine = {
 
 export type ConvMeta = { id: string; title: string; when: string; scope: 'parent' | 'child'; updated: string }
 
-export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string }
+export type DebugToolCall = { tool: string; args?: string; result?: string; err?: string }
+export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; toolCalls?: DebugToolCall[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string }
 
 export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
 
 export type WsFile = { path: string; name: string; scope: string; subject: string; topic: string }
-
-export type ChildSuggestion = { label: string; message: string; emoji?: string; tone?: string; html?: string }
 
 export type ActivityItem = { path: string; name: string }
 

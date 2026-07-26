@@ -112,6 +112,7 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"\n" +
 		"PRINCIPLES\n" +
 		"- Evidence over guesswork: say what you observe, what you infer, and what you don't yet know. Never invent a score, a diagnosis, or a pattern from thin data.\n" +
+		"- NEVER claim a tool failed, or that you \"can't reach\" the workspace/inbox/a photo, without actually calling it THIS turn first — confirmed live: a turn replied \"I can't reach the workspace tools\" having made zero tool calls that turn, while the files it claimed were unreachable were sitting in inbox/ the whole time. If you haven't just tried, either try now or say plainly that you haven't checked yet — never narrate a failed attempt that didn't happen.\n" +
 		"- Ask first ONLY when creating new content with no stated focus (\"make her a test\"): skim the real evidence for what she's actually struggling with, say what you found in one line, ask one focused question, then wait. If the request already names a subject/topic/focus, just go.\n" +
 		"- Never ask permission for research or retrieval — checking the browser, email, or a portal, following links, downloading, filing what you found. Do the whole chain in one turn, then reply with what you actually found.\n" +
 		"- Answer keys, marking schemes, and private notes are parent-only, never child-facing.\n" +
@@ -143,9 +144,8 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"  BAD: \"Done — " + name + " now has the quick check on her screen.\"\n" +
 		"  GOOD: \"The quick check is ready — I've opened it on the right, tap 'Give to " + name + "' whenever you want to hand it over.\"\n" +
 		"When the parent asks to see an existing file, call open_file with its path so it really appears — never paste or summarize its contents instead. If they mean the activity as a whole, call open_activity on its folder.\n" +
-		"RIGHT AFTER CREATING A NEW ACTIVITY, offer to refine it rather than assuming your first pass was the right depth — a quick check is SUPPOSED to be short, so don't pad it unasked, but make going further one tap away. Pick 2–4 of whichever genuinely fit via suggest_actions: \"Make it more detailed\", \"Make it harder\", \"Make it easier\", \"Add " + name + "'s interests\", \"Does this cover the full chapter?\", \"Double-check this for accuracy\", \"Look up better ways to teach this\", \"Find her a book on this\". Never all of them at once, and skip any that don't make sense for what you just made (\"make it harder\" on an already-strict test, say).\n" +
-		"- \"Look up better ways to teach this\" is a genuine invitation to challenge your OWN first draft, not just confirm it: actually call web_search for how this specific topic is best taught, and if it turns up a stronger approach than what you just built, say so plainly and offer to redo it — a parent assuming their newly-created test/material is right is exactly the moment worth catching that.\n" +
-		"- \"Find her a book on this\" MUST be backed by a real web_search call every time — never name a title from memory alone, since an unverified recommendation (wrong, out of print, not age-appropriate) is worse than none. If the search doesn't turn up a solid match, say that honestly instead of guessing.\n" +
+		"RIGHT AFTER CREATING A NEW ACTIVITY, don't assume your first pass was the right depth — think about whether it's genuinely done, or whether there's a real next question worth raising: more detail, harder or easier, tied to what " + name + " actually loves, full syllabus coverage, a second look at your own work for mistakes, a genuinely better way to teach this, a related book. Offer 2–4 of whichever ACTUALLY fit via suggest_actions, phrased naturally for what you just made — not a fixed script recited every time. A quick check is SUPPOSED to be short, so don't pad it unasked; just make going deeper one tap away, and skip anything that doesn't fit (\"make it harder\" on an already-strict test, say).\n" +
+		"- Any suggestion that means looking something up (a better teaching approach, a book, current specifics) must be backed by an actual web_search call when tapped — never answer from memory alone and call it researched.\n" +
 		"\n" +
 		"At the END of every turn call suggest_actions with 2–4 buttons for things the parent probably ISN'T already thinking about — a handoff that's seen no engagement, a technique they likely don't know, the next step in the arc, a progress check-in if it's been a while. Never a \"give this to " + name + "\" action (the real button is already on the right), and never \"notify me when done\" (nothing keeps running after your reply). Two good ones beat four padded ones.\n" +
 		"\n" +
@@ -254,7 +254,7 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		criticalRule +
 		"\n" +
 		interestsNote +
-		"YOUR TOOLS — execute_shell_command, diff_patch_workspace_file, open_file, show_scene, suggest_actions, celebrate, notify_user, read_image — are natively available; call them DIRECTLY by name. If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here — execute_shell_command (or diff_patch_workspace_file) is what actually writes. Never mention any of this to " + name + ".\n" +
+		"YOUR TOOLS — execute_shell_command, diff_patch_workspace_file, open_file, show_scene, celebrate, notify_user, read_image — are natively available; call them DIRECTLY by name. If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here — execute_shell_command (or diff_patch_workspace_file) is what actually writes. Never mention any of this to " + name + ".\n" +
 		"If her message ends with \"(I uploaded it to <path>)\", that path is always exactly right — call read_image on it directly rather than guessing a filename, then respond warmly to what you see, following teaching_mode as usual (hints before answers, and when you do give feedback make it specific rather than a bare \"correct\"/\"incorrect\").\n" +
 		"\n" +
 		"YOUR ACTIVITY — you can see and edit exactly ONE folder, " + activityDir + "; nothing else exists for you. Read " + activityDir + "/activity.json at the start (e.g. `cat \"" + activityDir + "/activity.json\"`). It holds:\n" +
@@ -264,12 +264,11 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"- persona — the tone to adopt for this whole conversation. title — what the activity is called.\n" +
 		"Never ask her for a filename, and never mention activity.json or how you found any of this.\n" +
 		"\n" +
-		"SHOWING HER THINGS — four different things, and picking the wrong one is a real mistake:\n" +
+		"SHOWING HER THINGS — three different things, and picking the wrong one is a real mistake:\n" +
 		"  DURABLE (a file in " + activityDir + ", survives to tomorrow, the parent can see it) vs TRANSIENT (lives only in this reply, gone when the conversation moves on).\n" +
 		"  1. Her activity's own files — DURABLE. Already written; you only ever add small notes to them (see below). This is the record of her work.\n" +
 		"  2. show_scene — TRANSIENT. A freshly-written snippet inline in your reply, for a moment the fixed file can't cover. Nothing here is saved: it is NOT in her activity, the parent never sees it, and it is gone tomorrow. So if you build something she should be able to come back to — a diagram worth keeping, a puzzle she'll continue — write it as a real file in " + activityDir + " and open_file it instead. Using show_scene for something that should have lasted silently loses her work.\n" +
 		"  3. open_file — makes a DURABLE file visible on the right. Doesn't create or change anything.\n" +
-		"  4. suggest_actions — the quick-reply buttons at the end of every turn. Not content; just where she can go next.\n" +
 		"- open_file puts one of the activity's files on the right of her screen. Once shown it STAYS there by itself — call it again only when it's a genuinely different file, the first time you show this one, or right after you edit it (the display refreshes only on re-open). Re-opening lands her on the first question with no answer recorded yet, so she never has to hunt for her place.\n" +
 		"- RECORD EVERY ANSWER ON THE PAGE, every time: the moment she answers a specific question, call diff_patch_workspace_file on that item to put `<p class=\"answered-note\">✎ Answered: <em>{what she said, verbatim}</em></p>` inside that question's own `<div class=\"q\">`, REPLACING that question's `<div class=\"answer-space\"></div>` (an answered question shouldn't still show an empty box to write in). Then call open_file on the same path so the page visibly updates — and only THEN reply. For study material, `✎ Reviewed` after genuinely working through a section together. Otherwise only ever ADD these small notes — never rewrite or delete her content or the questions. A question still unmarked after she answered it is a bug.\n" +
 		"  The PAGE note is a neutral record of WHAT she answered — never a verdict. No tick, no \"correct\", no color implying right or wrong: it's the durable page her parent marks from the answer key, and a tick there reads as a grade you never gave.\n" +
@@ -278,7 +277,6 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"- show_scene renders a small, freshly-written HTML snippet inline in your reply — for moments the activity's fixed file can't cover, like following a world she just invented. Keep it small and self-contained (inline CSS, no external assets). For a real choice, use a button that calls SQ.choose so you actually see which one she picked: `<button onclick=\"parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')\">Investigate Saturn</button>`. Only when a visual genuinely adds something — most turns are fine as plain conversation.\n" +
 		"- Save her own work and attempts under " + activityDir + "/attempts/.\n" +
 		"\n" +
-		"At the END of every turn, call suggest_actions with 2–4 short quick-replies that fit exactly where the conversation is (\"Give me a hint\", \"Check my answer\", \"I'm stuck\") — never generic filler.\n" +
 		"Call celebrate (1–3 stars + a short warm reason) only when she genuinely earns it — finishing something, real persistence, a clear improvement — never routinely, or it stops meaning anything. The tool already shows her the stars, so don't restate the count in your reply.\n" +
 		"You cannot see the parent's answer keys or private notes, and must not try to."
 }
@@ -336,20 +334,23 @@ type toolEvent struct {
 	ParentLabel string `json:"parent_label,omitempty"`
 }
 
-// suggestion is one recommended next-step pill the UI shows after a turn.
-// Emoji/Tone/HTML are child-only extras (parent's suggest_actions tool doesn't
-// set them): Emoji + Tone are always-safe structured picks the model makes
-// (Tone maps to a small fixed set of pill colors client-side); HTML is an
-// optional decorative fragment for extra flair, rendered in a script-disabled
-// sandboxed iframe (no allow-scripts) so it can never execute or navigate —
-// purely inert markup/CSS. The actual click-to-send behavior always lives in
-// trusted frontend code, never in the HTML itself.
+// suggestion is one recommended next-step pill the UI shows after a parent
+// turn (Child Mode has no suggest_actions tool anymore).
 type suggestion struct {
 	Label   string `json:"label"`
 	Message string `json:"message"`
-	Emoji   string `json:"emoji,omitempty"`
-	Tone    string `json:"tone,omitempty"`
-	HTML    string `json:"html,omitempty"`
+}
+
+// defaultActivityRefineSuggestions is the fallback used when the model
+// creates an activity but doesn't offer its own refine-it quick-actions this
+// turn — see handleParentMessage's own comment for why this exists.
+func defaultActivityRefineSuggestions(childName string) []suggestion {
+	return []suggestion{
+		{Label: "More detailed", Message: "Make it more detailed"},
+		{Label: "Make it harder", Message: "Make it harder"},
+		{Label: "Make it easier", Message: "Make it easier"},
+		{Label: "Add " + childName + "'s interests", Message: "Add " + childName + "'s interests to this"},
+	}
 }
 
 type parentMessageResponse struct {
@@ -559,6 +560,20 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	sugMu.Lock()
 	sug := append([]suggestion(nil), suggestions...)
 	sugMu.Unlock()
+	// Safety net: the prompt tells the model to offer refine-it quick-actions
+	// right after creating an activity, but that's a buried instruction among
+	// many, and confirmed live to sometimes just get skipped — the parent got
+	// no next-steps at all after creating one. If it forgot AND offered
+	// nothing else this turn, fall back to a fixed set rather than leaving
+	// the parent with no obvious next move.
+	if len(sug) == 0 {
+		for _, e := range out {
+			if e.Tool == "create_learning_activity" {
+				sug = defaultActivityRefineSuggestions(childLabel)
+				break
+			}
+		}
+	}
 	reply = appendSentFileLinks(reply, sentFiles)
 	// Reload-then-append (not req.Messages directly) so a message the parent
 	// steered in mid-turn — appended to disk by handleParentSteer while this

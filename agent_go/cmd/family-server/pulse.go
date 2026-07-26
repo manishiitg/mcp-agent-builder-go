@@ -193,6 +193,19 @@ func runPulseOnce(ctx context.Context, force bool) error {
 	// session as the web chat and WhatsApp) — one unified thread, not a separate
 	// Pulse channel.
 	convID := parentConversationID
+
+	// Parent and every child activity share the same physical workspace, so
+	// starting a new session here would force-close whatever OTHER session is
+	// currently warm (see agentsession.closeOtherInteractiveSessions) — fine
+	// for a direct user action, but Pulse fires on its own schedule with no
+	// idea whether the child is mid-conversation right now. Defer to the next
+	// cadence tick rather than silently evicting her live session the moment
+	// she pauses between messages.
+	if agentsession.HasOtherWarmInteractiveSession(convID) {
+		log.Printf("[pulse] deferring — another session is currently active on the shared workspace")
+		return nil
+	}
+
 	existing, _ := loadStoredConversation("parent", convID)
 
 	agentTurnMu.Lock()
