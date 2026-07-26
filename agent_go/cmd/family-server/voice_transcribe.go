@@ -38,9 +38,12 @@ func transcribeAudioFile(ctx context.Context, audioPath string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("whisper-cli not installed (brew install whisper-cpp)")
 	}
-	modelPath := whisperModelPath()
-	if _, err := os.Stat(modelPath); err != nil {
-		return "", fmt.Errorf("whisper model not found at %s", modelPath)
+	// Strongest INSTALLED model wins (see bestInstalledWhisperModel) — so
+	// upgrading a tier in Settings takes effect on the very next transcription
+	// with no separate "make it active" step to forget.
+	modelPath := bestInstalledWhisperModel()
+	if modelPath == "" {
+		return "", fmt.Errorf("no speech model installed yet")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)

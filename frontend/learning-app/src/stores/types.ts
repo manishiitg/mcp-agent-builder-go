@@ -30,6 +30,12 @@ export type VoiceTier = {
   unavailable_reason?: string
   installed: boolean
   coming_soon?: boolean
+  installing?: boolean
+  got_bytes?: number
+  total_bytes?: number
+  install_error?: string
+  can_install?: boolean
+  can_remove?: boolean
 }
 export type VoiceStatus = {
   hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }

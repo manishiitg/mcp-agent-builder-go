@@ -1488,15 +1488,23 @@ export default function LearningApp() {
   // Voice tier catalog — loaded whenever Settings opens. Cheap (a sysctl read
   // plus two LookPath calls), so it's refetched each time rather than cached:
   // installing a model elsewhere should be reflected on the next open.
-  useEffect(() => {
-    if (!settingsOpen) return
-    let cancelled = false
+  const refreshVoiceStatus = useCallback(() => {
     fetch(`${FAMILY_API}/api/voice/status`)
       .then((r) => r.json())
-      .then((d: VoiceStatus) => { if (!cancelled) setVoiceStatus(d) })
+      .then((d: VoiceStatus) => setVoiceStatus(d))
       .catch(() => {})
-    return () => { cancelled = true }
-  }, [settingsOpen])
+  }, [])
+  useEffect(() => {
+    if (!settingsOpen) return
+    refreshVoiceStatus()
+    // Poll only while a model is actually downloading — a multi-hundred-MB
+    // install needs live progress, but idle Settings shouldn't hit the server
+    // every two seconds for nothing.
+    const anyInstalling = voiceStatus?.stt_tiers.some((t) => t.installing)
+    if (!anyInstalling) return
+    const id = window.setInterval(refreshVoiceStatus, 1500)
+    return () => window.clearInterval(id)
+  }, [settingsOpen, refreshVoiceStatus, voiceStatus])
 
   // Secret names (never values) — loaded whenever Settings is opened.
   useEffect(() => {
@@ -3437,7 +3445,7 @@ export default function LearningApp() {
                     </div>
                   )}
 
-                  <VoiceSettings status={voiceStatus} childName={childName} />
+                  <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
 
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Secrets</p>
                   <p className="fl-note">Credentials Quill's tools can use — e.g. a school portal login. Saved here, never through chat, so a value you type below never appears in any saved conversation. Quill only ever sees the name, never the value.</p>

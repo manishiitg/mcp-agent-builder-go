@@ -1095,3 +1095,12 @@ audio.fl-viewer-media { background: var(--surface); }
 /* Errors here are almost always a denied mic permission — worth showing in
    place rather than failing silently, since the fix is outside this app. */
 .fl-mic-error { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 5; width: max-content; max-width: 260px; padding: 7px 10px; border-radius: 10px; background: var(--navy); color: #fff; font-size: var(--text-caption); line-height: 1.35; cursor: pointer; box-shadow: 0 10px 24px rgba(13, 35, 76, .25); }
+
+/* Voice model install/remove actions + live download progress. */
+.fl-voice-tier-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.fl-ghost-btn.is-tiny { padding: 3px 8px; font-size: var(--text-caption); gap: 4px; }
+.fl-voice-tier-progress { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-caption); font-weight: 700; color: #8a6114; font-variant-numeric: tabular-nums; }
+/* A several-hundred-MB download with no visible progress reads as a hang. */
+.fl-voice-progress-track { margin-top: 8px; height: 5px; border-radius: 999px; background: #efe7d8; overflow: hidden; }
+.fl-voice-progress-fill { display: block; height: 100%; border-radius: 999px; background: var(--sun, #f6b93b); transition: width .3s ease; }
+.fl-voice-tier-error { margin: 6px 0 0; font-size: var(--text-caption); color: #b3261e; }

@@ -37,9 +37,12 @@ var (
 	voiceInstallError string
 )
 
+// voiceModelInstalled reports whether ANY whisper tier is installed — not
+// just the base one. A parent who upgraded to the medium model and removed
+// the base one still has working speech, and the WhatsApp toggle must reflect
+// that rather than claiming transcription is unavailable.
 func voiceModelInstalled() bool {
-	_, err := os.Stat(whisperModelPath())
-	return err == nil
+	return bestInstalledWhisperModel() != ""
 }
 
 // actualOrApproxModelSizeMB reports the real on-disk size once the model is
@@ -148,32 +151,12 @@ func installVoiceTranscription() {
 		voiceInstallMu.Unlock()
 	}()
 
-	brewInstall := func(formula string) error {
-		log.Printf("[voice] installing %s via Homebrew...", formula)
-		out, err := exec.Command("brew", "install", formula).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("brew install %s: %w (%s)", formula, err, lastLines(string(out), 300))
-		}
-		return nil
-	}
-
-	if _, err := exec.LookPath("whisper-cli"); err != nil {
-		if err := brewInstall("whisper-cpp"); err != nil {
-			log.Printf("[voice] %v", err)
-			voiceInstallMu.Lock()
-			voiceInstallError = err.Error()
-			voiceInstallMu.Unlock()
-			return
-		}
-	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		if err := brewInstall("ffmpeg"); err != nil {
-			log.Printf("[voice] %v", err)
-			voiceInstallMu.Lock()
-			voiceInstallError = err.Error()
-			voiceInstallMu.Unlock()
-			return
-		}
+	if err := ensureWhisperRuntime(); err != nil {
+		log.Printf("[voice] %v", err)
+		voiceInstallMu.Lock()
+		voiceInstallError = err.Error()
+		voiceInstallMu.Unlock()
+		return
 	}
 
 	if voiceModelInstalled() {
@@ -239,4 +222,31 @@ func downloadWhisperModel() error {
 		return closeErr
 	}
 	return os.Rename(tmpPath, modelPath)
+}
+
+// ensureWhisperRuntime installs the tools every whisper tier shares —
+// whisper-cli and ffmpeg — via Homebrew, but only when they're actually
+// missing. Shared by the WhatsApp voice toggle and by installing any model
+// tier (voice_models.go), so a 1.5GB model can never land on a machine that
+// has nothing able to run it.
+func ensureWhisperRuntime() error {
+	brewInstall := func(formula string) error {
+		log.Printf("[voice] installing %s via Homebrew...", formula)
+		out, err := exec.Command("brew", "install", formula).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("brew install %s: %w (%s)", formula, err, lastLines(string(out), 300))
+		}
+		return nil
+	}
+	if _, err := exec.LookPath("whisper-cli"); err != nil {
+		if err := brewInstall("whisper-cpp"); err != nil {
+			return err
+		}
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		if err := brewInstall("ffmpeg"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -7,55 +7,43 @@
 
 import { useState } from 'react'
 import { Volume2 } from 'lucide-react'
-import type { VoiceStatus, VoiceTier } from '../stores'
+import type { VoiceStatus } from '../stores'
 import { speakText } from './speech'
-
-/**
- * One STT/TTS option. Deliberately shows the REAL tradeoff rather than just a
- * name — size, language coverage, and why an option is unavailable on this
- * specific Mac — since "which is better" genuinely depends on the family (an
- * English-only tier is faster but useless to a household that also speaks
- * Hindi).
- *
- * Not a button: tiers marked coming_soon have no install path wired up yet, so
- * this presents the tradeoff honestly rather than offering a click that would
- * do nothing.
- */
-export function VoiceTierCard({ tier }: { tier: VoiceTier }) {
-  const usable = tier.available && !tier.coming_soon
-  return (
-    <div className={`fl-voice-tier${tier.installed ? ' is-installed' : ''}${!tier.available ? ' is-unavailable' : ''}`}>
-      <div className="fl-voice-tier-head">
-        <span className="fl-voice-tier-name">{tier.label}</span>
-        {tier.installed && <span className="fl-voice-tier-badge is-on">Installed</span>}
-        {tier.coming_soon && tier.available && <span className="fl-voice-tier-badge">Coming soon</span>}
-        {!tier.available && <span className="fl-voice-tier-badge is-off">Unavailable</span>}
-      </div>
-      <p className="fl-voice-tier-desc">{tier.description}</p>
-      <p className="fl-voice-tier-meta">
-        {tier.languages}
-        {tier.size_mb
-          ? <> · {tier.size_mb >= 1000 ? `${(tier.size_mb / 1000).toFixed(1)}GB` : `${tier.size_mb}MB`} download</>
-          : <> · no download</>}
-      </p>
-      {!tier.available && tier.unavailable_reason && (
-        <p className="fl-voice-tier-why">{tier.unavailable_reason}</p>
-      )}
-      {usable && !tier.installed && (
-        <p className="fl-voice-tier-why">Downloads when you turn it on, and is deleted again if you turn it off.</p>
-      )}
-    </div>
-  )
-}
+import { VoiceTierCard } from './VoiceTierCard'
+import { FAMILY_API } from '../apiBase'
 
 export function VoiceSettings({
   status,
   childName,
+  onRefresh,
 }: {
   status: VoiceStatus | null
   childName: string
+  /** Re-fetch /api/voice/status — the parent owns the polling that keeps
+   *  download progress live while an install is running. */
+  onRefresh: () => void
 }) {
   const [previewing, setPreviewing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const modelAction = (path: string, id: string) => {
+    setBusy(true)
+    setActionError(null)
+    fetch(`${FAMILY_API}/api/voice/model/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        // A refused removal (e.g. "this is the only model") is a real,
+        // actionable message — show it rather than failing silently.
+        if (!r.ok) throw new Error(data?.error || `Failed (${r.status})`)
+      })
+      .catch((err) => setActionError(err instanceof Error ? err.message : 'Something went wrong'))
+      .finally(() => { setBusy(false); onRefresh() })
+  }
 
   // Play a short sample, so a parent can actually HEAR a voice before
   // committing to it — the whole point of offering tiers is that "more
@@ -88,13 +76,22 @@ export function VoiceSettings({
           <p className="fl-voice-group-label">Speech to text — talking instead of typing</p>
           <p className="fl-note">Used both here (the mic in the message box) and for WhatsApp voice notes.</p>
           <div className="fl-settings-engines">
-            {status.stt_tiers.map((t) => <VoiceTierCard key={t.id} tier={t} />)}
+            {status.stt_tiers.map((t) => (
+              <VoiceTierCard
+                key={t.id}
+                tier={t}
+                busy={busy}
+                onInstall={(id) => modelAction('install', id)}
+                onRemove={(id) => modelAction('remove', id)}
+              />
+            ))}
           </div>
 
           <p className="fl-voice-group-label">Read aloud — hearing Quill's replies</p>
           <div className="fl-settings-engines">
             {status.tts_tiers.map((t) => <VoiceTierCard key={t.id} tier={t} />)}
           </div>
+          {actionError && <p className="fl-voice-tier-error">{actionError}</p>}
 
           <button className="fl-ghost-btn" type="button" style={{ marginTop: '8px' }} onClick={preview} disabled={previewing}>
             <Volume2 size={14} /> {previewing ? 'Playing…' : 'Hear a sample'}

@@ -32,6 +32,14 @@ type voiceTier struct {
 	UnavailableWhy string `json:"unavailable_reason,omitempty"`
 	Installed      bool   `json:"installed"`
 	ComingSoon     bool   `json:"coming_soon,omitempty"`
+	// Live download progress, when this tier is being installed right now.
+	Installing bool   `json:"installing,omitempty"`
+	GotBytes   int64  `json:"got_bytes,omitempty"`
+	TotalBytes int64  `json:"total_bytes,omitempty"`
+	InstallErr string `json:"install_error,omitempty"`
+	// Whether the UI may offer install / remove for this tier.
+	CanInstall bool `json:"can_install,omitempty"`
+	CanRemove  bool `json:"can_remove,omitempty"`
 }
 
 type voiceStatusResponse struct {
@@ -53,37 +61,41 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	hw := detectVoiceHardware()
 	_, sayErr := exec.LookPath("say")
 
-	stt := []voiceTier{
-		{
-			ID:          "builtin",
-			Label:       "Built-in",
-			Description: "whisper.cpp, on-device — the same engine already used for WhatsApp voice notes.",
-			SizeMB:      whisperModelSizeMB,
-			Languages:   "100+ languages, including Hindi",
-			Available:   true,
-			Installed:   voiceModelInstalled(),
-		},
-		{
-			ID:          "better",
-			Label:       "Better, still universal",
-			Description: "whisper.cpp with a larger model — more accurate, still runs on any Mac.",
-			SizeMB:      1500,
-			Languages:   "100+ languages, including Hindi",
-			Available:   true,
-			ComingSoon:  true,
-		},
-		{
-			ID:          "fastest",
-			Label:       "Fastest (English only)",
-			Description: "Parakeet via Apple's MLX framework — faster and more accurate than Whisper for English specifically, but MLX only runs on Apple Silicon.",
-			SizeMB:      600,
-			Languages:   "English only",
-			Available:   hw.IsAppleSilicon,
-			ComingSoon:  true,
-		},
+	stt := make([]voiceTier, 0, len(whisperTierOrder))
+	// Presented weakest-first so the list reads as a ladder; whisperTierOrder
+	// is best-first because it answers a different question (which model to
+	// actually USE), so don't reuse it for display order.
+	installedCount := 0
+	for _, id := range []string{"builtin", "better", "best"} {
+		if whisperTierInstalled(id) {
+			installedCount++
+		}
 	}
-	if !hw.IsAppleSilicon {
-		stt[2].UnavailableWhy = "Requires an Apple Silicon Mac (M-series chip)"
+	for _, meta := range []struct{ id, label, desc string }{
+		{"builtin", "Built-in", "whisper.cpp base model — the same engine already used for WhatsApp voice notes. Fast, good enough for clear speech."},
+		{"better", "Better", "whisper.cpp small model — noticeably more accurate on names, numbers and quieter speech. Still runs on any Mac."},
+		{"best", "Most accurate", "whisper.cpp medium model — the most accurate option that runs on any Mac. Slower, and a big download."},
+	} {
+		wt := whisperTiers[meta.id]
+		st := installStateFor(meta.id)
+		installed := whisperTierInstalled(meta.id)
+		stt = append(stt, voiceTier{
+			ID:          meta.id,
+			Label:       meta.label,
+			Description: meta.desc,
+			SizeMB:      wt.SizeMB,
+			Languages:   "100+ languages, including Hindi",
+			Available:   true,
+			Installed:   installed,
+			Installing:  st.Installing,
+			GotBytes:    st.GotBytes,
+			TotalBytes:  st.TotalBytes,
+			InstallErr:  st.Error,
+			CanInstall:  !installed && !st.Installing,
+			// Never offer to remove the last one — that would silently turn
+			// speech input off rather than just downgrading it.
+			CanRemove: installed && installedCount > 1,
+		})
 	}
 
 	tts := []voiceTier{
