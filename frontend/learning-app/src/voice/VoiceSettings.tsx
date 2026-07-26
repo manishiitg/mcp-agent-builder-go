@@ -59,22 +59,16 @@ export function VoiceSettings({
     <>
       <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Voice</p>
       <p className="fl-note">
-        Talking to Quill instead of typing, and having replies read aloud. Everything runs on this Mac —
-        nothing is sent to a cloud service, so it works offline and costs nothing per use.
-        {status && (
-          <> Detected: <strong>{status.hardware.is_apple_silicon ? 'Apple Silicon' : 'Intel'}</strong>
-            {status.hardware.total_ram_bytes > 0 && (
-              <> · {Math.round(status.hardware.total_ram_bytes / 1024 / 1024 / 1024)}GB RAM</>
-            )}.</>
-        )}
+        Talk to Quill instead of typing, and have replies read out loud. All of this happens on this
+        computer — nothing is sent over the internet, so it keeps working offline and costs nothing.
       </p>
 
       {!status ? (
-        <p className="fl-note">Checking what this Mac can run…</p>
+        <p className="fl-note">Checking what this computer can do…</p>
       ) : (
         <>
-          <p className="fl-voice-group-label">Speech to text — talking instead of typing</p>
-          <p className="fl-note">Used both here (the mic in the message box) and for WhatsApp voice notes.</p>
+          <p className="fl-voice-group-label">Talking instead of typing</p>
+          <p className="fl-note">Used by the microphone in the message box, and for voice notes on WhatsApp.</p>
           <div className="fl-settings-engines">
             {status.stt_tiers.map((t) => (
               <VoiceTierCard
@@ -87,7 +81,7 @@ export function VoiceSettings({
             ))}
           </div>
 
-          <p className="fl-voice-group-label">Read aloud — hearing Quill's replies</p>
+          <p className="fl-voice-group-label">Reading replies out loud</p>
           <div className="fl-settings-engines">
             {status.tts_tiers.map((t) => <VoiceTierCard key={t.id} tier={t} />)}
           </div>

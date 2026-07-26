@@ -1104,3 +1104,8 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-voice-progress-track { margin-top: 8px; height: 5px; border-radius: 999px; background: #efe7d8; overflow: hidden; }
 .fl-voice-progress-fill { display: block; height: 100%; border-radius: 999px; background: var(--sun, #f6b93b); transition: width .3s ease; }
 .fl-voice-tier-error { margin: 6px 0 0; font-size: var(--text-caption); color: #b3261e; }
+
+/* Engine rows show a plain-language name plus one line on what it is, so a
+   parent can choose without knowing what a "CLI" is. */
+.fl-settings-engine-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; text-align: left; }
+.fl-settings-engine-blurb { font-size: var(--text-caption); font-weight: 500; color: var(--muted, #8a8478); }

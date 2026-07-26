@@ -110,9 +110,9 @@ function engineStatus(e: ApiEngine): { label: string; ready: boolean } {
 // Order reflects the product preference: ChatGPT → Claude → Cursor → Pi.
 const ENGINE_PRESENTATION: Record<string, { name: string; blurb: string; order: number; preferred?: boolean }> = {
   'codex-cli': { name: 'ChatGPT', blurb: 'Uses your ChatGPT account · can also create images', order: 1, preferred: true },
-  'claude-code': { name: 'Claude', blurb: 'Careful, step-by-step teaching from Anthropic', order: 2 },
-  'cursor-cli': { name: 'Cursor', blurb: 'Cursor’s AI assistant', order: 3 },
-  'pi-cli': { name: 'Pi', blurb: 'Access OpenRouter and many other models', order: 4 },
+  'claude-code': { name: 'Claude', blurb: 'Careful, patient, step-by-step teaching', order: 2 },
+  'cursor-cli': { name: 'Cursor', blurb: 'Uses your Cursor account', order: 3 },
+  'pi-cli': { name: 'Pi', blurb: 'Lets you pick from many other AI models', order: 4 },
 }
 function pres(id: string, fallbackName: string) {
   return ENGINE_PRESENTATION[id] ?? { name: fallbackName, blurb: 'Available on this computer', order: 99, preferred: false }
@@ -3409,12 +3409,12 @@ export default function LearningApp() {
                   <button className="fl-wa-close" type="button" onClick={() => setSettingsOpen(false)} aria-label="Close">×</button>
                 </div>
                 <div className="fl-settings-body">
-                  <p className="fl-drawer-label">AI engine</p>
-                  <p className="fl-note">Which coding-agent engine Quill runs on for both the parent chat and {childName || 'your child'}’s tutor.</p>
+                  <p className="fl-drawer-label">Which AI Quill uses</p>
+                  <p className="fl-note">The AI behind both your chat and {childName || 'your child'}’s tutor. They all work — pick whichever account you already pay for.</p>
                   {enginesState === 'loading' ? (
-                    <p className="fl-note">Checking available engines…</p>
+                    <p className="fl-note">Checking what’s available…</p>
                   ) : engines.length === 0 ? (
-                    <p className="fl-note">No engines detected on this machine.</p>
+                    <p className="fl-note">None found on this computer yet.</p>
                   ) : (
                     <div className="fl-settings-engines">
                       {engines.map((item) => {
@@ -3436,7 +3436,10 @@ export default function LearningApp() {
                               }).finally(() => setSavingEngine(false))
                             }}
                           >
-                            <span className="fl-settings-engine-name">{item.name}</span>
+                            <span className="fl-settings-engine-col">
+                              <span className="fl-settings-engine-name">{pres(item.id, item.name).name}</span>
+                              <span className="fl-settings-engine-blurb">{pres(item.id, item.name).blurb}</span>
+                            </span>
                             <span className={`fl-settings-engine-status ${status.ready ? 'is-ready' : ''}`}>{status.label}</span>
                             {active && <Check size={16} />}
                           </button>

@@ -274,6 +274,11 @@ func handleVoiceModelInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	if req.ID == "piper" {
+		installPiper()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "installing"})
+		return
+	}
 	if _, ok := whisperTiers[req.ID]; !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown model"})
 		return
@@ -296,9 +301,79 @@ func handleVoiceModelRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	if req.ID == "piper" {
+		if err := removePiper(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+		return
+	}
 	if err := removeWhisperTier(req.ID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// downloadFileWithProgress fetches url to dest, reporting progress scaled into
+// the [startFrac..1.0] slice of an install that has other phases too (Piper's
+// package tree finishes before its voice download starts).
+func downloadFileWithProgress(url, dest, id string, startFrac float64) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+	tmpPath := dest + ".download"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 256*1024)
+	var got int64
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				f.Close()
+				os.Remove(tmpPath)
+				return werr
+			}
+			got += int64(n)
+			if resp.ContentLength > 0 {
+				modelInstallMu.Lock()
+				if st := modelInstallStates[id]; st != nil && st.TotalBytes > 0 {
+					frac := startFrac + (1-startFrac)*(float64(got)/float64(resp.ContentLength))
+					st.GotBytes = int64(frac * float64(st.TotalBytes))
+				}
+				modelInstallMu.Unlock()
+			}
+		}
+		if rerr != nil {
+			if rerr.Error() == "EOF" {
+				break
+			}
+			f.Close()
+			os.Remove(tmpPath)
+			return rerr
+		}
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, dest)
 }

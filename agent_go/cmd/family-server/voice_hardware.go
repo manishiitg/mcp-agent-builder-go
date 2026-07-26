@@ -72,9 +72,9 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, meta := range []struct{ id, label, desc string }{
-		{"builtin", "Built-in", "whisper.cpp base model — the same engine already used for WhatsApp voice notes. Fast, good enough for clear speech."},
-		{"better", "Better", "whisper.cpp small model — noticeably more accurate on names, numbers and quieter speech. Still runs on any Mac."},
-		{"best", "Most accurate", "whisper.cpp medium model — the most accurate option that runs on any Mac. Slower, and a big download."},
+		{"builtin", "Standard", "Understands clear speech well. Already set up — nothing to download."},
+		{"better", "More accurate", "Better with names, numbers, and quieter or faster talking."},
+		{"best", "Most accurate", "The most accurate at understanding speech. A big download, and a little slower to think."},
 	} {
 		wt := whisperTiers[meta.id]
 		st := installStateFor(meta.id)
@@ -101,25 +101,35 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	tts := []voiceTier{
 		{
 			ID:          "builtin",
-			Label:       "Built-in",
-			Description: "macOS's own voice (AVSpeechSynthesizer) — no download, works instantly offline.",
-			Languages:   "English, Hindi, and every language macOS itself supports",
+			Label:       "Standard",
+			Description: "Your Mac's built-in voice. Ready right now — nothing to download.",
+			Languages:   "English, Hindi, and many more",
 			Available:   sayErr == nil,
 			Installed:   sayErr == nil,
 		},
-		{
-			ID:          "better",
-			Label:       "Better, still universal",
-			Description: "Piper — a small, fast neural voice, noticeably more natural than the system voice, on any Mac.",
-			SizeMB:      60,
-			Languages:   "English (per downloaded voice)",
-			Available:   true,
-			ComingSoon:  true,
-		},
+		func() voiceTier {
+			st := installStateFor("piper")
+			installed := piperInstalled()
+			return voiceTier{
+				ID:          "piper",
+				Label:       "More natural",
+				Description: "A warmer, more human-sounding voice. Works on any Mac.",
+				SizeMB:      piperTotalSizeMB,
+				Languages:   "English",
+				Available:   true,
+				Installed:   installed,
+				Installing:  st.Installing,
+				GotBytes:    st.GotBytes,
+				TotalBytes:  st.TotalBytes,
+				InstallErr:  st.Error,
+				CanInstall:  !installed && !st.Installing,
+				CanRemove:   installed,
+			}
+		}(),
 		{
 			ID:          "fastest",
-			Label:       "Fastest, most natural (Apple Silicon only)",
-			Description: "mlx-audio with a Kokoro voice — the most natural-sounding option, but only runs on Apple Silicon.",
+			Label:       "Most natural",
+			Description: "The most life-like voice — closest to a real person reading aloud.",
 			SizeMB:      350,
 			Languages:   "English only",
 			Available:   hw.IsAppleSilicon,
@@ -127,10 +137,10 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if sayErr != nil {
-		tts[0].UnavailableWhy = "'say' not found on this system"
+		tts[0].UnavailableWhy = "Not available on this computer"
 	}
 	if !hw.IsAppleSilicon {
-		tts[2].UnavailableWhy = "Requires an Apple Silicon Mac (M-series chip)"
+		tts[2].UnavailableWhy = "Needs a newer Mac (2020 or later)"
 	}
 
 	writeJSON(w, http.StatusOK, voiceStatusResponse{Hardware: hw, STTTiers: stt, TTSTiers: tts})

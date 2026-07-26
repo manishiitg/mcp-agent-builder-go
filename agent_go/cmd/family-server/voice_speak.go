@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -57,7 +58,22 @@ func handleVoiceSpeak(w http.ResponseWriter, r *http.Request) {
 		voice = defaultTTSVoice
 	}
 
-	audio, err := synthesizeSpeech(text, voice)
+	// The more natural voice wins automatically when it's installed — same
+	// rule as the speech models: installing an upgrade IS choosing it, with no
+	// separate "make it active" step to forget.
+	var audio []byte
+	var err error
+	if piperInstalled() {
+		audio, err = speakWithPiper(text)
+		if err != nil {
+			// Never leave the parent with silence because the optional upgrade
+			// broke — fall back to the always-present system voice.
+			log.Printf("[voice] piper failed, falling back to the system voice: %v", err)
+			audio, err = synthesizeSpeech(text, voice)
+		}
+	} else {
+		audio, err = synthesizeSpeech(text, voice)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
