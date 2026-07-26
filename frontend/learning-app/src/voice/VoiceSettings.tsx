@@ -83,13 +83,20 @@ export function VoiceSettings({
 
           <p className="fl-voice-group-label">Reading replies out loud</p>
           <div className="fl-settings-engines">
-            {status.tts_tiers.map((t) => <VoiceTierCard key={t.id} tier={t} />)}
+            {status.tts_tiers.map((t) => (
+              <VoiceTierCard
+                key={t.id}
+                tier={t}
+                busy={busy}
+                sampleable
+                onInstall={(id) => modelAction('install', id)}
+                onRemove={(id) => modelAction('remove', id)}
+              />
+            ))}
           </div>
           {actionError && <p className="fl-voice-tier-error">{actionError}</p>}
 
-          <button className="fl-ghost-btn" type="button" style={{ marginTop: '8px' }} onClick={preview} disabled={previewing}>
-            <Volume2 size={14} /> {previewing ? 'Playing…' : 'Hear a sample'}
-          </button>
+
         </>
       )}
     </>

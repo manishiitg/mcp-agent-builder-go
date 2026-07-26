@@ -126,15 +126,25 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 				CanRemove:   installed,
 			}
 		}(),
-		{
-			ID:          "fastest",
-			Label:       "Most natural",
-			Description: "The most life-like voice — closest to a real person reading aloud.",
-			SizeMB:      350,
-			Languages:   "English only",
-			Available:   hw.IsAppleSilicon,
-			ComingSoon:  true,
-		},
+		func() voiceTier {
+			st := installStateFor("kokoro")
+			installed := kokoroInstalled()
+			return voiceTier{
+				ID:          "kokoro",
+				Label:       "Most natural",
+				Description: "The most life-like voice — closest to a real person reading aloud.",
+				SizeMB:      kokoroTotalSizeMB,
+				Languages:   "English",
+				Available:   hw.IsAppleSilicon,
+				Installed:   installed,
+				Installing:  st.Installing,
+				GotBytes:    st.GotBytes,
+				TotalBytes:  st.TotalBytes,
+				InstallErr:  st.Error,
+				CanInstall:  hw.IsAppleSilicon && !installed && !st.Installing,
+				CanRemove:   installed,
+			}
+		}(),
 	}
 	if sayErr != nil {
 		tts[0].UnavailableWhy = "Not available on this computer"

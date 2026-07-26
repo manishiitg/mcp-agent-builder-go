@@ -28,6 +28,11 @@ const speakMaxChars = 4000
 type voiceSpeakRequest struct {
 	Text  string `json:"text"`
 	Voice string `json:"voice,omitempty"`
+	// Tier forces a SPECIFIC voice instead of the usual "best installed
+	// wins" — used by each tier's own "Hear a sample" button, so a parent can
+	// compare voices before choosing rather than only hearing whichever one
+	// currently happens to win.
+	Tier string `json:"tier,omitempty"`
 }
 
 // POST /api/voice/speak — synthesizes text to speech entirely on-device via
@@ -58,20 +63,35 @@ func handleVoiceSpeak(w http.ResponseWriter, r *http.Request) {
 		voice = defaultTTSVoice
 	}
 
-	// The more natural voice wins automatically when it's installed — same
-	// rule as the speech models: installing an upgrade IS choosing it, with no
-	// separate "make it active" step to forget.
 	var audio []byte
 	var err error
-	if piperInstalled() {
+	switch {
+	// An explicit tier is a sample request: play exactly that voice, and
+	// report failure rather than quietly substituting a different one — the
+	// whole point is hearing THIS voice.
+	case req.Tier == "builtin":
+		audio, err = synthesizeSpeech(text, voice)
+	case req.Tier == "piper":
 		audio, err = speakWithPiper(text)
+	case req.Tier == "kokoro":
+		audio, err = speakWithKokoro(text)
+	// No tier given: the best installed voice wins automatically — same rule
+	// as the speech models, so installing an upgrade IS choosing it.
+	case kokoroInstalled():
+		audio, err = speakWithKokoro(text)
 		if err != nil {
-			// Never leave the parent with silence because the optional upgrade
+			// Never leave the parent with silence because an optional upgrade
 			// broke — fall back to the always-present system voice.
-			log.Printf("[voice] piper failed, falling back to the system voice: %v", err)
+			log.Printf("[voice] kokoro failed, using the built-in voice: %v", err)
 			audio, err = synthesizeSpeech(text, voice)
 		}
-	} else {
+	case piperInstalled():
+		audio, err = speakWithPiper(text)
+		if err != nil {
+			log.Printf("[voice] piper failed, using the built-in voice: %v", err)
+			audio, err = synthesizeSpeech(text, voice)
+		}
+	default:
 		audio, err = synthesizeSpeech(text, voice)
 	}
 	if err != nil {

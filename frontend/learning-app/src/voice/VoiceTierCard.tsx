@@ -1,4 +1,6 @@
-import { Download, Trash2, Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { Download, Trash2, Loader2, Volume2 } from 'lucide-react'
+import { speakText } from './speech'
 import type { VoiceTier } from '../stores'
 
 function sizeLabel(mb?: number): string {
@@ -22,12 +24,22 @@ export function VoiceTierCard({
   onInstall,
   onRemove,
   busy,
+  sampleable,
 }: {
   tier: VoiceTier
   onInstall?: (id: string) => void
   onRemove?: (id: string) => void
   busy?: boolean
+  /** Read-aloud tiers can be previewed; speech-to-text tiers can't. */
+  sampleable?: boolean
 }) {
+  const [sampling, setSampling] = useState(false)
+  const playSample = () => {
+    setSampling(true)
+    speakText("Hi! This is how I'll read things out to you.", tier.id)
+      .then(() => setSampling(false))
+      .catch(() => setSampling(false))
+  }
   const pct = tier.total_bytes
     ? Math.min(100, Math.round(((tier.got_bytes ?? 0) / tier.total_bytes) * 100))
     : 0
@@ -45,6 +57,11 @@ export function VoiceTierCard({
             <span className="fl-voice-tier-progress"><Loader2 size={12} className="fl-mic-spin" /> {pct}%</span>
           ) : (
             <>
+              {sampleable && tier.installed && (
+                <button className="fl-ghost-btn is-tiny" type="button" disabled={sampling} onClick={playSample} title="Hear what this voice sounds like">
+                  <Volume2 size={12} /> {sampling ? 'Playing…' : 'Hear it'}
+                </button>
+              )}
               {tier.can_install && onInstall && (
                 <button className="fl-ghost-btn is-tiny" type="button" disabled={busy} onClick={() => onInstall(tier.id)}>
                   <Download size={12} /> Install

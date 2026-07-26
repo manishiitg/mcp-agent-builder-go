@@ -274,6 +274,11 @@ func handleVoiceModelInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	if req.ID == "kokoro" {
+		installKokoro()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "installing"})
+		return
+	}
 	if req.ID == "piper" {
 		installPiper()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "installing"})
@@ -299,6 +304,14 @@ func handleVoiceModelRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if req.ID == "kokoro" {
+		if err := removeKokoro(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 		return
 	}
 	if req.ID == "piper" {

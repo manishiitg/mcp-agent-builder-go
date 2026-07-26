@@ -104,27 +104,11 @@ func installPiper() {
 func buildPiperVenv() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	venv := filepath.Join(piperDir(), ".venv")
-
-	if uv, err := exec.LookPath("uv"); err == nil {
-		if out, err := exec.CommandContext(ctx, uv, "venv", "--python", "3.12", venv).CombinedOutput(); err != nil {
-			return fmt.Errorf("could not set up the voice environment: %s", lastLines(string(out), 200))
-		}
-		out, err := exec.CommandContext(ctx, uv, "pip", "install", "--python", piperPython(), "piper-tts").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("could not install the voice: %s", lastLines(string(out), 200))
-		}
-		return nil
-	}
-
-	py, err := exec.LookPath("python3")
+	venvPy, pipArgs, err := pythonEnvBuilder(ctx, filepath.Join(piperDir(), ".venv"))
 	if err != nil {
-		return fmt.Errorf("python3 is not available on this computer")
+		return err
 	}
-	if out, err := exec.CommandContext(ctx, py, "-m", "venv", venv).CombinedOutput(); err != nil {
-		return fmt.Errorf("could not set up the voice environment: %s", lastLines(string(out), 200))
-	}
-	if out, err := exec.CommandContext(ctx, piperPython(), "-m", "pip", "install", "piper-tts").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, venvPy, append(append([]string{}, pipArgs...), "piper-tts")...).CombinedOutput(); err != nil {
 		return fmt.Errorf("could not install the voice: %s", lastLines(string(out), 200))
 	}
 	return nil
@@ -159,4 +143,31 @@ func speakWithPiper(text string) ([]byte, error) {
 		return nil, fmt.Errorf("piper failed: %w (%s)", err, lastLines(string(out), 200))
 	}
 	return os.ReadFile(tmpPath)
+}
+
+// pythonEnvBuilder creates an isolated virtualenv at venvPath and returns the
+// command + leading args to install packages into it.
+//
+// Prefers uv (dramatically faster) but falls back to Python's own stdlib venv
+// module, because uv is a developer tool most Macs don't have — and a voice
+// download that only works for people who already develop software isn't
+// "works on any MacBook". python3 itself ships with macOS's command line
+// tools and is present on any machine that can run this app's other tooling.
+func pythonEnvBuilder(ctx context.Context, venvPath string) (cmd string, pipArgs []string, err error) {
+	venvPy := filepath.Join(venvPath, "bin", "python")
+	if uv, lookErr := exec.LookPath("uv"); lookErr == nil {
+		if out, e := exec.CommandContext(ctx, uv, "venv", "--python", "3.12", venvPath).CombinedOutput(); e != nil {
+			return "", nil, fmt.Errorf("could not set up the voice: %s", lastLines(string(out), 200))
+		}
+		// uv installs INTO a venv via --python, so it stays the driver.
+		return uv, []string{"pip", "install", "--python", venvPy}, nil
+	}
+	py, lookErr := exec.LookPath("python3")
+	if lookErr != nil {
+		return "", nil, fmt.Errorf("this needs Python, which isn't set up on this computer yet")
+	}
+	if out, e := exec.CommandContext(ctx, py, "-m", "venv", venvPath).CombinedOutput(); e != nil {
+		return "", nil, fmt.Errorf("could not set up the voice: %s", lastLines(string(out), 200))
+	}
+	return venvPy, []string{"-m", "pip", "install"}, nil
 }
