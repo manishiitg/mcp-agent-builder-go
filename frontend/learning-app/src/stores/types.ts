@@ -17,6 +17,25 @@ export type ApiEngine = {
 export type ConvMeta = { id: string; title: string; when: string; scope: 'parent' | 'child'; updated: string }
 
 export type DebugToolCall = { tool: string; args?: string; result?: string; err?: string }
+
+// Voice (speech-to-text / read-aloud) — mirrors the Go side's voiceTier /
+// voiceStatusResponse in cmd/family-server/voice_hardware.go.
+export type VoiceTier = {
+  id: string
+  label: string
+  description: string
+  size_mb?: number
+  languages: string
+  available: boolean
+  unavailable_reason?: string
+  installed: boolean
+  coming_soon?: boolean
+}
+export type VoiceStatus = {
+  hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }
+  stt_tiers: VoiceTier[]
+  tts_tiers: VoiceTier[]
+}
 export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; toolCalls?: DebugToolCall[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string }
 

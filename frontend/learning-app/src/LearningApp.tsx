@@ -31,6 +31,8 @@ import {
   FolderOpen,
   HardDrive,
   Type,
+  Volume2,
+  Square,
   Image as ImageIcon,
   Info,
   LockKeyhole,
@@ -69,18 +71,12 @@ import {
   type TreeNode,
   type WsFile,
   type Activity,
+  type VoiceStatus,
 } from './stores'
-
-// In the packaged desktop app the Go server serves this frontend itself, so the
-// API is same-origin — and must be read from the actual origin rather than a
-// fixed port, since the app falls forward to the next free port when 8010 is
-// taken (see desktop-sparkquill/main.js). The bridge only exists inside
-// Electron; in a browser this falls through to the dev default unchanged.
-const FAMILY_API =
-  (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl()
-  ?? (import.meta as { env?: { VITE_FAMILY_API?: string } }).env?.VITE_FAMILY_API
-  ?? 'http://127.0.0.1:8010'
-
+import { FAMILY_API } from './apiBase'
+import { VoiceSettings } from './voice/VoiceSettings'
+import { readAutoSpeak, speakText } from './voice/speech'
+import { useSpeakReply } from './voice/useSpeakReply'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
@@ -1076,6 +1072,11 @@ export default function LearningApp() {
   const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [savingEngine, setSavingEngine] = useState(false)
+  // Voice settings — the tier catalog is computed server-side against THIS
+  // machine's hardware (see /api/voice/status), so the UI never has to guess
+  // what an Intel vs Apple Silicon Mac can actually run.
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  const [autoSpeak, setAutoSpeak] = useState(readAutoSpeak)
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
   // Secrets (credentials the parent saves for Quill's tools, e.g. a school
   // portal login) — settings-form only, never through chat, so a value typed
@@ -1482,6 +1483,19 @@ export default function LearningApp() {
     return () => { cancelled = true }
   }, [screen, settingsOpen, pulsePopoverOpen])
 
+  // Voice tier catalog — loaded whenever Settings opens. Cheap (a sysctl read
+  // plus two LookPath calls), so it's refetched each time rather than cached:
+  // installing a model elsewhere should be reflected on the next open.
+  useEffect(() => {
+    if (!settingsOpen) return
+    let cancelled = false
+    fetch(`${FAMILY_API}/api/voice/status`)
+      .then((r) => r.json())
+      .then((d: VoiceStatus) => { if (!cancelled) setVoiceStatus(d) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [settingsOpen])
+
   // Secret names (never values) — loaded whenever Settings is opened.
   useEffect(() => {
     if (!settingsOpen) return
@@ -1511,6 +1525,25 @@ export default function LearningApp() {
       })
       .finally(() => setSavingSecret(false))
   }
+
+  // Read-aloud, one instance per thread (parent chat and child tutor each
+  // track their own "which reply is speaking" index).
+  const { speakingIdx, speakReply } = useSpeakReply()
+  const { speakingIdx: parentSpeakingIdx, speakReply: speakParentReply } = useSpeakReply()
+
+  // Auto-read: speak the newest tutor reply once the turn finishes. Keyed on
+  // the settled message list (not the streaming text) so it reads the final,
+  // reconciled reply exactly once rather than re-firing on every stream tick.
+  const lastSpokenRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!autoSpeak || childSending) return
+    const last = childMessages[childMessages.length - 1]
+    if (!last || last.role !== 'assistant' || !last.text) return
+    const key = `${childMessages.length}:${last.text.slice(0, 64)}`
+    if (lastSpokenRef.current === key) return
+    lastSpokenRef.current = key
+    speakText(last.text).catch(() => {})
+  }, [autoSpeak, childSending, childMessages])
 
   const deleteSecret = (name: string) => {
     setDeletingSecret(name)
@@ -2653,7 +2686,18 @@ export default function LearningApp() {
                       <>
                         <span className={`fl-msg-avatar ${m.source === 'pulse' ? 'is-pulse' : 'is-sun'}`}>{m.source === 'pulse' ? <PulseIcon size={17} /> : <Sun size={18} />}</span>
                         <div className="fl-msg-col">
-                          <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}><Markdown text={m.text ?? ''} /></div>
+                          <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
+                            <Markdown text={m.text ?? ''} />
+                            <button
+                              className={`fl-speak-btn${parentSpeakingIdx === i ? ' is-speaking' : ''}`}
+                              type="button"
+                              aria-label={parentSpeakingIdx === i ? 'Stop reading' : 'Read this out loud'}
+                              title={parentSpeakingIdx === i ? 'Stop reading' : 'Read this out loud'}
+                              onClick={() => speakParentReply(i, m.text ?? '')}
+                            >
+                              {parentSpeakingIdx === i ? <Square size={13} /> : <Volume2 size={13} />}
+                            </button>
+                          </div>
                         </div>
                       </>
                     )}
@@ -3387,6 +3431,13 @@ export default function LearningApp() {
                     </div>
                   )}
 
+                  <VoiceSettings
+                    status={voiceStatus}
+                    childName={childName}
+                    autoSpeak={autoSpeak}
+                    onAutoSpeakChange={setAutoSpeak}
+                  />
+
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Secrets</p>
                   <p className="fl-note">Credentials Quill's tools can use — e.g. a school portal login. Saved here, never through chat, so a value you type below never appears in any saved conversation. Quill only ever sees the name, never the value.</p>
                   {secretNames.length > 0 && (
@@ -3529,7 +3580,18 @@ export default function LearningApp() {
                   ) : m.role === 'assistant' ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <div className="fl-tbubble"><Markdown text={m.text ?? ''} /></div>
+                      <div className="fl-tbubble">
+                        <Markdown text={m.text ?? ''} />
+                        <button
+                          className={`fl-speak-btn${speakingIdx === i ? ' is-speaking' : ''}`}
+                          type="button"
+                          aria-label={speakingIdx === i ? 'Stop reading' : 'Read this out loud'}
+                          title={speakingIdx === i ? 'Stop reading' : 'Read this out loud'}
+                          onClick={() => speakReply(i, m.text ?? '')}
+                        >
+                          {speakingIdx === i ? <Square size={13} /> : <Volume2 size={13} />}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div key={i} className="fl-tmsg is-child">
