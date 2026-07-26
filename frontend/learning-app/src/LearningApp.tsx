@@ -78,6 +78,7 @@ import { VoiceSettings } from './voice/VoiceSettings'
 import { readAutoSpeak, speakText } from './voice/speech'
 import { useSpeakReply } from './voice/useSpeakReply'
 import { ReplySpeakControls } from './voice/ReplySpeakControls'
+import { MicButton } from './voice/MicButton'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
@@ -2747,6 +2748,11 @@ export default function LearningApp() {
             <form className="fl-composer" onSubmit={sendParentMessage}>
               <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf" onChange={onFilesSelected} style={{ display: 'none' }} />
               <button className="composer-icon" type="button" aria-label="Attach a photo or PDF" onClick={onPickFiles} disabled={uploading}><Paperclip size={19} /></button>
+              <MicButton
+                onText={(text) => setFocusInput((cur) => (cur ? `${cur} ${text}` : text))}
+                disabled={uploading}
+                shortcutEnabled={screen === 'parent'}
+              />
               <textarea
                 ref={focusTextareaRef}
                 aria-label="Message the learning guide"
@@ -3618,6 +3624,11 @@ export default function LearningApp() {
               <form className="fl-child-composer" onSubmit={sendChildMessage}>
                 <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
                 <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>
+                <MicButton
+                  onText={(text) => setChildInput((cur) => (cur ? `${cur} ${text}` : text))}
+                  disabled={childUploading}
+                  shortcutEnabled={screen === 'tutor'}
+                />
                 <textarea
                   ref={childTextareaRef}
                   aria-label="Message your tutor"

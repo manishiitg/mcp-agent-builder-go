@@ -128,6 +128,7 @@ func main() {
 	mux.HandleFunc("/api/voice/hardware", handleVoiceHardware)
 	mux.HandleFunc("/api/voice/status", handleVoiceStatus)
 	mux.HandleFunc("/api/voice/speak", handleVoiceSpeak)
+	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
 	mux.HandleFunc("/api/gmail/status", handleGmailStatus)
 	mux.HandleFunc("/api/gmail/test", handleGmailTest)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
