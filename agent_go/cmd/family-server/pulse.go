@@ -256,7 +256,18 @@ func runPulseOnce(ctx context.Context, force bool) error {
 	}
 	messages = appendPulseTurn(messages, notifyCheck.trigger, reply)
 	persistConversation("parent", convID, messages)
-	log.Printf("[pulse] cycle complete: %s", strings.TrimSpace(reply))
+	// Which of these fired is otherwise unrecoverable from the log: the
+	// ticker (startPulseTicker) and the manual "Run Pulse Now" button
+	// (handlePulseRunNow) both land here with no other distinguishing trace,
+	// which made a real investigation (why did Pulse run 4 times in 4
+	// minutes when cadence_hours=12?) unable to rule out a scheduling bug
+	// versus repeated manual clicks — this is the only place that
+	// certainty could have come from.
+	source := "scheduled"
+	if force {
+		source = "manual"
+	}
+	log.Printf("[pulse] cycle complete (%s): %s", source, strings.TrimSpace(reply))
 
 	stateMu.Lock()
 	cur := loadState()

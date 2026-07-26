@@ -121,8 +121,10 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 				"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"},
 				"focus": map[string]interface{}{
 					"type": "string",
-					"description": "id of the element to scroll to, e.g. \"q4\" for question 4 (questions are wrapped in <div class=\"q\" id=\"q4\">). " +
-						"Set this whenever your reply is about a particular question or section. Omitting it keeps her current scroll position instead. Ignored if no such id exists on the page.",
+					"description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a sub-section or worked example " +
+						"(\"s2-1\"), or a figure (\"fig1\"); see skills/_shared/html-design.md for the id scheme every generated page follows. " +
+						"Set this whenever your reply is clearly about one specific part of the page. Omitting it keeps her current scroll " +
+						"position instead. Ignored if no such id exists on the page.",
 				},
 			},
 			"required": []string{"path"},

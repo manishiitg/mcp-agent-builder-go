@@ -728,6 +728,7 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
 .fl-suggestion { display: inline-flex; align-items: center; gap: 6px; padding: 8px 15px; border: 1px solid #ecdcb4; border-radius: 999px; background: #fffaf0; color: #7a5c1a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
 .fl-suggestion:hover { background: #fdeecb; border-color: #e6c877; }
+.fl-suggestion:disabled { opacity: .5; cursor: default; }
 
 .fl-whatsapp-btn { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #cfe9d6; border-radius: 10px; background: #eafaf0; color: #1f9d55; cursor: pointer; }
 .fl-whatsapp-btn:hover { background: #d8f5e3; }
@@ -922,7 +923,7 @@ audio.fl-viewer-media { background: var(--surface); }
 }
 @media (prefers-reduced-motion: reduce) { .fl-start-burst { display: none; } }
 @keyframes fl-star-pop { 0% { opacity: 0; transform: scale(0) rotate(-25deg); } 60% { opacity: 1; transform: scale(1.25) rotate(8deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
-.fl-child-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
+.fl-child-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
 .fl-child-composer textarea { min-width: 0; min-height: 42px; max-height: 160px; padding: 10px 0 10px 8px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-child-composer textarea::placeholder { color: #6a7c95; }
 .fl-child-side { display: flex; flex-direction: column; gap: 14px; }

@@ -93,6 +93,30 @@ func (a *waAccount) react(chat, sender types.JID, msgID types.MessageID, emoji s
 	}
 }
 
+// sendTextWithRetry sends msg to chat, retrying transient failures a few
+// times before giving up. Observed live: a fully-generated reply's send
+// failed with "cipher encryption failed ... context deadline exceeded" — a
+// Signal-protocol identity-check timeout, the kind of hiccup that often
+// clears within seconds (e.g. right after whatsmeow reconnects) rather than a
+// permanent failure. attemptTimeout bounds each individual attempt.
+func (a *waAccount) sendTextWithRetry(chat types.JID, text string, attempts int, attemptTimeout time.Duration, logPrefix string) error {
+	msg := &waProto.Message{Conversation: &text}
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+		_, err = a.client.SendMessage(ctx, chat, msg)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		log.Printf("[whatsapp] %s send attempt %d/%d failed: %v", logPrefix, attempt, attempts, err)
+		if attempt < attempts {
+			time.Sleep(time.Duration(attempt) * 3 * time.Second)
+		}
+	}
+	return err
+}
+
 // SendToSelf pushes a message into this account's own "Message Yourself"
 // chat proactively — used by notify_user/Pulse.
 func (a *waAccount) SendToSelf(ctx context.Context, text string) error {
@@ -763,12 +787,11 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 		// perfect, so the parent should see (and can correct/retype) what
 		// Quill transcribed without waiting for the full reply.
 		if acct.client != nil {
-			confirmCtx, confirmCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			heard := fmt.Sprintf("🎙️ I heard: “%s”", voiceText)
-			if _, err := acct.client.SendMessage(confirmCtx, info.Chat, &waProto.Message{Conversation: &heard}); err != nil {
-				log.Printf("[whatsapp] voice transcript confirmation send failed: %v", err)
-			}
-			confirmCancel()
+			// Lower stakes than the real reply below (the actual answer still
+			// arrives separately even if this is lost), so a couple of quick
+			// attempts and no visible failure signal is enough here.
+			_ = acct.sendTextWithRetry(info.Chat, heard, 2, 15*time.Second, "voice transcript confirmation")
 		}
 	}
 
@@ -819,11 +842,11 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	if acct.client == nil {
 		return
 	}
-	msg := &waProto.Message{Conversation: &reply}
-	sendCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := acct.client.SendMessage(sendCtx, info.Chat, msg); err != nil {
-		log.Printf("[whatsapp] send failed: %v", err)
+	// A fully-generated reply is the highest-stakes send here — retry before
+	// giving up, and if every attempt still fails, react so the parent sees
+	// SOMETHING is wrong rather than a reply that silently never arrives.
+	if err := acct.sendTextWithRetry(info.Chat, reply, 3, 30*time.Second, "reply"); err != nil {
+		acct.react(info.Chat, info.Sender, info.ID, "⚠️")
 	}
 }
 

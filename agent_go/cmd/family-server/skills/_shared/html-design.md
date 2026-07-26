@@ -28,11 +28,24 @@ that breaks the moment the page is printed or opened offline.
   into it expecting something to happen, and nothing will. Write "try it yourself"
   questions as plain text with space to work on paper.
   - BAD: `<input type="text" placeholder="Type your answer...">`
+- **Give every major section, sub-section, and figure a real, predictable `id`** —
+  not just questions. `open_file`'s `focus` parameter scrolls the page straight to
+  any id on it, so when you're talking about "the worked example" or "Figure 2" the
+  page can actually jump there instead of leaving her to scroll and hunt while you're
+  mid-explanation. One scheme, applied consistently in document order:
+  - Each major section (a `.card`): `id="s1"`, `id="s2"`, ...
+  - A sub-section inside one (a sub-heading, a worked example): `id="s2-1"`, `id="s2-2"`, ...
+  - Each figure (a `.fig`, including a `find_image` picture): `id="fig1"`, `id="fig2"`, ...
+  - GOOD: `<div class="card" id="s2"><h2>Worked examples</h2><div id="s2-1">...</div></div>`
+  You wrote these ids, so you know them — reference them later without re-reading the
+  file. A turn that's clearly ABOUT one section or figure and doesn't pass focus is a
+  missed opportunity, the same way naming a question by number without focus is.
 - **Wrap every question in `<div class="q" id="q1">`**, the id's number matching the
-  question's own. This is load-bearing, not tidiness: the app opens the page AT the
-  first `.q` that has no answer recorded inside it, so the child lands on the question
-  she's up to instead of back at the top every time the tutor records something. A
-  question outside a `.q` is invisible to that, and the page keeps reopening at the top.
+  question's own. This is load-bearing beyond ordinary addressability: `open_file`
+  with NO `focus` lands the page at the first `.q` that has no answer recorded inside
+  it, so the child lands on the question she's up to instead of back at the top every
+  time the tutor records something. A question outside a `.q` is invisible to that,
+  and the page keeps reopening at the top.
   - GOOD:
     ```html
     <div class="q" id="q1">
@@ -171,7 +184,7 @@ the credit to print under it.
 - **Reference it relatively and give it real alt text**, describing what it shows
   rather than repeating the caption:
   ```html
-  <figure class="fig">
+  <figure class="fig" id="fig1">
     <img src="latitude-map.png" alt="World map with the Equator, both Tropics and the polar circles marked">
     <figcaption>The main latitude circles · Thesevenseas · CC BY-SA 3.0</figcaption>
   </figure>

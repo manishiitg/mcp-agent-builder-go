@@ -748,6 +748,25 @@ const CHILD_WAIT_HINTS = [
   'Tip: ask a parent to connect the school portal so Quill can help with your assignments.',
 ]
 
+// CHILD_QUICK_ACTIONS: fixed one-tap shortcuts for the handful of requests that
+// come up constantly but aren't worth typing out — same Sparkles-icon popover
+// pattern as QUICK_SKILLS in Parent Mode. Unlike suggest_actions (removed from
+// Child Mode entirely), these are deliberately NOT model-generated: a static
+// list of common asks, always the same, always available. Tapping one just
+// sends its message exactly as if she'd typed it — the tutor's own judgment
+// (already covered by its existing prompt) decides what to actually do, same
+// as if she'd typed the words herself. Add more here freely; nothing else
+// needs to change.
+const CHILD_QUICK_ACTIONS: { label: string; message: string }[] = [
+  { label: 'Update answers for print', message: "Please update all my answered questions on this page so it's ready to print." },
+  { label: 'No more hints', message: "Don't give me any more hints — just tell me if I'm right or wrong." },
+  { label: 'Harder question', message: 'Can you give me a harder question?' },
+  { label: 'Easier question', message: 'Can you give me an easier question?' },
+  { label: 'Give me a hint', message: 'Can you give me a hint?' },
+  { label: 'Keep quizzing me, harder each time', message: 'Keep asking me progressively harder questions on this until I fully understand it.' },
+  { label: 'One section at a time', message: "Let's go one section at a time — keep quizzing me on this section until I really understand it before moving to the next." },
+]
+
 // formatBytes renders a byte count the way a person reads it. Sizes here are
 // for keeping an eye on how the workspace grows, so one decimal past KB is
 // plenty of precision.
@@ -975,8 +994,22 @@ export default function LearningApp() {
         if (cancelled) return
         const sorted = [...data].sort((a, b) => pres(a.id, a.name).order - pres(b.id, b.name).order)
         setEngines(sorted)
-        const firstReady = sorted.find((item) => item.usable) ?? sorted[0]
-        if (firstReady) setEngine(firstReady.id)
+        // Only supply a DEFAULT for a genuinely fresh install — never override an
+        // already-known choice. This used to fire unconditionally, racing the
+        // /api/setup effect below (which loads the family's real saved engine):
+        // /api/setup is a fast state-file read, while this call does live runtime
+        // detection across four CLIs and reliably resolves second, so it was
+        // silently clobbering the real selection back to whichever engine happens
+        // to rank first in ENGINE_PRESENTATION's hardcoded order — confirmed live,
+        // every actual conversation kept running on the real saved engine (its own
+        // session is pinned to it independent of this picker) while Settings showed
+        // a completely different one as "active". Read the CURRENT store value at
+        // call time, not a value captured when this effect was created, since
+        // /api/setup may resolve either before or after this one.
+        if (!useSetupStore.getState().engine) {
+          const firstReady = sorted.find((item) => item.usable) ?? sorted[0]
+          if (firstReady) setEngine(firstReady.id)
+        }
         setEnginesState('ready')
       })
       .catch(() => { if (!cancelled) setEnginesState('error') })
@@ -1248,6 +1281,7 @@ export default function LearningApp() {
   // (open_file's `focus`). Empty = let the viewer pick the first unanswered question.
   const [childViewerFocus, setChildViewerFocus] = useState('')
   const [startBurst, setStartBurst] = useState(false)
+  const [childQuickMenuOpen, setChildQuickMenuOpen] = useState(false)
   // Last known scroll offset per file, reported out of the sandboxed iframe (see
   // withViewerPositionScript). A ref, not state: it updates on every scroll frame
   // and must never trigger a re-render, which would reload the iframe and destroy
@@ -1973,7 +2007,7 @@ export default function LearningApp() {
         if (cp) { if (cp.name) setChildName(cp.name); if (cp.grade) setGrade(cp.grade); if (cp.board) setBoard(cp.board) }
         const pl = events.find((e) => e.tool === 'set_parent_label' && e.parent_label)
         if (pl?.parent_label) setParentLabel(pl.parent_label)
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(of.path); setViewerRefreshKey((k) => k + 1) }
         const op = events.find((e) => e.tool === 'open_activity' && e.path)
         // Auto-expand so its actual content previews are visible right away —
@@ -2097,7 +2131,7 @@ export default function LearningApp() {
       .then((res) => res.json())
       .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
         // Snap the still-visible streaming bubble to the FINAL reply text
@@ -2164,7 +2198,7 @@ export default function LearningApp() {
       .then((res) => res.json())
       .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
         // Snap the still-visible streaming bubble to the FINAL reply text
@@ -3534,6 +3568,17 @@ export default function LearningApp() {
                     }
                   }}
                 />
+                <div className="fl-composer-menu">
+                  {childQuickMenuOpen && <div className="fl-menu-backdrop" onClick={() => setChildQuickMenuOpen(false)} />}
+                  <button type="button" className="composer-icon" aria-label="Quick requests" aria-expanded={childQuickMenuOpen} onClick={() => setChildQuickMenuOpen((v) => !v)}><Sparkles size={19} /></button>
+                  {childQuickMenuOpen && (
+                    <div className="fl-menu" role="menu">
+                      {CHILD_QUICK_ACTIONS.map((qa) => (
+                        <button key={qa.label} type="button" role="menuitem" onClick={() => { setChildQuickMenuOpen(false); sendChildText(qa.message) }}>{qa.label}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
             </section>
