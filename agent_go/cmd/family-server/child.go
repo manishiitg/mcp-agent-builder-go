@@ -109,10 +109,11 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		Description: "Show a lesson, worksheet, or one of your own saved pages to " + childDisplayName(s.Child) +
 			" on the right side of their screen. Call this when you want them to look at a specific study sheet, " +
 			"practice test, or their own work while you talk about it. Pass the workspace-relative path. " +
-			"By default the page scrolls to the first question with no answer recorded yet — the one they're up to — " +
-			"so you do NOT need to do anything for normal front-to-back work. Pass focus ONLY when you mean a " +
-			"different spot: revisiting a question they already answered, or pointing at a specific section of a " +
-			"study sheet.",
+			"PASS focus WHENEVER you are talking about one specific question or section — that is what actually scrolls " +
+			"the page to it. Without focus the page keeps wherever she had scrolled to (or opens at the top the first " +
+			"time), so a reply about question 4 next to a page still showing question 1 leaves her hunting for it. " +
+			"Omit focus only when you genuinely mean \"here is the page, carry on where you were\" — for example right " +
+			"after recording an answer, where holding her place is the point.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -120,8 +121,8 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 				"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"},
 				"focus": map[string]interface{}{
 					"type": "string",
-					"description": "OPTIONAL id of the element to scroll to, e.g. \"q4\" for question 4 (questions are wrapped in <div class=\"q\" id=\"q4\">). " +
-						"Omit to land on the first unanswered question automatically. Ignored if no such id exists on the page.",
+					"description": "id of the element to scroll to, e.g. \"q4\" for question 4 (questions are wrapped in <div class=\"q\" id=\"q4\">). " +
+						"Set this whenever your reply is about a particular question or section. Omitting it keeps her current scroll position instead. Ignored if no such id exists on the page.",
 				},
 			},
 			"required": []string{"path"},
@@ -228,6 +229,12 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		},
 		Tools: withToolCallDebug(&debugMu, &debugCalls, "child:"+activityDir, trace, withLiveStatus("child:"+activityDir, []agentsession.Tool{
 			childShellTool(), childOpenFile, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
+			// Illustrations mid-lesson. The requested dir is IGNORED: whatever the
+			// tutor passes, a picture can only ever land in this activity's own
+			// folder, matching the child sandbox everywhere else.
+			findImageTool(func(string) (string, bool) {
+				return resolveWorkspacePath(activityDir)
+			}),
 			childShowSceneTool(func(html string) {
 				sceneMu.Lock()
 				scene = html

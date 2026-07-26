@@ -30,6 +30,7 @@ import {
   Folder,
   FolderOpen,
   HardDrive,
+  Type,
   Image as ImageIcon,
   Info,
   LockKeyhole,
@@ -205,6 +206,38 @@ function persistChildSideWidth(px: number) {
   try { localStorage.setItem(CHILD_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
 }
 
+// Reading size for the worksheet. Applied as CSS `zoom` inside the viewer
+// iframe rather than a font-size override: the generated pages size everything
+// in px (headings, card padding, SVG diagrams), so scaling only the body font
+// would grow the paragraphs and leave headings and diagrams behind. Zoom scales
+// the whole page coherently, which is what "bigger" should mean on a worksheet.
+const CHILD_ZOOM_KEY = 'sparkquill.child-zoom'
+const CHILD_ZOOM_STEPS = [1, 1.15, 1.35, 1.6]
+function readChildZoom(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_ZOOM_KEY))
+    return CHILD_ZOOM_STEPS.includes(n) ? n : 1
+  } catch { return 1 }
+}
+function persistChildZoom(z: number) {
+  try { localStorage.setItem(CHILD_ZOOM_KEY, String(z)) } catch { /* best-effort */ }
+}
+
+// Reading size for the CHAT side, kept separate from the worksheet's: she may
+// want big text on a dense study sheet but not on the conversation, or the
+// reverse. Real DOM here, not a sandboxed iframe, so this scales the actual
+// font size (via --chat-scale) rather than zooming a whole page.
+const CHILD_CHAT_ZOOM_KEY = 'sparkquill.child-chat-zoom'
+function readChildChatZoom(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_CHAT_ZOOM_KEY))
+    return CHILD_ZOOM_STEPS.includes(n) ? n : 1
+  } catch { return 1 }
+}
+function persistChildChatZoom(z: number) {
+  try { localStorage.setItem(CHILD_CHAT_ZOOM_KEY, String(z)) } catch { /* best-effort */ }
+}
+
 // Dark/light theme — follows the OS/browser's own preference (or a
 // previously-stored explicit choice, from when there was an in-app toggle).
 // No in-app toggle for now; kept read-only.
@@ -229,15 +262,22 @@ function readTheme(): Theme {
 // Rewrites bare-relative src="..." references (skipping absolute/data/anchor
 // URLs, which are already fine) into the real /api/workspace/raw endpoint for
 // that exact file, resolved against the HTML file's own directory.
-function rewriteRelativeAssetURLs(html: string, filePath: string): string {
-  if (!/^\s*<(!doctype|html)/i.test(html)) return html
-  const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : ''
+// rewriteImgSrcsRelativeTo resolves every relative src="..." in html against
+// dir and points it at the raw-file API — the one place this actually
+// happens, shared by the full-page viewer and a show_scene snippet alike.
+function rewriteImgSrcsRelativeTo(html: string, dir: string): string {
   return html.replace(/\bsrc=(["'])(.*?)\1/gi, (whole, quote: string, ref: string) => {
     if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('/') || ref.startsWith('data:') || ref.startsWith('#')) return whole
     const resolved = dir ? `${dir}/${ref}` : ref
     const url = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(resolved)}`
     return `src=${quote}${url}${quote}`
   })
+}
+
+function rewriteRelativeAssetURLs(html: string, filePath: string): string {
+  if (!/^\s*<(!doctype|html)/i.test(html)) return html
+  const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : ''
+  return rewriteImgSrcsRelativeTo(html, dir)
 }
 
 // withSceneResizeScript appends a tiny bootstrap script to a show_scene
@@ -283,9 +323,17 @@ function withSceneResizeScript(html: string): string {
 //     which is why the old "scroll to the first unanswered question" behaviour was
 //     dropped: it moved the page under her whenever she was reading elsewhere.
 //  3. Nothing — a genuinely new file opens at the top, as expected.
-function withViewerPositionScript(html: string, focusId?: string, savedY = 0): string {
+function withViewerPositionScript(html: string, focusId?: string, savedY = 0, zoom = 1): string {
   const wanted = (focusId ?? '').replace(/[^A-Za-z0-9_-]/g, '')
-  return html + `
+  // Zoom shrinks the effective viewport, so a page whose .wrap is capped at a
+  // fixed px width would overflow sideways instead of reflowing. Releasing that
+  // cap lets the content just fill the pane at any size.
+  const zoomStyle = zoom === 1 ? '' : `
+<style>
+  body { zoom: ${zoom}; }
+  .wrap { max-width: none !important; }
+</style>`
+  return html + zoomStyle + `
 <script>(function(){
   var wanted = ${JSON.stringify(wanted)};
   var savedY = ${Math.max(0, Math.round(savedY))};
@@ -422,23 +470,42 @@ function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
 // instance only reacts to resize reports from its OWN iframe (matched via
 // the message event's source window), so multiple scenes in the same thread
 // don't interfere with each other.
-function SceneFrame({ html }: { html: string }) {
+// activityDir: the current activity folder, so a find_image picture the tutor
+// references with a plain relative `<img src="filename.png">` resolves — the
+// scene's own srcDoc has no such path otherwise, so the image silently
+// rendered as a broken-image glyph (confirmed live: the tutor called
+// find_image, got a real picture back, and it still never appeared).
+// SCENE_MAX_HEIGHT bounds one scene's footprint in the scrolling chat feed —
+// not a content cap (nothing above it is lost: the iframe scrolls internally
+// by default, and no ancestor sets overflow:hidden), just how tall a single
+// inline turn is allowed to make itself before the rest of the conversation
+// gets pushed out of view. Raised from the original 520 now that scenes are
+// meant to include real interactivity (games, simulations), which genuinely
+// wants more room than a passive diagram did.
+const SCENE_MAX_HEIGHT = 720
+
+function SceneFrame({ html, activityDir }: { html: string; activityDir: string }) {
   const ref = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState(160)
+  const [rawHeight, setRawHeight] = useState(160)
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       if (e.source !== ref.current?.contentWindow) return
       const m = e.data
       if (m && typeof m === 'object' && m.__sq === 1 && m.op === 'scene-resize' && typeof m.height === 'number') {
-        setHeight(Math.min(Math.max(m.height, 80), 520))
+        setRawHeight(Math.max(m.height, 80))
       }
     }
     window.addEventListener('message', onMsg)
     return () => window.removeEventListener('message', onMsg)
   }, [])
+  const resolved = rewriteImgSrcsRelativeTo(html, activityDir)
+  // A child should never have to discover a cut-off scene by noticing a faint
+  // scrollbar — when content is genuinely taller than the cap, say so visibly.
+  const clipped = rawHeight > SCENE_MAX_HEIGHT
   return (
     <div className="fl-scene-card">
-      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height }} srcDoc={withSceneResizeScript(html)} />
+      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(resolved)} />
+      {clipped && <div className="fl-scene-more" aria-hidden="true">scroll for more ↓</div>}
     </div>
   )
 }
@@ -1089,10 +1156,11 @@ export default function LearningApp() {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const childIframeRef = useRef<HTMLIFrameElement>(null)
 
-  // Child-mode split: how much room her worksheet gets versus the chat. Set only
-  // by the widen/restore button in the worksheet's own toolbar — deliberately not
-  // draggable, because a 6px handle is a poor target on a child-facing screen and
-  // the two useful states (normal, and "big while I work on this") are a toggle.
+  // Child-mode split: how much room her worksheet gets versus the chat. Two ways
+  // to set it, both writing the same persisted preference: dragging the divider
+  // between the panes (fine-grained, and its hit area is deliberately much wider
+  // than the hairline it draws), or the widen/restore button in the worksheet
+  // toolbar for the coarse "normal ⇄ as big as it goes" jump.
   const [childSideWidthPref, setChildSideWidth] = useState(readChildSideWidth)
   // Track the window width so the stored preference can be re-clamped when the
   // window shrinks. Without this, widening on a large display and then resizing
@@ -1106,6 +1174,61 @@ export default function LearningApp() {
   }, [])
   // The preference is what the child chose; this is what the layout can honour.
   const childSideWidth = Math.min(Math.max(childSideWidthPref, CHILD_SIDE_MIN), childSideMax(windowWidth))
+  // Set-and-save in one place, clamped to what the layout allows, so the drag
+  // handle, its arrow keys and the toolbar button can't drift apart.
+  const commitChildSideWidth = (px: number) => {
+    const next = Math.min(Math.max(px, CHILD_SIDE_MIN), childSideMax(windowWidth))
+    setChildSideWidth(next)
+    persistChildSideWidth(next)
+  }
+  const childBodyRef = useRef<HTMLDivElement>(null)
+  const [childResizing, setChildResizing] = useState(false)
+  // Reading size for the worksheet, cycled by the toolbar's "Aa" button and
+  // remembered — a child who needs bigger text needs it every session, not
+  // once.
+  const [childZoom, setChildZoom] = useState(readChildZoom)
+  const cycleChildZoom = () => {
+    const i = CHILD_ZOOM_STEPS.indexOf(childZoom)
+    const next = CHILD_ZOOM_STEPS[(i + 1) % CHILD_ZOOM_STEPS.length]
+    setChildZoom(next)
+    persistChildZoom(next)
+  }
+  const [childChatZoom, setChildChatZoom] = useState(readChildChatZoom)
+  const cycleChildChatZoom = () => {
+    const i = CHILD_ZOOM_STEPS.indexOf(childChatZoom)
+    const next = CHILD_ZOOM_STEPS[(i + 1) % CHILD_ZOOM_STEPS.length]
+    setChildChatZoom(next)
+    persistChildChatZoom(next)
+  }
+  // Pointer-events (not mouse) so the same handler covers trackpad, mouse and
+  // touch. Width is measured from the body's RIGHT edge rather than by
+  // accumulating deltas, so the panel edge tracks the finger exactly and can't
+  // drift after a clamp at either end.
+  const startChildResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    const body = childBodyRef.current
+    if (!body) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLDivElement).focus({ preventScroll: true })
+    const right = body.getBoundingClientRect().right
+    const max = childSideMax(windowWidth)
+    let last = childSideWidth
+    setChildResizing(true)
+    const move = (ev: PointerEvent) => {
+      last = Math.min(Math.max(right - ev.clientX, CHILD_SIDE_MIN), max)
+      setChildSideWidth(last)
+    }
+    const end = () => {
+      setChildResizing(false)
+      // Persist once at the end, not on every move — this writes localStorage.
+      persistChildSideWidth(last)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  }
   // "Wide" once past the midpoint between default and max, so the button's icon
   // always shows which way the next tap will move it.
   const childSideWide = childSideWidth > (CHILD_SIDE_DEFAULT + childSideMax(windowWidth)) / 2
@@ -3282,10 +3405,11 @@ export default function LearningApp() {
       <main className="learning-app" data-theme={theme}>
         <div className="fl-child">
           <div
-            className="fl-child-body"
+            ref={childBodyRef}
+            className={`fl-child-body${childResizing ? ' is-resizing' : ''}`}
             style={{ ['--child-side-w' as string]: `${Math.round(childSideWidth)}px` }}
           >
-            <section className="fl-child-chat">
+            <section className="fl-child-chat" style={{ ['--chat-scale' as string]: childChatZoom }}>
               <header className="fl-child-top">
                 <div className="fl-child-id">
                   <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
@@ -3317,6 +3441,18 @@ export default function LearningApp() {
                   )
                 })()}
                 <div className="fl-child-top-right">
+                  {/* Chat reading size — same cycle as the worksheet's button but
+                      its own preference, since the two sides are read differently. */}
+                  <button
+                    className={`fl-icon-btn fl-zoom-btn${childChatZoom > 1 ? ' is-on' : ''}`}
+                    type="button"
+                    aria-label={`Chat text size: ${Math.round(childChatZoom * 100)}% — tap for bigger`}
+                    title={childChatZoom > 1 ? `Chat text ${Math.round(childChatZoom * 100)}% — tap for bigger` : 'Make the chat text bigger'}
+                    onClick={cycleChildChatZoom}
+                  >
+                    <Type size={14} />
+                    {childChatZoom > 1 && <span className="fl-zoom-badge">{Math.round(childChatZoom * 100)}%</span>}
+                  </button>
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
@@ -3344,7 +3480,7 @@ export default function LearningApp() {
                   ) : m.role === 'tool' && m.tool === 'scene' ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <SceneFrame html={m.html ?? ''} />
+                      <SceneFrame html={m.html ?? ''} activityDir={childActivity?.dir ?? ''} />
                     </div>
                   ) : m.role === 'assistant' ? (
                     <div key={i} className="fl-tmsg is-tutor">
@@ -3401,6 +3537,28 @@ export default function LearningApp() {
                 <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
             </section>
+            <div
+              className="fl-child-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Drag to resize the worksheet"
+              aria-valuenow={Math.round(childSideWidth)}
+              aria-valuemin={CHILD_SIDE_MIN}
+              aria-valuemax={Math.round(childSideMax(windowWidth))}
+              tabIndex={0}
+              onPointerDown={startChildResize}
+              // Keyboard equivalent — a drag handle that only works with a
+              // pointer is unreachable for anyone tabbing, and this is the only
+              // fine-grained control (the toolbar button is coarse: default vs max).
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 80 : 24
+                if (e.key === 'ArrowLeft') { e.preventDefault(); commitChildSideWidth(childSideWidth + step) }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); commitChildSideWidth(childSideWidth - step) }
+                else if (e.key === 'Home') { e.preventDefault(); commitChildSideWidth(CHILD_SIDE_DEFAULT) }
+              }}
+            >
+              <span className="fl-child-resizer-grip" aria-hidden="true" />
+            </div>
             <aside className="fl-child-side">
               <div className="fl-child-side-scroll">
               {childViewerPath ? (
@@ -3408,10 +3566,24 @@ export default function LearningApp() {
                   <div className="fl-viewer-bar">
                     <button className="fl-viewer-back" type="button" onClick={() => setChildViewerPath(null)}><ArrowLeft size={15} /> Back</button>
                     <span className="fl-viewer-name">{labelFromFilename(childViewerPath.split('/').pop() || childViewerPath).label}</span>
+                    {/* Reading size. Cycles through the steps and wraps back to
+                        normal, so one button covers both directions — simpler
+                        than a +/- pair on a child's toolbar, and the current
+                        step is shown on the button itself. */}
+                    <button
+                      className={`fl-icon-btn fl-zoom-btn${childZoom > 1 ? ' is-on' : ''}`}
+                      type="button"
+                      aria-label={`Text size: ${Math.round(childZoom * 100)}% — tap for bigger`}
+                      title={childZoom > 1 ? `Text size ${Math.round(childZoom * 100)}% — tap for bigger` : 'Make the text bigger'}
+                      onClick={cycleChildZoom}
+                    >
+                      <Type size={14} />
+                      {childZoom > 1 && <span className="fl-zoom-badge">{Math.round(childZoom * 100)}%</span>}
+                    </button>
                     {/* Widen/restore the worksheet, beside refresh and print.
-                        A toggle rather than a draggable divider: the two useful
-                        states are "normal" and "big while I work on this", and a
-                        thin drag handle is a poor target on a child's screen. */}
+                        Complements the drag divider between the panes: the
+                        button is a coarse two-state jump (normal ⇄ as wide as
+                        possible), the divider is for anything in between. */}
                     <button
                       className={`fl-icon-btn fl-widen-btn${childSideWide ? ' is-on' : ''}`}
                       type="button"
@@ -3419,11 +3591,7 @@ export default function LearningApp() {
                       title={childSideWide ? 'Give the chat more room' : 'Give the worksheet more room'}
                       aria-pressed={childSideWide}
                       onClick={() => {
-                        const next = childSideWide
-                          ? CHILD_SIDE_DEFAULT
-                          : childSideMax(windowWidth)
-                        setChildSideWidth(next)
-                        persistChildSideWidth(next)
+                        commitChildSideWidth(childSideWide ? CHILD_SIDE_DEFAULT : childSideMax(windowWidth))
                       }}
                     >
                       {childSideWide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
@@ -3468,7 +3636,7 @@ export default function LearningApp() {
                       className="fl-viewer-frame"
                       title="Preview"
                       sandbox="allow-scripts"
-                      srcDoc={withViewerPositionScript(childViewerContent.content, childViewerFocus, childViewerScrollRef.current[childViewerPath] ?? 0)}
+                      srcDoc={withViewerPositionScript(childViewerContent.content, childViewerFocus, childViewerScrollRef.current[childViewerPath] ?? 0, childZoom)}
                     />
                   ) : childViewerPath.endsWith('.md') ? (
                     <div className="fl-viewer-md"><Markdown text={childViewerContent.content} /></div>

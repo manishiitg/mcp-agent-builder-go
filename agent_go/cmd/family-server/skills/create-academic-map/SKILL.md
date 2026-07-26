@@ -41,3 +41,5 @@ learning, AND how the parent can help them learn it better.
 3. **Tell the parent** the map is updated and where it appears (the **Academics** tab).
 
 Rebuild this whenever materials change so the map stays a living view — never hand-write topics that have no real materials behind them, and never hand-write a coaching point that isn't backed by something you actually observed.
+
+4. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

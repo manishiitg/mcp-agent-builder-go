@@ -2,8 +2,14 @@
 
 Every HTML file the app generates (progress reports, academic map, study material,
 tests, and anything else) shares this look so they feel like one product. Build a
-**complete standalone document** — inline everything, no external assets, fonts,
-images, or network calls.
+**complete standalone document** — inline the CSS, no web fonts, no hotlinked
+images, no network calls at load time.
+
+The one thing that may live beside the page rather than inside it is a picture
+saved by `find_image` (see "Real pictures" below). It sits in the same folder and
+is referenced with a plain relative `<img src="filename.png">`; the app resolves
+that when it displays the page. Never reference a URL on the internet directly —
+that breaks the moment the page is printed or opened offline.
 
 ## Rules
 
@@ -12,9 +18,11 @@ images, or network calls.
   clear title with the child's name and date. Only ever real data — never an invented
   score.
 - **Make it visually engaging** — children respond to this far more than plain text.
-  Use CSS transitions and animation freely: a gentle fade-in on load, hover effects,
-  an animated diagram, a subtle progress-fill bar. These are passive: they play on
-  their own or on hover, with nothing to click.
+  You are not limited to a fixed list of effects: use whatever CSS (transitions,
+  keyframe animation, transforms) genuinely brings a page to life, at whatever
+  richness the moment deserves. Judge tastefully — quality over quantity, and
+  never at the cost of the content being clear and correct — but don't hold back
+  on capability you actually have.
 - **No form controls at all** — no `<input>`, `<textarea>`, `<select>`, or `<form>`,
   not even an unscripted one. An empty text box is still wrong: the child will type
   into it expecting something to happen, and nothing will. Write "try it yourself"
@@ -145,6 +153,43 @@ and a green note were both being read as "correct" by the parent AND the child, 
 quietly turns a neutral record into a grade the tutor never gave — and under a strict
 `teaching_mode` the tutor must not reveal correctness at all. Marking is the parent's
 job, from the answer key.
+
+## Real pictures
+
+Some things are far easier to understand from a real picture than from any
+description: what a plateau actually looks like, where the Tropic of Cancer falls
+on a world map, how the digestive system is arranged. `find_image` fetches one
+from Wikimedia Commons, saves it beside the page, and hands back the filename plus
+the credit to print under it.
+
+- **Use it where seeing the thing IS the teaching** — a real landform, a map, a
+  labeled biological diagram, a historical photograph.
+- **Not for what you can draw better yourself.** A relationship, a process, a
+  comparison, a bar of progress — an inline SVG or CSS diagram is sharper, scales
+  cleanly, and can use the page's own colours. A fetched picture is for things
+  that genuinely exist in the world.
+- **Reference it relatively and give it real alt text**, describing what it shows
+  rather than repeating the caption:
+  ```html
+  <figure class="fig">
+    <img src="latitude-map.png" alt="World map with the Equator, both Tropics and the polar circles marked">
+    <figcaption>The main latitude circles · Thesevenseas · CC BY-SA 3.0</figcaption>
+  </figure>
+  ```
+- **Always print the credit** from the tool's `attribution` field in the
+  `figcaption`. These images are openly licensed, which is what makes them safe to
+  include in a page the parent may share — attribution is the condition of that.
+- **Never invent a filename.** Only reference what `find_image` actually returned;
+  if it found nothing, write the page without a picture rather than leaving a
+  broken image on a child's screen.
+
+Add this to the CSS when a page uses pictures:
+
+```css
+.fig{margin:14px 0;text-align:center}
+.fig img{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}
+.fig figcaption{margin-top:6px;color:var(--muted);font-size:12px}
+```
 
 ## Showing data
 

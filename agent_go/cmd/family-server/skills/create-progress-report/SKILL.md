@@ -92,3 +92,5 @@ section rather than pad it.
 3. **Tell the parent** it's ready and appears in the **Progress** tab, visible to
    both them and the child. Say the one next step in plain words too, so the value
    lands even if they don't open it.
+
+4. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

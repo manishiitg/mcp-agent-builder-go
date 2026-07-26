@@ -233,6 +233,11 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-widen-btn { border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-widen-btn:hover { border-color: #d9c79c; background: #fbe6bd; color: #6f4e10; }
 .fl-widen-btn.is-on { background: var(--sun, #f6b93b); border-color: var(--sun, #f6b93b); color: #3a2a00; }
+/* Text-size button. Widens to fit its percentage badge only while zoomed, so it
+   sits as a plain icon button at normal size. */
+.fl-zoom-btn { gap: 3px; }
+.fl-zoom-btn.is-on { width: auto; padding: 0 7px; border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
+.fl-zoom-badge { font-size: 10px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px); }
 .fl-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
@@ -465,17 +470,40 @@ html, body, #root { margin: 0; height: 100%; }
 /* Child mode has no left rail, so its side panel matches parent mode's usual
    (rail-closed) width — chat gets 1fr, side panel gets 348px + the 244px the
    rail would otherwise take, exactly like .fl-shell[data-rail="closed"]. */
-/* The right pane's width is set by the widen/restore button in the worksheet
-   toolbar (--child-side-w, from the persisted preference). Not draggable on
-   purpose — see the comment in LearningApp.tsx. */
+/* The right pane's width comes from --child-side-w (a persisted preference),
+   set either by dragging the divider between the two panes or by the coarse
+   widen/restore button in the worksheet toolbar. */
 .fl-child-body { flex: 1; min-height: 0; display: grid;
   /* The chat's 400px floor is enforced here as well as in JS. The grid wins if
      the two ever disagree, so the chat can never be crushed to unusable by a
      stale stored width — it just gives the worksheet less than it asked for. */
-  grid-template-columns: minmax(min(400px, 100%), 1fr) var(--child-side-w, calc(348px + 244px)); }
-/* Animate the change so a tap reads as the panel growing, not as a jump. */
+  grid-template-columns: minmax(min(400px, 100%), 1fr) auto var(--child-side-w, calc(348px + 244px)); }
+/* Animate the change so a TAP reads as the panel growing, not as a jump — but
+   never while dragging, where a transition makes the edge lag the finger. */
 .fl-child-body { transition: grid-template-columns .18s ease; }
+.fl-child-body.is-resizing { transition: none; cursor: col-resize; user-select: none; }
+/* While dragging, the iframe would otherwise swallow the pointer the moment it
+   crossed into the worksheet, stranding the drag mid-move. */
+.fl-child-body.is-resizing iframe { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .fl-child-body { transition: none; } }
+
+/* Drag divider between the chat and the worksheet. Visually a hairline, but a
+   generous hit area either side of it — this is a child-facing screen, so a
+   true 1px target would be unusable. */
+.fl-child-resizer { position: relative; width: 9px; margin: 0 -4px; z-index: 2; cursor: col-resize; touch-action: none; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; }
+.fl-child-resizer::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); background: var(--line); transition: background .12s ease, width .12s ease; }
+.fl-child-resizer:hover::before,
+.fl-child-resizer:focus-visible::before,
+.fl-child-body.is-resizing .fl-child-resizer::before { width: 3px; background: var(--yellow); }
+.fl-child-resizer:focus-visible { outline: none; }
+/* The grip dots only appear on hover/focus, so the divider stays quiet while
+   she's reading and becomes obviously grabbable the moment she reaches for it. */
+/* Ringed in the surface colour so it reads as a pill sitting ON the line rather
+   than merging into it — both are the same amber. */
+.fl-child-resizer-grip { position: relative; width: 6px; height: 30px; border-radius: 999px; background: var(--yellow); box-shadow: 0 0 0 2px var(--surface-2), 0 1px 3px rgba(13, 35, 76, .25); opacity: 0; transition: opacity .12s ease; }
+.fl-child-resizer:hover .fl-child-resizer-grip,
+.fl-child-resizer:focus-visible .fl-child-resizer-grip,
+.fl-child-body.is-resizing .fl-child-resizer-grip { opacity: 1; }
 .fl-child-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; container-name: childchat; }
 .fl-child-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 10px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
 .fl-child-id { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; }
@@ -509,8 +537,13 @@ html, body, #root { margin: 0; height: 100%; }
 /* show_scene — a small, freshly-generated inline visual (see scene_tool.go).
    No border/shadow/margin wrapper — just the generated HTML itself, so the
    scene's own styling shows through directly instead of looking boxed-in. */
-.fl-scene-card { width: 100%; }
+.fl-scene-card { width: 100%; position: relative; }
 .fl-scene-frame { display: block; width: 100%; border: 0; background: transparent; transition: height .15s ease; }
+/* Shown only when a scene is genuinely taller than SCENE_MAX_HEIGHT — the
+   iframe itself still scrolls internally either way, so this is purely making
+   that discoverable rather than leaving a child to notice a faint scrollbar
+   on her own. */
+.fl-scene-more { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; font-size: 11px; font-weight: 700; color: var(--muted, #8a8478); background: linear-gradient(to bottom, transparent, var(--surface) 75%); pointer-events: none; border-radius: 0 0 14px 14px; }
 .fl-tbubble { padding: 14px 16px; border-radius: 18px 18px 18px 6px; background: var(--surface); color: var(--reply-bubble-text); font-size: var(--text-body); line-height: 1.6; box-shadow: 0 6px 16px rgba(13, 35, 76, .06); }
 .fl-tbubble.is-streaming::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: fl-cursor-blink 1s step-end infinite; }
 .fl-tbubble strong { color: var(--heading); }
@@ -545,8 +578,13 @@ body, .learning-app { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothi
 .fl-bubble code, .fl-tbubble code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; background: rgba(22, 34, 58, .06); padding: 1px 6px; border-radius: 6px; }
 .fl-msg.is-parent .fl-bubble code { background: rgba(255, 255, 255, .16); color: #fff; }
 
-/* Child tutor bubbles a touch larger + friendlier */
-.fl-tbubble { font-size: 1.04rem; line-height: 1.62; }
+/* Child tutor bubbles a touch larger + friendlier. --chat-scale is the child's
+   own reading-size choice (the "Aa" button in her chat header); it multiplies the
+   conversation text and what she types, but deliberately NOT the avatars, chrome
+   or celebration cards — this is a readability control, not a page zoom. */
+.fl-tbubble { font-size: calc(1.04rem * var(--chat-scale, 1)); line-height: 1.62; }
+.fl-child-composer textarea { font-size: calc(var(--text-body) * var(--chat-scale, 1)); }
+.fl-child-thread .fl-thinking span { font-size: calc(var(--text-secondary) * var(--chat-scale, 1)); }
 .fl-tmsg.is-child .fl-tbubble strong { color: #fff; }
 .fl-tmsg.is-child .fl-tbubble li::marker { color: #ffd873; }
 
@@ -925,7 +963,12 @@ audio.fl-viewer-media { background: var(--surface); }
   .fl-child-hi strong { font-size: 15px; }
   .fl-header-logo { display: none; }
 }
-@media (max-width: 900px) { .fl-child-body { grid-template-columns: 1fr; } }
+/* Stacked layout: one column, so a vertical drag divider has nothing to resize
+   between — hide it rather than leave a dead handle in the flow. */
+@media (max-width: 900px) {
+  .fl-child-body { grid-template-columns: 1fr; }
+  .fl-child-resizer { display: none; }
+}
 
 @media (max-width: 1180px) {
   .fl-shell, .fl-shell[data-drawer="open"] { grid-template-columns: 244px minmax(0, 1fr) 0; }

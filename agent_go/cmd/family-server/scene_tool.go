@@ -8,10 +8,6 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
 )
 
-// sceneMaxLen bounds a single show_scene snippet — small and inline, not a
-// full page (that's what an activity's own generated file is for).
-const sceneMaxLen = 20000
-
 // childShowSceneTool lets the child tutor render a small, freshly-generated
 // HTML visual INLINE in its reply — a story beat, a diagram, a "guess before
 // you peek" moment with real choices — instead of only ever pointing at the
@@ -23,13 +19,19 @@ func childShowSceneTool(recordScene func(html string)) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "show_scene",
 		Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' " +
-			"moment, a mini interactive scene. Generate it fresh to match exactly what's happening in the conversation right now — " +
-			"not limited to whatever is in the activity's original file, so it can follow the child's own tangents naturally. " +
-			"Keep it SMALL (a few lines/cards — not a full page) and self-contained (inline CSS only, no external assets, follow " +
-			"skills/_shared/html-design.md's visual style). To offer a real choice, use a button that calls SQ.choose so you actually " +
-			"see and respond to whichever one she picks — never a `<details>` reveal or a button that does nothing further: " +
-			"`<button onclick=\"parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')\">Investigate Saturn</button>`. " +
-			"Call this when a visual moment genuinely helps, not every single turn — plain conversation is fine most of the time.",
+			"moment, a mini interactive scene, a genuinely playable moment. Generate it fresh to match exactly what's happening in the " +
+			"conversation right now — not limited to whatever is in the activity's original file, so it can follow the child's own " +
+			"tangents naturally. Full CSS animation AND real JavaScript are available — <script> runs, so build actual interactivity " +
+			"(drag, click-and-respond, a running score, a tiny simulation or game), not just something that plays on its own. Use " +
+			"whatever the moment genuinely calls for; don't hold back on capability you actually have. Keep it SMALL (a few lines/cards " +
+			"— not a full page) and self-contained (inline CSS/JS only, no external assets or network calls, follow " +
+			"skills/_shared/html-design.md's visual style). One real constraint: this iframe stays mounted in her chat history forever " +
+			"— it is never torn down when the conversation moves on — so any setInterval/requestAnimationFrame loop must have a natural " +
+			"stopping point (finish the animation, end the game, clear the timer) rather than run forever in the background. " +
+			"To offer a real choice you need to see and respond to, use a button that calls SQ.choose — never a `<details>` reveal or a " +
+			"button that does nothing further: `<button onclick=\"parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')\">" +
+			"Investigate Saturn</button>`. Call this when a visual moment genuinely helps, not every single turn — plain conversation is " +
+			"fine most of the time.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -42,9 +44,6 @@ func childShowSceneTool(recordScene func(html string)) agentsession.Tool {
 			html := strings.TrimSpace(fmt.Sprint(args["html"]))
 			if html == "" {
 				return "", fmt.Errorf("html is required")
-			}
-			if len(html) > sceneMaxLen {
-				return "", fmt.Errorf("that's too large for an inline scene (max %d chars) — keep it small, or put full content in the activity's own file instead", sceneMaxLen)
 			}
 			if recordScene != nil {
 				recordScene(html)

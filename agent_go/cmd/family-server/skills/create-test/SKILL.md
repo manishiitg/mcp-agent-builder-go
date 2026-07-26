@@ -47,3 +47,5 @@ description: Create a practice test for the child from their materials and progr
    rather than assume if the parent hasn't said.
 
 6. **Tell the parent** what you made and why those particular questions.
+
+7. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

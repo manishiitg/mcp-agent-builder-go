@@ -33,10 +33,13 @@ description: Create clear, child-ready study material (notes, worked examples, a
    examples, so she meets the method before practising it. Close with a line of
    encouragement addressed to her.
 
-   Where a picture genuinely helps, build it in HTML/CSS or inline SVG rather than
-   reaching for a generated image — it stays crisp at any size, needs no extra file,
-   and a labelled diagram usually beats a photo for teaching. Don't force one in
-   where it adds nothing.
+   Pictures: draw it yourself in HTML/CSS or inline SVG when the point is a
+   relationship, a process or a comparison — it stays crisp, needs no extra file,
+   and can use the page's own colours. Reach for `find_image` when seeing the real
+   thing IS the teaching: an actual landform, a world map, a labeled anatomical
+   diagram, a historical photograph. Print the credit it returns, and don't force a
+   picture in where it adds nothing. See `skills/_shared/html-design.md`
+   → "Real pictures".
 
 4. **Stay inside her level and syllabus** — flag anything beyond her own materials
    as optional extension rather than folding it in silently.
@@ -46,3 +49,5 @@ description: Create clear, child-ready study material (notes, worked examples, a
    like — e.g. "read every section and try the practice questions at the end".
 
 6. **Tell the parent** what you made.
+
+7. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

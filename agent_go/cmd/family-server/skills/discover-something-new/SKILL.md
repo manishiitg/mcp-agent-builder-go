@@ -48,3 +48,5 @@ If she takes it somewhere the cover page never anticipated, follow her there; a 
 scene matching where she's actually going beats forcing her back to a plan. Keep
 `goal` as the loose anchor — engage with tangents, but steer toward an actual closing
 moment rather than drifting forever.
+
+6. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.
