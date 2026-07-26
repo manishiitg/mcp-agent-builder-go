@@ -44,6 +44,27 @@ func main() {
 	os.Setenv("CODEX_CLI_STREAM_TRANSCRIPT", "1")
 	os.Setenv("CURSOR_CLI_STREAM_TRANSCRIPT", "1")
 
+	// Give every interactive coding-agent tmux session ITS OWN naming
+	// namespace, distinct from multi-llm-provider-go's shared "mlp-*" default
+	// that AgentWorks also uses (unmodified, confirmed — it sets none of these
+	// overrides). Without this, family-server's orphan-tmux sweep (see
+	// tmux_sweep.go) would match by prefix alone and could kill an AgentWorks
+	// session that happens to be alive on the same machine — a real, harmful
+	// collision this app must never risk. All four providers already support
+	// this via env var; set them for all four regardless of which engine is
+	// actually selected, since the family can switch engines at any time.
+	os.Setenv("CURSOR_CLI_INTERACTIVE_SESSION_PREFIX", "sq-cursor-cli-int")
+	os.Setenv("CLAUDE_CODE_TMUX_SESSION_PREFIX", "sq-claude-code")
+	os.Setenv("CODEX_CLI_INTERACTIVE_SESSION_PREFIX", "sq-codex-cli-int")
+	os.Setenv("PI_CLI_INTERACTIVE_SESSION_PREFIX", "sq-pi-cli-int")
+
+	// Clean up any coding-agent tmux sessions a PAST process left behind
+	// (crash, redeploy, or a plain restart mid-session all orphan whatever was
+	// warm at that moment — confirmed live: 32 accumulated in one day of
+	// development restarts), then keep sweeping hourly for the rest of this
+	// process's own life. See tmux_sweep.go.
+	startTmuxSweepLoop()
+
 	// Manual test knobs (see experiment_flags.go) — announce them loudly at
 	// startup since neither has any other visible effect until a turn runs.
 	if t := experimentCodingAgentTransport(); t != "" {

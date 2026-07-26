@@ -20,7 +20,7 @@ export type DebugToolCall = { tool: string; args?: string; result?: string; err?
 export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; toolCalls?: DebugToolCall[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string }
 
-export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
+export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[]; size?: number }
 
 export type WsFile = { path: string; name: string; scope: string; subject: string; topic: string }
 

@@ -29,6 +29,7 @@ import {
   Film,
   Folder,
   FolderOpen,
+  HardDrive,
   Image as ImageIcon,
   Info,
   LockKeyhole,
@@ -680,8 +681,23 @@ const CHILD_WAIT_HINTS = [
   'Tip: ask a parent to connect the school portal so Quill can help with your assignments.',
 ]
 
+// formatBytes renders a byte count the way a person reads it. Sizes here are
+// for keeping an eye on how the workspace grows, so one decimal past KB is
+// plenty of precision.
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes < 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i++ }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
 // FileTree renders the workspace as an expandable tree (AgentWorks-style). Files
-// are clickable to open in the viewer; .meta.json is hidden as noise.
+// are clickable to open in the viewer; .meta.json is hidden as noise. Each entry
+// carries its size on disk — a folder's is the recursive total — so it's visible
+// at a glance which part of the workspace is actually growing.
 function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (path: string) => void; depth?: number }) {
   const visible = nodes.filter((n) => !n.name.startsWith('.') && !n.name.endsWith('.meta.json'))
   if (visible.length === 0) return null
@@ -695,6 +711,7 @@ function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (pa
                 <Folder className="fl-tree-icon is-closed" size={15} />
                 <FolderOpen className="fl-tree-icon is-open" size={15} />
                 <span>{n.name}</span>
+                <span className="fl-tree-size">{formatBytes(n.size)}</span>
               </summary>
               {n.children && <FileTree nodes={n.children} onOpen={onOpen} depth={depth + 1} />}
             </details>
@@ -702,6 +719,7 @@ function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (pa
             <button className="fl-tree-file" type="button" onClick={() => onOpen(n.path)}>
               <FileGlyph name={n.name} size={14} />
               <span>{n.name}</span>
+              <span className="fl-tree-size">{formatBytes(n.size)}</span>
             </button>
           )}
         </li>
@@ -934,6 +952,10 @@ export default function LearningApp() {
   // off an activity often means "just carry on the same chat", not a fresh
   // start, so this is the parent's call rather than a silent guess.
   const [pendingChildEntry, setPendingChildEntry] = useState<{ dir: string; greetingText: string } | null>(null)
+  // The workspace's TRUE size on disk, from /api/workspace/tree — including
+  // what the listing hides (see workspaceTreeResponse), so the number in the
+  // Files tab is the one worth watching for growth.
+  const [treeTotalSize, setTreeTotalSize] = useState(0)
   // The current turn's tool calls, live — no result yet (still running), shown
   // as a collapsible "N tools" chip next to the thinking indicator. Reset at
   // turn start; replaced by a persisted debug_summary message (WITH results,
@@ -1018,8 +1040,13 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/workspace/tree`)
       .then((res) => res.json())
-      .then((nodes: TreeNode[]) => {
+      .then((data: TreeNode[] | { nodes?: TreeNode[]; total_size?: number }) => {
         if (cancelled) return
+        // Accepts both the current {nodes,total_size} object and the older bare
+        // array, so a packaged frontend built before the size fields still works
+        // against a newer server (and vice versa).
+        const nodes = Array.isArray(data) ? data : (data?.nodes ?? [])
+        setTreeTotalSize(Array.isArray(data) ? 0 : (data?.total_size ?? 0))
         const files: { path: string; name: string }[] = []
         const walk = (ns: TreeNode[]) => ns?.forEach((n) => {
           if (n.type === 'file') files.push({ path: n.path, name: n.name })
@@ -2774,7 +2801,15 @@ export default function LearningApp() {
                   </div>
                 )
               })() : drawerTab === 'allfiles' ? (
-                treeNodes.length === 0 ? <p className="fl-note">No files yet.</p> : <FileTree nodes={treeNodes} onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }} />
+                treeNodes.length === 0 ? <p className="fl-note">No files yet.</p> : (
+                  <>
+                    <p className="fl-tree-total">
+                      <HardDrive size={13} />
+                      <span>{formatBytes(treeTotalSize || treeNodes.reduce((sum, n) => sum + (n.size ?? 0), 0))} on disk</span>
+                    </p>
+                    <FileTree nodes={treeNodes} onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }} />
+                  </>
+                )
               ) : drawerTab === 'files' ? (
                 <>
                   {(() => {

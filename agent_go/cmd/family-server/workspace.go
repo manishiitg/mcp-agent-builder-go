@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,12 @@ type treeNode struct {
 	Path     string     `json:"path"` // relative to the workspace root
 	Type     string     `json:"type"` // "dir" | "file"
 	Children []treeNode `json:"children,omitempty"`
+	// Size is bytes on disk: the file's own size, or for a directory the
+	// recursive total of everything under it — INCLUDING entries hidden from
+	// the tree itself (dotfiles like a .cursor/ or .git marker), since the
+	// point of the number is the real footprint of that folder, not the sum
+	// of what happens to be listed.
+	Size int64 `json:"size"`
 }
 
 // workspaceRootHiddenNames are top-level entries that are app/agent
@@ -30,10 +37,15 @@ var workspaceRootHiddenNames = map[string]bool{
 	"AGENTS.md": true,
 }
 
-func buildTree(absDir, rel string) []treeNode {
+// buildTreeSized returns absDir's visible child nodes AND the total bytes on
+// disk beneath it. Hidden entries (dotfiles, and skills/ at the root) still
+// count toward the size even though they're never listed — see treeNode.Size.
+// Sizes are accumulated during this one walk rather than by a second pass per
+// directory, which would re-walk every level once per ancestor.
+func buildTreeSized(absDir, rel string) ([]treeNode, int64) {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		di, dj := entries[i].IsDir(), entries[j].IsDir()
@@ -43,30 +55,75 @@ func buildTree(absDir, rel string) []treeNode {
 		return entries[i].Name() < entries[j].Name()
 	})
 	nodes := make([]treeNode, 0, len(entries))
+	var total int64
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if rel == "" && workspaceRootHiddenNames[name] {
-			continue
-		}
+		hidden := strings.HasPrefix(name, ".") || (rel == "" && workspaceRootHiddenNames[name])
+		abs := filepath.Join(absDir, name)
 		childRel := name
 		if rel != "" {
 			childRel = rel + "/" + name
 		}
 		if e.IsDir() {
+			// A hidden directory only needs its bytes counted, not its nodes
+			// built — skip the node-building recursion entirely for it.
+			if hidden {
+				total += dirSizeBytes(abs)
+				continue
+			}
+			kids, size := buildTreeSized(abs, childRel)
+			total += size
 			nodes = append(nodes, treeNode{
 				Name:     name,
 				Path:     childRel,
 				Type:     "dir",
-				Children: buildTree(filepath.Join(absDir, name), childRel),
+				Children: kids,
+				Size:     size,
 			})
-		} else {
-			nodes = append(nodes, treeNode{Name: name, Path: childRel, Type: "file"})
+			continue
 		}
+		var size int64
+		if info, err := e.Info(); err == nil {
+			size = info.Size()
+		}
+		total += size
+		if hidden {
+			continue
+		}
+		nodes = append(nodes, treeNode{Name: name, Path: childRel, Type: "file", Size: size})
 	}
-	return nodes
+	return nodes, total
+}
+
+// dirSizeBytes sums every regular file beneath abs. Used for directories whose
+// contents are never listed, so no tree nodes are built for them.
+func dirSizeBytes(abs string) int64 {
+	var total int64
+	_ = filepath.WalkDir(abs, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // best-effort: an unreadable entry just doesn't count
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// workspaceTreeResponse carries the tree plus the workspace's TRUE total size.
+// The total can't be derived by summing Nodes: entries hidden from the listing
+// (skills/, AGENTS.md, and dotfiles like the coding-agent's own .git marker —
+// measured at 8.6 MB of a 68 MB workspace) still occupy real disk, and the
+// point of this number is to watch actual growth. Callers that only want the
+// listing can keep reading Nodes and ignore the rest.
+type workspaceTreeResponse struct {
+	Nodes []treeNode `json:"nodes"`
+	// TotalSize is every byte under the workspace root, listed or not.
+	TotalSize int64 `json:"total_size"`
+	// VisibleSize is the sum of Nodes only, so a caller can show the gap
+	// between "what you can see here" and "what's actually on disk".
+	VisibleSize int64 `json:"visible_size"`
 }
 
 // GET /api/workspace/tree — the live family workspace as a hierarchical tree.
@@ -77,7 +134,12 @@ func handleWorkspaceTree(w http.ResponseWriter, r *http.Request) {
 	}
 	root := filepath.Join(familyDataDir(), "workspace")
 	_ = os.MkdirAll(root, 0o700)
-	writeJSON(w, http.StatusOK, buildTree(root, ""))
+	nodes, total := buildTreeSized(root, "")
+	var visible int64
+	for _, n := range nodes {
+		visible += n.Size
+	}
+	writeJSON(w, http.StatusOK, workspaceTreeResponse{Nodes: nodes, TotalSize: total, VisibleSize: visible})
 }
 
 // seedWorkspace writes a couple of starter files so the tree is meaningful and

@@ -227,6 +227,21 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 			} else if strings.TrimSpace(transcript) != "" {
 				voiceText = strings.TrimSpace(transcript)
 				log.Printf("[whatsapp] transcribed voice note (%d chars)", len(voiceText))
+				// The transcript IS the message from here on — it becomes the
+				// parent's chat turn and is persisted in conversation.json
+				// permanently. The raw audio has no reader after this point:
+				// unlike a photo, a voice note is never filed into materials/
+				// by process-file, so it would sit in inbox/ forever, and the
+				// "check inbox/ before every reply" habit would make the agent
+				// re-notice the same dead files on every single turn.
+				// Only deleted on SUCCESS — a failed or disabled transcription
+				// keeps the audio, since then nothing else records what the
+				// parent said and removing it would lose the message outright.
+				if err := os.Remove(absPath); err != nil {
+					log.Printf("[whatsapp] could not remove transcribed voice note %s: %v", relPath, err)
+				} else {
+					log.Printf("[whatsapp] removed transcribed voice note %s (transcript kept in the conversation)", relPath)
+				}
 			}
 		}
 	}

@@ -601,6 +601,13 @@ details[open] > .fl-tree-dir .fl-tree-icon.is-open { display: block; }
 .fl-tree-file svg { flex: 0 0 auto; color: #b79a5e; }
 .fl-tree-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .fl-tree-file:hover { background: #f4efe4; color: var(--heading); }
+/* Size on disk, pushed to the right edge of its row. A folder's is the
+   recursive total, so it's visible at a glance which part is growing. Sits
+   OUTSIDE the ellipsis-truncated name span so a long filename shortens
+   instead of squeezing the number out. */
+.fl-tree-size { margin-left: auto; padding-left: 10px; flex: 0 0 auto; color: var(--muted, #8a8478); font-weight: 500; font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+.fl-tree-total { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 6px 9px; border-radius: 8px; background: var(--surface-2); color: var(--muted, #8a8478); font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; }
+.fl-tree-total svg { flex: 0 0 auto; }
 
 .fl-viewer { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .fl-viewer-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
