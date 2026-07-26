@@ -20,7 +20,11 @@ description: Create clear, child-ready study material (notes, worked examples, a
    and board (ask the parent if any is missing). The relevant
    `materials/<subject>/<topic>/*.meta.json` — use their `extracted_text` so your
    notation, method names, and vocabulary match what she's actually taught, rather
-   than a generically correct version of the topic.
+   than a generically correct version of the topic. Also check `memory/interests.md`
+   if it exists — a genuine interest can make one or two of the worked examples
+   below feel like they're actually about her, not a generic textbook. Use it where
+   it fits naturally, never in every example, and never at the cost of the maths
+   itself being clear and correct.
 
 3. **Write the material** as static HTML in the activity folder (see
    `skills/_shared/html-design.md`): a warm, plain-language intro at her grade level;

@@ -821,11 +821,16 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-star-badge { display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px; border-radius: 999px; background: linear-gradient(135deg, #fff3d6, #ffe6a8); color: #a9781a; font-size: var(--text-secondary); font-weight: 800; box-shadow: 0 1px 3px rgba(169, 120, 26, .18); }
 .fl-star-badge svg { color: #e0a51c; }
 .fl-child-top-right { display: flex; align-items: center; gap: 10px; }
-.fl-celebration { display: flex; align-items: center; gap: 12px; max-width: min(94%, 760px); padding: 13px 18px; border-radius: 16px; background: linear-gradient(90deg, #fff3d6, #fff8e6); border: 1px solid #f3d385; box-shadow: 0 6px 18px rgba(214, 158, 46, .18); animation: fl-celebration-in .35s ease; }
+/* This pop DOES run (verified in isolation) — it was just too quick and too
+   small (0.5s, 20px stars) to register against a reply bubble that just
+   finished streaming right above it, where the eye already is. Made the
+   whole card visibly pop (not just fade+slide) and gave the stars a bigger,
+   slower bounce so it reads as a celebration rather than a blink. */
+.fl-celebration { display: flex; align-items: center; gap: 12px; max-width: min(94%, 760px); padding: 13px 18px; border-radius: 16px; background: linear-gradient(90deg, #fff3d6, #fff8e6); border: 1px solid #f3d385; box-shadow: 0 6px 18px rgba(214, 158, 46, .18); animation: fl-celebration-in .45s cubic-bezier(.22, 1, .36, 1); }
 .fl-celebration-stars { display: flex; gap: 2px; flex: 0 0 auto; }
-.fl-celebration-star { color: #e0a51c; filter: drop-shadow(0 1px 2px rgba(224, 165, 28, .35)); animation: fl-star-pop .5s cubic-bezier(.34, 1.56, .64, 1) backwards; }
+.fl-celebration-star { color: #e0a51c; filter: drop-shadow(0 1px 2px rgba(224, 165, 28, .35)); animation: fl-star-pop .7s cubic-bezier(.34, 1.56, .64, 1) backwards; }
 .fl-celebration-text { color: #8a5c0a; font-weight: 650; font-size: var(--text-secondary); }
-@keyframes fl-celebration-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fl-celebration-in { from { opacity: 0; transform: translateY(-8px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 /* --- StartBurst: the moment she begins an activity ---------------------------
    Sits over the whole child screen; pointer-events:none throughout so it can

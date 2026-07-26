@@ -18,7 +18,7 @@ description: Create a practice test for the child from their materials and progr
    and board (ask the parent if any is missing). The relevant
    `materials/<subject>/<topic>/*.meta.json` for what she's actually being taught —
    their `extracted_text` already holds the full content, so her notation and method
-   names match what her teacher used.
+   names match what her teacher used. Also check `memory/interests.md` if it exists.
 
 3. **Write the test** as static HTML in the activity folder (see
    `skills/_shared/html-design.md`). It should read like a real test paper: a clear
@@ -29,6 +29,12 @@ description: Create a practice test for the child from their materials and progr
    do (so it isn't demoralizing), the rest on the moves that actually need work,
    approached from a different angle than last time rather than the same items again.
    No answers, and no hints that give them away.
+   A test still stays a real test paper first: if a genuine interest from
+   `interests.md` fits ONE word problem's cover story naturally (a fraction
+   question set at a Quidditch match, say), use it — but never at the cost of
+   realism, clarity, or exam register, never in every question, and never under a
+   `strict` teaching_mode where she needs to recognise the question in its real
+   exam form. Skip it entirely rather than force it.
 
 4. **Write the answer key** as plain Markdown at `<name>-KEY.md` in that SAME folder
    — full worked solutions, plus a note on which questions target which weakness so
