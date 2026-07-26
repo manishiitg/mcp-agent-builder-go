@@ -1109,3 +1109,11 @@ audio.fl-viewer-media { background: var(--surface); }
    parent can choose without knowing what a "CLI" is. */
 .fl-settings-engine-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; text-align: left; }
 .fl-settings-engine-blurb { font-size: var(--text-caption); font-weight: 500; color: var(--muted, #8a8478); }
+
+/* "Try it" for speech-to-text. Read-aloud can be judged by pressing play;
+   speech recognition can only be judged by seeing what it heard you say. */
+.fl-mic-test { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.fl-ghost-btn.is-recording { background: #fdecec; border-color: #e6b0b0; color: #b3261e; }
+.fl-mic-test-live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-caption); color: var(--muted, #8a8478); }
+.fl-mic-test-bar { display: block; width: 40px; height: 4px; border-radius: 999px; background: #e67373; transform-origin: left center; transition: transform .06s linear; }
+.fl-mic-test-heard { margin: 0; padding: 7px 11px; border-radius: 10px; background: var(--sun-soft, #fdeecb); color: #6f5a2a; font-size: var(--text-secondary); }

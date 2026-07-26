@@ -10,6 +10,7 @@ import { Volume2 } from 'lucide-react'
 import type { VoiceStatus } from '../stores'
 import { speakText } from './speech'
 import { VoiceTierCard } from './VoiceTierCard'
+import { MicTestButton } from './MicTestButton'
 import { FAMILY_API } from '../apiBase'
 
 export function VoiceSettings({
@@ -80,6 +81,7 @@ export function VoiceSettings({
               />
             ))}
           </div>
+          <MicTestButton />
 
           <p className="fl-voice-group-label">Reading replies out loud</p>
           <div className="fl-settings-engines">

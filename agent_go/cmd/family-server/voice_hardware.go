@@ -72,7 +72,7 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, meta := range []struct{ id, label, desc string }{
-		{"builtin", "Standard", "Understands clear speech well. Already set up — nothing to download."},
+		{"builtin", "Standard", "Understands clear speech well. This one is set up for you already."},
 		{"better", "More accurate", "Better with names, numbers, and quieter or faster talking."},
 		{"best", "Most accurate", "The most accurate at understanding speech. A big download, and a little slower to think."},
 	} {
@@ -92,9 +92,13 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 			TotalBytes:  st.TotalBytes,
 			InstallErr:  st.Error,
 			CanInstall:  !installed && !st.Installing,
-			// Never offer to remove the last one — that would silently turn
-			// speech input off rather than just downgrading it.
-			CanRemove: installed && installedCount > 1,
+			// The Standard model is the baseline everything falls back to, so
+			// it isn't removable at all — offering to delete the floor is
+			// confusing even when another model happens to be installed. The
+			// upgrades above it can be removed freely, and never the last one
+			// standing (which would silently turn speech input off rather
+			// than just downgrading it).
+			CanRemove: installed && meta.id != "builtin" && installedCount > 1,
 		})
 	}
 
