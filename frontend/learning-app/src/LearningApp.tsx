@@ -2435,16 +2435,21 @@ export default function LearningApp() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
 
-  // Reset the composer back to its natural single-row height once its text
-  // is cleared (sent, or deleted by hand) — autoGrowTextarea only grows it
-  // as the user types, so shrinking back needs its own trigger.
+  // Re-measure the composer's height on every value change, not just typing.
+  // The textarea's own onChange handler already calls autoGrowTextarea, but
+  // voice dictation (MicButton's onText) sets the value directly via
+  // setFocusInput/setChildInput — a React state update, not a DOM change
+  // event — so a long transcribed message never grew the box: it landed with
+  // the value already in place but the height untouched. This effect covers
+  // BOTH directions (grows for a long value, shrinks back for an empty one)
+  // regardless of how the value got there.
   const focusTextareaRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
-    if (!focusInput && focusTextareaRef.current) focusTextareaRef.current.style.height = 'auto'
+    if (focusTextareaRef.current) autoGrowTextarea(focusTextareaRef.current)
   }, [focusInput])
   const childTextareaRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
-    if (!childInput && childTextareaRef.current) childTextareaRef.current.style.height = 'auto'
+    if (childTextareaRef.current) autoGrowTextarea(childTextareaRef.current)
   }, [childInput])
 
   const onPickFiles = () => fileInputRef.current?.click()
