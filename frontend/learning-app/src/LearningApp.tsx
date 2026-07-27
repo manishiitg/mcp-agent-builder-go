@@ -739,7 +739,6 @@ const PARENT_WAIT_HINTS = [
   'Tip: ask for several things at once — "make a guide, a quick test, and an advanced one" — bundled as one activity.',
   'Tip: Quill can look up board-specific tips and exam strategies — just ask.',
   'Tip: you can ask Quill to explain a topic to you, not just make material for your child.',
-  'Tip: connect Gmail in Connectors, then just ask "did the school email anything?" — Quill checks for you.',
   'Tip: link WhatsApp in Connectors to chat with Quill from your phone, and get check-ins there.',
   'Tip: set up the Browser connector and Quill can peek at your school portal for new assignments.',
   'Tip: turn on Pulse (top bar) and Quill checks in on its own — reviewing progress and the school portal.',
@@ -1091,7 +1090,7 @@ export default function LearningApp() {
   const [deletingSecret, setDeletingSecret] = useState<string | null>(null)
   const waOpen = useWhatsAppStore((s) => s.waOpen)
   const setWaOpen = useWhatsAppStore((s) => s.setWaOpen)
-  const [connectorSection, setConnectorSection] = useState<'whatsapp' | 'gmail' | 'browser'>('whatsapp')
+  const [connectorSection, setConnectorSection] = useState<'whatsapp' | 'browser'>('whatsapp')
   // Multiple phones can be linked (one per parent) — accounts is the list of
   // already-paired numbers; pairing reflects whichever NEW phone's QR is
   // currently being shown (there's always room to add one more).
@@ -1099,16 +1098,11 @@ export default function LearningApp() {
   const [voiceToggling, setVoiceToggling] = useState(false)
   const [waQrNonce, setWaQrNonce] = useState(0)
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
-  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string } | null>(null)
-  const [gmailTesting, setGmailTesting] = useState(false)
-  const [gmailTestResult, setGmailTestResult] = useState<string | null>(null)
   const [browserStatus, setBrowserStatus] = useState<{ cli_installed: boolean } | null>(null)
   const [browserCopied, setBrowserCopied] = useState(false)
-  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; school_gmail_query?: string; watch_sites?: string[]; notify_emails?: string[] } | null>(null)
+  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[] } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
-  const [schoolQueryDraft, setSchoolQueryDraft] = useState('')
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
-  const [notifyEmailsDraft, setNotifyEmailsDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pendingConvUpdate, setPendingConvUpdate] = useState<StoredMsg[] | null>(null)
@@ -1438,31 +1432,6 @@ export default function LearningApp() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [waOpen, connectorSection])
 
-  // Gmail connection status (via the gws CLI, already authenticated on this
-  // machine) — checked once whenever the Gmail section is opened.
-  useEffect(() => {
-    if (!waOpen || connectorSection !== 'gmail') return
-    let cancelled = false
-    setGmailTestResult(null)
-    fetch(`${FAMILY_API}/api/gmail/status`)
-      .then((r) => r.json())
-      .then((d: { connected: boolean; email?: string }) => { if (!cancelled) setGmailStatus(d) })
-      .catch(() => { if (!cancelled) setGmailStatus({ connected: false }) })
-    return () => { cancelled = true }
-  }, [waOpen, connectorSection])
-
-  const sendGmailTest = () => {
-    setGmailTesting(true)
-    setGmailTestResult(null)
-    fetch(`${FAMILY_API}/api/gmail/test`, { method: 'POST' })
-      .then((r) => r.json())
-      .then((d: { ok?: boolean; sent_to?: string; error?: string }) => {
-        setGmailTestResult(d.ok ? `Sent — check ${d.sent_to}` : `Failed: ${d.error || 'unknown error'}`)
-      })
-      .catch(() => setGmailTestResult('Failed: could not reach SparkQuill.'))
-      .finally(() => setGmailTesting(false))
-  }
-
   // Browser connector — just a one-time CLI-install check; whether a CDP
   // Chrome is actually reachable is decided by agent-browser itself per call.
   useEffect(() => {
@@ -1483,12 +1452,10 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/pulse/config`)
       .then((r) => r.json())
-      .then((d: { enabled: boolean; cadence_hours: number; last_run_at?: string; school_gmail_query?: string; watch_sites?: string[]; notify_emails?: string[] }) => {
+      .then((d: { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[] }) => {
         if (cancelled) return
         setPulseConfig(d)
-        setSchoolQueryDraft(d.school_gmail_query || '')
         setWatchSitesDraft((d.watch_sites || []).join('\n'))
-        setNotifyEmailsDraft((d.notify_emails || []).join(', '))
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -1673,7 +1640,7 @@ export default function LearningApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [childSending, childQueue])
 
-  const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; school_gmail_query?: string; watch_sites?: string[]; notify_emails?: string[] }) => {
+  const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; watch_sites?: string[] }) => {
     setSavingPulse(true)
     fetch(`${FAMILY_API}/api/pulse/config`, {
       method: 'POST',
@@ -2623,14 +2590,6 @@ export default function LearningApp() {
                         </div>
 
                         <div className="fl-pulse-col">
-                          <p className="fl-pulse-config-hint">School email filter (optional) — a Gmail search for emails from school, e.g. <code>from:school.edu</code>. Quill only ever looks within this filter.</p>
-                          <input
-                            className="fl-pulse-config-input"
-                            type="text"
-                            placeholder="from:school.edu"
-                            value={schoolQueryDraft}
-                            onChange={(e) => { setSchoolQueryDraft(e.target.value); setPulseSaved(false) }}
-                          />
                           <p className="fl-pulse-config-hint">Websites to check (optional) — any pages Quill should look at: a school portal, a class site, anything. One per line. Uses your signed-in browser (Connectors → Browser).</p>
                           <textarea
                             className="fl-pulse-config-input"
@@ -2638,14 +2597,6 @@ export default function LearningApp() {
                             placeholder={"https://portal.myraschool.edu/assignments\nhttps://classroom.google.com/..."}
                             value={watchSitesDraft}
                             onChange={(e) => { setWatchSitesDraft(e.target.value); setPulseSaved(false) }}
-                          />
-                          <p className="fl-pulse-config-hint">Notify by email (optional) — extra addresses to email each check-in to, comma-separated. Quill always also emails the connected Gmail account.</p>
-                          <input
-                            className="fl-pulse-config-input"
-                            type="text"
-                            placeholder="dad@example.com, grandma@example.com"
-                            value={notifyEmailsDraft}
-                            onChange={(e) => { setNotifyEmailsDraft(e.target.value); setPulseSaved(false) }}
                           />
                         </div>
                       </div>
@@ -2655,8 +2606,7 @@ export default function LearningApp() {
                         disabled={savingPulse}
                         onClick={() => {
                           const sites = watchSitesDraft.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
-                          const emails = notifyEmailsDraft.split(',').map((s) => s.trim()).filter(Boolean)
-                          savePulseConfig({ school_gmail_query: schoolQueryDraft.trim(), watch_sites: sites, notify_emails: emails })
+                          savePulseConfig({ watch_sites: sites })
                           setPulseSaved(true)
                         }}
                       >
@@ -3325,7 +3275,6 @@ export default function LearningApp() {
                 <div className="fl-connectors-body">
                   <nav className="fl-connectors-nav">
                     <button type="button" className={connectorSection === 'whatsapp' ? 'is-active' : ''} onClick={() => setConnectorSection('whatsapp')}>WhatsApp</button>
-                    <button type="button" className={connectorSection === 'gmail' ? 'is-active' : ''} onClick={() => setConnectorSection('gmail')}>Gmail</button>
                     <button type="button" className={connectorSection === 'browser' ? 'is-active' : ''} onClick={() => setConnectorSection('browser')}>Browser</button>
                   </nav>
                   <div className="fl-connectors-panel">
@@ -3407,21 +3356,6 @@ export default function LearningApp() {
                           <p className="fl-note">The code refreshes automatically every 30 seconds until scanned.</p>
                         </div>
                       </div>
-                    ) : connectorSection === 'gmail' ? (
-                      gmailStatus?.connected ? (
-                        <div className="fl-connector-card">
-                          <p className="fl-connector-status is-connected">✓ Connected{gmailStatus.email ? ` — ${gmailStatus.email}` : ''}</p>
-                          <p className="fl-note">Sends only ever go to this same address, and only when you click the button below.</p>
-                          <button className="fl-ghost-btn" type="button" onClick={sendGmailTest} disabled={gmailTesting}>{gmailTesting ? 'Sending…' : 'Send test email'}</button>
-                          {gmailTestResult && <p className="fl-note">{gmailTestResult}</p>}
-                        </div>
-                      ) : gmailStatus === null ? (
-                        <p className="fl-note">Checking Gmail connection…</p>
-                      ) : (
-                        <div className="fl-connector-card">
-                          <p className="fl-note">Not connected. Gmail uses the <code>gws</code> CLI on this computer — sign it into a Google account, then reopen this.</p>
-                        </div>
-                      )
                     ) : (
                       <div className="fl-connector-card">
                         <p className="fl-connector-status" style={browserStatus?.cli_installed ? { color: 'var(--fl-green, #2e7d32)' } : undefined}>

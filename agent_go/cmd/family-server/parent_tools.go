@@ -117,6 +117,7 @@ func parentTools(engine, childLabel string, sinks parentToolSinks) []agentsessio
 		sendWhatsAppFileTool(sinks.sentFile),
 		listSecretsTool(),
 		setSecretTool(sinks.secretSet),
+		deleteSecretTool(),
 	}
 }
 
