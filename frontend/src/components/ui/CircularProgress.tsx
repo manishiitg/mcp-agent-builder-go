@@ -151,7 +151,7 @@ export const CircularProgress: React.FC<CircularProgressProps> = ({
     return (
       <div className="space-y-1.5 text-xs min-w-[280px]">
         <div className="font-semibold text-sm mb-1.5 border-b pb-1">
-          {isTotalEvent ? '📊 Total Token Usage' : 'Token Usage'} • Context: {percentageText}
+          Usage • Context: {percentageText}
         </div>
         
         {/* Model info */}

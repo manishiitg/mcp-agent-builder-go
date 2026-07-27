@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { ChevronDown, ListTodo } from 'lucide-react'
 import type { UserMessageEvent } from '../../../generated/events'
 
 interface UserMessageEventDisplayProps {
@@ -12,9 +13,17 @@ export const UserMessageEventDisplay: React.FC<UserMessageEventDisplayProps> = (
 }) => {
   const [isExpanded, setIsExpanded] = useState(false)
   const CHAR_LIMIT = 300
-  const isLiveCodingAgentInput = event.metadata?.source === 'coding_agent_live_input'
+  const messageSource = event.metadata?.source
+  const isLiveCodingAgentInput = messageSource === 'coding_agent_live_input'
+  const hasStepScope = typeof event.metadata?.current_step_id === 'string' ||
+    typeof event.metadata?.step_name === 'string'
+  const isExecutionPrompt = messageSource === 'execution_prompt' ||
+    (!messageSource && event.turn === 0 && hasStepScope)
   const content = event.content || ''
   const isAutoNotification = content.trim().startsWith('[AUTO-NOTIFICATION]')
+  const stepName = typeof event.metadata?.step_name === 'string'
+    ? event.metadata.step_name.trim()
+    : ''
 
   // Check if content is long enough to need expansion
   const shouldShowExpand = content.length > CHAR_LIMIT
@@ -65,6 +74,42 @@ export const UserMessageEventDisplay: React.FC<UserMessageEventDisplayProps> = (
         <span className="max-w-full whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200">
           {event.content || 'No message content'}
         </span>
+      </div>
+    )
+  }
+
+  if (isExecutionPrompt) {
+    return (
+      <div
+        data-testid="terminal-execution-prompt"
+        className="rounded border border-neutral-800 bg-neutral-900/45 px-3 py-2"
+      >
+        <div className="flex items-start gap-2.5">
+          <ListTodo className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-medium uppercase text-neutral-500">Task</div>
+            <div className="mt-0.5 break-words text-sm font-medium text-neutral-100">
+              {stepName || 'Execute this workflow step'}
+            </div>
+            <div className="mt-0.5 text-xs text-neutral-500">
+              Instructions sent to the agent
+            </div>
+          </div>
+        </div>
+        {content && (
+          <details className="group mt-2 border-t border-neutral-800 pt-2">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-300">
+              <ChevronDown
+                className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
+                aria-hidden="true"
+              />
+              View instructions
+            </summary>
+            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] leading-5 text-neutral-400">
+              {content}
+            </pre>
+          </details>
+        )}
       </div>
     )
   }

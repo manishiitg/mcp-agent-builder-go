@@ -1927,7 +1927,23 @@ func readPlanFromFileWithGraphValidation(ctx context.Context, workspacePath stri
 		validate = validateLoadedPlanStructure
 	}
 	if err := validate(&plan); err != nil {
-		return nil, fmt.Errorf("plan.json uses an invalid or legacy format: %w", err)
+		// A plan whose only defect is a pre-v1.0.10 message_sequence "code"
+		// item can still be LOADED here for editing — e.g. so
+		// delete_plan_steps or update_message_sequence_step can remove or
+		// repair the offending step — even though it fails strict
+		// validation. It can never execute or be persisted in this state:
+		// execution's own preflight (LoadPlanForWorkshop) and every
+		// writePlanToFile call independently enforce the strict validator.
+		// Mirrors LoadPlanForWorkshop's existing fallback in
+		// controller_workshop.go so mutation tools aren't the one path left
+		// unable to even open a legacy plan to fix it.
+		validateLegacy := validateLoadedPlanStructureCoreAllowLegacyMessageSequenceCode
+		if validateGraph {
+			validateLegacy = validateLoadedPlanStructureAllowLegacyMessageSequenceCode
+		}
+		if legacyErr := validateLegacy(&plan); legacyErr != nil {
+			return nil, fmt.Errorf("plan.json uses an invalid or legacy format: %w", err)
+		}
 	}
 
 	return &plan, nil

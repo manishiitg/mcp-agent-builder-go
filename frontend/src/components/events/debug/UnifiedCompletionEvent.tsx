@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react'
 import { Copy, Check } from 'lucide-react'
 import { ConversationMarkdownRenderer } from '../../ui/MarkdownRenderer'
+import { humanReadableAgentResult } from '../system/eventDisplayUtils'
 
 interface UnifiedCompletionEvent {
   timestamp?: string
@@ -26,6 +27,7 @@ interface UnifiedCompletionEventDisplayProps {
 }
 
 export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDisplayProps> = ({ event }) => {
+  const displayResult = humanReadableAgentResult(event.final_result)
 
   // Note: event.duration is in nanoseconds from Go time.Duration
   const formatDuration = (durationNs: number) => {
@@ -52,19 +54,19 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
   // Copy handler
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
-    if (!event.final_result) return
-    navigator.clipboard.writeText(event.final_result).then(() => {
+    if (!displayResult) return
+    navigator.clipboard.writeText(displayResult).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
-  }, [event.final_result])
+  }, [displayResult])
 
   const isError = event.status === 'error' || event.error
 
   // Render restored step errors and other completions with content as normal
   // assistant messages. Otherwise an event with status=error and final_result
   // collapses to a generic "Error" box and hides the useful restored summary.
-  if (event.final_result) {
+  if (displayResult) {
     return (
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
@@ -78,7 +80,7 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
                 {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
             </div>
-            <ConversationMarkdownRenderer content={event.final_result} maxHeight="none" framed={false} />
+            <ConversationMarkdownRenderer content={displayResult} maxHeight="none" framed={false} />
           </div>
           <div className="flex items-center gap-2 mt-1 px-1 text-[10px] text-gray-400 dark:text-gray-500">
             {event.duration && <span>{formatDuration(event.duration)}</span>}

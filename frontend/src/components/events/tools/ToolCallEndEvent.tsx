@@ -36,7 +36,7 @@ interface ToolCallEndEventProps {
 }
 
 export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
   const [isRawMode, setIsRawMode] = React.useState(false)
 
   const normalizedToolName = event.tool_name ? normalizeMCPToolName(event.tool_name) : event.tool_name

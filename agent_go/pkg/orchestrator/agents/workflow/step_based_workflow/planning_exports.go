@@ -1378,6 +1378,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 					ID:                execID,
 					ParentExecutionID: b.parentID,
 					Name:              workflowProgressDisplayName(startEvent.AgentName),
+					Kind:              string(workflowProgressExecutionKind(startEvent.AgentType)),
 				})
 			}
 		}
@@ -1438,6 +1439,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 							ID:                progressID,
 							ParentExecutionID: b.parentID,
 							Name:              workflowProgressDisplayName(stepName),
+							Kind:              string(workflowProgressExecutionKind(agentType)),
 						})
 					}
 					b.session.executionNotifier.OnExecutionComplete(progressID, workflowProgressDisplayName(stepName), result, meta, execErr)
@@ -1533,6 +1535,16 @@ func workflowProgressTracksAgent(agentType string, agentName string) bool {
 	return !strings.HasPrefix(strings.TrimSpace(agentName), "message-sequence-")
 }
 
+// workflowProgressExecutionKind maps a todo_task agent's internal agentType onto
+// the declared ExecutionKind, so the terminal store and rail badge no longer have
+// to re-derive it from the "Step -> " name convention below.
+func workflowProgressExecutionKind(agentType string) orchestrator_events.ExecutionKind {
+	if agentType == "todo_task_orchestrator" {
+		return orchestrator_events.ExecutionKindOrchestrator
+	}
+	return orchestrator_events.ExecutionKindSubAgent
+}
+
 // workflowProgressStepID extracts the actual workflow step ID from an orchestrator event's
 // metadata. The context_aware_bridge stamps current_step_id on every event it processes,
 // so this is the reliable way to map an execution-agent name back to its plan step ID.
@@ -1551,12 +1563,21 @@ func workflowProgressStepID(eventData interface{}) string {
 	return ""
 }
 
+// workflowProgressDisplayName used to prefix the name with "Step -> " so the
+// legacy isWorkflowStepTrackingExecution name-sniffer in cmd/server/delegation.go
+// would classify it correctly. That prefix is no longer needed now that the
+// OnExecutionStart calls below declare their ExecutionKind explicitly, and it
+// actively broke the frontend title: getBackgroundExecutionDisplayName only
+// recognized "Workflow step -> ", so "Step -> Foo Bar" fell through to raw
+// title-casing, which turns the "-" in "->" into a space — producing "Step >
+// Foo Bar" — which splitExecutionDisplayPath then misread as a "Foo Bar" title
+// nested "inside Step".
 func workflowProgressDisplayName(agentName string) string {
 	agentName = strings.TrimSpace(agentName)
 	if agentName == "" {
 		return "Step"
 	}
-	return "Step -> " + agentName
+	return agentName
 }
 
 func workflowProgressKey(agentType, agentName string, stepIndex int) string {
@@ -1826,7 +1847,13 @@ func RegisterRunFullWorkflowTool(
 					ID:                execID,
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              workflowDisplayName,
-					Cancel:            cancel,
+					// A full run is a CONTAINER, not an agent: it has no
+					// conversation of its own, only the steps beneath it. It is
+					// still registered so cancellation and HasRunningAgents()
+					// work, but declaring the kind keeps it out of the terminal
+					// rail instead of sitting there beside real agents.
+					Kind:   string(orchestrator_events.ExecutionKindFullRun),
+					Cancel: cancel,
 				})
 			}
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)

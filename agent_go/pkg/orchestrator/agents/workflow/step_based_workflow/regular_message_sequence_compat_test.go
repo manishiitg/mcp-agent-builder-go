@@ -117,6 +117,9 @@ func TestNonScriptedRegularStepNormalizesToMessageSequence(t *testing.T) {
 	if len(sequence.Items) != 1 || sequence.Items[0].ID != normalizedRegularSequenceItemID || sequence.Items[0].Type != "user_message" {
 		t.Fatalf("expected one normalized work turn, got %#v", sequence.Items)
 	}
+	if got := effectiveRuntimeStepType(regular); got != string(StepTypeMessageSeq) {
+		t.Fatalf("effective runtime step type = %q, want %q", got, StepTypeMessageSeq)
+	}
 }
 
 func TestScriptedRegularStepDoesNotNormalizeToMessageSequence(t *testing.T) {
@@ -126,6 +129,9 @@ func TestScriptedRegularStepDoesNotNormalizeToMessageSequence(t *testing.T) {
 	}
 	if shouldNormalizeRegularStepToMessageSequence(regular) {
 		t.Fatal("scripted regular step must retain the saved-script execution path")
+	}
+	if got := effectiveRuntimeStepType(regular); got != string(StepTypeRegular) {
+		t.Fatalf("effective runtime step type = %q, want %q", got, StepTypeRegular)
 	}
 }
 

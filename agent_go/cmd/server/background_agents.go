@@ -16,6 +16,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	agent "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentwrapper"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	orchEvents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
@@ -606,11 +607,8 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 	))
 
 	// Emit background_agent_started event
-	api.emitBackgroundAgentEvent(sessionID, agentID, "background_agent_started", map[string]interface{}{
-		"agent_id":    agentID,
-		"name":        name,
-		"instruction": truncateForToolResponse(instruction, 200),
-	})
+	// The delegate tool always creates a real delegated LLM agent.
+	api.emitBackgroundAgentStarted(sessionID, agentID, name, truncateForToolResponse(instruction, 200), "", orchEvents.ExecutionKindSubAgent)
 	api.notifyBackgroundAgentStarted(sessionID, agentID)
 
 	// Start the background completion loop for this session if not already running
@@ -681,23 +679,11 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 
 		if err != nil {
 			bgAgent.SetError(err.Error())
-			api.emitBackgroundAgentEvent(sessionID, agentID, "background_agent_completed", map[string]interface{}{
-				"agent_id": agentID,
-				"name":     name,
-				"status":   "failed",
-				"error":    err.Error(),
-				"duration": duration.Truncate(time.Second).String(),
-			})
+			api.emitBackgroundAgentCompleted(sessionID, agentID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
 			log.Printf("[BG AGENT] Agent '%s' (ID: %s) failed after %s: %v", name, agentID, duration, err)
 		} else {
 			bgAgent.SetResult(result)
-			api.emitBackgroundAgentEvent(sessionID, agentID, "background_agent_completed", map[string]interface{}{
-				"agent_id": agentID,
-				"name":     name,
-				"status":   "completed",
-				"result":   truncateForToolResponse(result, 500),
-				"duration": duration.Truncate(time.Second).String(),
-			})
+			api.emitBackgroundAgentCompleted(sessionID, agentID, name, "completed", truncateForToolResponse(result, 500), "", duration.Truncate(time.Second).String())
 			log.Printf("[BG AGENT] Agent '%s' (ID: %s) completed in %s", name, agentID, duration)
 		}
 
@@ -708,31 +694,39 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 	return agentID, nil
 }
 
-// emitBackgroundAgentEvent emits a background agent event to the event store
-func (api *StreamingAPI) emitBackgroundAgentEvent(sessionID, agentID, eventType string, data map[string]interface{}) {
+// backfillParentExecutionID returns existing if already set, otherwise looks
+// up agentID in the background agent registry for its ParentExecutionID.
+// Centralized so every typed emitter below backfills the same way the old
+// untyped emitBackgroundAgentEvent used to.
+func (api *StreamingAPI) backfillParentExecutionID(sessionID, agentID, existing string) string {
+	existing = strings.TrimSpace(existing)
+	if existing != "" || api == nil || api.bgAgentRegistry == nil || agentID == "" {
+		return existing
+	}
+	if agent := api.bgAgentRegistry.Get(sessionID, agentID); agent != nil {
+		return strings.TrimSpace(agent.GetSnapshot().ParentExecutionID)
+	}
+	return existing
+}
+
+// emitTypedBackgroundEvent wraps a typed background-agent event (see
+// pkg/orchestrator/events for the BackgroundAgent*/SyntheticTurnReady/
+// AutoNotificationSteered structs) and adds it to the event store.
+// dedupSuffix additionally distinguishes the event ID beyond
+// sessionID/eventType/agentID — only synthetic_turn_ready uses this today,
+// keyed on status, since a start and a completion notification for the same
+// agent must not collapse into the same event ID.
+func (api *StreamingAPI) emitTypedBackgroundEvent(sessionID, agentID, eventType, dedupSuffix string, data unifiedevents.EventData) {
 	if api == nil || api.eventStore == nil {
 		return
 	}
-	if data == nil {
-		data = make(map[string]interface{})
-	}
 	now := time.Now()
-	data["timestamp"] = now.Format(time.RFC3339)
-	if _, exists := data["parent_execution_id"]; !exists && api.bgAgentRegistry != nil && agentID != "" {
-		if agent := api.bgAgentRegistry.Get(sessionID, agentID); agent != nil {
-			if parentID := strings.TrimSpace(agent.GetSnapshot().ParentExecutionID); parentID != "" {
-				data["parent_execution_id"] = parentID
-			}
-		}
-	}
 
 	eventID := fmt.Sprintf("%s_%s_%s", sessionID, eventType, agentID)
 	if agentID == "" {
 		eventID = fmt.Sprintf("%s_%s_%d", sessionID, eventType, now.UnixNano())
-	} else if eventType == "synthetic_turn_ready" {
-		if status, ok := data["status"].(string); ok && strings.TrimSpace(status) != "" {
-			eventID = fmt.Sprintf("%s_%s_%s_%s", sessionID, eventType, strings.TrimSpace(status), agentID)
-		}
+	} else if dedupSuffix != "" {
+		eventID = fmt.Sprintf("%s_%s_%s_%s", sessionID, eventType, dedupSuffix, agentID)
 	}
 
 	event := events.Event{
@@ -745,10 +739,95 @@ func (api *StreamingAPI) emitBackgroundAgentEvent(sessionID, agentID, eventType 
 			Timestamp: now,
 			SessionID: sessionID,
 			Component: "background-agent",
-			Data:      events.NewGenericEventData(eventType, data),
+			Data:      data,
 		},
 	}
 	api.eventStore.AddEvent(sessionID, event)
+}
+
+// emitBackgroundAgentStarted reports a background/delegated agent beginning
+// work. parentExecutionID may be empty — it is backfilled from the
+// background agent registry when not supplied directly.
+//
+// kind is the DECLARED ExecutionKind of this execution (see
+// pkg/orchestrator/events/execution_kind.go). Pass the creator's own
+// declaration; do not synthesize one from the agent id here. An empty kind is
+// tolerated and simply means downstream consumers fall back to legacy
+// inference — but every new call site should declare one.
+func (api *StreamingAPI) emitBackgroundAgentStarted(sessionID, agentID, name, instruction, parentExecutionID string, kind orchEvents.ExecutionKind) {
+	now := time.Now()
+	evt := &orchEvents.BackgroundAgentStartedEvent{
+		BaseEventData:     unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
+		AgentID:           agentID,
+		Name:              name,
+		Instruction:       instruction,
+		Kind:              kind,
+		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, parentExecutionID),
+	}
+	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentStarted), "", evt)
+}
+
+// emitBackgroundAgentCompleted reports a background/delegated agent
+// finishing. result and errMsg are mutually exclusive — pass status
+// "completed" with result, or "failed" with errMsg.
+func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, status, result, errMsg, duration string) {
+	now := time.Now()
+	evt := &orchEvents.BackgroundAgentCompletedEvent{
+		BaseEventData:     unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
+		AgentID:           agentID,
+		Name:              name,
+		Status:            status,
+		Result:            result,
+		Error:             errMsg,
+		Duration:          duration,
+		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
+	}
+	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentCompleted), "", evt)
+}
+
+// emitBackgroundAgentTerminated reports a background/delegated agent being
+// canceled or torn down before it produced a normal completion.
+func (api *StreamingAPI) emitBackgroundAgentTerminated(sessionID, agentID, name, status string) {
+	now := time.Now()
+	evt := &orchEvents.BackgroundAgentTerminatedEvent{
+		BaseEventData:     unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
+		AgentID:           agentID,
+		Name:              name,
+		Status:            status,
+		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
+	}
+	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentTerminated), "", evt)
+}
+
+// emitSyntheticTurnReady notifies the main agent that background work
+// started or completed, so a synthetic turn can weave the update in. The
+// event ID is deduped on status (not just agentID) so a start and a later
+// completion for the same agent both reach the event store.
+func (api *StreamingAPI) emitSyntheticTurnReady(sessionID, agentID, name, status, message string) {
+	now := time.Now()
+	evt := &orchEvents.SyntheticTurnReadyEvent{
+		BaseEventData: unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
+		Message:       message,
+		AgentID:       agentID,
+		Name:          name,
+		Status:        status,
+	}
+	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.SyntheticTurnReady), strings.TrimSpace(status), evt)
+}
+
+// emitAutoNotificationSteered reports a background-agent notification being
+// delivered directly into an already-running foreground CLI turn instead of
+// queued for the next turn.
+func (api *StreamingAPI) emitAutoNotificationSteered(sessionID, agentID, name, status, provider string) {
+	now := time.Now()
+	evt := &orchEvents.AutoNotificationSteeredEvent{
+		BaseEventData: unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
+		AgentID:       agentID,
+		Name:          name,
+		Status:        status,
+		Provider:      provider,
+	}
+	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.AutoNotificationSteered), "", evt)
 }
 
 // isSessionBusy returns whether the session is currently processing a user turn
@@ -1354,11 +1433,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentStartsLocked(sessionID str
 	}
 
 	for _, agentID := range emittedIDs {
-		api.emitBackgroundAgentEvent(sessionID, agentID, "synthetic_turn_ready", map[string]interface{}{
-			"message":  "Background work started. The main agent will be notified.",
-			"agent_id": agentID,
-			"status":   "started",
-		})
+		api.emitSyntheticTurnReady(sessionID, agentID, "", "started", "Background work started. The main agent will be notified.")
 	}
 	if !api.executeSyntheticTurn(sessionID, syntheticMsg) && !api.autoNotificationSessionUnreachable(sessionID) {
 		for _, agent := range agentRefs {
@@ -1561,11 +1636,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 
 	// Emit synthetic_turn_ready event for each agent
 	for _, agentID := range emittedIDs {
-		api.emitBackgroundAgentEvent(sessionID, agentID, "synthetic_turn_ready", map[string]interface{}{
-			"message":  "Background agents completed. The main agent will process the results.",
-			"agent_id": agentID,
-			"status":   "completed",
-		})
+		api.emitSyntheticTurnReady(sessionID, agentID, "", "completed", "Background agents completed. The main agent will process the results.")
 	}
 
 	// Mark notified=true only for agents whose turn was actually dispatched.
@@ -1671,12 +1742,8 @@ func (api *StreamingAPI) processBackgroundAgentCompletion(sessionID, agentID str
 	if snap.Status == BGAgentFailed {
 		statusLabel = "failed"
 	}
-	api.emitBackgroundAgentEvent(sessionID, agentID, "synthetic_turn_ready", map[string]interface{}{
-		"message":  fmt.Sprintf("Background agent '%s' %s. The main agent will process the results.", snap.Name, statusLabel),
-		"agent_id": snap.ID,
-		"name":     snap.Name,
-		"status":   string(snap.Status),
-	})
+	api.emitSyntheticTurnReady(sessionID, snap.ID, snap.Name, string(snap.Status),
+		fmt.Sprintf("Background agent '%s' %s. The main agent will process the results.", snap.Name, statusLabel))
 
 	// Trigger a synthetic turn using the stored QueryRequest.
 	// Set notified=true only when the turn was actually dispatched.
@@ -1961,12 +2028,7 @@ func (api *StreamingAPI) steerBackgroundAgentCompletion(sessionID, agentID strin
 	delivered = true
 
 	api.recordLiveCodingAgentUserMessage(sessionID, msg, provider, newSteerMessageID(), deliveryStatus)
-	api.emitBackgroundAgentEvent(sessionID, agentID, "auto_notification_steered", map[string]interface{}{
-		"agent_id": snap.ID,
-		"name":     snap.Name,
-		"status":   string(snap.Status),
-		"provider": provider,
-	})
+	api.emitAutoNotificationSteered(sessionID, snap.ID, snap.Name, string(snap.Status), provider)
 	log.Printf("[BG AGENT] Steered completion for agent %s into busy session %s (provider=%s status=%s)", agentID, sessionID, provider, deliveryStatus)
 	return true
 }

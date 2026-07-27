@@ -1,7 +1,8 @@
 import React from 'react';
 import type { OrchestratorAgentEndEvent } from '../../../generated/events';
 import { ConversationMarkdownRenderer } from '../../ui/MarkdownRenderer';
-import { isEvaluationAgentEvent } from './eventDisplayUtils';
+import { humanReadableAgentResult, isEvaluationAgentEvent } from './eventDisplayUtils';
+import { completionTitle } from './agentEventDisplayLabels';
 
 function isMessageSequenceItemEvent(event: OrchestratorAgentEndEvent): boolean {
   return event.metadata?.message_sequence_item === true ||
@@ -21,9 +22,13 @@ function isSequenceWorkEvent(event: OrchestratorAgentEndEvent): boolean {
 
 interface OrchestratorAgentEndEventDisplayProps {
   event: OrchestratorAgentEndEvent;
+  compact?: boolean;
 }
 
-export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEventDisplayProps> = ({ event }) => {
+export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEventDisplayProps> = ({
+  event,
+  compact = false,
+}) => {
   // Hide workshop wrapper end events — these are signal-only events for auto-notification,
   // the actual agent completion is already shown by the inner agent's end event
   const agentType = (event as unknown as { agent_type?: string })?.agent_type
@@ -42,7 +47,9 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
 
   const getLabel = () => {
     const t = (event as unknown as { agent_type?: string })?.agent_type
-    if (isMessageSequenceItem) return 'Sequence Item'
+    // The terminal rail already identifies the sequence step. Exposing the
+    // internal message-sequence name again in the transcript is redundant.
+    if (isMessageSequenceItem) return 'Step'
     if (isSequenceWork) return 'Sequence Work'
     if (isWorkflowStepExecution) return 'Step'
     if (isEvaluationAgent && t === 'evaluation_scoring') return 'Evaluation Scoring'
@@ -61,7 +68,7 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
 
   const getAgentIcon = () => {
     const t = (event as unknown as { agent_type?: string })?.agent_type
-    if (isMessageSequenceItem) return '👤'
+    if (isMessageSequenceItem) return '✓'
     if (isWorkflowStepExecution) return '✅'
     if (isEvaluationAgent) return '🧪'
     if (t === 'plan_breakdown') return '🔍'
@@ -150,6 +157,7 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
   };
 
   const colors = getColorClasses(agentColor);
+  const displayResult = humanReadableAgentResult(event.result)
 
   return (
     <div className={`p-2 ${colors.bg} border ${colors.border} rounded`}>
@@ -163,8 +171,8 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
             </div>
             <div className="min-w-0 flex-1">
               <div className={`text-sm font-medium ${colors.text}`}>
-                {getLabel()} Completed: {event.agent_name}{' '}
-                <span className={`text-xs font-normal ${colors.textSecondary}`}>
+                {completionTitle(event.agent_name, isMessageSequenceItem, getLabel())}{' '}
+                {!compact && <span className={`text-xs font-normal ${colors.textSecondary}`}>
                   {event.step_index !== undefined && ` | Step: ${event.step_index}`}
                   {event.iteration !== undefined && ` | Iteration: ${event.iteration}`}
                   {/* Token usage summary - check if token fields exist */}
@@ -212,7 +220,7 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
                     }
                     return null
                   })()}
-                </span>
+                </span>}
               </div>
             </div>
           </div>
@@ -273,9 +281,9 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
       */}
 
       {/* Result content - always visible with markdown rendering */}
-      {event.result && (
+      {displayResult && (
         <div className="mt-3">
-          <ConversationMarkdownRenderer content={event.result} maxHeight="400px" />
+          <ConversationMarkdownRenderer content={displayResult} maxHeight="400px" />
         </div>
       )}
     </div>

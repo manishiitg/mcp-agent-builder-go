@@ -64,7 +64,7 @@ const formatDuration = (durationNs: number) => {
 }
 
 export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndDisplayProps> = ({ event }) => {
-  const { isExpanded: isOutputExpanded, toggle } = useExpandable(false)
+  const { isExpanded: isOutputExpanded, toggle } = useExpandable(true)
   const [isRawMode, setIsRawMode] = React.useState(false)
 
   // Extract context usage information for CircularProgress

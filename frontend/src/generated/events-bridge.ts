@@ -128,6 +128,11 @@ export interface EventDataUnion {
   orchestrator_agent_start?: OrchestratorAgentStartEvent;
   orchestrator_agent_end?: OrchestratorAgentEndEvent;
   orchestrator_agent_error?: OrchestratorAgentErrorEvent;
+  background_agent_started?: BackgroundAgentStartedEvent;
+  background_agent_completed?: BackgroundAgentCompletedEvent;
+  background_agent_terminated?: BackgroundAgentTerminatedEvent;
+  synthetic_turn_ready?: SyntheticTurnReadyEvent;
+  auto_notification_steered?: AutoNotificationSteeredEvent;
   step_token_usage?: StepTokenUsageEvent;
   step_progress_updated?: StepProgressUpdatedEvent;
   routing_evaluated?: RoutingEvaluatedEvent;
@@ -1356,6 +1361,105 @@ export interface OrchestratorAgentErrorEvent {
   step_index?: number;
   iteration?: number;
 }
+export interface BackgroundAgentStartedEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  agent_id?: string;
+  name?: string;
+  instruction?: string;
+  execution_kind?: string;
+  parent_execution_id?: string;
+}
+export interface BackgroundAgentCompletedEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  agent_id?: string;
+  name?: string;
+  status?: string;
+  result?: string;
+  error?: string;
+  duration?: string;
+  parent_execution_id?: string;
+}
+export interface BackgroundAgentTerminatedEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  agent_id?: string;
+  name?: string;
+  status?: string;
+  parent_execution_id?: string;
+}
+export interface SyntheticTurnReadyEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  message?: string;
+  agent_id?: string;
+  name?: string;
+  status?: string;
+}
+export interface AutoNotificationSteeredEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  agent_id?: string;
+  name?: string;
+  status?: string;
+  provider?: string;
+}
 export interface StepTokenUsageEvent {
   timestamp?: string;
   trace_id?: string;
@@ -1746,6 +1850,8 @@ export interface StreamingChunkEvent {
   chunk_index?: number;
   is_tool_call?: boolean;
   finish_reason?: string;
+  source?: string;
+  is_delta?: boolean;
 }
 export interface StreamingEndEvent {
   timestamp?: string;

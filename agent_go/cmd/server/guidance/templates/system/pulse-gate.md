@@ -13,6 +13,10 @@ pending human decisions. Stay on compact signals; open a full artifact
 (complete reports, broad DB rows, full KB/learnings, conversations, prompts,
 tool logs) only when a compact signal makes one targeted fact necessary.
 
+Compare exact pins with `list_provider_models` and `default_tier_models`.
+Provider-profile defaults auto-update; never flag them, infer freshness by name,
+or change config here.
+
 For the supplied run folder, inspect every executed step/item's compact final
 result for literal `CONCERNS:`. Read that result from:
 
@@ -56,8 +60,9 @@ Select modules agentically:
   dependency drift in that layer.
 - Cost/LLM/Time: missing/unpriced telemetry, material cost/latency/model change,
   or its planned roll-up checkpoint; do not run on every high-frequency Pulse.
-- LLM/Ops: low-frequency coaching after config/readiness change, its checkpoint,
-  or retained efficiency evidence; never silently change models or tiers.
+- LLM/Ops: after config/readiness change, checkpoint, retained
+  efficiency evidence, or a catalog-confirmed exact-pin issue. Catalog changes
+  override cooldown; never silently change models/tiers.
 - Goal Advisor: a trustworthy material goal miss, stalled outcome, measurement
   gap, answered strategy decision, active-experiment checkpoint/problem, or a
   reached healthy headroom/plan-design checkpoint. A clean run or green eval

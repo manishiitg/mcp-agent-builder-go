@@ -11,6 +11,7 @@ import (
 	"time"
 
 	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	agentevents "github.com/manishiitg/mcpagent/events"
 )
@@ -107,6 +108,17 @@ type Store struct {
 	dismissed      map[string]struct{}
 	forcedInactive map[string]time.Time
 	toolLines      map[string]*terminalToolLines
+	// delegationBackgroundAgent links a delegation's correlation ID to the
+	// background agent that spawned it. The delegate tool's real content
+	// events (tool calls, messages) carry only correlation_id — the
+	// delegationID minted fresh per call — never the background agent's own
+	// ID, so without this they'd resolve to a terminal ID disjoint from the
+	// background_agent_started/completed lifecycle events, which DO carry
+	// agent_id. Populated from delegation_start (which already carries both),
+	// consulted in metadataForEvent to unify the two identities. Entries are
+	// small (two short strings) and outlive their session for the process
+	// lifetime; not worth the bookkeeping to evict per-session.
+	delegationBackgroundAgent map[string]string
 }
 
 const terminalToolTextMaxRunes = 2400
@@ -134,12 +146,48 @@ type terminalToolLine struct {
 
 func NewStore() *Store {
 	return &Store{
-		byID:           make(map[string]Snapshot),
-		bySession:      make(map[string]map[string]struct{}),
-		dismissed:      make(map[string]struct{}),
-		forcedInactive: make(map[string]time.Time),
-		toolLines:      make(map[string]*terminalToolLines),
+		byID:                      make(map[string]Snapshot),
+		bySession:                 make(map[string]map[string]struct{}),
+		dismissed:                 make(map[string]struct{}),
+		forcedInactive:            make(map[string]time.Time),
+		toolLines:                 make(map[string]*terminalToolLines),
+		delegationBackgroundAgent: make(map[string]string),
 	}
+}
+
+func (s *Store) recordDelegationBackgroundAgent(delegationID, backgroundAgentID string) {
+	delegationID = strings.TrimSpace(delegationID)
+	backgroundAgentID = strings.TrimSpace(backgroundAgentID)
+	if s == nil || delegationID == "" || backgroundAgentID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.delegationBackgroundAgent[delegationID] = backgroundAgentID
+}
+
+func (s *Store) lookupDelegationBackgroundAgent(delegationID string) string {
+	delegationID = strings.TrimSpace(delegationID)
+	if s == nil || delegationID == "" {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.delegationBackgroundAgent[delegationID]
+}
+
+// metadataForEvent projects an event's typed payload into the generic metadata
+// map every owner-resolution check reads, then unifies a delegate-tool
+// sub-agent's content events with its background_agent_started/completed
+// lifecycle events. See delegationBackgroundAgent's doc comment.
+func (s *Store) metadataForEvent(event storeevents.Event) map[string]interface{} {
+	metadata := metadataForEvent(event)
+	if stringValue(metadata, "background_agent_id") == "" {
+		if bgID := s.lookupDelegationBackgroundAgent(stringValue(metadata, "correlation_id")); bgID != "" {
+			metadata["background_agent_id"] = bgID
+		}
+	}
+	return metadata
 }
 
 // HandleEvent ingests terminal streaming events emitted by coding-agent adapters.
@@ -164,31 +212,95 @@ func (s *Store) handleEvent(sessionID string, event storeevents.Event) bool {
 
 	switch event.Type {
 	case "streaming_chunk":
-		content, chunkIndex, metadata, ok := terminalChunk(event)
-		if !ok || strings.TrimSpace(content) == "" || !isTerminalMetadata(metadata) {
+		content, chunkIndex, metadata, ok := terminalChunk(s, event)
+		if !ok || strings.TrimSpace(content) == "" {
 			return false
 		}
-		s.upsertTerminal(sessionID, event, metadata, content, chunkIndex)
+		if isTerminalMetadata(metadata) {
+			s.upsertTerminal(sessionID, event, metadata, content, chunkIndex)
+			return true
+		}
+		if !isStructuredExecutionMetadata(sessionID, event, metadata) {
+			return false
+		}
+		s.upsertStructuredChunk(sessionID, event, metadata, content, chunkIndex)
 		return true
 	case "streaming_end":
-		metadata := metadataForEvent(event)
+		metadata := s.metadataForEvent(event)
 		if !isTerminalMetadata(metadata) {
 			return false
 		}
 		s.markInactive(sessionID, terminalOwnerID(sessionID, event, metadata), metadata, event.Timestamp)
 		return true
 	case string(agentevents.ToolCallStart), string(agentevents.ToolCallEnd), string(agentevents.ToolCallError):
-		metadata := metadataForEvent(event)
+		metadata := s.metadataForEvent(event)
 		if !isNonTmuxWorkflowTerminalMetadata(metadata) {
 			return false
 		}
 		s.upsertToolLine(sessionID, event, metadata)
 		return true
+	case string(agentevents.UserMessage):
+		content := structuredUserMessage(event)
+		if strings.TrimSpace(content) == "" {
+			return false
+		}
+		if isAutoNotificationMessage(content) {
+			return s.reconcileAsyncSubAgentCompletionBatch(sessionID, content, event.Timestamp)
+		}
+		metadata := s.metadataForEvent(event)
+		if !isStructuredExecutionMetadata(sessionID, event, metadata) {
+			return false
+		}
+		s.upsertStructuredMessage(sessionID, event, metadata, "> user: "+content)
+		return true
+	case "delegation_start":
+		// Bookkeeping only, no snapshot: link this delegation's correlation ID
+		// to the background agent that spawned it (if any), so the delegate
+		// tool's real content events — tagged only with correlation_id by
+		// DelegationEventObserver, never agent_id — resolve to the SAME
+		// terminal as their background_agent_started/completed lifecycle
+		// events instead of a disjoint one. See delegationBackgroundAgent.
+		if event.Data != nil {
+			if data, ok := event.Data.Data.(*storeevents.DelegationStartEventData); ok {
+				s.recordDelegationBackgroundAgent(data.DelegationID, data.BackgroundAgentID)
+			}
+		}
+		return false
 	case "pre_validation_completed":
 		s.updatePreValidationStatus(sessionID, event)
 		return true
 	case "status_line":
 		s.handleStatusLine(sessionID, event)
+		return true
+	case "orchestrator_agent_start", "background_agent_started":
+		metadata := s.metadataForEvent(event)
+		if !isStructuredExecutionMetadata(sessionID, event, metadata) {
+			return false
+		}
+		s.ensureStructuredExecution(sessionID, event, metadata)
+		return true
+	case "orchestrator_agent_end", "background_agent_completed", "todo_task_step_completed":
+		metadata := s.metadataForEvent(event)
+		if !isStructuredExecutionMetadata(sessionID, event, metadata) {
+			return false
+		}
+		if structuredLifecycleIsNestedSequence(event, metadata) {
+			s.appendStructuredLifecycleResult(sessionID, event, metadata)
+			// A message-sequence item reuses the owning step transcript. Settle
+			// the transcript when the item ends so a completed final item does
+			// not remain in the Live rail forever. A later item start/chunk
+			// reactivates the same transcript through the normal upsert path.
+			s.completeStructuredExecution(sessionID, event, metadata, structuredExecutionFailed(event))
+			return true
+		}
+		s.completeStructuredExecution(sessionID, event, metadata, structuredExecutionFailed(event))
+		return true
+	case "orchestrator_agent_error", "background_agent_failed":
+		metadata := s.metadataForEvent(event)
+		if !isStructuredExecutionMetadata(sessionID, event, metadata) {
+			return false
+		}
+		s.completeStructuredExecution(sessionID, event, metadata, true)
 		return true
 	}
 	return false
@@ -1007,6 +1119,447 @@ func (s *Store) upsertTerminal(sessionID string, event storeevents.Event, metada
 	}
 }
 
+func (s *Store) ensureStructuredExecution(sessionID string, event storeevents.Event, metadata map[string]interface{}) {
+	ownerID := terminalOwnerID(sessionID, event, metadata)
+	terminalID := terminalIDFor(sessionID, ownerID)
+	if terminalID == "" {
+		return
+	}
+	now := event.Timestamp
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dismissed := s.dismissed[terminalID]; dismissed {
+		return
+	}
+	snapshot, exists := s.byID[terminalID]
+	if !exists {
+		snapshot = Snapshot{
+			TerminalID: terminalID,
+			SessionID:  sessionID,
+			OwnerID:    ownerID,
+			CreatedAt:  now,
+			Content:    "Starting…",
+		}
+	}
+	enrichStructuredExecutionSnapshot(&snapshot, sessionID, ownerID, event, metadata)
+	snapshot.Active = true
+	snapshot.State = "running"
+	snapshot.ProcessState = "live"
+	snapshot.SnapshotKind = "live"
+	snapshot.CloseReason = ""
+	snapshot.ClosesAt = nil
+	snapshot.RetentionSeconds = 0
+	snapshot.UpdatedAt = now
+	fillDisplayContext(&snapshot)
+	s.byID[terminalID] = snapshot
+	if s.bySession[sessionID] == nil {
+		s.bySession[sessionID] = make(map[string]struct{})
+	}
+	s.bySession[sessionID][terminalID] = struct{}{}
+}
+
+func (s *Store) upsertStructuredChunk(sessionID string, event storeevents.Event, metadata map[string]interface{}, content string, chunkIndex int) {
+	ownerID := terminalOwnerID(sessionID, event, metadata)
+	terminalID := terminalIDFor(sessionID, ownerID)
+	if terminalID == "" {
+		return
+	}
+	now := event.Timestamp
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dismissed := s.dismissed[terminalID]; dismissed {
+		return
+	}
+	snapshot, exists := s.byID[terminalID]
+	if !exists {
+		snapshot = Snapshot{
+			TerminalID: terminalID,
+			SessionID:  sessionID,
+			OwnerID:    ownerID,
+			CreatedAt:  now,
+		}
+	}
+	enrichStructuredExecutionSnapshot(&snapshot, sessionID, ownerID, event, metadata)
+	if strings.TrimSpace(snapshot.Content) == "Starting…" {
+		snapshot.Content = ""
+	}
+	if structuredChunkIsDelta(event) {
+		snapshot.Content += content
+	} else if strings.TrimSpace(content) != "" && !strings.HasSuffix(snapshot.Content, content) {
+		if snapshot.Content != "" && !strings.HasSuffix(snapshot.Content, "\n") {
+			snapshot.Content += "\n"
+		}
+		snapshot.Content += content
+	}
+	snapshot.Content = s.contentWithToolLinesLocked(terminalID, snapshot.Content)
+	snapshot.ChunkIndex = max(snapshot.ChunkIndex, chunkIndex)
+	snapshot.Active = true
+	snapshot.State = "running"
+	snapshot.ProcessState = "live"
+	snapshot.SnapshotKind = "live"
+	snapshot.CloseReason = ""
+	snapshot.ClosesAt = nil
+	snapshot.RetentionSeconds = 0
+	snapshot.UpdatedAt = now
+	previousStatus := snapshot.Status
+	snapshot.Status = DeriveStatus(snapshot.Content, metadata)
+	preserveEphemeralStatusFields(&snapshot.Status, previousStatus)
+	fillDisplayContext(&snapshot)
+	s.byID[terminalID] = snapshot
+	if s.bySession[sessionID] == nil {
+		s.bySession[sessionID] = make(map[string]struct{})
+	}
+	s.bySession[sessionID][terminalID] = struct{}{}
+}
+
+func (s *Store) upsertStructuredMessage(sessionID string, event storeevents.Event, metadata map[string]interface{}, content string) {
+	ownerID := terminalOwnerID(sessionID, event, metadata)
+	terminalID := terminalIDFor(sessionID, ownerID)
+	if terminalID == "" {
+		return
+	}
+	now := event.Timestamp
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dismissed := s.dismissed[terminalID]; dismissed {
+		return
+	}
+	snapshot, exists := s.byID[terminalID]
+	if !exists {
+		snapshot = Snapshot{
+			TerminalID: terminalID,
+			SessionID:  sessionID,
+			OwnerID:    ownerID,
+			CreatedAt:  now,
+		}
+	}
+	enrichStructuredExecutionSnapshot(&snapshot, sessionID, ownerID, event, metadata)
+	if strings.TrimSpace(snapshot.Content) == "Starting…" {
+		snapshot.Content = ""
+	}
+	snapshot.Content = appendStructuredContent(snapshot.Content, content)
+	snapshot.Content = s.contentWithToolLinesLocked(terminalID, snapshot.Content)
+	snapshot.Active = true
+	snapshot.State = "running"
+	snapshot.ProcessState = "live"
+	snapshot.SnapshotKind = "live"
+	snapshot.CloseReason = ""
+	snapshot.ClosesAt = nil
+	snapshot.RetentionSeconds = 0
+	snapshot.UpdatedAt = now
+	fillDisplayContext(&snapshot)
+	s.byID[terminalID] = snapshot
+	if s.bySession[sessionID] == nil {
+		s.bySession[sessionID] = make(map[string]struct{})
+	}
+	s.bySession[sessionID][terminalID] = struct{}{}
+}
+
+func (s *Store) appendStructuredLifecycleResult(sessionID string, event storeevents.Event, metadata map[string]interface{}) {
+	result := firstNonEmpty(stringValue(metadata, "result"), stringValue(metadata, "error"))
+	if strings.TrimSpace(result) == "" {
+		return
+	}
+	prefix := "< asst: "
+	if structuredExecutionFailed(event) {
+		prefix = "[error] "
+	}
+	s.upsertStructuredMessage(sessionID, event, metadata, prefix+result)
+}
+
+func appendStructuredContent(content, addition string) string {
+	addition = strings.TrimSpace(addition)
+	if addition == "" {
+		return content
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	if strings.Contains(trimmed, addition) {
+		return content
+	}
+	if trimmed == "" {
+		return addition
+	}
+	return trimmed + "\n" + addition
+}
+
+func (s *Store) completeStructuredExecution(sessionID string, event storeevents.Event, metadata map[string]interface{}, failed bool) {
+	ownerID := terminalOwnerID(sessionID, event, metadata)
+	terminalID := terminalIDFor(sessionID, ownerID)
+	if terminalID == "" {
+		return
+	}
+	now := event.Timestamp
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, exists := s.byID[terminalID]
+	if !exists {
+		snapshot = Snapshot{
+			TerminalID: terminalID,
+			SessionID:  sessionID,
+			OwnerID:    ownerID,
+			CreatedAt:  now,
+		}
+	}
+	enrichStructuredExecutionSnapshot(&snapshot, sessionID, ownerID, event, metadata)
+	if strings.TrimSpace(snapshot.Content) == "" || strings.TrimSpace(snapshot.Content) == "Starting…" {
+		if failed {
+			snapshot.Content = "The execution failed before producing output."
+		} else {
+			snapshot.Content = "The execution completed."
+		}
+	}
+	snapshot.Active = false
+	if failed {
+		snapshot.State = "failed"
+		snapshot.CloseReason = firstNonEmpty(event.Error, "execution failed")
+	} else {
+		snapshot.State = "completed"
+		snapshot.CloseReason = ""
+	}
+	snapshot.ProcessState = "closed"
+	snapshot.SnapshotKind = "archived"
+	snapshot.ClosesAt = nil
+	snapshot.RetentionSeconds = 0
+	snapshot.UpdatedAt = now
+	fillDisplayContext(&snapshot)
+	s.byID[terminalID] = snapshot
+	if s.bySession[sessionID] == nil {
+		s.bySession[sessionID] = make(map[string]struct{})
+	}
+	s.bySession[sessionID][terminalID] = struct{}{}
+}
+
+func enrichStructuredExecutionSnapshot(snapshot *Snapshot, sessionID, ownerID string, event storeevents.Event, metadata map[string]interface{}) {
+	if snapshot == nil {
+		return
+	}
+	snapshot.ExecutionID = firstNonEmpty(workflowExecutionIDFromOwner(ownerID), snapshot.ExecutionID, event.ExecutionID, stringValue(metadata, "execution_id"), stringValue(metadata, "execution_owner_id"), ownerID)
+	snapshot.ExecutionKind = terminalExecutionKind(sessionID, ownerID, event, metadata)
+	snapshot.Scope = normalizedTerminalScope(sessionID, ownerID, terminalScope(event, metadata), snapshot.ExecutionKind)
+	snapshot.WorkflowPath = firstNonEmpty(stringValue(metadata, "workflow_path"), stringValue(metadata, "workspace_path"), stringValue(metadata, "working_directory"), snapshot.WorkflowPath)
+	snapshot.WorkflowName = firstNonEmpty(stringValue(metadata, "workflow_name"), stringValue(metadata, "workflow_id"), workflowNameFromPath(snapshot.WorkflowPath), snapshot.WorkflowName)
+	snapshot.WorkflowLabel = firstNonEmpty(stringValue(metadata, "workflow_label"), stringValue(metadata, "preset_name"), snapshot.WorkflowName, snapshot.WorkflowLabel)
+	ownerStepID := workflowStepIDFromOwner(ownerID)
+	metadataStepID := firstNonEmpty(stringValue(metadata, "current_step_id"), stringValue(metadata, "workflow_step_id"), stringValue(metadata, "step_id"))
+	snapshot.StepID = firstNonEmpty(ownerStepID, metadataStepID, snapshot.StepID)
+	stepContextMatchesOwner := ownerStepID == "" || metadataStepID == "" || ownerStepID == metadataStepID
+	if stepContextMatchesOwner {
+		// The first event that creates the execution has the authoritative plan
+		// title. Later completion events can inherit a sibling's shared
+		// current_step_title while retaining this execution's correct step ID.
+		// Never let that late shared context relabel an existing transcript.
+		snapshot.StepName = firstNonEmpty(snapshot.StepName, stringValue(metadata, "step_name"), stringValue(metadata, "step_title"), stringValue(metadata, "current_step_title"), humanizeIdentifier(snapshot.StepID))
+	} else {
+		// Shared workflow context can briefly point at a parallel sibling.
+		snapshot.StepName = firstNonEmpty(snapshot.StepName, humanizeIdentifier(snapshot.StepID))
+	}
+	if workflowStepIDFromOwner(ownerID) != "" {
+		snapshot.Label = firstNonEmpty(snapshot.StepName, humanizeIdentifier(snapshot.StepID), snapshot.Label)
+	} else {
+		snapshot.Label = firstNonEmpty(terminalLabel(event, metadata, ownerID), snapshot.Label)
+	}
+	if stepContextMatchesOwner {
+		snapshot.StepType = firstNonEmpty(stringValue(metadata, "plan_step_type"), stringValue(metadata, "workflow_step_type"), stringValue(metadata, "current_step_type"), stringValue(metadata, "step_type"), snapshot.StepType)
+	}
+	snapshot.ParentStepID = firstNonEmpty(stringValue(metadata, "parent_step_id"), snapshot.ParentStepID)
+	if snapshot.ParentStepID == "" && snapshot.ExecutionKind != "main_agent" {
+		snapshot.ParentStepID = "main_agent:" + sessionID
+	}
+	snapshot.AgentName = firstNonEmpty(stringValue(metadata, "agent_name"), stringValue(metadata, "orchestrator_agent_name"), snapshot.AgentName)
+	snapshot.StepTransport = "structured"
+}
+
+func structuredChunkIsDelta(event storeevents.Event) bool {
+	if event.Data == nil || event.Data.Data == nil {
+		return false
+	}
+	switch data := event.Data.Data.(type) {
+	case *agentevents.StreamingChunkEvent:
+		return data.IsDelta
+	case *agentevents.GenericEventData:
+		value, _ := data.Data["is_delta"].(bool)
+		return value
+	default:
+		return false
+	}
+}
+
+func structuredUserMessage(event storeevents.Event) string {
+	if event.Data == nil || event.Data.Data == nil {
+		return ""
+	}
+	switch data := event.Data.Data.(type) {
+	case *agentevents.UserMessageEvent:
+		return data.Content
+	case *agentevents.GenericEventData:
+		return firstNonEmpty(stringValue(data.Data, "content"), stringValue(data.Data, "message"))
+	default:
+		return ""
+	}
+}
+
+func isAutoNotificationMessage(content string) bool {
+	return strings.HasPrefix(strings.TrimSpace(content), "[AUTO-NOTIFICATION]")
+}
+
+type asyncSubAgentTerminalCompletion struct {
+	ExecutionID string `json:"execution_id"`
+	RouteID     string `json:"route_id"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+}
+
+// reconcileAsyncSubAgentCompletionBatch consumes the runtime's authoritative
+// child-completion batch without rendering its technical JSON as a user
+// message. Async predefined routes have two identities:
+//   - todo-sub-* is the lightweight lifecycle wrapper returned to the parent;
+//   - workflow-step:exec-*:route-id owns the real structured transcript.
+//
+// The runtime batch is the first place where both identities and the terminal
+// status are available together. Settling both prevents a completed structured
+// child from remaining in the Live rail indefinitely.
+func (s *Store) reconcileAsyncSubAgentCompletionBatch(sessionID, content string, at time.Time) bool {
+	const header = "[AUTO-NOTIFICATION] SUB-AGENT COMPLETION BATCH"
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, header) {
+		return false
+	}
+	jsonStart := strings.Index(trimmed, "[\n")
+	if jsonStart < 0 {
+		jsonStart = strings.Index(trimmed, "[{")
+	}
+	if jsonStart < 0 {
+		return false
+	}
+	jsonEnd := strings.Index(trimmed[jsonStart:], "\n\nContinue the same task now.")
+	if jsonEnd < 0 {
+		return false
+	}
+
+	var completions []asyncSubAgentTerminalCompletion
+	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed[jsonStart:jsonStart+jsonEnd])), &completions); err != nil {
+		return false
+	}
+	if len(completions) == 0 {
+		return false
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for _, completion := range completions {
+		status := strings.ToLower(strings.TrimSpace(completion.Status))
+		failed := status == "failed" || status == "canceled" || status == "cancelled"
+
+		// Settle the lifecycle wrapper if its start event created one.
+		wrapperID := terminalIDFor(sessionID, strings.TrimSpace(completion.ExecutionID))
+		if snapshot, ok := s.byID[wrapperID]; ok {
+			settleStructuredSnapshot(&snapshot, failed, completion.Error, at)
+			s.byID[wrapperID] = snapshot
+			changed = true
+		}
+
+		// A predefined route's real transcript is keyed by route_id. Select
+		// the newest active attempt so retries remain independently inspectable.
+		routeID := strings.TrimSpace(completion.RouteID)
+		if routeID == "" {
+			continue
+		}
+		var selectedID string
+		var selected Snapshot
+		for terminalID := range s.bySession[sessionID] {
+			candidate, ok := s.byID[terminalID]
+			if !ok || !candidate.Active || candidate.StepID != routeID ||
+				!strings.Contains(candidate.OwnerID, "workflow-step:") {
+				continue
+			}
+			if selectedID == "" || candidate.CreatedAt.After(selected.CreatedAt) {
+				selectedID = terminalID
+				selected = candidate
+			}
+		}
+		if selectedID != "" {
+			settleStructuredSnapshot(&selected, failed, completion.Error, at)
+			s.byID[selectedID] = selected
+			changed = true
+		}
+	}
+	return changed
+}
+
+func settleStructuredSnapshot(snapshot *Snapshot, failed bool, errorText string, at time.Time) {
+	if snapshot == nil {
+		return
+	}
+	snapshot.Active = false
+	if failed {
+		snapshot.State = "failed"
+		snapshot.CloseReason = firstNonEmpty(strings.TrimSpace(errorText), "execution failed")
+	} else {
+		snapshot.State = "completed"
+		snapshot.CloseReason = ""
+	}
+	snapshot.ProcessState = "closed"
+	snapshot.SnapshotKind = "archived"
+	snapshot.ClosesAt = nil
+	snapshot.RetentionSeconds = 0
+	snapshot.UpdatedAt = at
+	fillDisplayContext(snapshot)
+}
+
+func structuredLifecycleIsNestedSequence(event storeevents.Event, metadata map[string]interface{}) bool {
+	agentID := firstNonEmpty(
+		stringValue(metadata, "agent_id"),
+		stringValue(metadata, "background_agent_id"),
+		event.ExecutionID,
+	)
+	parentID := firstNonEmpty(
+		stringValue(metadata, "parent_execution_id"),
+		stringValue(metadata, "owner_execution_id"),
+	)
+	return strings.HasPrefix(agentID, "msgseq-") && strings.HasPrefix(parentID, "exec-")
+}
+
+func structuredExecutionFailed(event storeevents.Event) bool {
+	if strings.TrimSpace(event.Error) != "" {
+		return true
+	}
+	if event.Data == nil || event.Data.Data == nil {
+		return false
+	}
+	switch data := event.Data.Data.(type) {
+	case *agentevents.AgentEndEvent:
+		return !data.Success || strings.TrimSpace(data.Error) != ""
+	case *agentevents.GenericEventData:
+		if errText, _ := data.Data["error"].(string); strings.TrimSpace(errText) != "" {
+			return true
+		}
+		if success, ok := data.Data["success"].(bool); ok {
+			return !success
+		}
+	}
+	return false
+}
+
 func terminalUsesIdleTimeout(snapshot Snapshot) bool {
 	return strings.EqualFold(strings.TrimSpace(snapshot.StepTransport), "tmux") ||
 		strings.TrimSpace(snapshot.TmuxSession) != ""
@@ -1026,26 +1579,34 @@ func (s *Store) upsertToolLine(sessionID string, event storeevents.Event, metada
 		now = time.Now()
 	}
 
-	var toolCallID, toolName, args, result, resultPrefix string
+	var toolCallID, toolName, serverName, args, result, resultPrefix string
 	switch data := event.Data.Data.(type) {
 	case *agentevents.ToolCallStartEvent:
 		toolCallID = data.ToolCallID
 		toolName = data.ToolName
+		serverName = data.ServerName
 		args = data.ToolParams.Arguments
 	case *agentevents.ToolCallEndEvent:
 		toolCallID = data.ToolCallID
 		toolName = data.ToolName
+		serverName = data.ServerName
 		result = data.Result
 		resultPrefix = "✓"
 	case *agentevents.ToolCallErrorEvent:
 		toolCallID = data.ToolCallID
 		toolName = data.ToolName
+		serverName = data.ServerName
 		result = data.Error
 		resultPrefix = "✗"
 	default:
 		return
 	}
-	toolName = strings.TrimSpace(toolName)
+	toolName = strings.TrimSpace(firstNonEmpty(
+		toolName,
+		stringValue(metadata, "tool_name"),
+		serverName,
+		stringValue(metadata, "server_name"),
+	))
 	if toolName == "" {
 		toolName = "tool"
 	}
@@ -1082,6 +1643,9 @@ func (s *Store) upsertToolLine(sessionID string, event storeevents.Event, metada
 	snapshot, ok := s.byID[terminalID]
 	if !ok {
 		return
+	}
+	if strings.TrimSpace(snapshot.Content) == "Starting…" {
+		snapshot.Content = ""
 	}
 	snapshot.Content = s.contentWithToolLinesLocked(terminalID, snapshot.Content)
 	previousStatus := snapshot.Status
@@ -1639,7 +2203,7 @@ func (s *Store) updatePreValidationStatus(sessionID string, event storeevents.Ev
 	if !ok {
 		return
 	}
-	metadata := metadataForEvent(event)
+	metadata := s.metadataForEvent(event)
 	if update.stepID != "" && stringValue(metadata, "step_id") == "" {
 		metadata["step_id"] = update.stepID
 	}
@@ -1896,8 +2460,8 @@ func ownerMatchesTerminal(ownerID string, snapshot Snapshot) bool {
 		strings.HasSuffix(ownerID, ":"+snapshot.OwnerID)
 }
 
-func terminalChunk(event storeevents.Event) (string, int, map[string]interface{}, bool) {
-	metadata := metadataForEvent(event)
+func terminalChunk(s *Store, event storeevents.Event) (string, int, map[string]interface{}, bool) {
+	metadata := s.metadataForEvent(event)
 	if event.Data == nil || event.Data.Data == nil {
 		return "", 0, metadata, false
 	}
@@ -1931,9 +2495,99 @@ func metadataForEvent(event storeevents.Event) map[string]interface{} {
 		metadata = mergeMetadata(metadata, data.Metadata)
 	case *agentevents.GenericEventData:
 		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata = mergeMetadata(metadata, data.Data)
 		if nested, ok := data.Data["metadata"].(map[string]interface{}); ok {
 			metadata = mergeMetadata(metadata, nested)
 		}
+	// internal/events.GenericEventData is a second, differently-shaped
+	// "generic event" type (EventType/Fields, not Metadata/Data) used by
+	// emitBackgroundAgentEvent and friends. Without this case, every event
+	// built that way — background_agent_started/completed among them —
+	// resolves to an almost-empty metadata map here (only session_id/
+	// correlation_id survive), so agent_id/parent_execution_id/step_id are
+	// invisible to every downstream owner-resolution check.
+	case *storeevents.GenericEventData:
+		metadata = mergeMetadata(metadata, data.Fields)
+		if nested, ok := data.Fields["metadata"].(map[string]interface{}); ok {
+			metadata = mergeMetadata(metadata, nested)
+		}
+	// Typed background-agent events (replacing the untyped GenericEventData
+	// map that used to carry this data). Their meaningful fields — agent_id,
+	// parent_execution_id, status, ... — live as named struct fields, not
+	// inside BaseEventData.Metadata, so the generic `default` case below
+	// would miss them; project them into the metadata map explicitly so
+	// every existing owner-resolution/status helper below keeps working
+	// unchanged.
+	case *orchestratorevents.BackgroundAgentStartedEvent:
+		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata["agent_id"] = data.AgentID
+		metadata["name"] = data.Name
+		// current.AgentName (store.go ensureStructuredExecution/
+		// completeStructuredExecution) reads "agent_name", not "name" — without
+		// this the friendly name set here is invisible to snapshot building,
+		// leaving AgentName empty and the frontend falling back to the raw
+		// agent_id slug (e.g. "coun-0001" title-cased into "Coun 0001").
+		if data.Name != "" {
+			metadata["agent_name"] = data.Name
+		}
+		if data.Instruction != "" {
+			metadata["instruction"] = data.Instruction
+		}
+		// The creator's own declaration of what this execution is. Projected
+		// under the same key legacy events use, so terminalExecutionKind picks
+		// it up at its highest precedence and never falls through to sniffing.
+		if data.Kind != "" {
+			metadata["execution_kind"] = string(data.Kind)
+		}
+		if data.ParentExecutionID != "" {
+			metadata["parent_execution_id"] = data.ParentExecutionID
+		}
+	case *orchestratorevents.BackgroundAgentCompletedEvent:
+		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata["agent_id"] = data.AgentID
+		metadata["name"] = data.Name
+		if data.Name != "" {
+			metadata["agent_name"] = data.Name
+		}
+		metadata["status"] = data.Status
+		if data.Result != "" {
+			metadata["result"] = data.Result
+		}
+		if data.Error != "" {
+			metadata["error"] = data.Error
+		}
+		if data.Duration != "" {
+			metadata["duration"] = data.Duration
+		}
+		if data.ParentExecutionID != "" {
+			metadata["parent_execution_id"] = data.ParentExecutionID
+		}
+	case *orchestratorevents.BackgroundAgentTerminatedEvent:
+		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata["agent_id"] = data.AgentID
+		metadata["name"] = data.Name
+		if data.Name != "" {
+			metadata["agent_name"] = data.Name
+		}
+		if data.Status != "" {
+			metadata["status"] = data.Status
+		}
+		if data.ParentExecutionID != "" {
+			metadata["parent_execution_id"] = data.ParentExecutionID
+		}
+	case *orchestratorevents.SyntheticTurnReadyEvent:
+		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata["agent_id"] = data.AgentID
+		metadata["status"] = data.Status
+		if data.Name != "" {
+			metadata["name"] = data.Name
+		}
+	case *orchestratorevents.AutoNotificationSteeredEvent:
+		metadata = mergeMetadata(metadata, data.Metadata)
+		metadata["agent_id"] = data.AgentID
+		metadata["name"] = data.Name
+		metadata["status"] = data.Status
+		metadata["provider"] = data.Provider
 	default:
 		if withBase, ok := event.Data.Data.(interface {
 			GetBaseEventData() *agentevents.BaseEventData
@@ -1972,6 +2626,39 @@ func isNonTmuxWorkflowTerminalMetadata(metadata map[string]interface{}) bool {
 	}
 	return firstNonEmpty(
 		stringValue(metadata, "execution_owner_id"),
+		stringValue(metadata, "current_step_id"),
+		stringValue(metadata, "workflow_step_id"),
+		stringValue(metadata, "step_id"),
+	) != ""
+}
+
+func isStructuredExecutionMetadata(sessionID string, event storeevents.Event, metadata map[string]interface{}) bool {
+	ownerID := terminalOwnerID(sessionID, event, metadata)
+	if ownerID == "" || terminalOwnerIsCanonicalMain(sessionID, ownerID) {
+		return false
+	}
+	// Honour an explicitly DECLARED kind: a full run is a container, a
+	// message-sequence item is an internal turn, a router is a decision
+	// record. None of them is a conversation, so none gets a terminal.
+	//
+	// Only a declared kind may suppress. Most events still carry no kind at
+	// all, and treating "undeclared" as "no terminal" would delete nearly
+	// every pane. Undeclared falls through to the legacy checks below.
+	if declared := orchestratorevents.ParseExecutionKind(stringValue(metadata, "execution_kind")); declared != orchestratorevents.ExecutionKindUnknown {
+		if !declared.OwnsTerminal() && !declared.FoldsIntoParent() {
+			return false
+		}
+	}
+	kind := strings.ToLower(strings.TrimSpace(terminalExecutionKind(sessionID, ownerID, event, metadata)))
+	if kind == "main" || kind == "main_agent" || kind == "chat" {
+		return false
+	}
+	if kind != "" && kind != "execution" {
+		return true
+	}
+	return firstNonEmpty(
+		stringValue(metadata, "execution_owner_id"),
+		stringValue(metadata, "background_agent_id"),
 		stringValue(metadata, "current_step_id"),
 		stringValue(metadata, "workflow_step_id"),
 		stringValue(metadata, "step_id"),
@@ -2034,7 +2721,13 @@ func terminalExecutionKind(sessionID, ownerID string, event storeevents.Event, m
 		}
 		return kind
 	}
-	if !terminalKindIsMain(kind) {
+	// Only trust an explicitly declared kind. An empty kind (e.g.
+	// BackgroundAgentCompletedEvent, which has no Kind field to project —
+	// unlike BackgroundAgentStartedEvent) must fall through to the
+	// scope/ownerID inference below instead of returning "" here, or the
+	// completion event never reaches the isStructuredExecutionMetadata bar
+	// and the execution is stuck "running" forever.
+	if kind != "" && !terminalKindIsMain(kind) {
 		return kind
 	}
 
@@ -2122,8 +2815,64 @@ func workflowStepOwnerCandidate(event storeevents.Event, metadata map[string]int
 	} {
 		candidate = strings.TrimSpace(candidate)
 		if strings.HasPrefix(candidate, "workflow-step:") {
-			return candidate
+			return canonicalWorkflowStepOwner(candidate)
 		}
+	}
+
+	agentID := firstNonEmpty(
+		stringValue(metadata, "agent_id"),
+		stringValue(metadata, "background_agent_id"),
+		event.ExecutionID,
+	)
+	parentExecutionID := firstNonEmpty(
+		stringValue(metadata, "parent_execution_id"),
+		stringValue(metadata, "owner_execution_id"),
+	)
+	// execute_step IDs are created per invocation and are goroutine-local.
+	// current_step_id/step_id come from shared workflow context and can briefly
+	// describe a sibling when parallel steps start together. Prefer the step
+	// encoded in the execution identity so parallel calc/word executions
+	// cannot swap transcripts.
+	stepID := firstNonEmpty(
+		workflowStepIDFromExecutionAgent(agentID),
+		workflowStepIDFromExecutionAgent(parentExecutionID),
+		stringValue(metadata, "current_step_id"),
+		stringValue(metadata, "workflow_step_id"),
+		stringValue(metadata, "step_id"),
+	)
+	// A message-sequence item is an internal turn of its parent workflow step,
+	// not a separately selectable terminal. Collapse every item and automatic
+	// validation pass into the parent step's clean transcript. Message-sequence
+	// items are always structured transport (never tmux), so unlike the
+	// exec- collapse below, this does not need the isTerminalMetadata guard —
+	// there is no real tmux pane to protect from being merged.
+	//
+	// The parent can be either an "exec-<step>-<timestamp>" id (a regular
+	// workshop step execution) or a "workflow-full-<token>" id (an item
+	// running inside a scheduled/Pulse full-run execution, which registers
+	// itself as the ParentExecutionID for everything it contains — see
+	// planning_exports.go's execID construction). Missing the second form
+	// left full-run items stranded in their own near-empty terminal instead
+	// of the step terminal their own tool-call events already collapse into.
+	// Preferred path: the creator DECLARED that this execution is an internal
+	// turn of its parent (message_sequence_item, scripted_step, router), so it
+	// resolves to its parent's terminal regardless of what its id looks like.
+	// This is what makes the collapse independent of id format — the reason
+	// the prefix-matching fallback below kept missing cases as new id shapes
+	// ("exec-", then "workflow-full-") were introduced.
+	declaredKind := orchestratorevents.ParseExecutionKind(stringValue(metadata, "execution_kind"))
+	if declaredKind.FoldsIntoParent() && parentExecutionID != "" && stepID != "" {
+		return "workflow-step:" + parentExecutionID + ":" + stepID
+	}
+	// Legacy fallback for executions that predate the declared kind.
+	if strings.HasPrefix(agentID, "msgseq-") && stepID != "" &&
+		(strings.HasPrefix(parentExecutionID, "exec-") || strings.HasPrefix(parentExecutionID, "workflow-full-")) {
+		return "workflow-step:" + parentExecutionID + ":" + stepID
+	}
+	// execute_step uses exec-<step>-<timestamp> for the outer background task.
+	// Give it the same owner used by its streaming/tool events.
+	if !isTerminalMetadata(metadata) && strings.HasPrefix(agentID, "exec-") && stepID != "" {
+		return "workflow-step:" + agentID + ":" + stepID
 	}
 
 	workflowID := firstNonEmpty(
@@ -2133,15 +2882,45 @@ func workflowStepOwnerCandidate(event storeevents.Event, metadata map[string]int
 		stringValue(metadata, "execution_id"),
 		event.ExecutionID,
 	)
-	stepID := firstNonEmpty(
-		stringValue(metadata, "current_step_id"),
-		stringValue(metadata, "workflow_step_id"),
-		stringValue(metadata, "step_id"),
-	)
 	if strings.HasPrefix(workflowID, "workflow-full-") && stepID != "" {
 		return "workflow-step:" + workflowID + ":" + stepID
 	}
 	return ""
+}
+
+func workflowStepIDFromExecutionAgent(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	if !strings.HasPrefix(agentID, "exec-") {
+		return ""
+	}
+	withoutPrefix := strings.TrimPrefix(agentID, "exec-")
+	lastDash := strings.LastIndex(withoutPrefix, "-")
+	if lastDash <= 0 {
+		return ""
+	}
+	suffix := withoutPrefix[lastDash+1:]
+	if len(suffix) < 12 {
+		return ""
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return strings.TrimSpace(withoutPrefix[:lastDash])
+}
+
+func canonicalWorkflowStepOwner(ownerID string) string {
+	ownerID = strings.TrimSpace(ownerID)
+	if !strings.HasPrefix(ownerID, "workflow-step:") {
+		return ownerID
+	}
+	executionID := workflowExecutionIDFromOwner(ownerID)
+	encodedStepID := workflowStepIDFromExecutionAgent(executionID)
+	if executionID == "" || encodedStepID == "" {
+		return ownerID
+	}
+	return "workflow-step:" + executionID + ":" + encodedStepID
 }
 
 func terminalIDFor(sessionID, ownerID string) string {
@@ -2157,6 +2936,14 @@ func workflowStepIDFromOwner(ownerID string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func workflowExecutionIDFromOwner(ownerID string) string {
+	parts := strings.Split(strings.TrimSpace(ownerID), ":")
+	if len(parts) < 3 || parts[0] != "workflow-step" {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(parts[1:len(parts)-1], ":"))
 }
 
 func terminalLabel(event storeevents.Event, metadata map[string]interface{}, ownerID string) string {
@@ -2570,7 +3357,7 @@ func (s *Store) handleStatusLine(sessionID string, event storeevents.Event) {
 	if updated || tmuxSession == "" {
 		return
 	}
-	statusMetadata := mergeMetadata(metadataForEvent(event), statusMeta)
+	statusMetadata := mergeMetadata(s.metadataForEvent(event), statusMeta)
 	statusMetadata["kind"] = firstNonEmpty(stringValue(statusMetadata, "kind"), "terminal")
 	statusMetadata["tmux_session"] = tmuxSession
 	statusMetadata["step_transport"] = firstNonEmpty(stringValue(statusMetadata, "step_transport"), "tmux")

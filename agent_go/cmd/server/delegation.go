@@ -22,6 +22,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -252,6 +253,14 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		SessionID:             subAgentSessionID, // Reuse parent session's MCP connections via registry, unless browser isolation requested
 		UserID:                subAgentUserID,    // Per-user OAuth token isolation
 		CodingAgentWorkingDir: subAgentRuntimeDir,
+		// A delegated sub-agent is never steered mid-turn by a human — the same
+		// rationale step_based_workflow's applyWorkflowTransportToAgentConfig
+		// uses to force structured JSON transport for workflow steps applies
+		// here too. Without this, CLI-provider sub-agents (cursor-cli, etc.)
+		// default to raw tmux capture: no clean per-turn events, so the rail's
+		// transcript falls back to parsing ANSI text instead of rendering the
+		// same event cards every other execution kind gets.
+		ForceStructuredCodingAgent: common.IsCLIProvider(string(provider)),
 	}
 	// Tool timeout, context summarization/editing, large-output offloading, and
 	// parallel tool execution inherit from the parent request the same way the
@@ -694,12 +703,15 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 		}
 		return
 	}
+	// A declared kind always wins. The name/id prefix sniffing below predates
+	// declared kinds and exists only to classify executions that never set one.
 	kind := strings.TrimSpace(start.Kind)
 	if kind == "" {
-		kind = "workshop_background"
-	}
-	if isWorkflowStepTrackingExecution(start.ID, start.Name, start.Metadata) {
-		kind = "workflow_step"
+		if isWorkflowStepTrackingExecution(start.ID, start.Name, start.Metadata) {
+			kind = "workflow_step"
+		} else {
+			kind = "workshop_background"
+		}
 	}
 	metadata := map[string]string{
 		"workflow_path":    n.workspacePath,
@@ -742,10 +754,10 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 	// tool calls may detach from the foreground even though their HTTP request is
 	// still active, so generic/reviewer children must notify the parent rather than
 	// relying only on the synchronous response path.
-	n.api.emitBackgroundAgentEvent(n.sessionID, start.ID, "background_agent_started", map[string]interface{}{
-		"agent_id": start.ID,
-		"name":     start.Name,
-	})
+	// Forward the kind resolved above (creator's declaration, or the
+	// workshop_background default, or the workflow_step override) so the
+	// terminal store never has to re-infer it from the execution id.
+	n.api.emitBackgroundAgentStarted(n.sessionID, start.ID, start.Name, "", start.ParentExecutionID, orchEvents.ParseExecutionKind(kind))
 	if metadata["suppress_auto_notification"] != "true" {
 		n.api.notifyBackgroundAgentStarted(n.sessionID, start.ID)
 	}
@@ -792,13 +804,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		agent.SetError(err.Error())
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusFailed, err.Error(), meta)
 		duration := time.Since(agent.CreatedAt)
-		n.api.emitBackgroundAgentEvent(n.sessionID, execID, "background_agent_completed", map[string]interface{}{
-			"agent_id": execID,
-			"name":     name,
-			"status":   "failed",
-			"error":    err.Error(),
-			"duration": duration.Truncate(time.Second).String(),
-		})
+		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
 		suppressNotification := agent.GetSnapshot().Metadata["suppress_auto_notification"] == "true"
 		log.Printf("[BG AGENT] Background execution %s ended from context loss while still running (suppress_auto_notification=%t): %v", execID, suppressNotification, err)
 		if !suppressNotification {
@@ -814,23 +820,12 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 	if err != nil {
 		agent.SetError(err.Error())
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusFailed, err.Error(), meta)
-		n.api.emitBackgroundAgentEvent(n.sessionID, execID, "background_agent_completed", map[string]interface{}{
-			"agent_id": execID,
-			"name":     name,
-			"status":   "failed",
-			"error":    err.Error(),
-			"duration": duration.Truncate(time.Second).String(),
-		})
+		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
 	} else {
 		agent.SetResult(result) // Store full result — truncation only happens at display/notification time
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCompleted, "", meta)
-		n.api.emitBackgroundAgentEvent(n.sessionID, execID, "background_agent_completed", map[string]interface{}{
-			"agent_id": execID,
-			"name":     name,
-			"status":   "completed",
-			"result":   truncateForToolResponse(result, 500),
-			"duration": duration.Truncate(time.Second).String(),
-		})
+		displayResult := workshopCompletionDisplayResult(n.workspacePath, result, meta)
+		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "completed", displayResult, "", duration.Truncate(time.Second).String())
 	}
 
 	// Signal completion to the notification loop unless the parent is already
@@ -838,6 +833,47 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 	if agent.GetSnapshot().Metadata["suppress_auto_notification"] != "true" {
 		n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, execID)
 	}
+}
+
+func workshopCompletionDisplayResult(workspacePath, result string, meta map[string]string) string {
+	const defaultLimit = 500
+	if strings.TrimSpace(meta["execution_type"]) != "pulse-reviewer" {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+
+	resultPath := strings.TrimSpace(meta["review_result_path"])
+	workspacePath = strings.TrimSpace(workspacePath)
+	if resultPath == "" || workspacePath == "" || filepath.IsAbs(resultPath) {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+	root, err := filepath.Abs(workspacePath)
+	if err != nil {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+	candidate, err := filepath.Abs(filepath.Join(root, filepath.Clean(resultPath)))
+	if err != nil {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+	content, err := os.ReadFile(candidate)
+	if err != nil {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+
+	findings := strings.TrimSpace(string(content))
+	if marker := "\n## Findings\n"; strings.Contains(findings, marker) {
+		findings = strings.TrimSpace(strings.SplitN(findings, marker, 2)[1])
+	}
+	if findings == "" {
+		return truncateForToolResponse(result, defaultLimit)
+	}
+	// Review prompts cap findings at 6000 characters. Keep that complete review
+	// in the UI event while the parent agent still receives only the compact
+	// artifact-path result stored above.
+	return truncateForToolResponse(findings, 6000)
 }
 
 func (n *workshopExecutionBgNotifier) OnExecutionTerminated(execID, name string) {
@@ -854,10 +890,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionTerminated(execID, name string)
 	// Dedup with OnExecutionComplete's context-cancel path: emit the terminated
 	// event only once per agent regardless of which path fires first.
 	if agent.MarkTerminalNotified() {
-		n.api.emitBackgroundAgentEvent(n.sessionID, execID, "background_agent_terminated", map[string]interface{}{
-			"agent_id": execID,
-			"name":     name,
-		})
+		n.api.emitBackgroundAgentTerminated(n.sessionID, execID, name, "")
 	}
 	// Signal completion so the loop can process any pending completions
 	n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, execID)
@@ -913,11 +946,7 @@ func (n *workflowSubAgentTrackingNotifier) OnSubAgentStart(start todo_creation_h
 		n.api.completionLoopStartedMu.Unlock()
 	}
 
-	n.api.emitBackgroundAgentEvent(n.sessionID, start.ID, "background_agent_started", map[string]interface{}{
-		"agent_id":            start.ID,
-		"name":                start.Name,
-		"parent_execution_id": start.ParentExecutionID,
-	})
+	n.api.emitBackgroundAgentStarted(n.sessionID, start.ID, start.Name, "", start.ParentExecutionID, orchEvents.ParseExecutionKind(kind))
 	if !suppressAutoNotification {
 		n.api.notifyBackgroundAgentStarted(n.sessionID, start.ID)
 	}
@@ -943,11 +972,7 @@ func (n *workflowSubAgentTrackingNotifier) OnSubAgentComplete(agentID, name stri
 			// (finding-onsubagentcomplete-context-cancel-silent-drop fix).
 			if !n.api.isSessionMarkedStopped(n.sessionID) {
 				if agent.MarkTerminalNotified() {
-					n.api.emitBackgroundAgentEvent(n.sessionID, agentID, "background_agent_terminated", map[string]interface{}{
-						"agent_id": agentID,
-						"name":     name,
-						"status":   "canceled",
-					})
+					n.api.emitBackgroundAgentTerminated(n.sessionID, agentID, name, "canceled")
 					if !suppressAutoNotification {
 						n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, agentID)
 					}
@@ -960,13 +985,7 @@ func (n *workflowSubAgentTrackingNotifier) OnSubAgentComplete(agentID, name stri
 			return
 		}
 		duration := time.Since(agent.CreatedAt)
-		n.api.emitBackgroundAgentEvent(n.sessionID, agentID, "background_agent_completed", map[string]interface{}{
-			"agent_id": agentID,
-			"name":     name,
-			"status":   "failed",
-			"error":    err.Error(),
-			"duration": duration.Truncate(time.Second).String(),
-		})
+		n.api.emitBackgroundAgentCompleted(n.sessionID, agentID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
 		if !suppressAutoNotification {
 			n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, agentID)
 		}
@@ -977,13 +996,7 @@ func (n *workflowSubAgentTrackingNotifier) OnSubAgentComplete(agentID, name stri
 		return
 	}
 	duration := time.Since(agent.CreatedAt)
-	n.api.emitBackgroundAgentEvent(n.sessionID, agentID, "background_agent_completed", map[string]interface{}{
-		"agent_id": agentID,
-		"name":     name,
-		"status":   "completed",
-		"result":   truncateForToolResponse(result, 500),
-		"duration": duration.Truncate(time.Second).String(),
-	})
+	n.api.emitBackgroundAgentCompleted(n.sessionID, agentID, name, "completed", truncateForToolResponse(result, 500), "", duration.Truncate(time.Second).String())
 	if !suppressAutoNotification {
 		n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, agentID)
 	}

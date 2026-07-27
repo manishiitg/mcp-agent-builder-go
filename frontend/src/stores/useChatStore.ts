@@ -52,7 +52,10 @@ export type ExecutionStreamingActivity = {
 }
 
 export function normalizeEventViewMode(viewMode?: string | null): EventViewMode {
-  return viewMode === 'tree' ? 'tree' : 'terminal'
+  // The legacy event tree has been removed. Normalize persisted tree
+  // preferences to the automatic terminal surface during store hydration.
+  void viewMode
+  return 'terminal'
 }
 
 type ScriptedExecutionData = {

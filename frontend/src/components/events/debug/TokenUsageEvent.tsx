@@ -100,18 +100,7 @@ export const TokenUsageEventDisplay: React.FC<TokenUsageEventDisplayProps> = ({ 
       {/* Compact header with title and metadata */}
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5 flex-wrap text-xs">
-          <span className={`font-semibold ${textColor}`}>
-            {isTotalEvent ? '📊 Total Token Usage' : 'Token Usage'}
-          </span>
-          {event.model_id && (
-            <span className={textSecondaryColor}>• {event.model_id}</span>
-          )}
-          {event.provider && (
-            <span className={textSecondaryColor}>• {event.provider}</span>
-          )}
-          {event.use_code_execution_mode && (
-            <span className="text-orange-600 dark:text-orange-400">• Mode: Code Exec</span>
-          )}
+          <span className={`font-semibold ${textColor}`}>Usage</span>
         </div>
         {event.timestamp && (
           <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">

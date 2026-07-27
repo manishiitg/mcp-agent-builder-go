@@ -1,11 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, Power, RefreshCw, Search, Square, Terminal, Trash2, X } from 'lucide-react'
-import { AnsiUp } from 'ansi_up'
+import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, Network, Power, RefreshCw, Search, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { agentApi } from '../services/api'
-import { reconcileTerminalSnapshots } from '../utils/terminalSnapshotIdentity'
+import {
+  mergeTerminalSnapshotBody,
+  reconcileTerminalSnapshots,
+  shouldStreamTerminal,
+} from '../utils/terminalSnapshotIdentity'
 import type { PollingEvent, RuntimeSnapshot, TerminalSnapshot } from '../services/api-types'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { normalizeEventViewMode, useChatStore } from '../stores/useChatStore'
@@ -24,35 +27,18 @@ import {
   hiddenSelectedTerminalRailGroup,
   organizeTerminalRail,
   terminalRailGroupSearchText,
+  terminalRailTitle,
+  terminalRailVisualKind,
   type TerminalRailLogicalGroup,
   type TerminalRailSection,
 } from '../utils/terminalRailOrganization'
-import { MarkdownRenderer } from './ui/MarkdownRenderer'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
-import { runtimeDisplayStatus } from '../utils/runtimeActivity'
+import { reconcileTerminalRuntimeState, runtimeDisplayStatus } from '../utils/runtimeActivity'
 import { usePlanData } from './workflow/hooks/usePlanData'
+import { TerminalEventTranscript } from './TerminalEventTranscript'
+import { selectTerminalEvents } from '../utils/terminalEventTranscript'
 import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
-
-// Module-level ansi_up singleton for synthetic/structured terminal rows.
-// Real tmux panes render raw ANSI through xterm.js.
-//
-// use_classes = true makes ansi_up emit CSS classes (ansi-red-fg,
-// ansi-bright-blue-fg, ansi-bold, etc.) instead of inline colors. The
-// classes are styled in index.css with one ANSI class mapping for the
-// structured terminal view. Raw tmux panes bypass this path and render directly
-// through xterm.js.
-const ansiUp = new AnsiUp()
-ansiUp.use_classes = true
-
-// stripAnsi removes ANSI CSI sequences from a string. Used to feed clean text
-// into the line classifier regexes while we preserve the raw colored line for
-// rendering. Mirrors the Go-side strip on the backend so what we display
-// matches what the matcher saw.
-function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '')
-}
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -75,26 +61,6 @@ function hasTerminalRedrawControls(s: string): boolean {
 function isTmuxContentSource(source?: string): boolean {
   const normalized = (source || '').trim().toLowerCase()
   return normalized === 'tmux_pipe' || normalized === 'tmux_capture'
-}
-
-// rawAfterVisibleChars returns the substring of `raw` that starts after the
-// first `visibleCharCount` non-ANSI characters. Lets us slice the raw line
-// at a position discovered against the stripped version (e.g. "$ " prefix
-// length is always 2 in the stripped form but variable in the raw form).
-function rawAfterVisibleChars(raw: string, visibleCharCount: number): string {
-  let i = 0
-  let visible = 0
-  while (i < raw.length && visible < visibleCharCount) {
-    if (raw[i] === '\x1B' && raw[i + 1] === '[') {
-      let j = i + 2
-      while (j < raw.length && !/[A-Za-z]/.test(raw[j])) j++
-      i = j + 1
-      continue
-    }
-    visible++
-    i++
-  }
-  return raw.slice(i)
 }
 
 interface TerminalCenterProps {
@@ -143,6 +109,15 @@ const TERMINAL_SETTLED_CAPTURE_MAX_ATTEMPTS = 8
 type TerminalColorScheme = 'neon' | 'mono' | 'homebrew' | 'catppuccin' | 'nord' | 'gruvbox' | 'solarized' | 'tokyo'
 type TerminalDebugKey = 'enter' | 'esc' | 'ctrl-c' | 'ctrl-o' | 'tab' | 'up' | 'down'
 type TerminalRailFilter = 'all' | 'running' | 'attention' | 'non-running'
+// Matches the running/attention/completed status colors used throughout this
+// file (dotRunning/stateFailed-style emerald/red/sky), so the collapsed
+// rail's dots mean the same thing the expanded labels do.
+const RAIL_FILTER_DOT_COLOR: Record<TerminalRailFilter, string> = {
+  all: 'bg-neutral-500',
+  running: 'bg-emerald-400',
+  attention: 'bg-red-400',
+  'non-running': 'bg-sky-400',
+}
 type TerminalDetailOptions = { content?: 'stored' | 'screen' | 'history' | 'tmux' | 'deep'; lines?: number; debug?: boolean; debugSource?: string }
 
 const DEFAULT_TERMINAL_COLOR_SCHEME: TerminalColorScheme = 'homebrew'
@@ -773,6 +748,23 @@ function formatTerminalKindLabel(terminal: TerminalSnapshot): string {
   return formatExecutionKind(terminal.execution_kind)
 }
 
+// Matches the backend's internal "message-sequence-<stepID>" agent_name for the
+// reused execution_only agent behind a message_sequence step's turns (see
+// controller_message_sequence.go). That id is not a display name, so it must
+// never win over terminalRailTitle's message-sequence-aware humanization
+// regardless of which branch below resolves the title — this terminal is
+// frequently tagged execution_kind sub_agent/background_agent (a separate,
+// still-open classification gap), which would otherwise return it verbatim.
+const MESSAGE_SEQUENCE_AGENT_NAME_PATTERN = /^message[-_ ]sequence(?:[-_ ].*)?$/i
+
+function resolvedAgentName(terminal: TerminalSnapshot): string {
+  const raw = terminal.agent_name || ''
+  if (raw && MESSAGE_SEQUENCE_AGENT_NAME_PATTERN.test(raw)) {
+    return terminalRailTitle(terminal)
+  }
+  return raw
+}
+
 function formatTerminalTitle(terminal: TerminalSnapshot): string {
   // Prefer a human title (step title, or the agent's own name for step-less
   // maintenance agents like learning/organize) over the raw step_id. The ID —
@@ -784,9 +776,15 @@ function formatTerminalTitle(terminal: TerminalSnapshot): string {
     return terminal.agent_name || terminal.step_name || 'Main agent'
   }
   if (kind === 'background_agent' || kind === 'background' || kind === 'delegation' || kind === 'todo_task' || kind === 'sub_agent') {
-    return terminal.agent_name || terminal.step_name || terminal.display_title || visibleStepID(terminal) || formatTerminalKindLabel(terminal) || 'Terminal'
+    return resolvedAgentName(terminal) || terminal.step_name || terminal.display_title || visibleStepID(terminal) || formatTerminalKindLabel(terminal) || 'Terminal'
   }
-  return terminal.step_name || terminal.agent_name || visibleStepID(terminal) || formatTerminalKindLabel(terminal) || 'Terminal'
+  // Delegate to the rail's title logic rather than re-deriving it: it already
+  // humanizes the backend's internal "message-sequence-<stepID>" agent_name
+  // (via parent_step_id) instead of printing that raw slug when step_name is
+  // empty — the divergence between this function and the rail is exactly what
+  // let that raw id leak into the panel header while the rail showed the
+  // correct name for the same terminal.
+  return terminal.step_name || terminalRailTitle(terminal) || visibleStepID(terminal) || formatTerminalKindLabel(terminal) || 'Terminal'
 }
 
 function visibleStepID(terminal: TerminalSnapshot): string {
@@ -796,21 +794,16 @@ function visibleStepID(terminal: TerminalSnapshot): string {
   return value
 }
 
-// formatTransportChip returns "transport·provider" (e.g. "api·anthropic",
-// "structured·claudecode", "tmux·codex") for the title prefix. Falls
-// back to inference: tmux_session implies tmux; absence implies the
-// caller-supplied step_transport or "api".
+// The renderer is selected automatically: structured streams use the clean
+// transcript and tmux-backed streams use the raw terminal.
 function formatTransportChip(terminal: TerminalSnapshot): string {
-  let transport = terminal.step_transport || ''
-  if (!transport) {
-    transport = terminal.tmux_session ? 'tmux' : 'api'
-  }
-  // Normalize backend strings to the short chip form.
-  if (transport === 'structured_cli' || transport === 'structured') transport = 'structured'
-  if (transport === 'non_tmux') transport = 'api'
   const provider = terminal.status?.provider_label || ''
-  const transportLabel = humanizeIdentifier(transport)
-  return provider ? `${provider} · ${transportLabel}` : transportLabel
+  // The clean rail is task navigation, not provider telemetry. Some retained
+  // steps have provider metadata and others do not, so showing it produces an
+  // arbitrary mix of "Claude", blank, and legacy labels for sibling steps.
+  // Model/provider details remain available in the selected pane footer.
+  if (isSyntheticTerminal(terminal)) return ''
+  return provider ? `${provider} · Terminal` : 'Terminal'
 }
 
 function formatRailTransportChip(terminal: TerminalSnapshot): string {
@@ -834,7 +827,17 @@ function stepTypeLabel(stepType?: string): string {
 }
 
 function terminalStepTypeLabel(terminal: TerminalSnapshot): string {
-  return stepTypeLabel(terminal.step_type)
+  const labels: Record<ReturnType<typeof terminalRailVisualKind>, string> = {
+    terminal: stepTypeLabel(terminal.step_type),
+    orchestrator: 'Orchestrator',
+    'sub-agent': 'Sub-agent',
+    'message-sequence': 'Message sequence',
+    routing: 'Routing step',
+    scripted: 'Scripted step',
+    evaluation: 'Evaluation',
+    reviewer: 'Reviewer',
+  }
+  return labels[terminalRailVisualKind(terminal)]
 }
 
 function formatSelectedTerminalMeta(terminal: TerminalSnapshot): string {
@@ -977,6 +980,9 @@ function terminalStateDescription(terminal: TerminalSnapshot): string {
     case 'stale':
       return 'Stale: no terminal updates were received for a long time; this pane may have lost its lifecycle event.'
     case 'archived':
+      if (isSyntheticTerminal(terminal)) {
+        return 'Completed: the background task finished and this saved result is read-only.'
+      }
       return terminal.close_reason
         ? `Archived terminal capture: ${terminal.close_reason}. The tmux process is closed.`
         : 'Archived terminal capture: the tmux process is closed and this view is read-only.'
@@ -1073,10 +1079,6 @@ function terminalDebugText(terminal: TerminalSnapshot): string {
     terminal.retention_seconds ? `retention_seconds=${terminal.retention_seconds}` : '',
     `title=${formatTerminalTitle(terminal)}`,
   ].filter(Boolean).join('\n')
-}
-
-function isScrolledNearBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 24
 }
 
 function trimTerminalDisplayContent(content: string): string {
@@ -1235,23 +1237,27 @@ function TerminalRailBranchMarker({ depth }: { depth: number }) {
   )
 }
 
-function StepTypeIcon({ stepType, labelPrefix }: { stepType?: string; labelPrefix?: string }) {
-  const type = (stepType || '').toLowerCase()
-  if (!type) return null
+function terminalPaneIconDetails(terminal: TerminalSnapshot) {
+  const visualKind = terminalRailVisualKind(terminal)
+  return {
+    terminal: { label: isSyntheticTerminal(terminal) ? 'Automation step' : 'Terminal', Icon: Terminal },
+    orchestrator: { label: 'Orchestrator', Icon: Network },
+    'sub-agent': { label: 'Sub-agent', Icon: Bot },
+    'message-sequence': { label: 'Message sequence', Icon: ListRestart },
+    routing: { label: 'Routing decision', Icon: GitBranch },
+    scripted: { label: 'Scripted step', Icon: Braces },
+    evaluation: { label: 'Evaluation', Icon: ClipboardCheck },
+    reviewer: { label: 'Reviewer', Icon: SearchCheck },
+  }[visualKind]
+}
 
-  const label = `${labelPrefix || ''}${stepTypeLabel(type)}`
-  const iconClass = 'h-2.5 w-2.5'
-  let icon = <Terminal className={iconClass} />
-  if (type === 'routing') {
-    icon = <GitBranch className={iconClass} />
-  } else if (type === 'todo_task') {
-    icon = <Check className={iconClass} />
-  } else if (type === 'message_sequence') {
-    icon = <CornerUpLeft className={iconClass} />
-  } else if (type === 'human_input') {
-    icon = <CornerDownLeft className={iconClass} />
-  }
+function TerminalTypeGlyph({ terminal, className = 'h-2.5 w-2.5' }: { terminal: TerminalSnapshot; className?: string }) {
+  const { label, Icon } = terminalPaneIconDetails(terminal)
+  return <Icon className={className} aria-label={label} />
+}
 
+function TerminalPaneIcon({ terminal }: { terminal: TerminalSnapshot }) {
+  const { label } = terminalPaneIconDetails(terminal)
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1259,7 +1265,7 @@ function StepTypeIcon({ stepType, labelPrefix }: { stepType?: string; labelPrefi
           className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-neutral-700/70 bg-neutral-900/80 text-neutral-400"
           aria-label={label}
         >
-          {icon}
+          <TerminalTypeGlyph terminal={terminal} />
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="text-xs">
@@ -1267,10 +1273,6 @@ function StepTypeIcon({ stepType, labelPrefix }: { stepType?: string; labelPrefi
       </TooltipContent>
     </Tooltip>
   )
-}
-
-function TerminalStepTypeIcon({ terminal }: { terminal: TerminalSnapshot }) {
-  return <StepTypeIcon stepType={terminal.step_type} />
 }
 
 function TerminalArchivedTurnIcon() {
@@ -1312,16 +1314,6 @@ function latestCachedTerminalDetail(
   return latest
 }
 
-function terminalWithCachedBody(base: TerminalSnapshot, detail: TerminalSnapshot, includeDetailState = false): TerminalSnapshot {
-  const snapshot = includeDetailState ? { ...base, ...detail } : base
-  return {
-    ...snapshot,
-    content: detail.content || base.content || '',
-    content_source: detail.content_source || base.content_source,
-    rows: Array.isArray(detail.rows) && detail.rows.length > 0 ? detail.rows : base.rows,
-  }
-}
-
 function dedupeTerminalsByID(terminals: TerminalSnapshot[]): TerminalSnapshot[] {
   const byID = new Map<string, TerminalSnapshot>()
   for (const terminal of terminals) {
@@ -1342,263 +1334,6 @@ function dedupeTerminalsByID(terminals: TerminalSnapshot[]): TerminalSnapshot[] 
   return Array.from(byID.values())
 }
 
-// ---------------------------------------------------------------------------
-// Structured terminal view — parses synthetic/archived terminal buffers into
-// typed rows so we can colorize roles and fold long tool I/O behind a one-line
-// summary. Real tmux pane captures skip this parser and render raw ANSI through
-// xterm.js.
-// ---------------------------------------------------------------------------
-
-// rawText carries the ANSI-colored version of `text`. The parser populates
-// it only when the source line contained ANSI codes; the renderer falls
-// back to plain `text` otherwise. tool rows skip rawText because their
-// internal args/result text comes from regex group captures that are
-// already stripped — coloring them would require a separate raw extraction
-// per group and isn't worth the complexity for this round.
-type TerminalRow =
-  | { kind: 'banner'; text: string; rawText?: string }
-  | { kind: 'context'; text: string; rawText?: string }
-  | { kind: 'user'; text: string; rawText?: string }
-  | { kind: 'asst'; text: string; rawText?: string }
-  | { kind: 'tool'; name: string; args: string; result?: string; resultPrefix?: '✓' | '✗'; result_prefix?: '✓' | '✗' | string }
-  | { kind: 'attachment'; text: string; rawText?: string }
-  | { kind: 'done'; text: string; rawText?: string }
-  | { kind: 'error'; text: string; rawText?: string }
-  | { kind: 'plain'; text: string; rawText?: string }
-
-const TERMINAL_USER_PREVIEW_CHARS = 180
-const TERMINAL_TOOL_ARGS_PREVIEW_CHARS = 240
-
-function compactTerminalPreview(value: string, maxChars: number = TERMINAL_USER_PREVIEW_CHARS): string {
-  const compact = value.replace(/\s+/g, ' ').trim()
-  const chars = Array.from(compact)
-  if (chars.length <= maxChars) return compact
-  return `${chars.slice(0, maxChars).join('')}...`
-}
-
-function tryFormatJson(value: string): string | null {
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2)
-  } catch {
-    return null
-  }
-}
-
-function formatToolDetail(value: string): { text: string; isJson: boolean } {
-  const trimmed = value.trim()
-  if (!trimmed) return { text: '', isJson: false }
-  const direct = tryFormatJson(trimmed)
-  if (direct) return { text: direct, isJson: true }
-
-  const firstObject = trimmed.search(/[[{]/)
-  if (firstObject > 0) {
-    const prefix = trimmed.slice(0, firstObject).trimEnd()
-    const formatted = tryFormatJson(trimmed.slice(firstObject))
-    if (formatted) {
-      return { text: prefix ? `${prefix}\n${formatted}` : formatted, isJson: true }
-    }
-  }
-
-  return { text: value, isJson: false }
-}
-
-function shouldCollapseUserMessage(value: string): boolean {
-  return value.includes('\n') || Array.from(value.trim()).length > TERMINAL_USER_PREVIEW_CHARS
-}
-
-function terminalUserMessageMeta(value: string): { label: string; body: string; isAuto: boolean } {
-  const trimmed = value.trim()
-  const isAuto = trimmed.startsWith('[AUTO-NOTIFICATION]')
-  if (isAuto) {
-    return {
-      label: 'Auto',
-      body: trimmed.replace(/^\[AUTO-NOTIFICATION\]\s*/, ''),
-      isAuto,
-    }
-  }
-  return { label: 'User', body: value, isAuto }
-}
-
-function isAutoNotificationText(value: string): boolean {
-  return value.trim().startsWith('[AUTO-NOTIFICATION]')
-}
-
-// classifyTerminalLine inspects a single pane line and returns a typed row.
-// `stripped` is the line with ANSI removed (for regex / prefix matching);
-// `raw` is the original line preserving ANSI SGR codes. Rows whose text body
-// can carry color are annotated with rawText so the renderer can pass it
-// through ansi_up. When the raw line has no ANSI codes the parser leaves
-// rawText undefined and the renderer falls back to plain text.
-function classifyTerminalLine(stripped: string, raw: string): TerminalRow {
-  const rawHasColor = hasAnsiCodes(raw)
-  const withColor = (kind: 'banner' | 'context' | 'asst' | 'plain' | 'attachment' | 'done' | 'error', text: string, prefixLen: number) => {
-    const rawText = rawHasColor ? rawAfterVisibleChars(raw, prefixLen) : undefined
-    return { kind, text, rawText } as TerminalRow
-  }
-  if (stripped.startsWith('$ ')) return withColor('banner', stripped.slice(2), 2)
-  if (stripped.startsWith('↳ ')) return withColor('context', stripped.slice(2), 2)
-  if (stripped.startsWith('> user: ')) {
-    // user rows have their own preview/expand UX; rawText carried so the
-    // expanded body can render in color.
-    const rawText = rawHasColor ? rawAfterVisibleChars(raw, 8) : undefined
-    return { kind: 'user', text: stripped.slice(8), rawText } as TerminalRow
-  }
-  if (stripped.startsWith('< asst: ')) return withColor('asst', stripped.slice(8), 8)
-  if (stripped.startsWith('  ')) return withColor('asst', stripped.slice(2), 2)
-  if (stripped.startsWith('[image ')) return withColor('attachment', stripped, 0)
-  if (stripped.startsWith('[document ')) return withColor('attachment', stripped, 0)
-  if (stripped.startsWith('[done')) return withColor('done', stripped, 0)
-  if (stripped.startsWith('[error]')) return withColor('error', stripped.slice(7).trim(), 7)
-  // Tool start: "→ tool: name(args)" or "→ name args"
-  if (stripped.startsWith('→ ')) {
-    const rest = stripped.slice(2)
-    const toolMatch = rest.match(/^tool:\s*([^(]+)\((.*)\)$/)
-    if (toolMatch) {
-      return { kind: 'tool', name: toolMatch[1].trim(), args: toolMatch[2] }
-    }
-    const spaceIdx = rest.indexOf(' ')
-    if (spaceIdx > 0) {
-      return { kind: 'tool', name: rest.slice(0, spaceIdx), args: rest.slice(spaceIdx + 1) }
-    }
-    return { kind: 'tool', name: rest, args: '' }
-  }
-  return withColor('plain', stripped, 0)
-}
-
-function isTerminalRowBoundary(line: string): boolean {
-  return line.startsWith('$ ') ||
-    line.startsWith('↳ ') ||
-    line.startsWith('> user: ') ||
-    line.startsWith('< asst: ') ||
-    line.startsWith('[image ') ||
-    line.startsWith('[document ') ||
-    line.startsWith('[done') ||
-    line.startsWith('[error]') ||
-    line.startsWith('→ ') ||
-    /^([✓✗])\s+result\s+([^:]+):\s*(.*)$/.test(line) ||
-    /^([✓✗])\s+(\S+)\s+\(([^)]+)\)\s*(.*)$/.test(line)
-}
-
-// Pair tool starts with their matching result lines. A line beginning
-// "✓ result <name>:" or "✗ result <name>:" or the short "✓ <name> (<dur>) ..."
-// form gets merged into the most recent tool row with the same name.
-function parseTerminalContent(content: string): TerminalRow[] {
-  if (!content) return []
-  const lines = content.split('\n')
-  const rows: TerminalRow[] = []
-  let activeToolResultIndex: number | null = null
-  let activeTextRowIndex: number | null = null
-  for (const rawLine of lines) {
-    // Each line is matched / classified against the stripped form so the
-    // existing regexes keep working with colored input. rawLine is carried
-    // into classifyTerminalLine to populate row.rawText for colored render.
-    const line = stripAnsi(rawLine)
-    // Tool result variants
-    const fullResult = line.match(/^([✓✗])\s+result\s+([^:]+):\s*(.*)$/)
-    if (fullResult) {
-      const [, prefix, name, body] = fullResult
-      activeTextRowIndex = null
-      // Find the most recent tool row with this name that has no result yet
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i]
-        if (row.kind === 'tool' && row.name === name.trim() && !row.result) {
-          row.result = body
-          row.resultPrefix = prefix as '✓' | '✗'
-          activeToolResultIndex = i
-          break
-        }
-      }
-      continue
-    }
-    const shortResult = line.match(/^([✓✗])\s+(\S+)\s+\(([^)]+)\)\s*(.*)$/)
-    if (shortResult) {
-      const [, prefix, name, dur, body] = shortResult
-      activeTextRowIndex = null
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i]
-        if (row.kind === 'tool' && row.name === name && !row.result) {
-          row.result = body ? `${dur} · ${body}` : dur
-          row.resultPrefix = prefix as '✓' | '✗'
-          activeToolResultIndex = i
-          break
-        }
-      }
-      continue
-    }
-    if (activeToolResultIndex !== null && !isTerminalRowBoundary(line)) {
-      const activeTool = rows[activeToolResultIndex]
-      if (activeTool?.kind === 'tool') {
-        activeTool.result = activeTool.result ? `${activeTool.result}\n${line}` : line
-        continue
-      }
-      activeToolResultIndex = null
-    }
-    if (activeTextRowIndex !== null && !isTerminalRowBoundary(line)) {
-      const activeTextRow = rows[activeTextRowIndex]
-      const shouldAttachToTextRow = activeTextRow?.kind === 'asst' ||
-        (activeTextRow?.kind === 'user' && isAutoNotificationText(activeTextRow.text))
-      if (shouldAttachToTextRow) {
-        const continuation = line.startsWith('  ') ? line.slice(2) : line
-        const rawContinuation = line.startsWith('  ') ? rawAfterVisibleChars(rawLine, 2) : rawLine
-        activeTextRow.text = activeTextRow.text ? `${activeTextRow.text}\n${continuation}` : continuation
-        if (hasAnsiCodes(rawLine) || activeTextRow.rawText !== undefined) {
-          const prevRaw = activeTextRow.rawText ?? activeTextRow.text
-          activeTextRow.rawText = activeTextRow.rawText
-            ? `${prevRaw}\n${rawContinuation}`
-            : `${prevRaw}\n${rawContinuation}`
-        }
-        continue
-      }
-      activeTextRowIndex = null
-    }
-    const classified = classifyTerminalLine(line, rawLine)
-    activeToolResultIndex = null
-    // Coalesce consecutive assistant continuation lines into one row. Join
-    // with a newline (not a space) so the markdown structure that the model
-    // emitted — lists, paragraph breaks, fenced code, headings — survives
-    // and ReactMarkdown can render it. An empty continuation line becomes a
-    // blank line, which markdown reads as a paragraph break.
-    if (classified.kind === 'asst' && rows.length > 0 && rows[rows.length - 1].kind === 'asst') {
-      const prev = rows[rows.length - 1] as { kind: 'asst'; text: string; rawText?: string }
-      prev.text = prev.text ? `${prev.text}\n${classified.text}` : classified.text
-      if (classified.rawText !== undefined || prev.rawText !== undefined) {
-        const prevRaw = prev.rawText ?? prev.text
-        const nextRaw = classified.rawText ?? classified.text
-        prev.rawText = prev.rawText ? `${prevRaw}\n${nextRaw}` : `${prevRaw}\n${nextRaw}`
-      }
-      activeTextRowIndex = rows.length - 1
-      continue
-    }
-    if (classified.kind === 'asst' && line.startsWith('  ')) {
-      rows.push({ kind: 'plain', text: line, rawText: hasAnsiCodes(rawLine) ? rawLine : undefined })
-      activeTextRowIndex = null
-      continue
-    }
-    activeTextRowIndex = (
-      classified.kind === 'asst' ||
-      (classified.kind === 'user' && isAutoNotificationText(classified.text))
-    ) ? rows.length : null
-    rows.push(classified)
-  }
-  return rows
-}
-
-interface StructuredTerminalViewProps {
-  content: string
-  rows?: TerminalSnapshot['rows']
-  scrollRef: React.RefObject<HTMLDivElement | null>
-  onScroll: (e: React.UIEvent<HTMLDivElement>) => void
-  onWheel: (e: React.WheelEvent<HTMLDivElement>) => void
-  theme: TerminalTheme
-  // Optional snapshot is used to render a Claude-Code-style bottom status
-  // footer (model · turns · tokens · cost · elapsed) and to drive the
-  // streaming spinner when the pane is still active.
-  terminal?: TerminalSnapshot | null
-}
-
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒']
 
 function useSpinnerFrame(active: boolean): string {
@@ -1611,25 +1346,6 @@ function useSpinnerFrame(active: boolean): string {
     return () => window.clearInterval(id)
   }, [active])
   return SPINNER_FRAMES[frame]
-}
-
-const TerminalAssistantMarkdown: React.FC<{ text: string; theme: TerminalTheme }> = ({ text, theme }) => (
-  <MarkdownRenderer
-    content={text}
-    maxHeight="none"
-    className={theme.markdown}
-  />
-)
-
-// ColoredText renders ANSI-laden text via ansi_up. Memoized per input
-// string so re-renders don't repeatedly invoke the parser.
-//
-// When `rawText` is undefined or contains no ANSI escapes, the parent
-// component should render plain text directly — using this component for
-// non-colored text wastes a parse pass.
-const ColoredText: React.FC<{ rawText: string; className?: string }> = ({ rawText, className }) => {
-  const html = useMemo(() => ansiUp.ansi_to_html(rawText), [rawText])
-  return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 // LiveAttachXtermPane is the live-attach transport (see
@@ -1905,13 +1621,14 @@ const LiveAttachXtermPaneInner: React.FC<{
         if (action === 'superseded') {
           // The backend evicted this viewer: the terminal was opened in another
           // window. Reconnecting would evict whoever replaced us and start a
-          // ping-pong that never converges, so this is TERMINAL — show the last
-          // snapshot and wait for an explicit take-over.
+          // ping-pong that never converges, so this is TERMINAL. Keep the
+          // already-rendered local frame: a fresh capture uses the other
+          // viewer's tmux geometry and reflowing it into this pane corrupts
+          // wrapping. An explicit take-over reconnects and seeds at this pane's
+          // own grid.
           resizeReconnectPending = false
           superseded = true
-          void showDisconnectedSnapshot().then(() => {
-            if (!closed) setConnectionState('superseded')
-          })
+          setConnectionState('superseded')
           return
         }
         if (action === 'geometry-reconnect') {
@@ -2022,7 +1739,14 @@ const LiveAttachXtermPaneInner: React.FC<{
       }
     }
     let fitTimer: number | undefined
-    const scheduleFit = () => {
+    let lastObservedFitBox: { width: number; height: number } | null = null
+    const scheduleFit = (force = false) => {
+      const fitBox = (contentRef.current || mount).getBoundingClientRect()
+      const sameFitBox = lastObservedFitBox !== null
+        && Math.abs(lastObservedFitBox.width - fitBox.width) < 0.5
+        && Math.abs(lastObservedFitBox.height - fitBox.height) < 0.5
+      if (!force && sameFitBox) return
+      lastObservedFitBox = { width: fitBox.width, height: fitBox.height }
       if (fitTimer !== undefined) window.clearTimeout(fitTimer)
       fitTimer = window.setTimeout(fitTerminal, 120)
     }
@@ -2030,8 +1754,8 @@ const LiveAttachXtermPaneInner: React.FC<{
     // terminal pane is flex-sized after mount; connecting immediately can seed
     // tmux/backfill at a stale grid and then receive live cursor-relative updates
     // at the final grid, which shows up as duplicated wrapping/spinner stacking.
-    scheduleFit()
-    const resizeObserver = new ResizeObserver(scheduleFit)
+    scheduleFit(true)
+    const resizeObserver = new ResizeObserver(() => scheduleFit())
     resizeObserver.observe(contentRef.current || mount)
 
     return () => {
@@ -2369,53 +2093,6 @@ const StaticXtermPaneInner: React.FC<{
 
 const StaticXtermPane = memo(StaticXtermPaneInner)
 
-function normalizeTerminalRows(rows: TerminalSnapshot['rows'] | undefined): TerminalRow[] {
-  if (!Array.isArray(rows)) return []
-  const normalized: TerminalRow[] = []
-  // Server-pre-parsed synthetic rows can carry ANSI. We strip ANSI for the
-  // `text` field (so existing display logic and string comparisons stay clean)
-  // but stash the colored original in `rawText` so the structured renderer can
-  // colorize via ansi_up. Real tmux panes do not use this path.
-  for (const row of rows) {
-    switch (row.kind) {
-      case 'banner':
-      case 'context':
-      case 'user':
-      case 'asst':
-      case 'attachment':
-      case 'done':
-      case 'error':
-      case 'plain': {
-        const raw = row.text || ''
-        const stripped = hasAnsiCodes(raw) ? stripAnsi(raw) : raw
-        const rawText = hasAnsiCodes(raw) ? raw : undefined
-        normalized.push({ kind: row.kind, text: stripped, rawText } as TerminalRow)
-        break
-      }
-      case 'tool':
-        normalized.push({
-          kind: 'tool',
-          // tool name / args / result come from server-side regex captures —
-          // they're already stripped on the backend and don't currently
-          // carry color. Leave them as plain text.
-          name: row.name || 'tool',
-          args: row.args || '',
-          result: row.result,
-          resultPrefix: row.result_prefix === '✗' ? '✗' : row.result_prefix === '✓' ? '✓' : undefined,
-          result_prefix: row.result_prefix,
-        })
-        break
-      default: {
-        const raw = row.text || ''
-        const stripped = hasAnsiCodes(raw) ? stripAnsi(raw) : raw
-        const rawText = hasAnsiCodes(raw) ? raw : undefined
-        normalized.push({ kind: 'plain', text: stripped, rawText })
-      }
-    }
-  }
-  return normalized
-}
-
 function normalizeTerminalWorkflowPath(path?: string | null): string {
   return (path || '')
     .replace(/^\/data\/docs\//, '')
@@ -2456,234 +2133,24 @@ function formatStatusFooterCost(usd?: number): string {
   return `$${formatCost(usd)}`
 }
 
-const StructuredTerminalViewInner: React.FC<StructuredTerminalViewProps> = ({ content, rows: structuredRows, scrollRef, onScroll, onWheel, terminal, theme }) => {
-  const rows = useMemo(() => {
-    const normalizedRows = normalizeTerminalRows(structuredRows)
-    return normalizedRows.length > 0 ? normalizedRows : parseTerminalContent(content)
-  }, [content, structuredRows])
-  // Long user prompts and tool rows collapse behind one-line summaries.
-  // We key by row index; content updates are append-only so indexes stay
-  // stable for existing rows.
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const toggle = useCallback((idx: number) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
-      return next
-    })
-  }, [])
-  const isStreaming = !!terminal?.active && (terminal.state === 'running' || terminal.state === 'idle' || terminal.state === undefined)
-  const spinner = useSpinnerFrame(isStreaming)
-  return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      onWheel={onWheel}
-      className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-2.5 font-mono bg-[#0b0d0c] ${theme.contentText} ${theme.selection}`}
-    >
-      {rows.map((row, idx) => {
-        // Subtle divider between turns: a new banner (other than the first
-        // row) marks a fresh turn boundary in the aggregated scrollback.
-        const showDivider = row.kind === 'banner' && idx > 0
-        switch (row.kind) {
-          case 'banner':
-            return (
-              <div key={idx}>
-                {showDivider && <div className="my-2 border-t border-dashed border-neutral-700/60" />}
-                <div className={theme.prompt}>
-                  <span className="text-neutral-500">$ </span>
-                  {row.rawText !== undefined
-                    ? <ColoredText rawText={row.rawText} />
-                    : row.text}
-                </div>
-              </div>
-            )
-          case 'context':
-            return (
-              <div key={idx} className="text-neutral-500">
-                ↳ {row.rawText !== undefined
-                  ? <ColoredText rawText={row.rawText} />
-                  : row.text}
-              </div>
-            )
-          case 'user':
-            {
-              const message = terminalUserMessageMeta(row.text)
-              const longUserMessage = shouldCollapseUserMessage(message.body)
-              const isOpen = expanded.has(idx) || !longUserMessage
-              const preview = compactTerminalPreview(message.body)
-              const labelClass = message.isAuto ? theme.userAuto : theme.user
-              return (
-                <div key={idx} className="my-0.5">
-                  {longUserMessage ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => toggle(idx)}
-                        className="group flex w-full min-w-0 items-start gap-1.5 rounded px-0.5 py-0.5 text-left hover:bg-white/[0.04]"
-                      >
-                        <span className="shrink-0 text-neutral-500">&gt;</span>
-                        <span className={`shrink-0 font-semibold ${labelClass}`}>{message.label}</span>
-                        <span className="min-w-0 flex-1 truncate text-neutral-300">
-                          {isOpen ? 'message' : preview}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-neutral-600 group-hover:text-neutral-400">
-                          {isOpen ? '[-]' : '[+]'}
-                        </span>
-                      </button>
-                      {isOpen && (
-                        <pre className={`ml-5 border-l border-neutral-800/80 pl-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-mono text-neutral-200 ${theme.contentText}`}>
-                          {message.body}
-                        </pre>
-                      )}
-                    </>
-                  ) : (
-                    <div className="flex min-w-0 items-start gap-1.5 whitespace-pre-wrap break-words px-0.5 py-0.5 text-neutral-200">
-                      <span className="shrink-0 text-neutral-500">&gt;</span>
-                      <span className={`shrink-0 font-semibold ${labelClass}`}>{message.label}</span>
-                      <span className="min-w-0 flex-1">{message.body}</span>
-                    </div>
-                  )}
-                </div>
-              )
-            }
-          case 'asst':
-            return (
-              <div key={idx} className="my-1.5">
-                <div className={`mb-0.5 flex items-center gap-1.5 px-0.5 ${theme.assistantLabelText}`}>
-                  <span className="text-neutral-500">&lt;</span>
-                  <span className={`font-semibold ${theme.assistant}`}>AI</span>
-                </div>
-                <div className={`border-l border-neutral-700/70 pl-3 ${theme.assistantBodyText}`}>
-                  <TerminalAssistantMarkdown text={row.text} theme={theme} />
-                </div>
-              </div>
-            )
-          case 'tool': {
-            const hasResult = row.result !== undefined
-            const isError = row.resultPrefix === '✗'
-            const longResult = (row.result?.length ?? 0) > 80
-            const isOpen = expanded.has(idx)
-            const argsDetail = row.args ? formatToolDetail(row.args) : null
-            const resultDetail = hasResult ? formatToolDetail(row.result || '') : null
-            const hasJsonDetail = !!(argsDetail?.isJson || resultDetail?.isJson)
-            const statusColor = !hasResult
-              ? theme.toolPending
-              : isError
-                ? 'text-red-400'
-                : 'text-neutral-500'
-            return (
-              <div key={idx} className={`my-px ${theme.toolText}`}>
-                <button
-                  type="button"
-                  onClick={() => toggle(idx)}
-                  className="w-full rounded px-0.5 -mx-0.5 text-left text-neutral-500 hover:bg-white/[0.035] hover:text-neutral-300"
-                >
-                  <span className={statusColor}>
-                    {hasResult ? (isError ? '✗' : '·') : '→'}
-                  </span>
-                  <span className="ml-1 text-neutral-400">{row.name}</span>
-                  {hasJsonDetail && (
-                    <Braces className="ml-1 inline h-3 w-3 align-[-2px] text-neutral-500" aria-hidden />
-                  )}
-                  {row.args && (
-                    <span className="ml-1 text-neutral-600">
-                      ({compactTerminalPreview(row.args, TERMINAL_TOOL_ARGS_PREVIEW_CHARS)})
-                    </span>
-                  )}
-                  <span className="text-neutral-600 ml-1">{isOpen ? '▾' : '▸'}</span>
-                </button>
-                {isOpen && (argsDetail || resultDetail) && (
-                  <div className="ml-3 mt-1 space-y-1 border-l border-neutral-800/80 pl-2">
-                    {argsDetail && (
-                      <div>
-                        <div className="mb-0.5 text-[10px] uppercase tracking-wide text-neutral-600">
-                          args{argsDetail.isJson ? ' · json' : ''}
-                          {argsDetail.isJson && <Braces className="ml-1 inline h-3 w-3 align-[-2px]" aria-hidden />}
-                        </div>
-                        <pre className="max-h-72 overflow-auto rounded border border-neutral-800/80 bg-black/25 p-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-neutral-300">
-                          {argsDetail.text}
-                        </pre>
-                      </div>
-                    )}
-                    {resultDetail && (
-                      <div>
-                        <div className={`mb-0.5 text-[10px] uppercase tracking-wide ${isError ? 'text-red-400/70' : 'text-neutral-600'}`}>
-                          {isError ? 'error' : 'result'}{resultDetail.isJson ? ' · json' : ''}
-                          {resultDetail.isJson && <Braces className="ml-1 inline h-3 w-3 align-[-2px]" aria-hidden />}
-                        </div>
-                        <pre className={`max-h-72 overflow-auto rounded border p-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${isError ? 'border-red-900/45 bg-red-950/15 text-red-200' : 'border-neutral-800/80 bg-black/25 text-neutral-400'}`}>
-                          {resultDetail.text}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {!isOpen && hasResult && !longResult && row.result && (
-                  <div className={`ml-1 flex whitespace-pre-wrap break-words ${isError ? 'text-red-300' : 'text-neutral-500'}`}>
-                    <span className="text-neutral-600 select-none mr-1">└─</span>
-                    <span className="flex-1">{row.result}</span>
-                  </div>
-                )}
-              </div>
-            )
-          }
-          case 'attachment':
-            return (
-              <div key={idx} className="text-neutral-500">
-                {row.rawText !== undefined ? <ColoredText rawText={row.rawText} /> : row.text}
-              </div>
-            )
-          case 'done':
-            return (
-              <div key={idx} className={`${theme.done} mt-1 ${theme.doneText} font-mono`}>
-                {row.rawText !== undefined ? <ColoredText rawText={row.rawText} /> : row.text}
-              </div>
-            )
-          case 'error':
-            return (
-              <div key={idx} className="text-red-400">
-                [error] {row.rawText !== undefined ? <ColoredText rawText={row.rawText} /> : row.text}
-              </div>
-            )
-          case 'plain':
-            return (
-              <div key={idx} className="text-neutral-300 whitespace-pre-wrap break-words">
-                {row.rawText !== undefined ? <ColoredText rawText={row.rawText} /> : row.text}
-              </div>
-            )
-        }
-      })}
-      {isStreaming && (
-        <div className={`mt-1 font-mono ${theme.streaming}`} aria-label="Running">
-          {spinner}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Memoized so a parent re-render with unchanged props (callbacks are
-// useCallback-stable) does not re-render the view.
-const StructuredTerminalView = memo(StructuredTerminalViewInner)
-
 function isSyntheticTerminal(terminal: TerminalSnapshot): boolean {
   const transport = (terminal.step_transport || '').toLowerCase()
-  // A few workflow CLI steps can be labelled "structured" while still carrying
-  // raw TUI bytes from Claude/Codex/etc. Rendering those through the structured
-  // parser collapses spacing and exposes spinner redraw fragments. Xterm is the
-  // only renderer that can interpret that content correctly.
-  if (hasTerminalRedrawControls(terminal.content || '')) return false
+  // Workflow-step CLI transport is authoritative once set: every CLI provider
+  // used in workflow steps now speaks structured JSON, not raw TUI bytes (see
+  // the coding-agent transport unification), so a "structured" label can be
+  // trusted outright instead of re-sniffing content for redraw sequences.
+  // Sniffing ahead of the label was what randomly dropped structured,
+  // event-backed step terminals into the legacy text-parsing renderer,
+  // producing a different look (message bubbles, tool-call cards) from the
+  // same step's sibling terminals for no reason visible to the user.
   if (transport === 'tmux') return false
   if (transport === 'api' || transport === 'structured' || transport === 'structured_cli' || transport === 'non_tmux') return true
+  // No transport label at all (older sessions, or the main/builder agent,
+  // which intentionally stays tmux): fall back to sniffing content, since
+  // that is the only signal available.
+  if (hasTerminalRedrawControls(terminal.content || '')) return false
   if (terminal.tmux_session) return false
   if (isTmuxContentSource(terminal.content_source)) return false
-  // Retained tmux snapshots can lose tmux_session after the pane is removed.
-  // If the stored content still carries terminal escape sequences, keep the
-  // xterm renderer so colors, alternate-screen redraws, and terminal spacing
-  // remain close to the live pane.
-  if (hasTerminalRedrawControls(terminal.content || '')) return false
   return true
 }
 
@@ -2785,10 +2252,8 @@ function logTerminalScrollDebug(
   console.info('[TERMINAL_DEBUG] frontend detail', payload)
 }
 
-// Error event types that should surface as a banner above the terminal
-// pane. Tree view renders these as their own cards; in Terminal mode
-// they would otherwise be invisible because the rail only shows pane
-// content + synthetic terminal chunks.
+// Error event types that should surface above the selected pane. They would
+// otherwise be invisible when the rail only contains terminal snapshots.
 const TERMINAL_ERROR_EVENT_TYPES = new Set<string>([
   'orchestrator_agent_error',
   'background_agent_failed',
@@ -2997,7 +2462,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // A toggle in the rail controls lets the user resize it themselves.
   const [railManualNarrow, setRailManualNarrow] = useState<boolean | null>(true)
   const railNarrow = railManualNarrow !== null ? railManualNarrow : slimAgentRail
-  const [terminalRailFilter, setTerminalRailFilter] = useState<TerminalRailFilter>('running')
+  const [terminalRailFilter, setTerminalRailFilter] = useState<TerminalRailFilter>('all')
   const [terminalRailSearch, setTerminalRailSearch] = useState('')
   const [expandedRailGroupKeys, setExpandedRailGroupKeys] = useState<Set<string>>(() => new Set())
   const [collapsedRailSections, setCollapsedRailSections] = useState<Set<TerminalRailSection>>(() => new Set(['other']))
@@ -3029,6 +2494,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const sessionEvents = useChatStore(state => (
     currentSessionId ? state.tabEvents[currentSessionId] : undefined
   ))
+  const addTabEvents = useChatStore(state => state.addTabEvents)
+  const eventHydrationAttemptedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     setDismissedErrorIDs(readDismissedTerminalErrorIDs(currentSessionId))
   }, [currentSessionId])
@@ -3363,22 +2830,29 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
     try {
       const response = await agentApi.listTerminals(viewAll ? undefined : currentSessionId, 'none')
-      const visibleTerminals = (response.terminals || []).filter(terminal =>
-        !dismissedTerminalIDs.has(terminal.terminal_id) &&
-        terminalMatchesWorkflow(terminal, terminalWorkflowPathFilter)
-      )
+      const runtimeStates = response.runtime_states || {}
+      const visibleTerminals = (response.terminals || [])
+        .filter(terminal =>
+          !dismissedTerminalIDs.has(terminal.terminal_id) &&
+          // A session-scoped response already contains only the main agent and
+          // its descendants. Structured children can have an empty or
+          // child-local workflow_path, so filtering them again here made both
+          // live and retained Clean panes disappear from the rail.
+          (!viewAll || terminalMatchesWorkflow(terminal, terminalWorkflowPathFilter))
+        )
+        .map(terminal => reconcileTerminalRuntimeState(terminal, runtimeStates[terminal.session_id]))
 
       const nextTerminals = dedupeTerminalsByID(visibleTerminals)
       if (fetchRequestSeqRef.current !== requestSeq) return
-      setRuntimeStatesBySession(response.runtime_states || {})
+      setRuntimeStatesBySession(runtimeStates)
       setTerminals(current => {
+        const scopedMainTerminal = current.find(terminal => (
+          isMainAgentTerminal(terminal) && !isArchivedTurnTerminal(terminal)
+        ))
         const currentMatchesScope = (
           viewAll ||
           !currentSessionId ||
-          current.every(terminal =>
-            terminal.session_id === currentSessionId &&
-            terminalMatchesWorkflow(terminal, terminalWorkflowPathFilter)
-          )
+          scopedMainTerminal?.session_id === currentSessionId
         )
         const continuity = preserveTerminalContinuity(current, nextTerminals, {
           sameScope: !viewAll && !!currentSessionId && currentMatchesScope,
@@ -3584,11 +3058,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     if (!selectedTerminal) return null
     const cachedDetail = selectedTerminalDetailCacheKey ? terminalDetailCache[selectedTerminalDetailCacheKey] : undefined
     if (cachedDetail && terminalPaneKey(cachedDetail) === selectedTerminalKey) {
-      return terminalWithCachedBody(selectedTerminal, cachedDetail, true)
+      return mergeTerminalSnapshotBody(selectedTerminal, cachedDetail)
     }
     const staleDetail = latestCachedTerminalDetail(selectedTerminal, terminalDetailCache)
     if (staleDetail && terminalPaneKey(staleDetail) === selectedTerminalKey) {
-      return terminalWithCachedBody(selectedTerminal, staleDetail)
+      return mergeTerminalSnapshotBody(selectedTerminal, staleDetail)
     }
     return selectedTerminal
   }, [selectedTerminal, selectedTerminalDetailCacheKey, selectedTerminalKey, terminalDetailCache])
@@ -3600,6 +3074,18 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       stepID,
     )
   }, [selectedTerminalView?.step_id, terminalWorkflowPlan])
+  const planTitleForTerminal = useCallback((terminal: TerminalSnapshot): string => {
+    const stepID = terminal.step_id?.trim()
+    if (!stepID || !terminalWorkflowPlan) return ''
+    return findPlanStepByID(
+      [...terminalWorkflowPlan.steps, ...(terminalWorkflowPlan.orphan_steps || [])],
+      stepID,
+    )?.title?.trim() || ''
+  }, [terminalWorkflowPlan])
+  const selectedTerminalDisplayTitle = selectedPlanStep?.title?.trim()
+    || (selectedTerminalView ? planTitleForTerminal(selectedTerminalView) : '')
+    || (selectedTerminalView ? terminalRailTitle(selectedTerminalView) : '')
+    || (selectedTerminalView ? formatTerminalTitle(selectedTerminalView) : '')
   const showSelectedPlanStep = useCallback(() => {
     if (!selectedPlanStep) return
 
@@ -3667,15 +3153,58 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     [selectedTerminalView, priorArchivedTurns, archivedTurnContents],
   )
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
+  const selectedTerminalIsTmux = Boolean(
+    selectedTerminalView &&
+    !selectedTerminalIsSynthetic &&
+    selectedTerminalView.tmux_session,
+  )
+  const selectedTerminalID = selectedTerminalView?.terminal_id ?? null
+  const selectedTerminalEvents = useMemo(
+    () => selectTerminalEvents(sessionEvents, selectedTerminalView, terminals),
+    [sessionEvents, selectedTerminalView, terminals],
+  )
+  const selectedTerminalHasEvents = useMemo(
+    () => selectedTerminalEvents.length > 0,
+    [selectedTerminalEvents],
+  )
+  const selectedTerminalHasPreValidationEvent = useMemo(
+    () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
+    [selectedTerminalEvents],
+  )
+  // A restored tab can have terminal snapshots before its event history has
+  // been hydrated. Fetch once for the selected clean terminal rather than
+  // falling back to server-parsed rows: those rows are a lossy compatibility
+  // format and, when stale metadata crossed between parallel siblings, could
+  // display one step's lifecycle card under another step's selected header.
+  useEffect(() => {
+    if (!currentSessionId || !selectedTerminalID || !selectedTerminalIsSynthetic || selectedTerminalHasEvents) {
+      return
+    }
+    const hydrationKey = `${currentSessionId}:${selectedTerminalID}`
+    if (eventHydrationAttemptedRef.current.has(hydrationKey)) return
+    eventHydrationAttemptedRef.current.add(hydrationKey)
+
+    void agentApi.getRecentSessionEvents(currentSessionId)
+      .then(response => {
+        if (Array.isArray(response.events) && response.events.length > 0) {
+          addTabEvents(currentSessionId, response.events)
+          return
+        }
+        eventHydrationAttemptedRef.current.delete(hydrationKey)
+      })
+      .catch(error => {
+        eventHydrationAttemptedRef.current.delete(hydrationKey)
+        console.warn('Failed to hydrate clean terminal events', currentSessionId, error)
+      })
+  }, [
+    addTabEvents,
+    currentSessionId,
+    selectedTerminalHasEvents,
+    selectedTerminalID,
+    selectedTerminalIsSynthetic,
+  ])
   const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
-  const selectedTerminalIsSettled =
-    selectedTerminalState === 'completed' ||
-    selectedTerminalState === 'failed' ||
-    selectedTerminalState === 'closing' ||
-    selectedTerminalState === 'stale'
-  const isSelectedTerminalStreaming = !!selectedTerminalView &&
-    !selectedTerminalIsSettled &&
-    (selectedTerminalView.active || selectedTerminalState === 'running' || selectedTerminalState === 'idle')
+  const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
   // Live-attach is the ONLY transport for the selected live tmux terminal: it
   // renders over the /api/terminals/{id}/stream WebSocket while the selected
   // terminal is active. Completed tmux panes render through StaticXtermPane from
@@ -3772,7 +3301,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
         if (cancelled) return
         logTerminalScrollDebug('selected-detail', selectedTerminalView, detailOptions, detail)
         cacheTerminalDetail(detail)
-        applyTerminalSnapshotUpdate(detail)
       })
       .catch(err => {
         console.warn('Failed to load selected terminal detail', selectedTerminalView.terminal_id, err)
@@ -3785,7 +3313,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     selectedTerminal,
     useLiveAttachForSelected,
     cacheTerminalDetail,
-    applyTerminalSnapshotUpdate,
   ])
 
   const selectedTerminalIDForSettledProbe = selectedTerminalView?.terminal_id
@@ -3831,7 +3358,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           if (cancelled) return
           logTerminalScrollDebug('selected-settled-history', detail, detailOptions, detail)
           cacheTerminalDetail(detail)
-          applyTerminalSnapshotUpdate(detail)
 
           const content = detail.content || ''
           stableSamples = previousContent !== null && content === previousContent
@@ -3868,7 +3394,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     selectedTerminalState,
     selectedTerminalIsSynthetic,
     cacheTerminalDetail,
-    applyTerminalSnapshotUpdate,
   ])
 
   const selectedRouteDecision = selectedTerminalView?.step_id
@@ -3949,21 +3474,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       window.clearInterval(interval)
     }
   }, [activeRailTmuxProbeTargets, stableLiveAttachId, applyTerminalSnapshotUpdate, cacheTerminalDetail, fetchTerminals])
-
-  const handleTerminalScroll = useCallback(() => {
-    const el = terminalOutputRef.current
-    if (!el) return
-    const isNearBottom = isScrolledNearBottom(el)
-    terminalAutoScrollRef.current = isNearBottom
-    terminalManualScrollLockRef.current = !isNearBottom
-  }, [])
-
-  const handleTerminalWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
-    if (event.deltaY < 0) {
-      terminalAutoScrollRef.current = false
-      terminalManualScrollLockRef.current = true
-    }
-  }, [])
 
   const handleXtermViewportStickChange = useCallback((isNearBottom: boolean) => {
     terminalAutoScrollRef.current = isNearBottom
@@ -4073,11 +3583,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     ]
 
     return (
-      <div key="terminal-rail-controls" className="border-y border-neutral-800/80 bg-[#0b0d0c] p-2">
+      <div key="terminal-rail-controls" data-testid="terminal-rail-controls" className="border-y border-neutral-800/80 bg-[#0b0d0c] p-2">
         <div className="flex min-w-0 items-center gap-1">
           <button
             type="button"
             onClick={() => setRailManualNarrow(!railNarrow)}
+            data-testid="terminal-rail-toggle"
             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-emerald-300"
             title={railNarrow ? 'Expand agents' : 'Collapse agents'}
             aria-label={railNarrow ? 'Expand agents' : 'Collapse agents'}
@@ -4090,6 +3601,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                 key={filter.key}
                 type="button"
                 onClick={() => setTerminalRailFilter(filter.key)}
+                data-testid={`terminal-rail-filter-${filter.key}`}
                 className={filterButtonClass(filter.key)}
                 title={`Show ${filter.label.toLowerCase()} agents`}
               >
@@ -4101,6 +3613,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           <button
             type="button"
             onClick={clearNonRunningTerminals}
+            data-testid="terminal-rail-clear-completed"
             disabled={clearableNonRunningTerminals.length === 0}
             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:text-neutral-500"
             title="Clear completed agents"
@@ -4109,11 +3622,39 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
             <Trash2 className="h-3 w-3" />
           </button>
         </div>
+        {/* Collapsed rail still has 56px to work with. A bare letter+number per
+            filter (first attempt) read as cryptic noise, especially at zero.
+            A status-colored dot carries the same meaning the expanded labels
+            do (emerald=live, amber=attention, sky=done) without needing text,
+            and rows with nothing to report just don't render — four rows of
+            "0" told the reader nothing four times over. */}
+        {railNarrow && filters.some(filter => filter.key !== 'all' && filter.count > 0) && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            {filters.filter(filter => filter.key !== 'all' && filter.count > 0).map(filter => (
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setTerminalRailFilter(filter.key)}
+                data-testid={`terminal-rail-filter-narrow-${filter.key}`}
+                className={`flex items-center justify-center gap-1.5 rounded px-1 py-1 text-[10px] font-medium leading-none tabular-nums transition-colors ${
+                  terminalRailFilter === filter.key
+                    ? 'bg-neutral-800 text-neutral-100 shadow-sm'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                }`}
+                title={`${filter.count} ${filter.label.toLowerCase()}`}
+              >
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${RAIL_FILTER_DOT_COLOR[filter.key]}`} aria-hidden />
+                <span>{filter.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {!railNarrow && (
           <label className="mt-2 flex h-7 items-center gap-1.5 rounded border border-neutral-800 bg-[#121413] px-2 text-neutral-500 focus-within:border-neutral-600 focus-within:text-neutral-300">
             <Search className="h-3 w-3 shrink-0" aria-hidden />
             <input
-              type="search"
+            type="search"
+              data-testid="terminal-rail-search"
               value={terminalRailSearch}
               onChange={event => setTerminalRailSearch(event.target.value)}
               placeholder="Find agent"
@@ -4158,9 +3699,50 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       const terminalErrors = terminalErrorsByID.get(terminalPaneKey(terminal)) || []
       const latestTerminalError = terminalErrors[0]
       const selected = options?.selected ?? terminalPaneKey(terminal) === selectedTerminalKey
+      const title = options?.title || formatTerminalTitle(terminal)
+      const viewLabel = isSyntheticTerminal(terminal) ? 'Clean view' : 'Terminal view'
+      if (railNarrow) {
+        return (
+          <button
+            key={terminalPaneKey(terminal)}
+            type="button"
+            data-testid={`terminal-rail-item-${terminalPaneKey(terminal)}`}
+            onClick={() => selectTerminalFromRail(terminal)}
+            className={`group relative flex h-9 w-full items-center justify-center border-l-2 transition-colors ${
+              selected
+                ? terminalTheme.railSelected
+                : 'border-l-transparent text-neutral-400 hover:bg-[#1b1f1d] hover:text-neutral-100'
+            }`}
+            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)}`}
+            aria-label={`Open ${title} in ${viewLabel}`}
+          >
+            <span className="relative inline-flex h-5 w-5 items-center justify-center rounded border border-neutral-700/80 bg-neutral-900/90">
+              <TerminalTypeGlyph terminal={terminal} className="h-3 w-3" />
+              <span
+                className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[#141615] ${
+                  isRunning ? terminalTheme.dotRunning : terminalDotClass(terminal, terminalTheme)
+                }`}
+                aria-hidden
+              />
+              {latestTerminalError && (
+                <AlertTriangle
+                  className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full bg-[#141615] text-red-300"
+                  aria-label="Terminal error"
+                />
+              )}
+            </span>
+            {(options?.attemptCount || 0) > 1 && (
+              <span className="absolute bottom-0.5 right-1 rounded bg-neutral-800 px-1 text-[8px] tabular-nums text-neutral-300">
+                {options?.attemptCount}
+              </span>
+            )}
+          </button>
+        )
+      }
       return (
         <div
           key={terminalPaneKey(terminal)}
+          data-testid={`terminal-rail-item-${terminalPaneKey(terminal)}`}
           role="button"
           tabIndex={0}
           onClick={() => {
@@ -4196,12 +3778,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                 aria-label={terminalStateDescription(terminal)}
               />
             )}
-            <TerminalStepTypeIcon terminal={terminal} />
+            <TerminalPaneIcon terminal={terminal} />
             {isArchivedTurnTerminal(terminal) && (
               <TerminalArchivedTurnIcon />
             )}
-            <span className="min-w-0 flex-1 truncate font-medium" title={options?.title || formatTerminalTitle(terminal)}>
-              {options?.title || formatTerminalTitle(terminal)}
+            <span className="min-w-0 flex-1 truncate font-medium" title={title}>
+              {title}
             </span>
             {latestTerminalError && (
               <AlertTriangle
@@ -4303,15 +3885,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
   const renderRailGroup = (group: TerminalRailLogicalGroup) => {
     const expanded = expandedRailGroupKeys.has(group.key)
-    const groupSelected = group.terminals.some(terminal => terminalPaneKey(terminal) === selectedTerminalKey)
-    const isSequence = group.key.startsWith('sequence:')
+    const groupSelected = group.members.some(terminal => terminalPaneKey(terminal) === selectedTerminalKey)
+    const isSequence = terminalRailVisualKind(group.representative) === 'message-sequence'
     const earlierTerminals = group.terminals.filter(
       terminal => terminalPaneKey(terminal) !== terminalPaneKey(group.representative),
     )
     return (
       <div key={group.key}>
         {renderRailItem(group.representative, 0, {
-          title: group.title,
+          title: planTitleForTerminal(group.representative) || group.title,
           selected: groupSelected,
           attemptCount: group.terminals.length,
           expanded,
@@ -4332,7 +3914,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const sectionLabels: Record<TerminalRailSection, string> = {
     active: 'Active',
     attention: 'Needs attention',
-    workflow: 'Workflow steps',
+    workflow: isWorkflowTerminalContext ? 'Workflow steps' : 'Background tasks',
     review: 'Pulse reviewers',
     other: 'Other agents',
   }
@@ -4461,14 +4043,22 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           }`}>
             {/* The main agent and controls stay pinned. Logical task sections
                 scroll independently, with retries hidden under each task. */}
-            <div className={`hidden shrink-0 flex-col overflow-hidden border-r border-neutral-700/70 bg-[#141615] sm:flex ${railNarrow ? 'w-14' : 'w-56'}`}>
+            <div data-testid="terminal-rail" className={`hidden shrink-0 flex-col overflow-hidden border-r border-neutral-700/70 bg-[#141615] sm:flex ${railNarrow ? 'w-14' : 'w-56'}`}>
               {currentMainTerminal && renderRailItem(currentMainTerminal, 0, { title: 'Main agent' })}
               {renderRailControls()}
               <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
                 {(['active', 'attention', 'workflow', 'review', 'other'] as TerminalRailSection[]).map(renderRailSection)}
                 {groupedTerminals.visibleGroups.length === 0 && (
                   <div className={`px-3 py-5 text-center text-[11px] leading-4 text-neutral-600 ${railNarrow ? 'hidden' : ''}`}>
-                    {terminalRailSearch ? 'No agents match this search.' : 'No agents in this view.'}
+                    {terminalRailSearch
+                      ? 'No agents match this search.'
+                      : terminalRailFilter === 'running'
+                        ? 'No other agents are running.'
+                        : terminalRailFilter === 'attention'
+                          ? 'No agents need attention.'
+                          : terminalRailFilter === 'non-running'
+                            ? 'No completed agents.'
+                            : 'No agents yet.'}
                   </div>
                 )}
               </div>
@@ -4497,9 +4087,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       )}
                       <span
                         className="max-w-[38%] shrink-0 truncate font-medium text-neutral-200"
-                        title={formatTerminalTitle(selectedTerminalView)}
+                        title={selectedTerminalDisplayTitle}
                       >
-                        {formatTerminalTitle(selectedTerminalView)}
+                        {selectedTerminalDisplayTitle}
                       </span>
                       {selectedPlanStep && (
                         <button
@@ -4507,7 +4097,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                           onClick={showSelectedPlanStep}
                           className="inline-flex shrink-0 items-center justify-center rounded p-0.5 text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100"
                           title="Show step in plan"
-                          aria-label={`Show ${formatTerminalTitle(selectedTerminalView)} in plan`}
+                          aria-label={`Show ${selectedTerminalDisplayTitle} in plan`}
                         >
                           <Info className="h-3.5 w-3.5" />
                         </button>
@@ -4526,28 +4116,32 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                           {terminalStateLabel(selectedTerminalView)}
                         </span>
                       )}
-                      <button
-                        type="button"
-                        onClick={scrollSelectedTerminalToBottom}
-                        className="inline-flex items-center justify-center rounded p-1 text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100"
-                        title="Scroll terminal to bottom"
-                        aria-label="Scroll terminal to bottom"
-                      >
-                        <ArrowDownToLine className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void copyTerminalDebug(selectedTerminalView)}
-                        className="inline-flex items-center justify-center rounded p-1 text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100"
-                        title="Copy terminal debug IDs"
-                        aria-label="Copy terminal debug IDs"
-                      >
-                        {copiedTerminalID === selectedTerminalView.terminal_id ? (
-                          <Check className={`h-3.5 w-3.5 ${terminalTheme.copiedIcon}`} />
-                        ) : (
-                          <Info className="h-3.5 w-3.5" />
-                        )}
-                      </button>
+                      {selectedTerminalIsTmux && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={scrollSelectedTerminalToBottom}
+                            className="inline-flex items-center justify-center rounded p-1 text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100"
+                            title="Scroll terminal to bottom"
+                            aria-label="Scroll terminal to bottom"
+                          >
+                            <ArrowDownToLine className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void copyTerminalDebug(selectedTerminalView)}
+                            className="inline-flex items-center justify-center rounded p-1 text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100"
+                            title="Copy terminal debug IDs"
+                            aria-label="Copy terminal debug IDs"
+                          >
+                            {copiedTerminalID === selectedTerminalView.terminal_id ? (
+                              <Check className={`h-3.5 w-3.5 ${terminalTheme.copiedIcon}`} />
+                            ) : (
+                              <Info className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </>
+                      )}
                       {hasTerminalDebugActions(selectedTerminalView) && (
                         <div ref={debugMenuRef} className="relative inline-flex">
                           <button
@@ -4782,7 +4376,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       )}
                     </div>
                   </div>
-                  {terminalPreValidationSummary(selectedTerminalView) && (
+                  {terminalPreValidationSummary(selectedTerminalView) &&
+                    (!selectedTerminalIsSynthetic || !selectedTerminalHasPreValidationEvent) && (
                     <div className={`border-b border-neutral-700/70 bg-[#151716] px-3 py-1.5 ${terminalTheme.headerText} ${terminalPreValidationClass(selectedTerminalView, terminalTheme)}`}>
                       {terminalPreValidationSummary(selectedTerminalView)}
                     </div>
@@ -4830,14 +4425,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                     </div>
                   )}
                   {selectedTerminalIsSynthetic ? (
-                    <StructuredTerminalView
-                      content={selectedTerminalDisplayContent}
-                      rows={selectedTerminalIsSynthetic && priorArchivedTurns.length === 0 ? selectedTerminalView.rows : undefined}
-                      scrollRef={terminalOutputRef as React.RefObject<HTMLDivElement | null>}
-                      onScroll={handleTerminalScroll}
-                      onWheel={handleTerminalWheel as (e: React.WheelEvent<HTMLDivElement>) => void}
+                    // Clean view always renders the real event stream. Never
+                    // substitute the legacy parsed-row card: it is not the
+                    // conversation UI and can carry stale sibling metadata.
+                    <TerminalEventTranscript
+                      events={sessionEvents}
                       terminal={selectedTerminalView}
-                      theme={terminalTheme}
+                      siblingTerminals={terminals}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane
@@ -4926,6 +4520,18 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       dur,
                       ...extraSegs.filter(segment => segment !== context && !usageLimitSegments.includes(segment)),
                     ].filter(Boolean)
+                    // Clean workflow steps already expose their live state in
+                    // the rail and lifecycle card. When no telemetry has
+                    // arrived yet, the footer would contain only the backend's
+                    // internal terminal label (for example "Step engagement
+                    // connect"), which is both redundant and user-hostile.
+                    if (selectedTerminalIsSynthetic &&
+                      !cost &&
+                      usageLimitSegments.length === 0 &&
+                      !context &&
+                      detailSegments.length === 0) {
+                      return null
+                    }
                     const paneID = terminalPaneKey(selectedTerminalView)
                     const detailsExpanded = expandedTelemetryTerminalID === paneID
                     return (

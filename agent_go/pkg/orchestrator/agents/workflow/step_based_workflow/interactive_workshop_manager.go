@@ -5271,9 +5271,17 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					ID:                execID,
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              "Review Workflow Plan",
+					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
 					Cancel:            cancel,
 				})
 			}
+			// Without this, runReviewPlanAgent's own execution correlates only via
+			// agentSessionID (a separate id, for LLM turn/event correlation) and
+			// never links back to execID — the lifecycle registration above and the
+			// actual running agent's content end up as two disjoint rail entries.
+			// Matches the working pattern at line ~3088/3509.
+			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
 			go func() {
 				var result string
@@ -5372,9 +5380,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					ID:                execID,
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              "Review Workflow Timing",
+					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
 					Cancel:            cancel,
 				})
 			}
+			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
 			go func() {
 				var result string
@@ -5508,9 +5519,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					ID:                execID,
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              "Review Workflow Costs",
+					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
 					Cancel:            cancel,
 				})
 			}
+			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
 			go func() {
 				var result string
@@ -5632,9 +5646,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					ID:                execID,
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              "Review Step Code",
+					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
 					Cancel:            cancel,
 				})
 			}
+			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
 			go func() {
 				var result string
@@ -8880,7 +8897,7 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 		return "", fmt.Errorf("no valid LLM configuration for review_plan agent")
 	}
 
-	config := iwm.controller.CreateStandardAgentConfigWithLLM("review-plan-agent", 50, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig("review-plan-agent", 50, llmConfigToUse, "review_plan agent")
 	// Isolate in a fresh tmp dir; don't project CLAUDE.md/.claude into the
 	// builder's live workflow folder. See improve-db-agent above.
 	config.IsolateCodingAgentWorkspace = true
@@ -8981,7 +8998,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 		return "", fmt.Errorf("no valid LLM configuration for review_workflow_timing agent")
 	}
 
-	config := iwm.controller.CreateStandardAgentConfigWithLLM("review-workflow-timing-agent", 60, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig("review-workflow-timing-agent", 60, llmConfigToUse, "review_workflow_timing agent")
 	// Isolate in a fresh tmp dir; don't project CLAUDE.md/.claude into the
 	// builder's live workflow folder. See improve-db-agent above.
 	config.IsolateCodingAgentWorkspace = true
@@ -9081,7 +9098,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 		return "", fmt.Errorf("no valid LLM configuration for review_workflow_costs agent")
 	}
 
-	config := iwm.controller.CreateStandardAgentConfigWithLLM("review-workflow-costs-agent", 60, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig("review-workflow-costs-agent", 60, llmConfigToUse, "review_workflow_costs agent")
 	// Isolate in a fresh tmp dir; don't project CLAUDE.md/.claude into the
 	// builder's live workflow folder. See improve-db-agent above.
 	config.IsolateCodingAgentWorkspace = true
@@ -9250,7 +9267,7 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 		return "", fmt.Errorf("no valid LLM configuration for review_step_code agent")
 	}
 
-	config := iwm.controller.CreateStandardAgentConfigWithLLM("review-step-code-agent", 50, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig("review-step-code-agent", 50, llmConfigToUse, "review_step_code agent")
 	// Isolate in a fresh tmp dir; don't project CLAUDE.md/.claude into the
 	// builder's live workflow folder. See improve-db-agent above.
 	config.IsolateCodingAgentWorkspace = true
@@ -9587,13 +9604,19 @@ func truncateGoalAdvisorStageOutput(value string) string {
 	return strings.TrimSpace(value[:half] + "\n\n... [Goal Advisor stage output truncated for next-stage review] ...\n\n" + value[len(value)-half:])
 }
 
+func (iwm *InteractiveWorkshopManager) createUnattendedWorkshopAgentConfig(agentName string, maxTurns int, llmConfig *orchestrator.LLMConfig, agentKind string) *agents.OrchestratorAgentConfig {
+	config := iwm.controller.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
+	iwm.controller.applyWorkflowTransportToAgentConfig(config, nil, agentKind)
+	return config
+}
+
 func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess) (string, error) {
 	logger := iwm.controller.GetLogger()
 	workspacePath := iwm.controller.GetWorkspacePath()
 	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
-	// Every advisor/reviewer stage owns a separate terminal. Without a
+	// Every advisor/reviewer stage owns a separate execution entry. Without a
 	// goroutine-local execution owner, parallel stages can inherit the parent
-	// main-agent identity and repeatedly replace its tmux pane in the UI.
+	// main-agent identity and replace its activity in the UI.
 	if parentExecutionID, _ := ctx.Value(orchestrator_events.ParentExecutionIDKey).(string); strings.TrimSpace(parentExecutionID) == "" {
 		ctx = context.WithValue(ctx, orchestrator_events.ParentExecutionIDKey, stageAgentIdentity)
 	}
@@ -9643,7 +9666,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 		return "", fmt.Errorf("no valid LLM configuration found for %s", name)
 	}
 
-	config := iwm.controller.CreateStandardAgentConfigWithLLM(fmt.Sprintf("Background: %s", name), 100, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig(fmt.Sprintf("Background: %s", name), 100, llmConfigToUse, "Pulse reviewer / Goal Advisor stage")
 	config.IsolateCodingAgentWorkspace = true
 	config.UseCodeExecutionMode = false
 	config.EnableParallelToolExecution = true
@@ -9867,7 +9890,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	}
 
 	// --- Agent config ---
-	config := iwm.controller.CreateStandardAgentConfigWithLLM(fmt.Sprintf("Background: %s", name), 80, agents.OutputFormatStructured, llmConfigToUse)
+	config := iwm.createUnattendedWorkshopAgentConfig(fmt.Sprintf("Background: %s", name), 80, llmConfigToUse, "background task agent")
 	isCodeExecMode := iwm.controller.GetUseCodeExecutionMode()
 	config.UseCodeExecutionMode = isCodeExecMode
 	config.EnableParallelToolExecution = true

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { ActiveSessionInfo, RuntimePhase, RuntimeSnapshot } from '../services/api-types'
+import type { ActiveSessionInfo, RuntimePhase, RuntimeSnapshot, TerminalSnapshot } from '../services/api-types'
 import {
   executionTreeRuntimeStatus,
+  reconcileTerminalRuntimeState,
   runtimeCanSteer,
   runtimeHasBackgroundAgents,
   runtimeNeedsUserInput,
@@ -25,6 +26,23 @@ function session(state: RuntimeSnapshot): ActiveSessionInfo {
     last_activity: state.last_progress_at, created_at: state.started_at, runtime_state: state,
     // Deliberately contradictory legacy values prove runtime_state wins.
     display_status: 'stopped', has_running_background_agents: false, can_steer: false,
+  }
+}
+
+function terminal(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
+  return {
+    terminal_id: 'session-1:pulse-review-learn-health-123',
+    session_id: 'session-1',
+    execution_id: 'pulse-review-learn-health-123',
+    content: '',
+    rows: [],
+    chunk_index: 0,
+    active: true,
+    state: 'running',
+    status: {},
+    created_at: '2026-07-17T00:00:00Z',
+    updated_at: '2026-07-17T00:00:00Z',
+    ...overrides,
   }
 }
 
@@ -65,5 +83,95 @@ describe('authoritative runtime activity selector', () => {
     const value = session(runtime('canceled', { background_live: true, terminal_busy: true }))
     expect(runtimeHasBackgroundAgents(value)).toBe(false)
     expect(sessionRuntimeStatus(value)).toBe('stopped')
+  })
+
+  it('keeps only the child that the runtime ledger still reports as active', () => {
+    const state = runtime('running', {
+      raw_session_status: 'completed',
+      background_live: true,
+      child_executions: [
+        {
+          execution_id: 'pulse-review-learn-health-123',
+          kind: 'pulse_reviewer',
+          status: 'running',
+          started_at: '2026-07-17T00:01:00Z',
+        },
+        {
+          execution_id: 'pulse-review-llm-ops-456',
+          kind: 'pulse_reviewer',
+          status: 'completed',
+          started_at: '2026-07-17T00:00:00Z',
+          completed_at: '2026-07-17T00:02:00Z',
+        },
+      ],
+    })
+
+    expect(reconcileTerminalRuntimeState(terminal(), state)).toMatchObject({
+      active: true,
+      state: 'running',
+    })
+    expect(reconcileTerminalRuntimeState(terminal({
+      terminal_id: 'session-1:pulse-review-llm-ops-456',
+      execution_id: 'pulse-review-llm-ops-456',
+    }), state)).toMatchObject({
+      active: false,
+      state: 'completed',
+    })
+  })
+
+  it('settles wrapper terminals whose IDs use the same reviewer slug', () => {
+    const state = runtime('running', {
+      raw_session_status: 'completed',
+      child_executions: [{
+        execution_id: 'review-costs-44000',
+        kind: 'workflow_builder_task',
+        status: 'completed',
+        started_at: '2026-07-17T00:00:00Z',
+        completed_at: '2026-07-17T00:02:00Z',
+      }],
+    })
+
+    expect(reconcileTerminalRuntimeState(terminal({
+      terminal_id: 'session-1:agent:workshop-review-costs-99999',
+      owner_id: 'agent:workshop-review-costs-99999',
+      execution_id: 'agent:workshop-review-costs-99999',
+    }), state)).toMatchObject({
+      active: false,
+      state: 'completed',
+    })
+  })
+
+  it('does not settle a newly launching terminal while the foreground is busy', () => {
+    const state = runtime('running', {
+      raw_session_status: 'completed',
+      foreground_turn: { busy: true, has_cancel: true, can_steer: true, synthetic: false },
+    })
+
+    expect(reconcileTerminalRuntimeState(terminal(), state)).toMatchObject({
+      active: true,
+      state: 'running',
+    })
+  })
+
+  it('settles a completed child even while the main agent continues working', () => {
+    const state = runtime('running', {
+      raw_session_status: 'running',
+      foreground_turn: { busy: true, has_cancel: true, can_steer: true, synthetic: true },
+      child_executions: [{
+        execution_id: 'pulse-review-llm-ops-456',
+        kind: 'pulse_reviewer',
+        status: 'completed',
+        started_at: '2026-07-17T00:00:00Z',
+        completed_at: '2026-07-17T00:02:00Z',
+      }],
+    })
+
+    expect(reconcileTerminalRuntimeState(terminal({
+      terminal_id: 'session-1:pulse-review-llm-ops-456',
+      execution_id: 'pulse-review-llm-ops-456',
+    }), state)).toMatchObject({
+      active: false,
+      state: 'completed',
+    })
   })
 })

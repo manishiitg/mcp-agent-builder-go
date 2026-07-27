@@ -59,6 +59,17 @@ const (
 	OrchestratorAgentEnd   events.EventType = "orchestrator_agent_end"
 	OrchestratorAgentError events.EventType = "orchestrator_agent_error"
 
+	// Background agent lifecycle events (sub-agents, todo-task steps,
+	// message-sequence items — anything dispatched and notified about
+	// asynchronously). BackgroundAgentFailed is intentionally NOT defined:
+	// failure is reported via BackgroundAgentCompleted with status "failed",
+	// not a distinct wire event type.
+	BackgroundAgentStarted    events.EventType = "background_agent_started"
+	BackgroundAgentCompleted  events.EventType = "background_agent_completed"
+	BackgroundAgentTerminated events.EventType = "background_agent_terminated"
+	SyntheticTurnReady        events.EventType = "synthetic_turn_ready"
+	AutoNotificationSteered   events.EventType = "auto_notification_steered"
+
 	// Parallel execution events
 	IndependentStepsSelected events.EventType = "independent_steps_selected"
 

@@ -1204,7 +1204,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeGenericAgent(
 		genericStep.GetTitle(),
 		orchestrator.RichStepContext{
 			StepName:     genericStep.GetTitle(),
-			StepType:     string(genericStep.StepType()),
+			StepType:     effectiveRuntimeStepType(genericStep),
 			StepIndex:    stepIndex + 1,
 			ParentStepID: step.GetID(),
 			TriggeredBy:  "todo_task",
@@ -1356,8 +1356,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 	if isMessageSequenceStep(sequenceExecutionStep) {
 		reentryMessage := strings.TrimSpace(sequenceExecutionStep.GetDescription())
 		messageSequenceRestart, _ := ctx.Value(virtualtools.SubAgentMessageSequenceRestartKey).(bool)
+		// See the matching comment in controller_execution.go: mint this step
+		// its own "exec-<step>-<timestamp>" id so message-sequence item
+		// notifications and this step's own tool-call events agree on the
+		// same owner, instead of both falling back to whatever ambient
+		// full-run id was set once at the top of the run.
+		stepExecID := fmt.Sprintf("exec-%s-%d", sequenceExecutionStep.GetID(), time.Now().UnixNano())
+		stepScopedCtx := virtualtools.WithBackgroundAgentID(ctx, stepExecID)
+		stepScopedCtx = context.WithValue(stepScopedCtx, events.ParentExecutionIDKey, stepExecID)
 		executionResult, capturedHistory, err := hcpo.executeMessageSequenceStep(
-			ctx,
+			stepScopedCtx,
 			sequenceExecutionStep,
 			stepIndex,
 			subAgentStepPath,
@@ -1506,7 +1514,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 		stepToExecute.GetTitle(),
 		orchestrator.RichStepContext{
 			StepName:     stepToExecute.GetTitle(),
-			StepType:     string(stepToExecute.StepType()),
+			StepType:     effectiveRuntimeStepType(stepToExecute),
 			StepIndex:    stepIndex + 1,
 			ParentStepID: step.GetID(),
 			TriggeredBy:  "todo_task_route",

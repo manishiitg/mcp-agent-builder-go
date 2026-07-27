@@ -10,7 +10,7 @@ interface ToolCallStartEventProps {
 }
 
 export const ToolCallStartEventDisplay: React.FC<ToolCallStartEventProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
 
   const normalizedToolName = event.tool_name ? normalizeMCPToolName(event.tool_name) : event.tool_name
 

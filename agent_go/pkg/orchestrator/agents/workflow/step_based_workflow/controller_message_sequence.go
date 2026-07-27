@@ -100,6 +100,20 @@ func shouldNormalizeRegularStepToMessageSequence(step PlanStepInterface) bool {
 	return ok && !isScriptedExecutionModeConfig(regular.AgentConfigs)
 }
 
+// effectiveRuntimeStepType reports the execution model users actually see.
+// Persisted non-scripted regular steps run through message_sequence for
+// compatibility, so exposing them as "regular" in terminal metadata is
+// misleading even though the saved plan still has the legacy type.
+func effectiveRuntimeStepType(step PlanStepInterface) string {
+	if shouldNormalizeRegularStepToMessageSequence(step) {
+		return string(StepTypeMessageSeq)
+	}
+	if step == nil {
+		return ""
+	}
+	return string(step.StepType())
+}
+
 // messageSequenceClosingItems builds synthetic trailing items so a standalone
 // message_sequence honors its step-level learning_objective and
 // knowledgebase_contribution — the same post-step learnings/KB a regular step

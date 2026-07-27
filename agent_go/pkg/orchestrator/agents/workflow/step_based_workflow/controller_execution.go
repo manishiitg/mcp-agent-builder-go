@@ -14,9 +14,11 @@ import (
 	"strings"
 	"time"
 
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
+	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -3072,7 +3074,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			if stepBridge, ok := bridge.(interface {
 				SetCurrentStepContext(stepID, stepType string)
 			}); ok {
-				stepBridge.SetCurrentStepContext(stepID, string(step.StepType()))
+				stepBridge.SetCurrentStepContext(stepID, effectiveRuntimeStepType(step))
 			} else if stepBridge, ok := bridge.(interface {
 				SetCurrentStepID(stepID string)
 			}); ok {
@@ -3093,7 +3095,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			if cab, ok := bridge.(*orchestrator.ContextAwareEventBridge); ok {
 				rich := orchestrator.RichStepContext{
 					StepName:    step.GetTitle(),
-					StepType:    string(step.StepType()),
+					StepType:    effectiveRuntimeStepType(step),
 					StepIndex:   i + 1,
 					StepTotal:   len(breakdownSteps),
 					Attempt:     1,
@@ -3256,7 +3258,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 					callOptions.ReentryMessage = execCtx.WorkshopHumanInput
 				}
 			}
-			executionResult, _, err := hcpo.executeMessageSequenceStep(ctx, sequenceExecutionStep, i, stepPath, progress, execCtx, breakdownSteps, callOptions)
+			// A standalone execute_step already owns an exec-<step>-<timestamp>
+			// ID. Reuse it so the start, transcript, and completion events settle
+			// the same terminal. Full-workflow runs still need an ID per step.
+			stepExecID := messageSequenceExecutionID(ctx, sequenceExecutionStep.GetID())
+			if stepExecID == "" {
+				stepExecID = fmt.Sprintf("exec-%s-%d", sequenceExecutionStep.GetID(), time.Now().UnixNano())
+			}
+			stepScopedCtx := virtualtools.WithBackgroundAgentID(ctx, stepExecID)
+			stepScopedCtx = context.WithValue(stepScopedCtx, orchestrator_events.ParentExecutionIDKey, stepExecID)
+			executionResult, _, err := hcpo.executeMessageSequenceStep(stepScopedCtx, sequenceExecutionStep, i, stepPath, progress, execCtx, breakdownSteps, callOptions)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Message sequence step %d canceled", i+1))
