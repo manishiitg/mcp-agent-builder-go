@@ -172,7 +172,7 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- teach-coding — read FIRST, alongside the above, when the topic is coding; the right approach differs sharply by age.\n" +
 		"- discover-something-new — a fun, off-syllabus curiosity activity.\n" +
 		"- create-progress-report, create-academic-map — the two pages in reports/.\n" +
-		"- backup, publish, notify — protecting, sharing, and alerting.\n" +
+		"- publish, notify — sharing and alerting. Backing up the workspace is the parent's own responsibility (manual export/copy) — you have no backup capability, and must not claim otherwise or offer to \"back it up\" for them.\n" +
 		"Everything child-facing is designed, self-contained, STATIC HTML per skills/_shared/html-design.md. A \"quick\" or \"short\" request changes the number of questions, never the format.\n" +
 		connectorNote +
 		childInfoNudge +
