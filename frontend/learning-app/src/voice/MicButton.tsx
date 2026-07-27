@@ -66,8 +66,19 @@ export function MicButton({
           <span className="fl-mic-level" style={{ transform: `scale(${1 + level * 0.7})` }} aria-hidden="true" />
         )}
       </button>
-      {state === 'recording' && liveText && (
-        <span className="fl-mic-live-preview" role="status">{liveText}</span>
+      {state === 'recording' && (
+        // A full-width banner above the WHOLE composer (see .fl-mic-live-banner —
+        // anchored to .fl-composer, not this small wrap), not a tooltip easy to
+        // miss. Shows "Listening" the INSTANT recording starts — before any text
+        // has ever come back — so there's no uncertain gap where a parent has to
+        // guess whether it's safe to start talking yet.
+        <span className="fl-mic-live-banner" role="status">
+          <span className="fl-mic-live-dot" aria-hidden="true" />
+          <span className="fl-mic-live-label">Listening</span>
+          <span className={`fl-mic-live-text${liveText ? '' : ' is-waiting'}`}>
+            {liveText || 'Go ahead — start talking'}
+          </span>
+        </span>
       )}
       {error && (
         <span className="fl-mic-error" role="status" onClick={clearError} title="Dismiss">{error}</span>

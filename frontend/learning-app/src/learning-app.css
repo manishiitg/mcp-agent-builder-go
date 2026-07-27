@@ -239,7 +239,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-zoom-btn.is-on { width: auto; padding: 0 7px; border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-zoom-badge { font-size: 10px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px); }
-.fl-composer { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
+.fl-composer { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
 .fl-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
 .fl-menu { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 21; min-width: 232px; padding: 6px; border: 1px solid #e0d7c5; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); display: flex; flex-direction: column; gap: 2px; }
@@ -968,7 +968,7 @@ audio.fl-viewer-media { background: var(--surface); }
 }
 @media (prefers-reduced-motion: reduce) { .fl-start-burst { display: none; } }
 @keyframes fl-star-pop { 0% { opacity: 0; transform: scale(0) rotate(-25deg); } 60% { opacity: 1; transform: scale(1.25) rotate(8deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
-.fl-child-composer { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
+.fl-child-composer { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
 .fl-child-composer textarea { min-width: 0; min-height: 42px; max-height: 160px; padding: 10px 0 10px 8px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-child-composer textarea::placeholder { color: #6a7c95; }
 .fl-child-side { display: flex; flex-direction: column; gap: 14px; }
@@ -1085,7 +1085,10 @@ audio.fl-viewer-media { background: var(--surface); }
    useMicDictation) so "listening" is visibly true rather than merely
    claimed — a muted or wrong input device shows a dead ring instead of
    silently recording nothing. */
-.fl-mic-wrap { position: relative; display: inline-flex; align-items: center; align-self: center; }
+/* Deliberately NOT position:relative — the live banner and error bubble need
+   to anchor against the whole composer (.fl-composer/.fl-child-composer,
+   which own position:relative), not this small icon wrapper. */
+.fl-mic-wrap { display: inline-flex; align-items: center; align-self: center; }
 .fl-mic-btn { position: relative; }
 .fl-mic-btn.is-recording { background: #fdecec; border-color: #e6b0b0; color: #b3261e; }
 .fl-mic-level { position: absolute; inset: -3px; border-radius: 999px; border: 2px solid #e6737333; pointer-events: none; transition: transform .06s linear; }
@@ -1131,4 +1134,17 @@ audio.fl-viewer-media { background: var(--surface); }
 /* Live transcription preview while recording — refreshes every couple of
    seconds (see useMicDictation's LIVE_PREVIEW_INTERVAL_MS), not word-by-word.
    Positioned like the mic error bubble since only one is ever shown at once. */
-.fl-mic-live-preview { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 5; width: max-content; max-width: 280px; padding: 7px 11px; border-radius: 10px; background: var(--navy); color: #fff; font-size: var(--text-caption); font-style: italic; line-height: 1.35; box-shadow: 0 10px 24px rgba(13, 35, 76, .25); }
+/* Full-width banner above the WHOLE composer (anchored to .fl-composer /
+   .fl-child-composer, both position:relative — not to the small mic wrap),
+   so it can't be mistaken for a passing tooltip. Two states: an immediate
+   "listening, go ahead" the instant recording starts (before any audio has
+   even been transcribed once), then the growing preview text once the first
+   refresh lands. A parent needs to know it's safe to start talking WITHOUT
+   waiting to see if anything appears — that certainty is the point. */
+.fl-mic-live-banner { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); z-index: 6; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 14px; background: var(--navy); color: #fff; box-shadow: 0 14px 32px rgba(13, 35, 76, .3); }
+.fl-mic-live-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: #ff5b5b; animation: fl-mic-live-pulse 1.1s ease-in-out infinite; }
+@keyframes fl-mic-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.75); } }
+@media (prefers-reduced-motion: reduce) { .fl-mic-live-dot { animation: none; } }
+.fl-mic-live-label { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #ffd479; }
+.fl-mic-live-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-secondary); line-height: 1.4; }
+.fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }
