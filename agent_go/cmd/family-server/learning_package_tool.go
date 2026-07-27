@@ -54,7 +54,9 @@ func createLearningActivityTool(childLabel string, recordEvent func(toolEvent)) 
 			"the child works through them (do NOT include the answer key). For an instruction-only/dynamic activity (the tutor " +
 			"generates questions live), leave `items` empty and put the full activity description in `guide_note`. Set " +
 			"`teaching_mode` per the parent's wishes for THIS activity: beginner (tell the answer and keep correcting), graduated " +
-			"(give `hints_before_answer` hints, then reveal), or strict (hints only, never reveal). `persona` is the tutor's tone " +
+			"(give `hints_before_answer` hints, then reveal), or strict (hints only while she's still working through it, like a " +
+			"real assessment — but always reveals the real answers once she's actually finished the whole activity, never just " +
+			"defers her to the parent). `persona` is the tutor's tone " +
 			"for this activity. `goal` is what COMPLETING this activity concretely looks like (e.g. \"reach the final scene and " +
 			"design one explorer ship\", \"answer all 10 practice questions\") — distinct from `guide_note` (which is about HOW to " +
 			"run it, pacing/tone); the tutor uses `goal` to keep steering the child back toward finishing even after the " +
