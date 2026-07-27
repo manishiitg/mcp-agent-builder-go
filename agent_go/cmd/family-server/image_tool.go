@@ -142,6 +142,32 @@ func runReadImage(ctx context.Context, engine string, args map[string]interface{
 		// Allow the CLI's native Read tool so it can actually open/view the
 		// image file (the tmux CLI runs --permission-mode dontAsk and only
 		// enables tools passed via --allowed-tools).
+		//
+		// KNOWN UNENFORCED BOUNDARY — deliberate, documented, not yet fixed.
+		// This path exists precisely to give the CLI back its native tools, and
+		// enginedetect.Chat applies neither bridge-only tool-stripping nor any
+		// sandbox. The spawned CLI therefore runs unsandboxed with its full
+		// toolset (for codex that is its own shell_tool; WithAllowedTools is a
+		// Claude-specific flag and a no-op there). workingDir sets where it
+		// starts, not what it can reach: measured, this sub-agent will read a
+		// file in the real home directory and return its contents when asked
+		// directly.
+		//
+		// The tool's own arguments ARE safe — runReadImage validates the path
+		// via allowed(), resolveWorkspacePath and the extension check, so a
+		// caller cannot aim this at ~/.ssh. The residual risk is the IMAGE
+		// CONTENT, which is untrusted input this sub-agent is asked to obey:
+		// text baked into a picture telling it to cat a file and include the
+		// output. Tested with exactly that image — the transcriber reported the
+		// injected instruction as text rather than executing it, which is the
+		// correct behaviour but is MODEL JUDGEMENT, not an enforced boundary.
+		// One phrasing on one engine passing is not proof; a different wording
+		// or model could comply.
+		//
+		// To make it enforced rather than trusted: run this sub-agent under a
+		// sandbox whose read scope is the single image file (clisandbox /
+		// security.Isolator), or replace the CLI sub-agent with a vision API
+		// call so no shell exists to abuse. See docs/agent-execution-architecture.html.
 		return enginedetect.Chat(ctx, engine, "", workspaceRoot(),
 			"You are a careful transcriber of images for a family learning app. Report only what is truly visible.",
 			[]enginedetect.ChatMessage{{Role: "user", Text: prompt}},
