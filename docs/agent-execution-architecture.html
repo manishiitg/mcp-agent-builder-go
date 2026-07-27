@@ -121,7 +121,12 @@ allowlist, Pi <code>--no-builtin-tools</code>.</p>
 Asked to read a file using only its built-in ability, the CLI returned <code>NATIVE_READ_BLOCKED</code>.
 The control matters more: asked to read a file <em>inside</em> the workspace the same way, it returned
 <code>NO_NATIVE_TOOL</code> — so the tool is genuinely absent, not the model being agreeable.
-<span class="muted">Tested on codex-cli only; the other three use different flags.</span></div>
+<br><br>Re-run against every selectable engine, controls included:
+<b>codex-cli</b>, <b>claude-code</b> and <b>cursor-cli</b> all returned
+<code>NATIVE_BLOCKED</code> outside and <code>NO_NATIVE_TOOL</code> for the in-workspace control — so the
+tool is genuinely absent in all three, despite each using a different disable flag.
+<span class="muted">pi-cli is installed but not authenticated (<code>usable:false</code>), so it could not be
+tested; it is also the one engine read_image refuses outright.</span></div>
 
 <h3>Bridge tools are sandboxed separately</h3>
 <p><code>execute_shell_command</code> does not inherit the CLI's sandbox — it runs in the trusted server
