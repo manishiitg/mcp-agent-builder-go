@@ -29,6 +29,11 @@ export type VoiceTier = {
   available: boolean
   unavailable_reason?: string
   installed: boolean
+  // Distinct from `installed`: a model can be fully installed on disk yet
+  // still cold (the background process that keeps it loaded in memory was
+  // never started this session, or unloaded itself after 15 idle minutes).
+  // Only `warm` means the next use is actually instant.
+  warm?: boolean
   coming_soon?: boolean
   installing?: boolean
   got_bytes?: number

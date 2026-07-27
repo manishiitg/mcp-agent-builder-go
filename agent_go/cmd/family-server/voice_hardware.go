@@ -31,7 +31,14 @@ type voiceTier struct {
 	Available      bool   `json:"available"`
 	UnavailableWhy string `json:"unavailable_reason,omitempty"`
 	Installed      bool   `json:"installed"`
-	ComingSoon     bool   `json:"coming_soon,omitempty"`
+	// Warm is distinct from Installed: a model can be fully installed on
+	// disk yet still cold (the worker process was never started this
+	// session, or unloaded itself after 15 idle minutes — see
+	// voice_worker.go). The UI should only claim "ready — instant" when Warm
+	// is true; Installed-but-not-Warm means the FIRST use this session pays
+	// a real few-second warm-up cost.
+	Warm       bool `json:"warm"`
+	ComingSoon bool `json:"coming_soon,omitempty"`
 	// Live download progress, when this tier is being installed right now.
 	Installing bool   `json:"installing,omitempty"`
 	GotBytes   int64  `json:"got_bytes,omitempty"`
@@ -82,6 +89,7 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 			Languages:   "English",
 			Available:   hw.IsAppleSilicon,
 			Installed:   installed,
+			Warm:        installed && sharedVoiceWorker.IsWarm(parakeetModel),
 			Installing:  st.Installing,
 			GotBytes:    st.GotBytes,
 			TotalBytes:  st.TotalBytes,
@@ -104,6 +112,7 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 			Languages:   "English, Hindi, and many more",
 			Available:   sayErr == nil,
 			Installed:   sayErr == nil,
+			Warm:        sayErr == nil, // never cold — no separate process to warm up
 		},
 		func() voiceTier {
 			st := installStateFor(mlxVoiceInstallID)
@@ -118,6 +127,7 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 				Languages:   "English, Hindi, and more",
 				Available:   hw.IsAppleSilicon,
 				Installed:   installed,
+				Warm:        installed && sharedVoiceWorker.IsWarm(kokoroModel),
 				Installing:  st.Installing,
 				GotBytes:    st.GotBytes,
 				TotalBytes:  st.TotalBytes,

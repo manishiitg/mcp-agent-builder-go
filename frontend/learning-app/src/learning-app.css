@@ -860,6 +860,9 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-voice-tier-badge { padding: 2px 8px; border-radius: 999px; background: #eef1f6; color: #5c6d88; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .fl-voice-tier-badge.is-on { background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-voice-tier-badge.is-off { background: #f4f1ea; color: #8a8478; }
+/* Installed but not yet loaded into memory — the next use pays a real
+   few-second warm-up, so this is shown instead of overclaiming "Installed". */
+.fl-voice-tier-badge.is-warming { background: #eaf1fb; color: #3a63a8; }
 .fl-voice-tier-desc { margin: 5px 0 0; font-size: var(--text-secondary); color: var(--body); line-height: 1.45; }
 .fl-voice-tier-meta { margin: 5px 0 0; font-size: var(--text-caption); color: var(--muted, #8a8478); font-variant-numeric: tabular-nums; }
 .fl-voice-tier-why { margin: 5px 0 0; font-size: var(--text-caption); color: var(--muted, #8a8478); font-style: italic; }

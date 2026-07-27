@@ -79,7 +79,15 @@ export function VoiceTierCard({
     <div className={`fl-voice-tier${tier.installed ? ' is-installed' : ''}${!tier.available ? ' is-unavailable' : ''}`}>
       <div className="fl-voice-tier-head">
         <span className="fl-voice-tier-name">{tier.label}</span>
-        {tier.installed && <span className="fl-voice-tier-badge is-on">Installed</span>}
+        {tier.installed && (
+          tier.warm === false
+            // Installed but the model isn't loaded in memory yet (first use
+            // this session, or it unloaded itself after being idle) — the
+            // NEXT use will take a few real seconds rather than being
+            // instant, so this says so instead of over-claiming "ready".
+            ? <span className="fl-voice-tier-badge is-warming">Warming up…</span>
+            : <span className="fl-voice-tier-badge is-on">Installed</span>
+        )}
         {tier.coming_soon && tier.available && !tier.installed && <span className="fl-voice-tier-badge">Coming soon</span>}
         {!tier.available && <span className="fl-voice-tier-badge is-off">Unavailable</span>}
 

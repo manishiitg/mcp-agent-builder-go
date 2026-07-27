@@ -1497,11 +1497,15 @@ export default function LearningApp() {
   useEffect(() => {
     if (!settingsOpen) return
     refreshVoiceStatus()
-    // Poll only while a model is actually downloading — a multi-hundred-MB
-    // install needs live progress, but idle Settings shouldn't hit the server
-    // every two seconds for nothing.
-    const anyInstalling = voiceStatus?.stt_tiers.some((t) => t.installing)
-    if (!anyInstalling) return
+    // Poll while a model is actually downloading (live progress) OR still
+    // warming up in the background (see voice_worker.go's proactive
+    // startup warm-up) — otherwise "Warming up…" would sit stale until the
+    // parent happened to close and reopen Settings. Idle Settings with
+    // nothing in flight shouldn't hit the server every couple seconds though.
+    const allTiers = [...(voiceStatus?.stt_tiers ?? []), ...(voiceStatus?.tts_tiers ?? [])]
+    const anyInstalling = allTiers.some((t) => t.installing)
+    const anyWarming = allTiers.some((t) => t.installed && t.warm === false)
+    if (!anyInstalling && !anyWarming) return
     const id = window.setInterval(refreshVoiceStatus, 1500)
     return () => window.clearInterval(id)
   }, [settingsOpen, refreshVoiceStatus, voiceStatus])

@@ -179,6 +179,21 @@ func main() {
 		log.Printf("serving frontend from %s", webDir)
 	}
 
+	// If voice was already installed in an earlier session, start warming the
+	// persistent worker in the background right away — a parent's FIRST use
+	// each session should find it already loaded rather than paying the
+	// ~2-3s cold-start cost on whatever happens to be the first click.
+	if mlxVoiceInstalled() {
+		go func() {
+			if err := warmParakeet(context.Background()); err != nil {
+				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
+			}
+			if _, err := sharedVoiceWorker.call(map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
+				log.Printf("[voice] background warm-up (read-aloud voice) failed: %v", err)
+			}
+		}()
+	}
+
 	addr := ":" + strings.TrimPrefix(strings.TrimSpace(*port), ":")
 	log.Printf("family-server listening on %s", addr)
 	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
