@@ -64,7 +64,8 @@ func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	text, err := transcribeAudioFile(ctx, tmpPath)
+	// An explicit tier is a "Try it" from Settings; empty means normal use.
+	text, err := transcribeAudioFileWith(ctx, tmpPath, r.FormValue("tier"))
 	if err != nil {
 		// Surfaced verbatim rather than swallowed: the likely causes here are
 		// "model not downloaded yet" / "whisper-cli not installed", which the

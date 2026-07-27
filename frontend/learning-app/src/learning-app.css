@@ -1117,3 +1117,8 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-mic-test-live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-caption); color: var(--muted, #8a8478); }
 .fl-mic-test-bar { display: block; width: 40px; height: 4px; border-radius: 999px; background: #e67373; transform-origin: left center; transition: transform .06s linear; }
 .fl-mic-test-heard { margin: 0; padding: 7px 11px; border-radius: 10px; background: var(--sun-soft, #fdeecb); color: #6f5a2a; font-size: var(--text-secondary); }
+
+/* Remove is destructive — colour it so it can't be mistaken for Install at a
+   glance, since they sit side by side. */
+.fl-ghost-btn.is-danger { color: #b3261e; border-color: #e6c2c2; }
+.fl-ghost-btn.is-danger:hover { background: #fdecec; border-color: #d99a9a; color: #8c1d18; }

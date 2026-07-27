@@ -12,9 +12,9 @@ import { useMicDictation } from './useMicDictation'
  * is also the honest way to justify a 1.5GB upgrade: hear the mistakes the
  * smaller model makes on your own voice first.
  */
-export function MicTestButton() {
+export function MicTestButton({ tier }: { tier?: string }) {
   const [heard, setHeard] = useState<string | null>(null)
-  const { state, level, error, toggle } = useMicDictation((text) => setHeard(text))
+  const { state, level, error, toggle } = useMicDictation((text) => setHeard(text), tier)
 
   const recording = state === 'recording'
   const busy = state === 'transcribing'

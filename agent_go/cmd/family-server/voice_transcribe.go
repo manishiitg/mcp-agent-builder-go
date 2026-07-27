@@ -30,6 +30,14 @@ func whisperModelPath() string {
 // returns an error and the caller treats transcription as unavailable
 // (the audio file itself is still saved to the inbox regardless).
 func transcribeAudioFile(ctx context.Context, audioPath string) (string, error) {
+	return transcribeAudioFileWith(ctx, audioPath, "")
+}
+
+// transcribeAudioFileWith transcribes using a SPECIFIC model tier when tierID
+// is set, instead of the usual best-installed-wins. That's what lets Settings
+// offer a per-model "Try it": comparing models is only meaningful if each one
+// actually runs, rather than every button quietly using the same winner.
+func transcribeAudioFileWith(ctx context.Context, audioPath, tierID string) (string, error) {
 	ffmpegBin, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return "", fmt.Errorf("ffmpeg not installed (brew install ffmpeg)")
@@ -42,6 +50,13 @@ func transcribeAudioFile(ctx context.Context, audioPath string) (string, error) 
 	// upgrading a tier in Settings takes effect on the very next transcription
 	// with no separate "make it active" step to forget.
 	modelPath := bestInstalledWhisperModel()
+	if tierID != "" {
+		wt, ok := whisperTiers[tierID]
+		if !ok || !whisperTierInstalled(tierID) {
+			return "", fmt.Errorf("that speech model isn't installed")
+		}
+		modelPath = whisperTierPath(wt)
+	}
 	if modelPath == "" {
 		return "", fmt.Errorf("no speech model installed yet")
 	}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Download, Trash2, Loader2, Volume2 } from 'lucide-react'
 import { speakText } from './speech'
+import { MicTestButton } from './MicTestButton'
 import type { VoiceTier } from '../stores'
 
 function sizeLabel(mb?: number): string {
@@ -25,13 +26,16 @@ export function VoiceTierCard({
   onRemove,
   busy,
   sampleable,
+  testable,
 }: {
   tier: VoiceTier
   onInstall?: (id: string) => void
   onRemove?: (id: string) => void
   busy?: boolean
-  /** Read-aloud tiers can be previewed; speech-to-text tiers can't. */
+  /** Read-aloud tiers preview with a play button. */
   sampleable?: boolean
+  /** Speech tiers preview by recording you and showing what they heard. */
+  testable?: boolean
 }) {
   const [sampling, setSampling] = useState(false)
   const playSample = () => {
@@ -68,7 +72,7 @@ export function VoiceTierCard({
                 </button>
               )}
               {tier.can_remove && onRemove && (
-                <button className="fl-ghost-btn is-tiny" type="button" disabled={busy} onClick={() => onRemove(tier.id)} title="Delete this model and reclaim the space">
+                <button className="fl-ghost-btn is-tiny is-danger" type="button" disabled={busy} onClick={() => onRemove(tier.id)} title="Delete this and free up the space">
                   <Trash2 size={12} /> Remove
                 </button>
               )}
@@ -85,6 +89,7 @@ export function VoiceTierCard({
           <span className="fl-voice-progress-fill" style={{ width: `${pct}%` }} />
         </div>
       )}
+      {testable && tier.installed && !tier.installing && <MicTestButton tier={tier.id} />}
       {tier.install_error && <p className="fl-voice-tier-error">{tier.install_error}</p>}
       {!tier.available && tier.unavailable_reason && (
         <p className="fl-voice-tier-why">{tier.unavailable_reason}</p>

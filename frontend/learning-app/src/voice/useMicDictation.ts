@@ -15,7 +15,7 @@ export type MicState = 'idle' | 'recording' | 'transcribing'
  * it a recording UI is a lie: you can't tell "listening" from "mic is muted /
  * the wrong input is selected" until after you've already spoken.
  */
-export function useMicDictation(onText: (text: string) => void) {
+export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const [state, setState] = useState<MicState>('idle')
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -81,6 +81,9 @@ export function useMicDictation(onText: (text: string) => void) {
           const ext = (rec.mimeType || '').includes('mp4') ? 'mp4' : 'webm'
           const form = new FormData()
           form.append('audio', blob, `dictation.${ext}`)
+          // Forces a specific model, so a per-tier "Try it" really tests THAT
+          // model rather than whichever one currently wins.
+          if (tier) form.append('tier', tier)
           const res = await fetch(`${FAMILY_API}/api/voice/transcribe`, { method: 'POST', body: form })
           const data = await res.json()
           if (!res.ok) throw new Error(data?.error || `transcribe failed: ${res.status}`)
