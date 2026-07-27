@@ -29,16 +29,53 @@ def get_tts_model(name):
     return _tts_models[name]
 
 
-def handle_load_stt(req):
-    # Warms the model into memory without needing a real audio file — used
-    # during install (see installMlxVoiceEnv) so a parent's first real
-    # recording doesn't pay the load cost.
-    get_stt_model(req["model"])
-    return {"status": "ok"}
+def _silent_warmup_wav(path, seconds=1.0, sample_rate=16000):
+    """A trivial, silent WAV file — good enough to trigger MLX's real
+    first-inference compilation (which cares about input SHAPE, not content),
+    without depending on the OTHER model having warmed up first. STT and TTS
+    warm up in different orders depending on the caller (install warms TTS
+    first, server startup warms STT first — see voice_mlx_env.go/main.go), so
+    each warm-up path must be fully self-contained."""
+    import wave
+    import struct
+    n_samples = int(seconds * sample_rate)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(struct.pack(f"<{n_samples}h", *([0] * n_samples)))
 
 
 def handle_load_tts(req):
-    get_tts_model(req["model"])
+    # Loading weights is NOT enough to make the first real use fast: MLX
+    # lazily compiles/JIT's the computation graph on the first actual
+    # inference, separately from loading weights. Measured directly: first
+    # real generate_audio call after a fresh load took 3.456s; the second,
+    # with everything already compiled, took 0.217s. Running one real
+    # (discarded) synthesis here pays that one-time cost during install/
+    # startup instead of on the parent's first real "Listen" click.
+    from mlx_audio.tts.generate import generate_audio
+    import tempfile
+    model = get_tts_model(req["model"])
+    with tempfile.TemporaryDirectory() as tmp:
+        generate_audio(
+            text="Ready.", model=model, voice="af_heart", lang_code="a",
+            file_prefix=os.path.join(tmp, "warmup"), audio_format="wav",
+            join_audio=True, verbose=False,
+        )
+    return {"status": "ok"}
+
+
+def handle_load_stt(req):
+    # Same reasoning as handle_load_tts — a real (discarded) transcription,
+    # not just loaded weights, is what actually pays MLX's compilation cost.
+    from mlx_audio.stt.generate import generate_transcription
+    import tempfile
+    model = get_stt_model(req["model"])
+    with tempfile.TemporaryDirectory() as tmp:
+        clip = os.path.join(tmp, "warmup.wav")
+        _silent_warmup_wav(clip)
+        generate_transcription(model=model, audio=clip, verbose=False)
     return {"status": "ok"}
 
 

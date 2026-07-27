@@ -128,9 +128,10 @@ export function VoiceTierCard({
         <label className="fl-voice-pick">
           <span>Voice</span>
           <select value={voice} onChange={(e) => chooseVoice(e.target.value)}>
-            {voices.map((v) => (
-              <option key={v.id} value={v.id}>{v.accent ? `${v.label} · ${v.accent}` : v.label}</option>
-            ))}
+            {voices.map((v) => {
+              const parts = [v.label, v.accent, v.gender === 'male' ? 'Male' : v.gender === 'female' ? 'Female' : undefined].filter(Boolean)
+              return <option key={v.id} value={v.id}>{parts.join(' · ')}</option>
+            })}
           </select>
         </label>
       )}

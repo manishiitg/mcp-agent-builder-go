@@ -14,6 +14,7 @@ type voiceChoice struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
 	Accent string `json:"accent,omitempty"`
+	Gender string `json:"gender,omitempty"` // "male" | "female"
 }
 
 // systemVoiceAllowlist keeps the built-in tier to voices worth reading a
@@ -23,23 +24,23 @@ type voiceChoice struct {
 // Indian English (Aman, Rishi) is deliberately included and surfaced: this
 // app is aimed at CBSE/ICSE families, for whom a US voice is the less
 // natural default.
-var systemVoiceAllowlist = []struct{ name, accent string }{
-	{"Samantha", "American"},
-	{"Alex", "American"},
-	{"Ava", "American"},
-	{"Allison", "American"},
-	{"Tom", "American"},
-	{"Aman", "Indian"},
-	{"Rishi", "Indian"},
-	{"Veena", "Indian"},
-	{"Daniel", "British"},
-	{"Serena", "British"},
-	{"Kate", "British"},
-	{"Oliver", "British"},
-	{"Karen", "Australian"},
-	{"Lee", "Australian"},
-	{"Moira", "Irish"},
-	{"Fiona", "Scottish"},
+var systemVoiceAllowlist = []struct{ name, accent, gender string }{
+	{"Samantha", "American", "female"},
+	{"Alex", "American", "male"},
+	{"Ava", "American", "female"},
+	{"Allison", "American", "female"},
+	{"Tom", "American", "male"},
+	{"Aman", "Indian", "male"},
+	{"Rishi", "Indian", "male"},
+	{"Veena", "Indian", "female"},
+	{"Daniel", "British", "male"},
+	{"Serena", "British", "female"},
+	{"Kate", "British", "female"},
+	{"Oliver", "British", "male"},
+	{"Karen", "Australian", "female"},
+	{"Lee", "Australian", "male"},
+	{"Moira", "Irish", "female"},
+	{"Fiona", "Scottish", "female"},
 }
 
 // Name, then the locale code. Most rows are column-aligned with 2+ spaces
@@ -77,7 +78,7 @@ func systemVoices() []voiceChoice {
 	var voices []voiceChoice
 	for _, v := range systemVoiceAllowlist {
 		if installed[v.name] {
-			voices = append(voices, voiceChoice{ID: v.name, Label: v.name, Accent: v.accent})
+			voices = append(voices, voiceChoice{ID: v.name, Label: v.name, Accent: v.accent, Gender: v.gender})
 		}
 	}
 	return voices
@@ -104,6 +105,20 @@ var kokoroVoices = []voiceChoice{
 	{ID: "hf_beta", Label: "Beta", Accent: "Hindi"},
 	{ID: "hm_omega", Label: "Omega", Accent: "Hindi"},
 	{ID: "hm_psi", Label: "Psi", Accent: "Hindi"},
+}
+
+func init() {
+	// Kokoro's own naming convention: the letter right after the language
+	// code is the voice's gender — af_/bf_/hf_ = female, am_/bm_/hm_ = male.
+	// Derived rather than hand-entered per voice, so it can't drift out of
+	// sync with the ID list above.
+	for i, v := range kokoroVoices {
+		if len(v.ID) > 1 && v.ID[1] == 'f' {
+			kokoroVoices[i].Gender = "female"
+		} else if len(v.ID) > 1 && v.ID[1] == 'm' {
+			kokoroVoices[i].Gender = "male"
+		}
+	}
 }
 
 // voicesForTier lists what a given read-aloud tier can speak as.
