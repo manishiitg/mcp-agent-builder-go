@@ -60,8 +60,8 @@ export const LLMGenerationEndEventDisplay: React.FC<LLMGenerationEndEventProps> 
               <div className="text-sm font-medium text-green-700 dark:text-green-300">
                 LLM Generation End{' '}
                 <span className="text-xs font-normal text-green-600 dark:text-green-400">
-                  {event.turn && `• Turn ${event.turn}`}
-                  {event.duration && ` • ${formatDuration(event.duration)}`}
+                  {event.turn != null && `• Turn ${event.turn}`}
+                  {event.duration != null && ` • ${formatDuration(event.duration)}`}
                   {event.tool_calls !== undefined && ` • ${event.tool_calls} tool calls`}
                   {event.usage_metrics && (
                     <>

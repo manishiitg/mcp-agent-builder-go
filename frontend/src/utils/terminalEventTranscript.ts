@@ -362,3 +362,110 @@ export function buildTranscriptItems(events: PollingEvent[]): TranscriptItem[] {
 
   return items
 }
+
+export interface PairedToolCall {
+  key: string
+  /** Friendly tool name — MCP's `mcp__<server>__<tool>` reduced to `<tool>`. */
+  name: string
+  /** MCP server that owns the tool, when the name encoded one. */
+  server?: string
+  /** start/end/error events for this call, in arrival order, for detail rendering. */
+  events: PollingEvent[]
+  status: 'running' | 'ok' | 'error'
+  durationMs?: number
+  /** Arguments the model passed. Carried on the START event (tool_params). */
+  args?: string
+  /** What the tool returned. Carried on the END event. */
+  result?: string
+}
+
+/**
+ * mcpToolDisplayName splits MCP's wire name into its parts.
+ *
+ * A tool arrives as `mcp__api-bridge__agent_browser`. Rendered raw it is the
+ * least readable thing on screen, and the double underscores read as damage.
+ * The server is worth keeping — just not welded into the name.
+ */
+export function mcpToolDisplayName(raw: string): { name: string; server?: string } {
+  const match = /^mcp__(.+?)__(.+)$/.exec(raw.trim())
+  if (!match) return { name: raw.trim() }
+  return { name: match[2], server: match[1] }
+}
+
+/** Arguments live under tool_params.arguments on the start event. */
+function toolCallArgs(event: PollingEvent): string {
+  const params = toolCallField(event, 'tool_params')
+  if (params && typeof params === 'object') {
+    return textField((params as Record<string, unknown>).arguments)
+  }
+  return ''
+}
+
+function toolCallField(event: PollingEvent, key: string): unknown {
+  const fields = eventFields(event)
+  return fields[key]
+}
+
+/**
+ * pairToolCalls collapses the start/end (or start/error) events of one tool
+ * call into a single item.
+ *
+ * The transcript previously rendered a "Tool Call Start" row and a "Tool Call
+ * End" row for every call — two near-identical rows, neither showing what the
+ * tool did, and the pair split apart whenever calls interleaved. A reader wants
+ * one line per call: what ran, whether it worked, how long it took.
+ *
+ * Pairs on tool_call_id. Events without one (or an end with no matching start)
+ * still get their own item, so nothing is ever dropped.
+ */
+export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
+  const out: PairedToolCall[] = []
+  const byCallID = new Map<string, PairedToolCall>()
+
+  for (const event of events) {
+    const type = event.type || ''
+    if (!TOOL_CALL_TYPES.has(type)) continue
+
+    const callID = textField(toolCallField(event, 'tool_call_id'))
+    const rawName = textField(toolCallField(event, 'tool_name'))
+    const existing = callID ? byCallID.get(callID) : undefined
+
+    if (!existing) {
+      const { name, server } = mcpToolDisplayName(rawName)
+      const item: PairedToolCall = {
+        key: event.id || `${type}-${out.length}`,
+        name: name || 'tool',
+        server: server || textField(toolCallField(event, 'server_name')) || undefined,
+        events: [event],
+        status: type === 'tool_call_error' ? 'error' : type === 'tool_call_end' ? 'ok' : 'running',
+      }
+      const duration = toolCallField(event, 'duration')
+      if (typeof duration === 'number') item.durationMs = duration
+      const args = toolCallArgs(event)
+      if (args) item.args = args
+      const result = textField(toolCallField(event, 'result'))
+      if (result) item.result = result
+      out.push(item)
+      if (callID) byCallID.set(callID, item)
+      continue
+    }
+
+    existing.events.push(event)
+    if (type === 'tool_call_error') existing.status = 'error'
+    else if (type === 'tool_call_end' && existing.status !== 'error') existing.status = 'ok'
+    const duration = toolCallField(event, 'duration')
+    if (typeof duration === 'number') existing.durationMs = duration
+    const args = toolCallArgs(event)
+    if (args) existing.args = args
+    const result = textField(toolCallField(event, 'result'))
+    if (result) existing.result = result
+    // A start may lack the name that the end carries (and vice versa).
+    if (existing.name === 'tool' && rawName) {
+      const { name, server } = mcpToolDisplayName(rawName)
+      existing.name = name
+      existing.server = existing.server || server
+    }
+  }
+
+  return out
+}

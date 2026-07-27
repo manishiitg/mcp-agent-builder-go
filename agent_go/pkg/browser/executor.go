@@ -1233,12 +1233,41 @@ func (e *Executor) cdpTabSelectionError(ctx context.Context, session, cdpURL str
 	return fmt.Errorf("failed to select CDP tab %q before %q: %w\n\nThe tab label/id %q is not currently selectable. Do not retry page actions with this label. Select a known tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"<tab-id-or-label>\"]) or create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", %q, \"<url>\"]).", tab, command, selectErr, tab, configuredURL, configuredURL, tab)
 }
 
+// unmarkedCDPTabArg looks for a tab id that was passed as a bare positional
+// (["--cdp", url, "t7"]) instead of being marked with tab/--tab. The tab
+// selection is still rejected -- silently guessing which positional is a tab
+// would misread ordinary arguments -- but naming the token lets the error say
+// "you passed t7, mark it" instead of the misleading "no tab was provided",
+// and lets the retry hints drop the stray token instead of repeating it.
+// Only the strict tN id form counts, and only outside a flag's value slot, so
+// e.g. type --text t7 is never mistaken for a tab selection.
+func unmarkedCDPTabArg(args []string) (tab string, rest []string) {
+	for i, arg := range args {
+		if !isCDPTabID(arg) {
+			continue
+		}
+		if i > 0 && strings.HasPrefix(args[i-1], "-") {
+			continue
+		}
+		rest = append(append([]string{}, args[:i]...), args[i+1:]...)
+		return strings.TrimSpace(arg), rest
+	}
+	return "", args
+}
+
 func missingCDPPageActionTabError(port int, command string, commandArgs []string, tabHint string) error {
 	normalizedArgs := normalizeAgentBrowserCommandArgs(command, commandArgs)
+	unmarkedTab, normalizedArgs := unmarkedCDPTabArg(normalizedArgs)
+	tabPlaceholder := "<tab-id-or-label>"
+	diagnosis := fmt.Sprintf("CDP shared-browser mode requires every page action to include a tab before %q.\n\n%s", command, tabHint)
+	if unmarkedTab != "" {
+		tabPlaceholder = unmarkedTab
+		diagnosis = fmt.Sprintf("CDP shared-browser mode requires every page action to include a tab before %q.\n\nTab %q was passed as a bare positional argument, so it was not read as a tab selection. Mark it with tab or --tab.", command, unmarkedTab)
+	}
 	cdpPrefix := []string{"--cdp", resolveCdpURL(port)}
-	tabRetryArgs := append(append(append([]string{}, cdpPrefix...), "tab", "<tab-id-or-label>"), normalizedArgs...)
-	flagRetryArgs := append(append(append([]string{}, cdpPrefix...), "--tab", "<tab-id-or-label>"), normalizedArgs...)
-	return fmt.Errorf("CDP shared-browser mode requires every page action to include a tab before %q.\n\n%s\n\nRetry the same command with the tab inline:\nagent_browser(command=%q, args=%s)\nor:\nagent_browser(command=%q, args=%s)\n\nDo not put the command name inside args. For wait, use milliseconds or native wait options after the CDP+tab prefix.\n\nIf no tab is selected yet, create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", \"<label>\", \"<url>\"]).", command, tabHint, command, jsonStringSlice(tabRetryArgs), command, jsonStringSlice(flagRetryArgs), resolveCdpURL(port))
+	tabRetryArgs := append(append(append([]string{}, cdpPrefix...), "tab", tabPlaceholder), normalizedArgs...)
+	flagRetryArgs := append(append(append([]string{}, cdpPrefix...), "--tab", tabPlaceholder), normalizedArgs...)
+	return fmt.Errorf("%s\n\nRetry the same command with the tab inline:\nagent_browser(command=%q, args=%s)\nor:\nagent_browser(command=%q, args=%s)\n\nDo not put the command name inside args. For wait, use milliseconds or native wait options after the CDP+tab prefix.\n\nIf no tab is selected yet, create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", \"<label>\", \"<url>\"]).", diagnosis, command, jsonStringSlice(tabRetryArgs), command, jsonStringSlice(flagRetryArgs), resolveCdpURL(port))
 }
 
 func jsonStringSlice(args []string) string {

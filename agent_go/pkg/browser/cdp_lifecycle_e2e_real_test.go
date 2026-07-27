@@ -269,6 +269,24 @@ document.querySelector('#upload').addEventListener('change', async (event) => {
 		t.Fatalf("selection response is not context-safe: %q", selection)
 	}
 
+	// A page action that carries the tab as a bare positional ("t7") instead of
+	// marking it ("--tab t7") is still rejected -- a sticky selection exists at
+	// this point and must not be used to paper over the unmarked argument -- but
+	// the error has to name the tab it found rather than claim none was given,
+	// and the retry it suggests has to work against the real CLI.
+	_, unmarkedErr := managedCall(ctx, "snapshot", workflowTabID)
+	if unmarkedErr == nil {
+		t.Fatal("bare positional tab was accepted; the page-action tab guard must stay strict")
+	}
+	if !strings.Contains(unmarkedErr.Error(), fmt.Sprintf("Tab %q was passed as a bare positional argument", workflowTabID)) {
+		t.Fatalf("unmarked-tab error must name the supplied tab, got: %v", unmarkedErr)
+	}
+	if !strings.Contains(unmarkedErr.Error(), fmt.Sprintf(`"--tab","%s"`, workflowTabID)) {
+		t.Fatalf("unmarked-tab error must suggest marking the supplied tab, got: %v", unmarkedErr)
+	}
+	// Follow the error's own advice; if this fails the hint is misleading agents.
+	managed("snapshot", "--tab", workflowTabID)
+
 	// The daemon was launched with access only to workflow A's Downloads. Later
 	// requests grant two disjoint workflow trees. Concurrent uploads must bridge
 	// that stale daemon sandbox without crossing either workflow's FolderGuard.

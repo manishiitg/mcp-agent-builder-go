@@ -90,7 +90,7 @@ export const ToolCallStartEventDisplay: React.FC<ToolCallStartEventProps> = ({ e
                 </span>
               )}
               <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                {event.turn && `• Turn: ${event.turn}`}
+                {event.turn != null && `• Turn: ${event.turn}`}
                 {event.tool_name && ` • Tool: ${event.tool_name}`}
                 {event.server_name && ` • Server: ${event.server_name}`}
               </span>

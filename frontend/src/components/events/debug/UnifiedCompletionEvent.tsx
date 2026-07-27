@@ -100,7 +100,7 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
           <div className="text-sm font-medium text-red-700 dark:text-red-300">
             Error
             <span className="text-xs font-normal text-red-600 dark:text-red-400 ml-2">
-              {event.duration && `${formatDuration(event.duration)}`}
+              {event.duration != null && `${formatDuration(event.duration)}`}
               {event.turns && ` | ${event.turns} turns`}
             </span>
           </div>
@@ -127,7 +127,7 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs text-gray-500 dark:text-gray-400">
           Completed
-          {event.duration && ` in ${formatDuration(event.duration)}`}
+          {event.duration != null && ` in ${formatDuration(event.duration)}`}
           {event.turns && ` (${event.turns} turns)`}
         </div>
         {event.timestamp && (

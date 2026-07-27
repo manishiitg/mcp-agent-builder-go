@@ -36,7 +36,7 @@ export const BrokenPipeEventDisplay: React.FC<BrokenPipeEventDisplayProps> = ({ 
               <span className="text-xs font-normal text-gray-600 dark:text-gray-400">
                 {event.tool_name && `Tool: ${event.tool_name}`}
                 {event.server_name && ` | Server: ${event.server_name}`}
-                {event.duration && ` | ${event.duration}`}
+                {event.duration != null && ` | ${event.duration}`}
               </span>
             </div>
           </div>

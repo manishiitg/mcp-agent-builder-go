@@ -4,6 +4,8 @@ import { CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import {
   buildTranscriptItems,
+  pairToolCalls,
+  type PairedToolCall,
   selectTerminalEvents,
   toolBatchLabel,
   type TranscriptItem,
@@ -26,9 +28,96 @@ import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 // Selection/grouping logic lives in utils/terminalEventTranscript.ts so it can
 // be unit-tested without pulling React in.
 
+// ONE card per tool call — not one per event.
+//
+// A single call arrives as two events and the transcript used to draw a card
+// for each. That was worse than verbose, it was misleading: the start event
+// never carries arguments, so its "Arguments: (no arguments)" section was
+// permanently empty, while the end event held both the arguments and the
+// result behind a disclosure. The reader saw two boxes, the useful one closed.
+//
+// This renders the pair as one thing — identity from the start, args + result
+// from the end — and deliberately does NOT nest the old per-event cards, which
+// is what produced triplicated server names, boxes inside boxes, and a scroll
+// container fighting itself.
+const PREVIEW_LIMIT = 600
+
+const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
+  const [open, setOpen] = useState(false)
+  const hasDetail = Boolean(pair.args || pair.result)
+
+  const mark = pair.status === 'error' ? '✗' : pair.status === 'ok' ? '✓' : '⋯'
+  const markClass =
+    pair.status === 'error' ? 'text-red-400' : pair.status === 'ok' ? 'text-emerald-400' : 'text-neutral-500'
+  const duration =
+    pair.durationMs != null && pair.durationMs > 0
+      ? pair.durationMs >= 1000
+        ? `${(pair.durationMs / 1000).toFixed(1)}s`
+        : `${pair.durationMs}ms`
+      : null
+
+  return (
+    <div data-testid="terminal-clear-tool-call" className="rounded border border-neutral-800 bg-neutral-900/40">
+      <button
+        type="button"
+        onClick={() => hasDetail && setOpen(prev => !prev)}
+        aria-expanded={hasDetail ? open : undefined}
+        disabled={!hasDetail}
+        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
+          hasDetail ? 'hover:bg-neutral-800/60' : 'cursor-default'
+        }`}
+      >
+        <span className={`shrink-0 font-mono ${markClass}`}>{mark}</span>
+        <span className="truncate font-medium text-neutral-200">{pair.name}</span>
+        {pair.server && (
+          <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+            {pair.server}
+          </span>
+        )}
+        {duration && <span className="shrink-0 tabular-nums text-[10px] text-neutral-500">{duration}</span>}
+        {hasDetail && <span className="ml-auto shrink-0 font-mono text-neutral-600">{open ? '▾' : '▸'}</span>}
+      </button>
+
+      {open && hasDetail && (
+        <div className="space-y-2 border-t border-neutral-800 px-2 py-2">
+          {pair.args && <ToolCallField label="Arguments" value={pair.args} />}
+          {pair.result && <ToolCallField label="Result" value={pair.result} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Long args/results must scroll INSIDE their own box. Letting them size the
+// card is what broke scrolling once a tool was opened: a multi-KB result grew
+// the row past the viewport and took the transcript's scroll with it.
+const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, value }) => {
+  const [full, setFull] = useState(false)
+  const isLong = value.length > PREVIEW_LIMIT
+  const shown = full || !isLong ? value : `${value.slice(0, PREVIEW_LIMIT)}…`
+  return (
+    <div className="min-w-0">
+      <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">{label}</div>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] leading-5 text-neutral-300">
+        {shown}
+      </pre>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setFull(prev => !prev)}
+          className="mt-1 text-[10px] text-neutral-500 hover:text-neutral-300"
+        >
+          {full ? 'Show less' : `Show all (${value.length.toLocaleString()} chars)`}
+        </button>
+      )}
+    </div>
+  )
+}
+
 const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> = ({ item }) => {
   const [expanded, setExpanded] = useState(false)
   const label = useMemo(() => toolBatchLabel(item.events), [item.events])
+  const pairs = useMemo(() => pairToolCalls(item.events), [item.events])
   const toggle = useCallback(() => setExpanded(prev => !prev), [])
 
   return (
@@ -47,9 +136,9 @@ const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> 
         {label && <span className="truncate text-neutral-500">· {label}</span>}
       </button>
       {expanded && (
-        <div data-testid="terminal-clear-tool-batch-content" className="mt-1 space-y-1 border-l border-neutral-700/60 pl-3">
-          {item.events.map((event, idx) => (
-            <EventDispatcher key={event.id || `tool-${idx}`} event={event} compact hideOrchestratorContext />
+        <div data-testid="terminal-clear-tool-batch-content" className="mt-1 space-y-0.5 border-l border-neutral-700/60 pl-3">
+          {pairs.map(pair => (
+            <ToolCallCard key={pair.key} pair={pair} />
           ))}
         </div>
       )}

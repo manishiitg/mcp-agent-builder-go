@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  pairToolCalls,
   selectTerminalEvents,
   buildTranscriptItems,
   collapseCompletedLifecycleStarts,
@@ -401,5 +402,94 @@ describe('buildTranscriptItems — duplicate execution_prompt suppression', () =
       }),
     ])
     expect(items.map(i => i.key)).toEqual(['start', 'notice'])
+  })
+})
+
+describe('pairToolCalls', () => {
+  const tool = (id: string, type: string, extra: Record<string, unknown> = {}) =>
+    evt({ id, session_id: 's1', type, data: { data: { tool_call_id: 'call-1', ...extra } } as never })
+
+  it('collapses a start/end pair into ONE row instead of two', () => {
+    const pairs = pairToolCalls([
+      tool('a', 'tool_call_start', { tool_name: 'ToolSearch' }),
+      tool('b', 'tool_call_end', { tool_name: 'ToolSearch', duration: 1200 }),
+    ])
+    expect(pairs).toHaveLength(1)
+    expect(pairs[0].name).toBe('ToolSearch')
+    expect(pairs[0].status).toBe('ok')
+    expect(pairs[0].durationMs).toBe(1200)
+    expect(pairs[0].events).toHaveLength(2)
+  })
+
+  it('strips the mcp__server__tool wire name and keeps the server separately', () => {
+    const pairs = pairToolCalls([
+      tool('a', 'tool_call_start', { tool_name: 'mcp__api-bridge__agent_browser' }),
+    ])
+    expect(pairs[0].name).toBe('agent_browser')
+    expect(pairs[0].server).toBe('api-bridge')
+  })
+
+  it('marks a call still running when only the start has arrived', () => {
+    expect(pairToolCalls([tool('a', 'tool_call_start', { tool_name: 'x' })])[0].status).toBe('running')
+  })
+
+  it('an error anywhere in the pair wins over a later success', () => {
+    const pairs = pairToolCalls([
+      tool('a', 'tool_call_start', { tool_name: 'x' }),
+      tool('b', 'tool_call_error', { tool_name: 'x' }),
+      tool('c', 'tool_call_end', { tool_name: 'x' }),
+    ])
+    expect(pairs).toHaveLength(1)
+    expect(pairs[0].status).toBe('error')
+  })
+
+  it('keeps interleaved calls separate rather than merging them', () => {
+    const a = (id: string, type: string, name: string) =>
+      evt({ id, session_id: 's1', type, data: { data: { tool_call_id: 'A', tool_name: name } } as never })
+    const b = (id: string, type: string, name: string) =>
+      evt({ id, session_id: 's1', type, data: { data: { tool_call_id: 'B', tool_name: name } } as never })
+    const pairs = pairToolCalls([
+      a('1', 'tool_call_start', 'first'),
+      b('2', 'tool_call_start', 'second'),
+      a('3', 'tool_call_end', 'first'),
+      b('4', 'tool_call_end', 'second'),
+    ])
+    expect(pairs.map(p => p.name)).toEqual(['first', 'second'])
+    expect(pairs.every(p => p.status === 'ok')).toBe(true)
+  })
+
+  it('never drops an event that has no tool_call_id to pair on', () => {
+    const orphan = evt({ id: 'o', session_id: 's1', type: 'tool_call_end', data: { data: { tool_name: 'lonely' } } as never })
+    const pairs = pairToolCalls([orphan])
+    expect(pairs).toHaveLength(1)
+    expect(pairs[0].name).toBe('lonely')
+  })
+})
+
+describe('pairToolCalls — args and result surfaced on the pair', () => {
+  it('takes arguments from the START event and the result from the END event', () => {
+    // This split is the whole reason a per-event card was misleading: neither
+    // event alone can render a complete tool call.
+    const start = evt({
+      id: 'a', session_id: 's1', type: 'tool_call_start',
+      data: { data: { tool_call_id: 'c1', tool_name: 'agent_browser', tool_params: { arguments: '{"action":"status"}' } } } as never,
+    })
+    const end = evt({
+      id: 'b', session_id: 's1', type: 'tool_call_end',
+      data: { data: { tool_call_id: 'c1', tool_name: 'agent_browser', result: 'CDP connected', duration: 1200 } } as never,
+    })
+    const [pair] = pairToolCalls([start, end])
+    expect(pair.args).toBe('{"action":"status"}')
+    expect(pair.result).toBe('CDP connected')
+    expect(pair.durationMs).toBe(1200)
+    expect(pair.status).toBe('ok')
+  })
+
+  it('leaves args/result undefined when the provider sent neither', () => {
+    const [pair] = pairToolCalls([
+      evt({ id: 'a', session_id: 's1', type: 'tool_call_start', data: { data: { tool_call_id: 'c1', tool_name: 'x' } } as never }),
+    ])
+    expect(pair.args).toBeUndefined()
+    expect(pair.result).toBeUndefined()
   })
 })

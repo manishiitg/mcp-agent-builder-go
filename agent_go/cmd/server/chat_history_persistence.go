@@ -551,7 +551,50 @@ func chatHistoryMessagesEqual(a, b llmtypes.MessageContent) bool {
 	return aErr == nil && bErr == nil && string(aJSON) == string(bJSON)
 }
 
+// collapseChatHistoryStreamingChunks drops every streaming_chunk in a
+// consecutive run except the last one for that execution.
+//
+// A streaming_chunk is not a text delta -- it is a full render of the pane at
+// that instant, roughly a kilobyte apiece, and the UI consumes it by calling
+// setOwnedStreamingTerminalSnapshot(key, chunkIndex, content), i.e. last
+// writer wins. Nothing replays the intermediate frames, so persisting all of
+// them stores the same screen dozens of times: one real two-turn conversation
+// spent 74.5 KB across 75 chunks, 58% of its events, to preserve a single
+// final pane that the last chunk already carries.
+//
+// Runs are keyed by execution so two terminals streaming concurrently do not
+// collapse into each other, and the final chunk of each run is kept because
+// structured (non-tmux) providers rebuild their synthetic terminal from it.
+// This runs before the event cap, so the cap now spends its budget on real
+// conversation events instead of discarding them to make room for duplicate
+// screens.
+func collapseChatHistoryStreamingChunks(uiEvents []internalevents.Event) []internalevents.Event {
+	const streamingChunk = "streaming_chunk"
+	collapsed := make([]internalevents.Event, 0, len(uiEvents))
+	for i := 0; i < len(uiEvents); i++ {
+		event := uiEvents[i]
+		if event.Type != streamingChunk {
+			collapsed = append(collapsed, event)
+			continue
+		}
+		// Advance to the last chunk of this run for this execution. A chunk
+		// belonging to a different execution ends the run so its own frames
+		// are not silently dropped.
+		last := i
+		for j := i + 1; j < len(uiEvents); j++ {
+			if uiEvents[j].Type != streamingChunk || uiEvents[j].ExecutionID != event.ExecutionID {
+				break
+			}
+			last = j
+		}
+		collapsed = append(collapsed, uiEvents[last])
+		i = last
+	}
+	return collapsed
+}
+
 func trimChatHistoryUIEvents(uiEvents []internalevents.Event) []internalevents.Event {
+	uiEvents = collapseChatHistoryStreamingChunks(uiEvents)
 	if len(uiEvents) <= maxPersistedChatHistoryUIEvents {
 		return uiEvents
 	}
