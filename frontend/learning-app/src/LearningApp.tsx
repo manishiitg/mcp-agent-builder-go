@@ -1068,6 +1068,16 @@ export default function LearningApp() {
   // off an activity often means "just carry on the same chat", not a fresh
   // start, so this is the parent's call rather than a silent guess.
   const [pendingChildEntry, setPendingChildEntry] = useState<{ dir: string; greetingText: string } | null>(null)
+  // Bumped by every performHandoff call, captured by its own response. If a
+  // second "Give to child" fires (a different activity, clicked before the
+  // first request finished) before this one's response lands, its generation
+  // no longer matches — the response is discarded instead of kicking off a
+  // chat for an activity the parent already navigated away from. Without
+  // this, whichever request happened to resolve LAST won regardless of which
+  // was actually clicked last, since fetch responses aren't guaranteed to
+  // arrive in request order — the same race speakText's generation counter
+  // (see voice/speech.ts) already fixed for double-playback.
+  const handoffGenerationRef = useRef(0)
   // The workspace's TRUE size on disk, from /api/workspace/tree — including
   // what the listing hides (see workspaceTreeResponse), so the number in the
   // Files tab is the one worth watching for growth.
@@ -2372,6 +2382,7 @@ export default function LearningApp() {
   // reads. resume asks the backend to keep Myra's existing conversation going
   // instead of its own same-activity heuristic.
   const performHandoff = (dir: string, greetingText: string, resume: boolean) => {
+    const myGeneration = ++handoffGenerationRef.current
     fetch(`${FAMILY_API}/api/parent/handoff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2380,6 +2391,11 @@ export default function LearningApp() {
       .then((res) => res.json())
       .then((data: { new_session?: boolean; dir?: string; title?: string; guide_note?: string }) => {
         if (!data.dir) return
+        // A newer handoff has started since this one was fired (a different
+        // activity, clicked before this request finished) — its own response
+        // will apply instead, so bail out here rather than starting a chat
+        // for an activity the parent already navigated away from.
+        if (myGeneration !== handoffGenerationRef.current) return
         enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.guide_note, data.title)
       })
       .catch(() => {})
