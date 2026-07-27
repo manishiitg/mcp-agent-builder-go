@@ -18,6 +18,19 @@ import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 // View. A long reviewer can emit dozens of status_line updates; rendering each
 // one as a card pushes the actual finding off screen.
 const NON_TRANSCRIPT_TYPES = new Set(['token_usage', 'status_line'])
+
+// A full run is a CONTAINER, not an agent: it has no conversation of its own,
+// only the steps beneath it. The backend already declares this
+// (ExecutionKindFullRun) and keeps it out of the terminal rail for exactly that
+// reason, but its lifecycle card still rendered at the top of the transcript --
+// a "Full Run [Group / Iteration 0]" row restating the panel header above it
+// before the first thing that actually happened.
+const CONTAINER_EXECUTION_KINDS = new Set(['full_run'])
+
+function isContainerLifecycleEvent(event: PollingEvent): boolean {
+  if (!CONTAINER_EXECUTION_KINDS.has(event.execution_kind || '')) return false
+  return LIFECYCLE_EVENT_FAMILIES[event.type || ''] !== undefined
+}
 const TOOL_CALL_TYPES = new Set([
   'tool_call_start',
   'tool_call_end',
@@ -80,7 +93,53 @@ function normalizedLifecycleName(fields: Record<string, unknown>): string {
     .replace(/^-+|-+$/g, '')
 }
 
-function lifecycleKey(event: PollingEvent): string | null {
+function lifecycleFamily(event: PollingEvent): string {
+  return LIFECYCLE_EVENT_FAMILIES[event.type || '']?.family || ''
+}
+
+function lifecycleExecutionID(event: PollingEvent): string {
+  const fields = eventFields(event)
+  return textField(event.execution_id) || textField(fields.execution_id) || textField(fields.agent_id)
+}
+
+// The server and the delegated agent both announce the SAME execution, and they
+// decorate the name differently at each end -- "Pulse reviewer: pulse 2026 07 27
+// bug review" against "Background: Pulse reviewer - pulse-2026-07-27-bug-review".
+// Including the name in the dedupe key therefore made one reviewer render as two
+// agents. Normalising those strings is a losing game (they differ by word order,
+// separators and prefix), so identity comes from the execution id instead.
+//
+// The name still has a job: sibling agents can legitimately share one execution
+// id -- an eval step emits "...route-val-2" and "...route-val-3" under the same
+// id -- and those must stay apart. The distinguishing signal is whether a single
+// family emits more than one start for that execution: aliases arrive one per
+// family, real siblings repeat within a family. Measured across 1101 executions
+// in stored history, exactly 2 fall in the latter group.
+function aliasCollapsibleExecutions(events: PollingEvent[]): Set<string> {
+  const perExecutionFamilyCounts = new Map<string, Map<string, number>>()
+  for (const event of events) {
+    const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
+    if (!descriptor?.start) continue
+    const executionID = lifecycleExecutionID(event)
+    if (!executionID) continue
+    const families = perExecutionFamilyCounts.get(executionID) || new Map<string, number>()
+    const family = lifecycleFamily(event)
+    families.set(family, (families.get(family) || 0) + 1)
+    perExecutionFamilyCounts.set(executionID, families)
+  }
+
+  const collapsible = new Set<string>()
+  for (const [executionID, families] of perExecutionFamilyCounts) {
+    let repeats = false
+    for (const count of families.values()) {
+      if (count > 1) repeats = true
+    }
+    if (!repeats) collapsible.add(executionID)
+  }
+  return collapsible
+}
+
+function lifecycleKey(event: PollingEvent, aliasExecutions?: Set<string>): string | null {
   const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
   if (!descriptor) return null
   const fields = eventFields(event)
@@ -91,11 +150,13 @@ function lifecycleKey(event: PollingEvent): string | null {
   // those as aliases, not two agents. The execution id is shared across both
   // event families; the name protects sequence items that share a parent
   // execution from collapsing into one another.
-  const executionID =
-    textField(event.execution_id) ||
-    textField(fields.execution_id) ||
-    textField(fields.agent_id)
-  if (executionID) return `execution:${executionID}:${name}`
+  const executionID = lifecycleExecutionID(event)
+  if (executionID) {
+    // Alias case: one start per family for this execution, so the differing
+    // names are two labels for the same agent.
+    if (aliasExecutions?.has(executionID)) return `execution:${executionID}`
+    return `execution:${executionID}:${name}`
+  }
 
   // Correlation is shared by a start/end pair. Include the agent identity so
   // sibling agents that happen to share the same workflow correlation cannot
@@ -119,10 +180,11 @@ function lifecycleStartRichness(event: PollingEvent): number {
 export function collapseCompletedLifecycleStarts(events: PollingEvent[]): PollingEvent[] {
   const openStarts = new Map<string, PollingEvent>()
   const hiddenStarts = new Set<PollingEvent>()
+  const aliasExecutions = aliasCollapsibleExecutions(events)
 
   for (const event of events) {
     const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
-    const key = lifecycleKey(event)
+    const key = lifecycleKey(event, aliasExecutions)
     if (!descriptor || !key) continue
     if (descriptor.start) {
       const current = openStarts.get(key)
@@ -200,7 +262,9 @@ function dropDuplicateExecutionPromptMessages(events: PollingEvent[]): PollingEv
 }
 
 function isTranscriptEvent(event: PollingEvent): boolean {
-  return !NON_TRANSCRIPT_TYPES.has(event.type || '')
+  if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
+  if (isContainerLifecycleEvent(event)) return false
+  return true
 }
 
 function isToolBatchEvent(event: PollingEvent): boolean {

@@ -559,3 +559,81 @@ describe('answer shown exactly once', () => {
     expect(ids).toContain('done')
   })
 })
+
+describe('full-run container rows', () => {
+  const ev = (id: string, type: string, execution_kind?: string): any => ({
+    id, type, execution_kind, data: { data: { name: 'full-run [Toptal Bid / iteration-0]' } },
+  })
+
+  // A full run has no conversation of its own -- the backend already keeps it
+  // out of the rail for that reason. Its lifecycle card just restated the panel
+  // header before the first real event.
+  it('drops full_run lifecycle rows from the transcript', () => {
+    const items = buildTranscriptItems([
+      ev('fullrun', 'background_agent_started', 'full_run'),
+      ev('routing', 'orchestrator_agent_start', 'orchestrator'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).not.toContain('fullrun')
+    expect(ids).toContain('routing')
+  })
+
+  it('keeps non-lifecycle events even when tagged full_run', () => {
+    const items = buildTranscriptItems([ev('msg', 'user_message', 'full_run')])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toContain('msg')
+  })
+})
+
+describe('lifecycle alias dedupe', () => {
+  const start = (id: string, type: string, name: string, execution_id = 'pulse-review-2026-07-27-bug'): any => ({
+    id, type, execution_id, data: { data: { name, provider: 'claude-code', model_id: 'opus' } },
+  })
+
+  // Real production names for ONE reviewer: the server and the delegated agent
+  // decorate the same execution differently, so the agent rendered twice.
+  it('collapses background/orchestrator starts for the same execution', () => {
+    const items = buildTranscriptItems([
+      start('bg', 'background_agent_started', 'Pulse reviewer: pulse 2026 07 27 bug review'),
+      start('orch', 'orchestrator_agent_start', 'Background: Pulse reviewer - pulse-2026-07-27-bug-review'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toHaveLength(1)
+    expect(ids).toContain('orch') // the richer payload wins
+  })
+
+  // Siblings that legitimately share one execution id must stay apart. An eval
+  // step emits several orchestrator starts under the same id; repeats WITHIN a
+  // family are the signal that these are distinct agents, not aliases.
+  it('keeps repeated starts from the same family distinct', () => {
+    const items = buildTranscriptItems([
+      start('v2', 'orchestrator_agent_start', 'step-1-execution-evaluate-search-route-val-2', 'workflow-step:eval'),
+      start('v3', 'orchestrator_agent_start', 'step-1-execution-evaluate-search-route-val-3', 'workflow-step:eval'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toHaveLength(2)
+  })
+
+  // Mixed families where one family repeats: the repeats are real agents, so
+  // nothing may collapse on execution id alone.
+  it('does not alias-collapse when a family repeats on that execution', () => {
+    const items = buildTranscriptItems([
+      start('a', 'agent_start', 'eval', 'workflow-step:eval'),
+      start('v2', 'orchestrator_agent_start', 'route-val-2', 'workflow-step:eval'),
+      start('v3', 'orchestrator_agent_start', 'route-val-3', 'workflow-step:eval'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toContain('v2')
+    expect(ids).toContain('v3')
+  })
+
+  // Different executions are never merged, however similar the names.
+  it('never merges across executions', () => {
+    const items = buildTranscriptItems([
+      start('bug', 'background_agent_started', 'Pulse reviewer: pulse bug review', 'exec-bug'),
+      start('art', 'background_agent_started', 'Pulse reviewer: pulse artifact review', 'exec-artifact'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toHaveLength(2)
+  })
+})

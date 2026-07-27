@@ -1651,6 +1651,11 @@ const LiveAttachXtermPaneInner: React.FC<{
               return
             }
             setConnectionState('reconnecting')
+            // Same reason as the suspend-output step: this path reconnects
+            // because the grid changed, and GEOMETRY_RECONNECT_AFTER_CLOSE is
+            // only ['fit', 'open-socket'], so nothing else drops the history
+            // that was painted at the previous width.
+            resetRawXtermForGeometryChange()
             for (const step of GEOMETRY_RECONNECT_AFTER_CLOSE) {
               if (!runGeometryStep(step)) {
                 scheduleReconnect()
@@ -1693,6 +1698,22 @@ const LiveAttachXtermPaneInner: React.FC<{
 
     // Executes one planned geometry step. The ORDER comes from
     // planGeometryChange (pure, unit-tested); this only performs the effects.
+    // Clearing the buffer is only half the job: the reseed effect skips writes
+    // when the incoming content matches what it last wrote, so without also
+    // forgetting that record an unchanged snapshot would leave the pane blank
+    // until the next distinct frame.
+    const resetRawXtermForGeometryChange = () => {
+      const term = terminalRef.current
+      if (!term) return
+      try {
+        term.reset()
+      } catch {
+        // reset can throw while the pane is detached; the fresh seed still lands.
+      }
+      lastVisibleReseedRef.current = { content: '', at: 0 }
+      wroteConnectingSnapshotRef.current = false
+    }
+
     const runGeometryStep = (step: GeometryChangeStep): boolean => {
       switch (step) {
         case 'suspend-output':
@@ -1700,6 +1721,16 @@ const LiveAttachXtermPaneInner: React.FC<{
           // resizes; its replacement starts with an authoritative reset + seed.
           resizeReconnectPending = true
           setConnectionState('reconnecting')
+          // Drop history drawn at the OLD grid. tmux emits lines that are
+          // already hard-wrapped at its own width, so xterm has no soft-wrap
+          // markers to reflow against: scrollback keeps whatever width it was
+          // painted at forever. After a resize the viewport repaints correctly
+          // while that history stays behind, re-wrapped mid-word ("the
+          // strategy i" / "s") and interleaved with the new seed, which is why
+          // resizing the window never repaired what was already on screen.
+          // Safe to discard: the replacement stream opens with an authoritative
+          // reset + full seed, so this is re-painted at the new grid.
+          resetRawXtermForGeometryChange()
           return true
         case 'close-socket': {
           const ws = wsRef.current
@@ -3670,8 +3701,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                 ? terminalTheme.railSelected
                 : 'border-l-transparent text-neutral-400 hover:bg-[#1b1f1d] hover:text-neutral-100'
             }`}
-            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)}`}
-            aria-label={`Open ${title} in ${viewLabel}`}
+            // The narrow rail is ordered by CREATION time and deliberately never
+            // reorders (see sortTerminalsForRail), so a stack of finished agents
+            // gives no clue which one finished last. Nothing in the icon or the
+            // tooltip carried a time at all. Surface the age so recency is
+            // readable without destabilising the order.
+            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
+            aria-label={`Open ${title} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
           >
             <span className="relative inline-flex h-5 w-5 items-center justify-center rounded border border-neutral-700/80 bg-neutral-900/90">
               <TerminalTypeGlyph terminal={terminal} className="h-3 w-3" />

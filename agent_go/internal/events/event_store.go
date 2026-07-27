@@ -316,7 +316,16 @@ func (e *Event) ensureExecutionOwnership(sessionID string, previous []Event) {
 		case strings.HasPrefix(e.Type, "background_agent_") && backgroundAgentID != "":
 			e.ExecutionID = backgroundAgentID
 			e.ParentExecutionID = firstNonEmptyString(parentExecutionID, "main:"+sessionID)
-			e.ExecutionKind = "background_agent"
+			// Honour a kind the creator declared on the payload. Hardcoding
+			// "background_agent" here discarded it, which is precisely what
+			// BackgroundAgentStartedEvent.Kind documents must not happen: a
+			// full run declares ExecutionKindFullRun so consumers know it is a
+			// CONTAINER with no conversation of its own, and flattening that to
+			// background_agent made it render as if it were an agent.
+			e.ExecutionKind = firstNonEmptyString(
+				stringField(payload, "execution_kind"),
+				"background_agent",
+			)
 		case autoNotificationExecutionID != "":
 			e.ExecutionID = autoNotificationExecutionID
 			e.ParentExecutionID = "main:" + sessionID

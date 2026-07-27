@@ -89,6 +89,10 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
     if (t === 'execution') return 'purple'
     if (t === 'validation') return 'emerald'
     if (t === 'organizer') return 'orange'
+    // A todo orchestrator finishing is an ordinary completion. It used to fall
+    // through to the yellow default, so a normal end-of-run read as a warning
+    // -- the loudest card on the screen for the least alarming event.
+    if (t === 'todo_task_orchestrator') return 'slate'
     return 'yellow'
   }
 
@@ -281,9 +285,12 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
       */}
 
       {/* Result content - always visible with markdown rendering */}
+      {/* framed={false}: the card is already the frame. Leaving the renderer's
+          own border on drew a second box inside the first, which is what made
+          a one-paragraph result look like a nested panel. */}
       {displayResult && (
-        <div className="mt-3">
-          <ConversationMarkdownRenderer content={displayResult} maxHeight="400px" />
+        <div className="mt-2">
+          <ConversationMarkdownRenderer content={displayResult} maxHeight="400px" framed={false} />
         </div>
       )}
     </div>

@@ -21,8 +21,13 @@ describe('UserMessageEventDisplay', () => {
 
     expect(html).toContain('data-testid="terminal-execution-prompt"')
     expect(html).toContain('Nested Word Task')
-    expect(html).toContain('View instructions')
+    expect(html).toContain('Instructions')
     expect(html).not.toContain('No message content')
+    // The instructions ARE the task: rendering the card with them collapsed
+    // left a header with nothing under it, so the details element must open by
+    // default and the prompt text must be present without interaction.
+    expect(html).toContain('<details open')
+    expect(html).toContain('Internal generated prompt')
   })
 
   it('keeps live user input visually distinct from execution prompts', () => {

@@ -662,70 +662,42 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
       complete: 'text-green-600 dark:text-green-400',
       continue: 'text-yellow-600 dark:text-yellow-400',
     }
+    const tierClass =
+      data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300'
+      : data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'
+      : 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
+    const routeName = data.selected_route_name || (data.use_generic_agent ? 'Generic Agent' : '')
+    // An orchestrator picks a route per todo, so these arrive in long runs --
+    // eleven in a row on a real Pulse orchestrator. As a full card each one
+    // repeated "Todo Task: Route Selected", the iteration chip and "Action:"
+    // identically, and the only part that differed (which agent, which tier)
+    // was buried three lines down. One dense row per route puts the varying
+    // part first and turns a screenful into a readable list.
     return (
       <CompactWrapper compact={compact}>
-        <div className={`bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg ${compact ? 'p-2' : 'p-3'}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-lg">📋</span>
-            <span className={`font-medium ${compact ? 'text-xs' : 'text-sm'} text-purple-700 dark:text-purple-300`}>
-              Todo Task: Route Selected
+        {/* Semantic tokens rather than a raw purple wash: the accent lives in
+            the left rule, so the route name keeps full foreground contrast in
+            both themes instead of sitting on a tinted band. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border-l-2 border-purple-500/70 bg-muted/20 px-2 py-1 text-xs hover:bg-muted/40">
+          <span aria-hidden>📋</span>
+          {routeName && <span className="font-medium text-foreground">{routeName}</span>}
+          {data.preferred_tier_label && (
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${tierClass}`}>
+              {data.preferred_tier_label}
             </span>
-            {data.iteration && (
-              <span className={`${compact ? 'text-[10px]' : 'text-xs'} bg-purple-200 dark:bg-purple-800 px-1.5 py-0.5 rounded text-purple-700 dark:text-purple-300`}>
-                Iteration {data.iteration}
-              </span>
-            )}
-          </div>
-          <div className={`space-y-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500 dark:text-gray-400">Action:</span>
-              <span className={`font-medium ${actionColors[data.next_action || ''] || 'text-gray-700 dark:text-gray-300'}`}>
-                {data.next_action || 'unknown'}
-              </span>
-            </div>
-            {data.selected_route_name && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Agent:</span>
-                <span className="text-purple-600 dark:text-purple-400">{data.selected_route_name}</span>
-                {data.preferred_tier_label && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300' :
-                    data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' :
-                    'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
-                  }`}>
-                    {data.preferred_tier_label}
-                  </span>
-                )}
-              </div>
-            )}
-            {data.use_generic_agent && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Agent:</span>
-                <span className="text-purple-600 dark:text-purple-400">Generic Agent</span>
-                {data.preferred_tier_label && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300' :
-                    data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' :
-                    'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
-                  }`}>
-                    {data.preferred_tier_label}
-                  </span>
-                )}
-              </div>
-            )}
-            {data.todo_title && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Todo:</span>
-                <span className="text-gray-700 dark:text-gray-300">{data.todo_title}</span>
-              </div>
-            )}
-            {data.progress_summary && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Progress:</span>
-                <span className="text-gray-700 dark:text-gray-300">{data.progress_summary}</span>
-              </div>
-            )}
-          </div>
+          )}
+          <span className={`font-medium ${actionColors[data.next_action || ''] || 'text-gray-700 dark:text-gray-300'}`}>
+            {data.next_action || 'unknown'}
+          </span>
+          {/* Iteration is deliberately not shown: it is identical for every
+              route in a run, so repeating it per row is the same noise this
+              layout exists to remove. It stays available in the run header. */}
+          {data.todo_title && (
+            <span className="min-w-0 flex-1 truncate text-gray-600 dark:text-gray-400">{data.todo_title}</span>
+          )}
+          {data.progress_summary && (
+            <span className="w-full truncate text-[11px] text-gray-500 dark:text-gray-500">{data.progress_summary}</span>
+          )}
         </div>
       </CompactWrapper>
     )
