@@ -390,7 +390,13 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-child-assignment-pill:hover { background: #fdecc4; border-color: #e8cf94; box-shadow: 0 2px 8px rgba(138, 109, 31, .12); }
 .fl-child-assignment-pill:disabled { cursor: default; }
 .fl-child-assignment-pill:disabled:hover { background: #fff7e6; border-color: #f2e2bd; box-shadow: none; }
-.fl-child-assignment-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Icon + chevron only, always — never the full activity title. The name is
+   already shown in the worksheet's own toolbar right beside this, so it was
+   pure duplication at full size and only got hidden once the pane narrowed;
+   there's no width where showing it is actually useful. The button/chevron
+   stay, since it's the only way to the Goal/Plan popover. */
+.fl-child-assignment-pill > span { display: none; }
+.fl-child-assignment-pill { padding: 6px 9px; }
 .fl-child-assignment-pill svg:last-child { flex: 0 0 auto; transition: transform .15s ease; }
 .fl-child-assignment-pill svg.is-open { transform: rotate(180deg); }
 .fl-child-goal-popover { position: absolute; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); z-index: 30; width: min(360px, 82vw); padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); text-align: left; }
@@ -986,7 +992,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-child-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 14px; border-radius: 14px; background: #effbf4; color: #2c6b49; font-size: var(--text-secondary); line-height: 1.5; }
 .fl-child-note svg { flex: 0 0 auto; margin-top: 2px; color: #2aa96a; }
 
-.fl-child-assignment-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Progressive steps as the CHAT pane narrows (the worksheet being widened is the
    usual cause). Each step drops the least useful thing next, so the greeting and
    the activity name survive longest.
@@ -1008,12 +1013,6 @@ audio.fl-viewer-media { background: var(--surface); }
 }
 @container childchat (max-width: 440px) {
   .fl-child-top { gap: 8px; padding-left: 12px; padding-right: 12px; }
-  /* Collapse the activity pill to its icon. The activity's name is already shown
-     in the worksheet's own toolbar right beside this, so the text is the redundant
-     part — but keep the button itself, because it is the only way to the
-     Goal/Plan popover. */
-  .fl-child-assignment-pill > span { display: none; }
-  .fl-child-assignment-pill { padding: 6px 9px; }
 }
 @container childchat (max-width: 360px) {
   .fl-child-hi strong { font-size: 15px; }
