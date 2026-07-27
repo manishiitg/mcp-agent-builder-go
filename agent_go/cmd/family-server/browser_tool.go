@@ -63,6 +63,27 @@ func browserFolderGuardContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// rawStringArgs mirrors pkg/browser's own (unexported) stringArgs: the
+// "args" field arrives as []interface{} after JSON decoding, occasionally as
+// []string when built in-process. Needed here, separately, only because that
+// helper isn't exported across the package boundary.
+func rawStringArgs(raw interface{}) []string {
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, a := range v {
+			if s, ok := a.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return append([]string(nil), v...)
+	default:
+		return nil
+	}
+}
+
 func agentBrowserTool() agentsession.Tool {
 	return agentsession.Tool{
 		Name: "agent_browser",
@@ -75,7 +96,13 @@ func agentBrowserTool() agentsession.Tool {
 			"to list them, pick the one matching what you want, switch to it, then read/snapshot. Never act on an unrelated tab. " +
 			"DOWNLOADS land in the parent's Downloads folder, not the workspace — after downloading, copy the file into materials/ or the " +
 			"activity folder it belongs to with execute_shell_command before reading it. If status reports CDP isn't reachable, tell the parent to open their signed-in browser " +
-			"from Connectors → Browser; don't keep retrying.",
+			"from Connectors → Browser; don't keep retrying. " +
+			"LOGGING INTO A SITE WITH A SAVED SECRET: list_secrets gives you names only, never values — that's intentional. In a " +
+			"fill/type arg (e.g. the value for a password field), write the literal placeholder $SECRET_<NAME> (list_secrets gives you " +
+			"the exact env-var form to use) and the real value is substituted server-side before it ever reaches the browser; you will " +
+			"never see it, and must never ask the parent for it or claim you can't use it. If the site rejects the login (2FA, a " +
+			"CAPTCHA, an unfamiliar-device challenge), stop and tell the parent to finish signing in themselves — don't keep retrying " +
+			"a form submission blind.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -85,9 +112,11 @@ func agentBrowserTool() agentsession.Tool {
 					"description": "agent-browser subcommand: status (first, no args), skills, tab, open, read, snapshot, click, fill, type, download, screenshot, etc.",
 				},
 				"args": map[string]interface{}{
-					"type":        "array",
-					"items":       map[string]interface{}{"type": "string"},
-					"description": "arguments; for CDP mode every call after status must begin with [\"--cdp\", \"<endpoint>\"]",
+					"type":  "array",
+					"items": map[string]interface{}{"type": "string"},
+					"description": "arguments; for CDP mode every call after status must begin with [\"--cdp\", \"<endpoint>\"]. " +
+						"A fill/type value may contain $SECRET_<NAME> as a literal placeholder — substituted with the real value " +
+						"before it reaches the browser; never write the actual credential here.",
 				},
 				"session": map[string]interface{}{
 					"type":        "string",
@@ -104,7 +133,23 @@ func agentBrowserTool() agentsession.Tool {
 			if s, _ := args["session"].(string); strings.TrimSpace(s) == "" {
 				args["session"] = "family" // Executor requires a non-empty session
 			}
-			return exec.HandleAgentBrowser(browserFolderGuardContext(ctx), args)
+			// Substitute $SECRET_<NAME> placeholders in the args array — same
+			// syntax and mental model as execute_shell_command's env vars, just
+			// resolved here instead of by a shell. The model's own tool call
+			// (and the transcript of it) only ever contains the placeholder
+			// token; the decrypted value is filled in right here, server-side.
+			if rawArgs, ok := args["args"]; ok {
+				resolved := rawStringArgs(rawArgs)
+				for i, a := range resolved {
+					resolved[i] = substituteSecretPlaceholders(a)
+				}
+				args["args"] = resolved
+			}
+			result, err := exec.HandleAgentBrowser(browserFolderGuardContext(ctx), args)
+			// Defense in depth: if the underlying CDP tool ever echoes back what
+			// it typed (e.g. a fill confirmation), scrub any secret value that
+			// might have leaked into the result before it reaches the model.
+			return redactSecrets(result, allSecretValues()), err
 		},
 	}
 }
