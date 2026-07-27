@@ -105,16 +105,6 @@ func pulseChecks(s familyState) []pulseCheck {
 		})
 	}
 
-	if q := strings.TrimSpace(s.Pulse.SchoolGmailQuery); q != "" {
-		checks = append(checks, pulseCheck{
-			trigger: "Automated check-in — checking school email",
-			instruction: "This is an automated Pulse check-in, focused ONLY on school email. The parent configured this filter: \"" + q + "\". " +
-				"Use execute_shell_command with the gws CLI (see your system instructions for the exact command shape) to check for anything " +
-				"new WITHIN that filter — never widen it to their whole inbox. If there's a relevant new email (a notice, a deadline, something " +
-				"about " + who + "), summarize it plainly for the parent." + pulseReplyRules,
-		})
-	}
-
 	checks = append(checks, pulseCheck{
 		trigger: "Automated check-in — updating what I remember about your preferences",
 		instruction: "This is an automated Pulse check-in, focused ONLY on your working memory of the parent's preferences. Read " +
@@ -356,12 +346,10 @@ func startPulseTicker(ctx context.Context) {
 // --- HTTP routes ---------------------------------------------------------
 
 type pulseConfigResponse struct {
-	Enabled          bool     `json:"enabled"`
-	CadenceHours     int      `json:"cadence_hours"`
-	LastRunAt        string   `json:"last_run_at,omitempty"`
-	SchoolGmailQuery string   `json:"school_gmail_query,omitempty"`
-	WatchSites       []string `json:"watch_sites,omitempty"`
-	NotifyEmails     []string `json:"notify_emails,omitempty"`
+	Enabled      bool     `json:"enabled"`
+	CadenceHours int      `json:"cadence_hours"`
+	LastRunAt    string   `json:"last_run_at,omitempty"`
+	WatchSites   []string `json:"watch_sites,omitempty"`
 }
 
 func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
@@ -369,7 +357,7 @@ func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
 	if hours <= 0 {
 		hours = 24
 	}
-	return pulseConfigResponse{Enabled: p.Enabled, CadenceHours: hours, LastRunAt: p.LastRunAt, SchoolGmailQuery: p.SchoolGmailQuery, WatchSites: p.Sites(), NotifyEmails: p.NotifyEmails}
+	return pulseConfigResponse{Enabled: p.Enabled, CadenceHours: hours, LastRunAt: p.LastRunAt, WatchSites: p.Sites()}
 }
 
 // pulseRunMu prevents two manual "run now" triggers overlapping — a real
@@ -426,11 +414,9 @@ func handleGetPulseConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type setPulseConfigRequest struct {
-	Enabled          *bool     `json:"enabled,omitempty"`
-	CadenceHours     *int      `json:"cadence_hours,omitempty"`
-	SchoolGmailQuery *string   `json:"school_gmail_query,omitempty"`
-	WatchSites       *[]string `json:"watch_sites,omitempty"`
-	NotifyEmails     *[]string `json:"notify_emails,omitempty"`
+	Enabled      *bool     `json:"enabled,omitempty"`
+	CadenceHours *int      `json:"cadence_hours,omitempty"`
+	WatchSites   *[]string `json:"watch_sites,omitempty"`
 }
 
 // POST /api/pulse/config — partial update; only provided fields change.
@@ -452,9 +438,6 @@ func handleSetPulseConfig(w http.ResponseWriter, r *http.Request) {
 	if req.CadenceHours != nil && *req.CadenceHours > 0 {
 		s.Pulse.CadenceHours = *req.CadenceHours
 	}
-	if req.SchoolGmailQuery != nil {
-		s.Pulse.SchoolGmailQuery = strings.TrimSpace(*req.SchoolGmailQuery)
-	}
 	if req.WatchSites != nil {
 		cleaned := make([]string, 0, len(*req.WatchSites))
 		for _, u := range *req.WatchSites {
@@ -464,15 +447,6 @@ func handleSetPulseConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Pulse.WatchSites = cleaned
 		s.Pulse.SchoolPortalURL = "" // fully replaced by the generic list; drop the legacy single value
-	}
-	if req.NotifyEmails != nil {
-		cleaned := make([]string, 0, len(*req.NotifyEmails))
-		for _, e := range *req.NotifyEmails {
-			if e = strings.TrimSpace(e); e != "" {
-				cleaned = append(cleaned, e)
-			}
-		}
-		s.Pulse.NotifyEmails = cleaned
 	}
 	err := saveState(s)
 	stateMu.Unlock()

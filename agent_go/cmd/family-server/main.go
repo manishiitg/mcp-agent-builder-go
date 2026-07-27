@@ -24,7 +24,7 @@ var allowedOrigins = map[string]bool{
 func main() {
 	// execute_shell_command runs through security.BuildSafeEnvironment(), which
 	// only preserves the real login-shell PATH/HOME (so host CLIs like node,
-	// homebrew, gws, aws resolve normally) when NATIVE_WORKSPACE=true — otherwise
+	// homebrew, aws resolve normally) when NATIVE_WORKSPACE=true — otherwise
 	// it silently falls back to a Docker-style minimal PATH that can't find
 	// anything outside /usr/bin. family-server, like AgentWorks' own desktop
 	// launcher (desktop/main.js), always runs natively on the user's machine,
@@ -138,8 +138,6 @@ func main() {
 		}
 		handleVoiceVoices(w, r)
 	})
-	mux.HandleFunc("/api/gmail/status", handleGmailStatus)
-	mux.HandleFunc("/api/gmail/test", handleGmailTest)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
 	mux.HandleFunc("/api/pulse/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -209,7 +207,7 @@ func withCORS(next http.Handler) http.Handler {
 		if allowedOrigins[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}

@@ -75,6 +75,50 @@ func setSecretTool(onSet func(name, value string)) agentsession.Tool {
 	}
 }
 
+// deleteSecretTool removes a saved credential by NAME (never a value) —
+// the chat-side counterpart to set_secret, for when the parent asks in
+// conversation to remove or replace one (e.g. "remove the old Veracross
+// password", "forget that, use this one instead"). Mirrors the Settings
+// form's own delete exactly (same underlying deleteSecretValue), so a
+// credential removed this way is gone from both surfaces immediately.
+func deleteSecretTool() agentsession.Tool {
+	return agentsession.Tool{
+		Name: "delete_secret",
+		Description: "Remove a saved credential by name — e.g. the parent asks to forget an old password, or to clean up a " +
+			"duplicate after saving a replacement. Call list_secrets first if you're not certain of the exact saved name. " +
+			"Never guess a name; if it doesn't match exactly, ask the parent which one they mean rather than deleting the " +
+			"wrong one.",
+		Category: "family_tools",
+		Params: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "the exact saved name, e.g. \"school portal password\""},
+			},
+			"required": []string{"name"},
+		},
+		Handler: func(_ context.Context, args map[string]interface{}) (string, error) {
+			name := strings.TrimSpace(fmt.Sprint(args["name"]))
+			if name == "" {
+				return "", fmt.Errorf("name is required")
+			}
+			found := false
+			for _, n := range listSecretNames() {
+				if n == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", fmt.Errorf("no secret saved under that exact name — call list_secrets to see what's actually there")
+			}
+			if err := deleteSecretValue(name); err != nil {
+				return "", fmt.Errorf("failed to remove secret: %w", err)
+			}
+			return fmt.Sprintf(`{"status":"ok","name":%q}`, name), nil
+		},
+	}
+}
+
 // retroactivelyRedactStoredConversation reloads a persisted conversation and
 // rewrites it with the given (just-learned) secret values redacted from every
 // message. Needed because a NEW secret set mid-turn via set_secret couldn't

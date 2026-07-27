@@ -797,7 +797,7 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-pulse-save:disabled { opacity: .6; cursor: default; }
 .fl-pulse-save.is-saved { background: #1fae6b; }
 
-/* Connectors modal (WhatsApp real pairing, Gmail) */
+/* Connectors modal (WhatsApp real pairing, Browser) */
 .fl-wa-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(11, 29, 66, .5); backdrop-filter: blur(3px); }
 .fl-wa-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #075e54; color: #fff; }
 .fl-wa-title { font-weight: 700; font-size: var(--text-secondary); }

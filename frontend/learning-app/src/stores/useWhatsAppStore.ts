@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { resolveSetState, type SetStateAction } from './storeUtils'
 
-// State for the "Connectors" modal (WhatsApp real pairing, Gmail).
+// State for the "Connectors" modal (WhatsApp real pairing, Browser).
 interface WhatsAppState {
   waOpen: boolean
   setWaOpen: (v: SetStateAction<boolean>) => void

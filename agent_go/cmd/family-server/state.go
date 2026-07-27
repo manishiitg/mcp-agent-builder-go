@@ -79,11 +79,6 @@ type PulseConfig struct {
 	// LastRunAt (RFC3339 UTC) is when Pulse last actually ran, so the ticker
 	// knows whether the cadence window has elapsed.
 	LastRunAt string `json:"last_run_at,omitempty"`
-	// SchoolGmailQuery is a Gmail search filter (e.g. "from:school.edu") the
-	// parent configures so Quill can check for new school email — deliberately
-	// server-side config, never a free-form parameter the model controls, so
-	// Quill can only ever search within what the parent explicitly scoped.
-	SchoolGmailQuery string `json:"school_gmail_query,omitempty"`
 	// WatchSites are websites the parent wants Quill to check on each Pulse via
 	// agent_browser (reusing the parent's own signed-in CDP Chrome — see
 	// browser_status.go): a school portal, a class site, any third-party page —
@@ -93,10 +88,6 @@ type PulseConfig struct {
 	// SchoolPortalURL is the legacy single-portal field, kept so older saved
 	// state still parses; folded into the effective site list (see Sites()).
 	SchoolPortalURL string `json:"school_portal_url,omitempty"`
-	// NotifyEmails are additional recipient addresses the parent wants Pulse
-	// digest emails sent to (e.g. both parents). Empty = send only to the
-	// connected Gmail account's own address (the default self-notify).
-	NotifyEmails []string `json:"notify_emails,omitempty"`
 }
 
 // Sites returns the effective de-duplicated list of websites to check —
