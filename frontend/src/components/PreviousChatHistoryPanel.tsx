@@ -8,6 +8,7 @@ import {
   type ChatHistorySession,
 } from '../services/api-types'
 import { useChatStore } from '../stores/useChatStore'
+import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   CHAT_HISTORY_CLEANUP_AGE_OPTIONS,
   type ChatHistoryCleanupAgeDays,
@@ -20,7 +21,15 @@ const PAGE_SIZE = 5
 // renders five rows at a time, so loading 100 upfront makes the spinner feel
 // stuck on workflows with months of schedule/pulse history.
 const FETCH_LIMIT = 25
-const EXPANDED_MESSAGE_LIMIT = 6
+// How many stored messages the first expand pulls. Every fetched message is
+// rendered (assistant prose, tool calls, tool results), so this is the whole
+// budget rather than a fetch-more-than-you-show buffer -- "Load more" walks
+// further back through the conversation in increments.
+const EXPANDED_FETCH_LIMIT = 16
+const EXPANDED_FETCH_INCREMENT = 30
+// Fallback rows built from the session-list metadata (session.preview_messages),
+// shown before the details fetch lands or if it fails.
+const PREVIEW_MESSAGE_LIMIT = 14
 
 type PreviousChatKind = 'chat' | 'schedule' | 'bot'
 type PreviousChatFilter = PreviousChatKind
@@ -166,7 +175,7 @@ const getChatKind = (session: ChatHistorySession): PreviousChatKind => {
 const previewMessages = (session: ChatHistorySession): ChatHistoryPreviewMessage[] => {
   return (session.preview_messages || [])
     .filter(message => message.text?.trim())
-    .slice(-EXPANDED_MESSAGE_LIMIT)
+    .slice(-PREVIEW_MESSAGE_LIMIT)
 }
 
 const messageRole = (message: ChatHistoryMessage): string => {
@@ -196,6 +205,47 @@ const messageText = (message: ChatHistoryMessage): string => {
   return cleanMessageText(text)
 }
 
+const functionCallOf = (part: unknown): Record<string, unknown> | null => {
+  const call = (part as Record<string, unknown>)?.FunctionCall ?? (part as Record<string, unknown>)?.functionCall
+  return call && typeof call === 'object' ? call as Record<string, unknown> : null
+}
+
+const messageToolName = (message: ChatHistoryMessage): string => {
+  const parts = message.Parts || message.parts || []
+  for (const part of parts) {
+    const call = functionCallOf(part)
+    const name = call?.Name ?? call?.name
+      ?? (part as Record<string, unknown>).Name ?? (part as Record<string, unknown>).name
+    if (typeof name === 'string' && name.trim()) return name.trim()
+  }
+  return ''
+}
+
+// The tool CALL lives as a FunctionCall part on an assistant message and holds
+// no text, so messageText() came back empty and the call was filtered out
+// entirely -- only its result survived. Surface the arguments so a reader can
+// see what was actually run, not just what came back.
+const messageToolArgs = (message: ChatHistoryMessage): string => {
+  const parts = message.Parts || message.parts || []
+  for (const part of parts) {
+    const call = functionCallOf(part)
+    const args = call?.Arguments ?? call?.arguments
+    if (typeof args === 'string' && args.trim()) {
+      try {
+        return JSON.stringify(JSON.parse(args), null, 2)
+      } catch {
+        return args.trim()
+      }
+    }
+  }
+  return ''
+}
+
+const messageIsError = (message: ChatHistoryMessage): boolean => {
+  const parts = message.Parts || message.parts || []
+  return parts.some(part => Boolean((part as Record<string, unknown>).IsError ?? (part as Record<string, unknown>).is_error))
+}
+
 const shouldSkipMessageText = (text: string): boolean => {
   return text.startsWith('[AUTO-NOTIFICATION]') ||
     text.startsWith('[Previous tool call') ||
@@ -204,23 +254,41 @@ const shouldSkipMessageText = (text: string): boolean => {
 
 const conversationMessages = (conversation: ChatHistoryConversation): ChatHistoryPreviewMessage[] => {
   return (conversation.conversation_history || [])
-    .map(message => ({
-      role: messageRole(message),
-      text: messageText(message),
-    }))
+    .flatMap((message): ChatHistoryPreviewMessage[] => {
+      const role = messageRole(message)
+      const text = messageText(message)
+      const toolName = messageToolName(message)
+      const rows: ChatHistoryPreviewMessage[] = []
+      if (text) rows.push({ role, text, toolName, isError: messageIsError(message) })
+      // An assistant turn often has prose AND a tool call; emit the call as its
+      // own row so neither hides the other.
+      if (role === 'ai' || role === 'assistant') {
+        const args = messageToolArgs(message)
+        if (args) rows.push({ role: 'tool_call', text: args, toolName })
+      }
+      return rows
+    })
     .filter(message => {
-      if (!message.text || shouldSkipMessageText(message.text)) return false
+      if (!message.text) return false
+      // Prose heuristics (auto-notification banners, replayed tool summaries)
+      // must not be applied to raw tool arguments/results.
+      if (message.role !== 'tool' && message.role !== 'tool_call' && shouldSkipMessageText(message.text)) return false
       return message.role === 'human' ||
         message.role === 'user' ||
         message.role === 'ai' ||
-        message.role === 'assistant'
+        message.role === 'assistant' ||
+        // Tool calls were filtered out entirely, so a chat that spent most of
+        // its turns in tools -- and any tool that failed -- read as if nothing
+        // happened between one message and the next.
+        message.role === 'tool' ||
+        message.role === 'tool_call'
     })
 }
 
+// No local slice: the server already returns exactly the requested window, and
+// trimming again here would make "Load more" fetch messages it then discarded.
 const recentConversationMessages = (messages: ChatHistoryPreviewMessage[]): ChatHistoryPreviewMessage[] => {
-  return messages
-    .filter(message => message.text?.trim())
-    .slice(-EXPANDED_MESSAGE_LIMIT)
+  return messages.filter(message => message.text?.trim())
 }
 
 const mergeSessions = (current: ChatHistorySession[], next: ChatHistorySession[]): ChatHistorySession[] => {
@@ -309,6 +377,10 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set())
   const [expandedMessagesBySession, setExpandedMessagesBySession] = useState<Record<string, ChatHistoryPreviewMessage[]>>({})
   const [loadingExpandedSessionIds, setLoadingExpandedSessionIds] = useState<Set<string>>(() => new Set())
+  // How many stored messages each expanded session has pulled so far, and
+  // whether the server still had older ones to give.
+  const [expandedWindowBySession, setExpandedWindowBySession] = useState<Record<string, number>>({})
+  const [hasMoreBySession, setHasMoreBySession] = useState<Record<string, boolean>>({})
   const expandedMessagesRef = useRef(expandedMessagesBySession)
   const loadingExpandedSessionIdsRef = useRef(loadingExpandedSessionIds)
   const addToast = useChatStore(state => state.addToast)
@@ -395,18 +467,28 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
     onHasChatsChange?.(!isLoading && visibleSessions.length > 0, !isLoading)
   }, [isLoading, onHasChatsChange, visibleSessions.length])
 
-  const loadExpandedMessages = useCallback(async (session: ChatHistorySession) => {
+  const loadExpandedMessages = useCallback(async (session: ChatHistorySession, requestedWindow?: number) => {
     const sessionId = session.session_id
-    if (expandedMessagesRef.current[sessionId] || loadingExpandedSessionIdsRef.current.has(sessionId)) return
+    const window = requestedWindow ?? EXPANDED_FETCH_LIMIT
+    const isLoadMore = requestedWindow !== undefined
+    // A plain expand is a no-op once loaded; "Load more" deliberately re-fetches
+    // the same session with a larger window.
+    if (!isLoadMore && expandedMessagesRef.current[sessionId]) return
+    if (loadingExpandedSessionIdsRef.current.has(sessionId)) return
 
     const nextLoading = new Set(loadingExpandedSessionIdsRef.current)
     nextLoading.add(sessionId)
     loadingExpandedSessionIdsRef.current = nextLoading
     setLoadingExpandedSessionIds(nextLoading)
     try {
-      const conversation = await agentApi.getChatHistoryConversation(sessionId, workspacePath)
+      const conversation = await agentApi.getChatHistoryConversation(sessionId, workspacePath, window)
       const messages = conversationMessages(conversation)
       const recentMessages = recentConversationMessages(messages)
+      // The server returns the tail of the conversation capped at `window`.
+      // Getting back fewer than asked for means we reached the beginning.
+      const returned = conversation.conversation_history?.length ?? 0
+      setExpandedWindowBySession(current => ({ ...current, [sessionId]: window }))
+      setHasMoreBySession(current => ({ ...current, [sessionId]: returned >= window }))
       setExpandedMessagesBySession(current => {
         const next = {
           ...current,
@@ -603,6 +685,9 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
               const messages = expandedMessagesBySession[session.session_id] || previewMessages(session)
               const isExpanded = expandedSessionIds.has(session.session_id)
               const isLoadingDetails = loadingExpandedSessionIds.has(session.session_id)
+              // Distinguishes a first expand (blank, show a spinner) from a
+              // "Load more" (keep the list on screen while the next page loads).
+              const hasLoadedMessages = Boolean(expandedMessagesBySession[session.session_id]?.length)
               const runtimeLabel = chatHistoryRuntimeLabel(session)
               const isDeleting = deletingSessionIds.has(session.session_id)
               const timeLabel = formatChatTime(session.updated_at || session.created_at)
@@ -672,7 +757,7 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                   {isExpanded && (
                     <div className="px-10 pb-3">
                       <div className="max-h-80 space-y-2 overflow-y-auto rounded-md border border-border bg-muted/20 p-2 text-xs text-foreground">
-                        {isLoadingDetails && (
+                        {isLoadingDetails && !hasLoadedMessages && (
                           <div className="flex items-center gap-2 text-muted-foreground">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             <span>Loading recent messages...</span>
@@ -681,20 +766,60 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                         {!isLoadingDetails && messages.length === 0 && (
                           <div className="text-muted-foreground">No displayable messages found.</div>
                         )}
-                        {!isLoadingDetails && messages.map((message, index) => {
-                          const normalizedRole = message.role === 'ai' || message.role === 'assistant' ? 'Assistant' : 'User'
-                          const roleClass = normalizedRole === 'Assistant'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-sky-600 dark:text-sky-400'
+                        {isLoadingDetails && hasLoadedMessages && (
+                          <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>Loading older messages...</span>
+                          </div>
+                        )}
+                        {!isLoadingDetails && hasMoreBySession[session.session_id] && (
+                          <button
+                            type="button"
+                            onClick={() => void loadExpandedMessages(
+                              session,
+                              (expandedWindowBySession[session.session_id] ?? EXPANDED_FETCH_LIMIT) + EXPANDED_FETCH_INCREMENT,
+                            )}
+                            className="w-full rounded border border-border/60 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                          >
+                            Load older messages
+                          </button>
+                        )}
+                        {(!isLoadingDetails || hasLoadedMessages) && messages.map((message, index) => {
+                          const isToolCall = message.role === 'tool_call'
+                          const isTool = message.role === 'tool' || isToolCall
+                          const normalizedRole = isTool
+                            ? `${isToolCall ? 'Tool call' : 'Tool result'}${message.toolName ? ` · ${message.toolName}` : ''}`
+                            : message.role === 'ai' || message.role === 'assistant' ? 'Assistant' : 'User'
+                          const roleClass = message.isError
+                            ? 'text-red-600 dark:text-red-400'
+                            : isTool
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : normalizedRole === 'Assistant'
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-sky-600 dark:text-sky-400'
 
                           return (
                             <div key={`${session.session_id}-previous-preview-${index}`} className="space-y-1 rounded bg-background/70 px-2 py-1.5">
                               <div className={`text-[10px] font-semibold uppercase leading-none ${roleClass}`}>
                                 {normalizedRole}
                               </div>
-                              <div className="whitespace-pre-wrap break-words leading-relaxed text-muted-foreground">
-                                {message.text}
-                              </div>
+                              {/* Rendered as markdown, not raw text: the stored
+                                  answer is markdown (bold, headings, tables) and
+                                  whitespace-pre-wrap showed it literally, e.g.
+                                  "**Toptal**" with the asterisks visible. */}
+                              {isTool ? (
+                                <pre className={`max-h-40 overflow-auto whitespace-pre-wrap break-words rounded px-1 py-0.5 font-mono text-[11px] leading-4 ${
+                                  message.isError
+                                    ? 'bg-red-950/25 text-red-200'
+                                    : 'bg-muted/40 text-muted-foreground'
+                                }`}>
+                                  {message.text}
+                                </pre>
+                              ) : (
+                                <div className="break-words leading-relaxed text-muted-foreground">
+                                  <ConversationMarkdownRenderer content={message.text} maxHeight="none" framed={false} />
+                                </div>
+                              )}
                             </div>
                           )
                         })}

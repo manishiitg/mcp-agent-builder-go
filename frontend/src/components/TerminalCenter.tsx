@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, Network, Power, RefreshCw, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -112,11 +113,22 @@ type TerminalRailFilter = 'all' | 'running' | 'attention' | 'non-running'
 // Matches the running/attention/completed status colors used throughout this
 // file (dotRunning/stateFailed-style emerald/red/sky), so the collapsed
 // rail's dots mean the same thing the expanded labels do.
-const RAIL_FILTER_DOT_COLOR: Record<TerminalRailFilter, string> = {
-  all: 'bg-neutral-500',
-  running: 'bg-emerald-400',
-  attention: 'bg-red-400',
-  'non-running': 'bg-sky-400',
+// The collapsed rail previously showed a bare colored dot beside each count.
+// Colour alone is not a legend: the only way to learn that emerald meant "live"
+// was to hover for the tooltip, so the strip read as two unexplained numbers.
+// A glyph says what the colour merely implies, in the same 56px, and keeps
+// working for anyone who cannot separate the hues.
+const RAIL_FILTER_ICON: Record<TerminalRailFilter, LucideIcon> = {
+  all: Terminal,
+  running: Activity,
+  attention: AlertTriangle,
+  'non-running': Check,
+}
+const RAIL_FILTER_TEXT_COLOR: Record<TerminalRailFilter, string> = {
+  all: 'text-neutral-400',
+  running: 'text-emerald-400',
+  attention: 'text-red-400',
+  'non-running': 'text-sky-400',
 }
 type TerminalDetailOptions = { content?: 'stored' | 'screen' | 'history' | 'tmux' | 'deep'; lines?: number; debug?: boolean; debugSource?: string }
 
@@ -3606,9 +3618,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                     ? 'bg-neutral-800 text-neutral-100 shadow-sm'
                     : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
                 }`}
-                title={`${filter.count} ${filter.label.toLowerCase()}`}
+                title={`${filter.count} ${filter.label.toLowerCase()} — click to filter`}
+                aria-label={`Show ${filter.count} ${filter.label.toLowerCase()} agents`}
+                aria-pressed={terminalRailFilter === filter.key}
               >
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${RAIL_FILTER_DOT_COLOR[filter.key]}`} aria-hidden />
+                {(() => {
+                  const FilterIcon = RAIL_FILTER_ICON[filter.key]
+                  return <FilterIcon className={`h-3 w-3 shrink-0 ${RAIL_FILTER_TEXT_COLOR[filter.key]}`} aria-hidden />
+                })()}
                 <span>{filter.count}</span>
               </button>
             ))}

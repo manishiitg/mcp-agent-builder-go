@@ -741,6 +741,22 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 			}
 		} else {
 			tabForCommand := inlineCDPTab
+			// A tab id sent as a bare positional (["--cdp", url, "t1"]) instead
+			// of marked (["--cdp", url, "--tab", "t1"]) is recovered rather than
+			// rejected. open already does exactly this
+			// (stripInlineTabFromOpenArgs); rejecting it here only meant a real
+			// agent burned a turn on a retry that changed nothing but the
+			// spelling. The tab requirement itself stays strict: recovery needs
+			// the unambiguous tN form outside a flag's value slot, so
+			// `type --text t1` is never mistaken for a tab, and a page action
+			// with no tab-shaped argument still fails.
+			if tabForCommand == "" {
+				if recovered, cleaned := unmarkedCDPTabArg(commandArgs); recovered != "" {
+					log.Printf("[BROWSER] CDP: recovered unmarked tab %q from %q args; treat it as --tab %s", recovered, command, recovered)
+					tabForCommand = recovered
+					commandArgs = cleaned
+				}
+			}
 			if tabForCommand == "" && isBrowserOpenCommand(command) {
 				tabForCommand = getCDPTabSelection(cdpPort, cdpOwner)
 			}
@@ -1256,18 +1272,13 @@ func unmarkedCDPTabArg(args []string) (tab string, rest []string) {
 }
 
 func missingCDPPageActionTabError(port int, command string, commandArgs []string, tabHint string) error {
+	// A tN-shaped positional never reaches here -- the caller recovers it as
+	// the tab selection -- so by this point no tab was supplied in any form.
 	normalizedArgs := normalizeAgentBrowserCommandArgs(command, commandArgs)
-	unmarkedTab, normalizedArgs := unmarkedCDPTabArg(normalizedArgs)
-	tabPlaceholder := "<tab-id-or-label>"
-	diagnosis := fmt.Sprintf("CDP shared-browser mode requires every page action to include a tab before %q.\n\n%s", command, tabHint)
-	if unmarkedTab != "" {
-		tabPlaceholder = unmarkedTab
-		diagnosis = fmt.Sprintf("CDP shared-browser mode requires every page action to include a tab before %q.\n\nTab %q was passed as a bare positional argument, so it was not read as a tab selection. Mark it with tab or --tab.", command, unmarkedTab)
-	}
 	cdpPrefix := []string{"--cdp", resolveCdpURL(port)}
-	tabRetryArgs := append(append(append([]string{}, cdpPrefix...), "tab", tabPlaceholder), normalizedArgs...)
-	flagRetryArgs := append(append(append([]string{}, cdpPrefix...), "--tab", tabPlaceholder), normalizedArgs...)
-	return fmt.Errorf("%s\n\nRetry the same command with the tab inline:\nagent_browser(command=%q, args=%s)\nor:\nagent_browser(command=%q, args=%s)\n\nDo not put the command name inside args. For wait, use milliseconds or native wait options after the CDP+tab prefix.\n\nIf no tab is selected yet, create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", \"<label>\", \"<url>\"]).", diagnosis, command, jsonStringSlice(tabRetryArgs), command, jsonStringSlice(flagRetryArgs), resolveCdpURL(port))
+	tabRetryArgs := append(append(append([]string{}, cdpPrefix...), "tab", "<tab-id-or-label>"), normalizedArgs...)
+	flagRetryArgs := append(append(append([]string{}, cdpPrefix...), "--tab", "<tab-id-or-label>"), normalizedArgs...)
+	return fmt.Errorf("CDP shared-browser mode requires every page action to include a tab before %q.\n\n%s\n\nRetry the same command with the tab inline:\nagent_browser(command=%q, args=%s)\nor:\nagent_browser(command=%q, args=%s)\n\nDo not put the command name inside args. For wait, use milliseconds or native wait options after the CDP+tab prefix.\n\nIf no tab is selected yet, create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", \"<label>\", \"<url>\"]).", command, tabHint, command, jsonStringSlice(tabRetryArgs), command, jsonStringSlice(flagRetryArgs), resolveCdpURL(port))
 }
 
 func jsonStringSlice(args []string) string {

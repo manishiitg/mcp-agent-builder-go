@@ -26,10 +26,22 @@ const TOOL_CALL_TYPES = new Set([
 
 // Absorbed into an adjacent tool batch so they don't split one in half, but
 // never worth a row of their own. delegation_* interleave between a
-// tool_call_start/end pair in workflow and multi-agent runs; llm_generation_end
-// closes a generation and carries nothing a reader needs.
+// tool_call_start/end pair in workflow and multi-agent runs.
 //
-const BATCH_BRIDGE_TYPES = new Set(['delegation_start', 'delegation_end', 'llm_generation_end'])
+// llm_generation_end is only a bridge when it is EMPTY. It is also the event
+// that carries the assistant's final answer, and nothing else in the terminal
+// transcript renders that text: EventDispatcher has no streaming_chunk case,
+// so chunks draw nothing here. Treating it as an unconditional bridge meant a
+// tool-heavy turn -- a CDP browser step ends on a tool call, then answers --
+// swept the answer into the tool batch, where pairToolCalls emits only
+// tool rows and drops it. The turn rendered with no response at all.
+const BATCH_BRIDGE_TYPES = new Set(['delegation_start', 'delegation_end'])
+
+// An llm_generation_end with text must never be absorbed; an empty one still
+// behaves as a bridge so it doesn't split a tool batch in half.
+function isEmptyGenerationEnd(event: PollingEvent): boolean {
+  return textField(eventFields(event).content).trim().length === 0
+}
 
 // A lifecycle start is useful while an agent is running. Once the matching
 // completion/failure arrives, rendering both is just duplicate information:
@@ -193,6 +205,7 @@ function isTranscriptEvent(event: PollingEvent): boolean {
 
 function isToolBatchEvent(event: PollingEvent): boolean {
   const type = event.type || ''
+  if (type === 'llm_generation_end') return isEmptyGenerationEnd(event)
   return TOOL_CALL_TYPES.has(type) || BATCH_BRIDGE_TYPES.has(type)
 }
 
@@ -321,8 +334,56 @@ export function selectTerminalEvents(
  * Collapsing is not cosmetic: the tree relied on auto-collapse to keep rendered
  * node counts down, and a flat list has no equivalent. This replaces it.
  */
+// Events that render a completion card carrying the turn's answer.
+const COMPLETION_ANSWER_TYPES = new Set([
+  'unified_completion',
+  'agent_end',
+  'orchestrator_agent_end',
+  'background_agent_completed',
+])
+
+function answerText(event: PollingEvent): string {
+  const fields = eventFields(event)
+  return textField(fields.content) || textField(fields.final_result) || textField(fields.result)
+}
+
+function comparableAnswer(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+// llm_generation_end has to render its answer when nothing else will -- that is
+// what stopped tool-heavy turns (a CDP browser step) from showing no response
+// at all. But a completion card usually repeats the very same text, and then
+// the reader sees the answer twice in a row. Keep the completion card, which
+// also carries the outcome, and drop the generation-end copy.
+//
+// Compared on normalised text with containment rather than equality: the two
+// carriers legitimately differ at the edges (a completion card may prepend a
+// status line, or hold prose from before a trailing tool call), and the point
+// is only to detect that the reader is being shown the same answer twice.
+function dropAnswersRepeatedByCompletionCard(events: PollingEvent[]): PollingEvent[] {
+  const completionAnswers: string[] = []
+  for (const event of events) {
+    if (!COMPLETION_ANSWER_TYPES.has(event.type || '')) continue
+    const text = comparableAnswer(answerText(event))
+    if (text) completionAnswers.push(text)
+  }
+  if (completionAnswers.length === 0) return events
+
+  return events.filter(event => {
+    if ((event.type || '') !== 'llm_generation_end') return true
+    const text = comparableAnswer(answerText(event))
+    // Too short to judge: a handful of words can coincide without being the
+    // same answer, so keep it rather than risk hiding a real reply.
+    if (text.length < 24) return true
+    return !completionAnswers.some(done => done.includes(text) || text.includes(done))
+  })
+}
+
 export function buildTranscriptItems(events: PollingEvent[]): TranscriptItem[] {
-  const visibleEvents = dropDuplicateExecutionPromptMessages(collapseCompletedLifecycleStarts(events))
+  const visibleEvents = dropAnswersRepeatedByCompletionCard(
+    dropDuplicateExecutionPromptMessages(collapseCompletedLifecycleStarts(events)),
+  )
   const items: TranscriptItem[] = []
   let cursor = 0
 

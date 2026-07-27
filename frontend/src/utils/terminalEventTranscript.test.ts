@@ -493,3 +493,69 @@ describe('pairToolCalls — args and result surfaced on the pair', () => {
     expect(pair.result).toBeUndefined()
   })
 })
+
+describe('final answer visibility (CDP step regression)', () => {
+  const ev = (id: string, type: string, content?: string): any => ({
+    id,
+    type,
+    data: { data: { ...(content !== undefined ? { content } : {}), tool_name: 'agent_browser' } },
+  })
+
+  // A browser/CDP step ends on a tool call and then answers. The answer event
+  // must not be swallowed by the adjacent tool batch: nothing else in the
+  // transcript renders that text (EventDispatcher has no streaming_chunk case).
+  it('keeps a content-carrying llm_generation_end out of an adjacent tool batch', () => {
+    const items = buildTranscriptItems([
+      ev('t1', 'tool_call_start'),
+      ev('t2', 'tool_call_end'),
+      ev('answer', 'llm_generation_end', 'Snapshot captured. The page shows 3 results.'),
+    ])
+
+    const rendered = items.find((i) => i.kind === 'event' && (i as any).event.id === 'answer')
+    expect(rendered).toBeDefined()
+  })
+
+  // An empty one is still just noise closing a generation, and should stay
+  // absorbed rather than splitting the batch into two collapsed groups.
+  it('still absorbs an empty llm_generation_end into the tool batch', () => {
+    const items = buildTranscriptItems([
+      ev('t1', 'tool_call_start'),
+      ev('t2', 'tool_call_end'),
+      ev('empty', 'llm_generation_end', '   '),
+    ])
+
+    expect(items.some((i) => i.kind === 'event' && (i as any).event.id === 'empty')).toBe(false)
+    expect(items.some((i) => i.kind === 'tools')).toBe(true)
+  })
+})
+
+describe('answer shown exactly once', () => {
+  const ANSWER =
+    'Confirmed CDP is available: status reported the endpoint reachable, and a live snapshot succeeded.'
+  const gen = (content: string): any => ({
+    id: 'gen', type: 'llm_generation_end', data: { data: { content } },
+  })
+  const completion = (final_result: string): any => ({
+    id: 'done', type: 'unified_completion', data: { data: { final_result, status: 'completed' } },
+  })
+
+  it('drops the generation-end copy when a completion card repeats it', () => {
+    const items = buildTranscriptItems([gen(ANSWER), completion(ANSWER)])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toContain('done')
+    expect(ids).not.toContain('gen')
+  })
+
+  it('still keeps generation-end when no completion card carries the answer', () => {
+    const items = buildTranscriptItems([gen(ANSWER)])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toContain('gen')
+  })
+
+  it('keeps both when the completion card carries a different answer', () => {
+    const items = buildTranscriptItems([gen(ANSWER), completion('Something else entirely happened here.')])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toContain('gen')
+    expect(ids).toContain('done')
+  })
+})
