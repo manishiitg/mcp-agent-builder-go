@@ -1,7 +1,7 @@
 # Family Learning — Architecture (working draft)
 
 **Status:** working draft · 2026-07-19 · branch `codex/family-learning-prd`
-**Companion docs:** [`family-learning-prd.html`](family-learning-prd.html) · [`family-learning-design-guidelines.md`](family-learning-design-guidelines.md)
+**Companion docs:** [`family-learning-design-guidelines.md`](family-learning-design-guidelines.md) · [`docs/agent-execution-architecture.html`](docs/agent-execution-architecture.html)
 
 Legend: ✅ locked · ⚠️ risk / gap to design · ❓ open decision
 
