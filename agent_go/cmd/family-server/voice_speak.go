@@ -58,9 +58,19 @@ func handleVoiceSpeak(w http.ResponseWriter, r *http.Request) {
 	if len(text) > speakMaxChars {
 		text = text[:speakMaxChars]
 	}
+	// An explicit voice (a picker preview) wins; otherwise use whatever the
+	// parent saved for whichever tier is about to speak.
 	voice := strings.TrimSpace(req.Voice)
+	tierForVoice := req.Tier
+	if tierForVoice == "" {
+		if mlxVoiceInstalled() {
+			tierForVoice = "kokoro"
+		} else {
+			tierForVoice = "builtin"
+		}
+	}
 	if voice == "" {
-		voice = defaultTTSVoice
+		voice = selectedVoiceFor(tierForVoice)
 	}
 
 	var audio []byte
@@ -71,25 +81,17 @@ func handleVoiceSpeak(w http.ResponseWriter, r *http.Request) {
 	// whole point is hearing THIS voice.
 	case req.Tier == "builtin":
 		audio, err = synthesizeSpeech(text, voice)
-	case req.Tier == "piper":
-		audio, err = speakWithPiper(text)
 	case req.Tier == "kokoro":
-		audio, err = speakWithKokoro(text)
-	// No tier given: the best installed voice wins automatically — same rule
-	// as the speech models, so installing an upgrade IS choosing it.
-	case kokoroInstalled():
-		audio, err = speakWithKokoro(text)
+		audio, err = speakWithKokoro(text, voice)
+	// No tier given: the best installed voice wins automatically — installing
+	// the upgrade IS choosing it, with no separate "make it active" step.
+	case mlxVoiceInstalled():
+		audio, err = speakWithKokoro(text, voice)
 		if err != nil {
 			// Never leave the parent with silence because an optional upgrade
 			// broke — fall back to the always-present system voice.
 			log.Printf("[voice] kokoro failed, using the built-in voice: %v", err)
-			audio, err = synthesizeSpeech(text, voice)
-		}
-	case piperInstalled():
-		audio, err = speakWithPiper(text)
-		if err != nil {
-			log.Printf("[voice] piper failed, using the built-in voice: %v", err)
-			audio, err = synthesizeSpeech(text, voice)
+			audio, err = synthesizeSpeech(text, selectedVoiceFor("builtin"))
 		}
 	default:
 		audio, err = synthesizeSpeech(text, voice)

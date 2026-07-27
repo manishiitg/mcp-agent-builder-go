@@ -37,6 +37,7 @@ export type VoiceTier = {
   can_install?: boolean
   can_remove?: boolean
 }
+export type VoiceChoice = { id: string; label: string; accent?: string }
 export type VoiceStatus = {
   hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }
   stt_tiers: VoiceTier[]

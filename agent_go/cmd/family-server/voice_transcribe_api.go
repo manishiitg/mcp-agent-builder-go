@@ -17,12 +17,11 @@ const maxVoiceClipBytes = 25 << 20 // 25 MB
 
 // POST /api/voice/transcribe — multipart form with an "audio" file part.
 // Transcribes a mic recording from the app's own composer entirely on-device,
-// reusing the SAME whisper.cpp pipeline that already handles WhatsApp voice
+// reusing the SAME Parakeet pipeline that already handles WhatsApp voice
 // notes (transcribeAudioFile in voice_transcribe.go): identical engine,
-// identical model, just a different entry point. ffmpeg normalizes whatever
+// identical model, just a different entry point. Parakeet reads whatever
 // container MediaRecorder produced (webm/opus in Chromium, mp4 in Safari)
-// into the 16kHz mono WAV whisper.cpp needs, so no format negotiation is
-// needed on the frontend.
+// directly, so no format conversion is needed on either side.
 func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -64,12 +63,11 @@ func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	// An explicit tier is a "Try it" from Settings; empty means normal use.
-	text, err := transcribeAudioFileWith(ctx, tmpPath, r.FormValue("tier"))
+	text, err := transcribeAudioFile(ctx, tmpPath)
 	if err != nil {
-		// Surfaced verbatim rather than swallowed: the likely causes here are
-		// "model not downloaded yet" / "whisper-cli not installed", which the
-		// UI can only tell the parent about if it's actually told.
+		// Surfaced verbatim rather than swallowed: the likely cause is "not
+		// installed yet", which the UI can only tell the parent about if it's
+		// actually told.
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": fmt.Sprint(err)})
 		return
 	}

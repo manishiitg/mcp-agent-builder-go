@@ -54,12 +54,18 @@ type familyState struct {
 	// WhatsAppVoiceEnabled is the parent's explicit choice for on-device
 	// WhatsApp voice-note transcription (see voice_transcribe.go). nil means
 	// "never explicitly chosen" — whatsAppVoiceEnabled() then defaults to
-	// whether the whisper model already happens to be installed, so shipping
+	// whether Parakeet already happens to be installed, so shipping
 	// this toggle doesn't silently turn off transcription that was already
 	// working. A pointer (not a plain bool) so "explicitly disabled" and
 	// "never asked" are distinguishable — a plain bool's zero value can't tell
 	// those apart.
 	WhatsAppVoiceEnabled *bool `json:"whatsapp_voice_enabled,omitempty"`
+
+	// VoiceChoices maps a read-aloud tier -> the voice the parent picked for
+	// it (see voice_choices.go). Per-tier rather than one global setting
+	// because the tiers have entirely different voice catalogs: picking
+	// "Aman" only means something for the built-in Mac voices.
+	VoiceChoices map[string]string `json:"voice_choices,omitempty"`
 }
 
 // PulseConfig is the parent-configurable settings for the Pulse background

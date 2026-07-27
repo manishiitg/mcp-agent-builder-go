@@ -1122,3 +1122,8 @@ audio.fl-viewer-media { background: var(--surface); }
    glance, since they sit side by side. */
 .fl-ghost-btn.is-danger { color: #b3261e; border-color: #e6c2c2; }
 .fl-ghost-btn.is-danger:hover { background: #fdecec; border-color: #d99a9a; color: #8c1d18; }
+
+/* Voice picker inside a read-aloud tier. Only rendered when a tier has more
+   than one voice, so a single-voice tier shows no pointless dropdown. */
+.fl-voice-pick { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: var(--text-caption); color: var(--muted, #8a8478); font-weight: 600; }
+.fl-voice-pick select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--heading); font: inherit; font-size: var(--text-caption); cursor: pointer; }

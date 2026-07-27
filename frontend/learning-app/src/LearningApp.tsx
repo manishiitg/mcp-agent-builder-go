@@ -1094,7 +1094,7 @@ export default function LearningApp() {
   // Multiple phones can be linked (one per parent) — accounts is the list of
   // already-paired numbers; pairing reflects whichever NEW phone's QR is
   // currently being shown (there's always room to add one more).
-  const [waStatus, setWaStatus] = useState<{ accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string } } | null>(null)
+  const [waStatus, setWaStatus] = useState<{ accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string } } | null>(null)
   const [voiceToggling, setVoiceToggling] = useState(false)
   const [waQrNonce, setWaQrNonce] = useState(0)
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
@@ -1417,7 +1417,7 @@ export default function LearningApp() {
     const poll = () => {
       fetch(`${FAMILY_API}/api/whatsapp/status`)
         .then((r) => r.json())
-        .then((d: { accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string } }) => {
+        .then((d: { accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string } }) => {
           if (cancelled) return
           setWaStatus(d)
           setWaQrNonce((n) => n + 1) // there's always a pairing slot open for one more phone
@@ -2100,11 +2100,14 @@ export default function LearningApp() {
       .finally(() => setUnpairingJid(null))
   }
 
-  // Toggles on-device WhatsApp voice-note transcription. Enabling kicks off a
-  // background install on the server (whisper-cli/ffmpeg via Homebrew if
-  // missing, then the ~148MB model download); the status poll above picks up
-  // "installing" → "installed" as it progresses. Disabling deletes the model
-  // file server-side right away to reclaim the space.
+  // Toggles on-device WhatsApp voice-note transcription (Parakeet, Apple
+  // Silicon only). Enabling kicks off the shared MLX voice install if it
+  // isn't already there — the same install that also powers the "most
+  // natural" read-aloud voice; the status poll above picks up "installing" →
+  // "installed" as it progresses. Disabling does NOT delete anything: doing
+  // so would silently break read-aloud too, since they share one
+  // environment. Deleting it is only ever a deliberate action via a tier's
+  // own "Remove" button in Settings → Voice.
   const toggleVoiceTranscription = (enabled: boolean) => {
     setVoiceToggling(true)
     fetch(`${FAMILY_API}/api/whatsapp/voice`, {
@@ -2113,7 +2116,7 @@ export default function LearningApp() {
       body: JSON.stringify({ enabled }),
     })
       .then((r) => r.json())
-      .then((d: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string }) => {
+      .then((d: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string }) => {
         setWaStatus((cur) => (cur ? { ...cur, voice_transcription: d } : cur))
       })
       .finally(() => setVoiceToggling(false))
@@ -3298,11 +3301,14 @@ export default function LearningApp() {
                                   <div>
                                     <p className="fl-wa-voice-title">Understand voice notes</p>
                                     <p className="fl-note">
-                                      {waStatus.voice_transcription.installing
-                                        ? `Setting this up on your computer (~${waStatus.voice_transcription.model_size_mb}MB, one-time) — this can take a minute…`
-                                        : waStatus.voice_transcription.enabled && waStatus.voice_transcription.installed
-                                          ? `On — voice notes are transcribed right on this computer (~${waStatus.voice_transcription.model_size_mb}MB used). Nothing is sent to the cloud for this.`
-                                          : `Let Quill understand voice notes you send on WhatsApp. Transcribed entirely on this computer — a one-time ~${waStatus.voice_transcription.model_size_mb}MB download, no ongoing cost.`}
+                                      {(() => {
+                                        const vt = waStatus.voice_transcription!
+                                        const sizeLabel = vt.model_size_mb >= 1000 ? `${(vt.model_size_mb / 1000).toFixed(1)}GB` : `${vt.model_size_mb}MB`
+                                        if (!vt.available) return 'Needs a newer Mac (2020 or later) — not available on this computer.'
+                                        if (vt.installing) return `Setting this up on your computer (~${sizeLabel}, one-time) — this can take several minutes on a home connection…`
+                                        if (vt.enabled && vt.installed) return `On — voice notes are transcribed right on this computer (~${sizeLabel} used). Nothing is sent to the cloud for this. English only.`
+                                        return `Let Quill understand voice notes you send on WhatsApp — English only. Transcribed entirely on this computer, a one-time ~${sizeLabel} download, no ongoing cost.`
+                                      })()}
                                     </p>
                                     {waStatus.voice_transcription.error && (
                                       <p className="fl-note fl-wa-voice-error">Couldn’t set this up: {waStatus.voice_transcription.error}</p>
@@ -3312,7 +3318,7 @@ export default function LearningApp() {
                                     <input
                                       type="checkbox"
                                       checked={waStatus.voice_transcription.enabled}
-                                      disabled={voiceToggling || waStatus.voice_transcription.installing}
+                                      disabled={voiceToggling || waStatus.voice_transcription.installing || !waStatus.voice_transcription.available}
                                       onChange={(e) => toggleVoiceTranscription(e.target.checked)}
                                     />
                                     <span className="fl-toggle-slider" />

@@ -61,45 +61,39 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	hw := detectVoiceHardware()
 	_, sayErr := exec.LookPath("say")
 
-	stt := make([]voiceTier, 0, len(whisperTierOrder))
-	// Presented weakest-first so the list reads as a ladder; whisperTierOrder
-	// is best-first because it answers a different question (which model to
-	// actually USE), so don't reuse it for display order.
-	installedCount := 0
-	for _, id := range []string{"builtin", "better", "best"} {
-		if whisperTierInstalled(id) {
-			installedCount++
-		}
-	}
-	for _, meta := range []struct{ id, label, desc string }{
-		{"builtin", "Standard", "Understands clear speech well. This one is set up for you already."},
-		{"better", "More accurate", "Better with names, numbers, and quieter or faster talking."},
-		{"best", "Most accurate", "The most accurate at understanding speech. A big download, and a little slower to think."},
-	} {
-		wt := whisperTiers[meta.id]
-		st := installStateFor(meta.id)
-		installed := whisperTierInstalled(meta.id)
-		stt = append(stt, voiceTier{
-			ID:          meta.id,
-			Label:       meta.label,
-			Description: meta.desc,
-			SizeMB:      wt.SizeMB,
-			Languages:   "100+ languages, including Hindi",
-			Available:   true,
+	// One tier: Parakeet, English-only, Apple Silicon only. This app used to
+	// offer three universal whisper.cpp tiers (any Mac, ~100 languages
+	// including Hindi) — replaced deliberately, after being told plainly what
+	// that gives up, for materially better English accuracy/speed and a real
+	// path to live "see it as you speak" transcription later (mlx_audio.stt
+	// exposes a genuine streaming API; whisper.cpp's CLI was batch-only).
+	stt := []voiceTier{func() voiceTier {
+		st := installStateFor(mlxVoiceInstallID)
+		// While the shared install is still running, report NOT installed
+		// even once the Python packages import successfully — the packages
+		// finish well before the two model warm-ups do, and showing
+		// "Installed" alongside a live progress bar would look broken.
+		installed := mlxVoiceInstalled() && !st.Installing
+		return voiceTier{
+			ID:          "parakeet",
+			Label:       "Standard",
+			Description: "Understands clear English speech, quickly and accurately.",
+			SizeMB:      mlxVoiceTotalSizeMB,
+			Languages:   "English",
+			Available:   hw.IsAppleSilicon,
 			Installed:   installed,
 			Installing:  st.Installing,
 			GotBytes:    st.GotBytes,
 			TotalBytes:  st.TotalBytes,
 			InstallErr:  st.Error,
-			CanInstall:  !installed && !st.Installing,
-			// The Standard model is the baseline everything falls back to, so
-			// it isn't removable at all — offering to delete the floor is
-			// confusing even when another model happens to be installed. The
-			// upgrades above it can be removed freely, and never the last one
-			// standing (which would silently turn speech input off rather
-			// than just downgrading it).
-			CanRemove: installed && meta.id != "builtin" && installedCount > 1,
-		})
+			CanInstall:  hw.IsAppleSilicon && !installed && !st.Installing,
+			// Removing this ALSO removes the "most natural" read-aloud voice
+			// below — they are the same shared install (see voice_mlx_env.go).
+			CanRemove: installed,
+		}
+	}()}
+	if !hw.IsAppleSilicon {
+		stt[0].UnavailableWhy = "Needs a newer Mac (2020 or later)"
 	}
 
 	tts := []voiceTier{
@@ -112,33 +106,16 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 			Installed:   sayErr == nil,
 		},
 		func() voiceTier {
-			st := installStateFor("piper")
-			installed := piperInstalled()
-			return voiceTier{
-				ID:          "piper",
-				Label:       "More natural",
-				Description: "A warmer, more human-sounding voice. Works on any Mac.",
-				SizeMB:      piperTotalSizeMB,
-				Languages:   "English",
-				Available:   true,
-				Installed:   installed,
-				Installing:  st.Installing,
-				GotBytes:    st.GotBytes,
-				TotalBytes:  st.TotalBytes,
-				InstallErr:  st.Error,
-				CanInstall:  !installed && !st.Installing,
-				CanRemove:   installed,
-			}
-		}(),
-		func() voiceTier {
-			st := installStateFor("kokoro")
-			installed := kokoroInstalled()
+			st := installStateFor(mlxVoiceInstallID)
+			// Same reasoning as the STT tier above: not "installed" while the
+			// shared install is still running its model warm-ups.
+			installed := mlxVoiceInstalled() && !st.Installing
 			return voiceTier{
 				ID:          "kokoro",
 				Label:       "Most natural",
-				Description: "The most life-like voice — closest to a real person reading aloud.",
-				SizeMB:      kokoroTotalSizeMB,
-				Languages:   "English",
+				Description: "The most life-like voice — closest to a real person reading aloud. Also includes Hindi and several other languages.",
+				SizeMB:      mlxVoiceTotalSizeMB,
+				Languages:   "English, Hindi, and more",
 				Available:   hw.IsAppleSilicon,
 				Installed:   installed,
 				Installing:  st.Installing,
@@ -146,7 +123,9 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 				TotalBytes:  st.TotalBytes,
 				InstallErr:  st.Error,
 				CanInstall:  hw.IsAppleSilicon && !installed && !st.Installing,
-				CanRemove:   installed,
+				// Removing this ALSO removes speech-to-text above — they are
+				// the same shared install (see voice_mlx_env.go).
+				CanRemove: installed,
 			}
 		}(),
 	}
@@ -154,18 +133,18 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		tts[0].UnavailableWhy = "Not available on this computer"
 	}
 	if !hw.IsAppleSilicon {
-		tts[2].UnavailableWhy = "Needs a newer Mac (2020 or later)"
+		tts[1].UnavailableWhy = "Needs a newer Mac (2020 or later)"
 	}
 
 	writeJSON(w, http.StatusOK, voiceStatusResponse{Hardware: hw, STTTiers: stt, TTSTiers: tts})
 }
 
 // voiceHardware is what the voice settings UI needs to decide which STT/TTS
-// tiers are actually offerable on this machine: Apple-Silicon-only tiers
-// (Parakeet via MLX, mlx-audio TTS) need IsAppleSilicon. Nothing gates on RAM
-// today — whisper.cpp's tiers and Piper are all light enough on any Mac this
-// app targets — but TotalRAMBytes is reported so a future heavier tier has a
-// real number to gate on instead of guessing.
+// tiers are actually offerable on this machine: the shared MLX voice
+// environment (Parakeet STT + Kokoro TTS) needs IsAppleSilicon. Nothing gates
+// on RAM today — macOS's own voice is light on any Mac this app targets — but
+// TotalRAMBytes is reported so a future heavier tier has a real number to
+// gate on instead of guessing.
 type voiceHardware struct {
 	Arch           string `json:"arch"` // Go's GOARCH: "arm64" | "amd64"
 	IsAppleSilicon bool   `json:"is_apple_silicon"`

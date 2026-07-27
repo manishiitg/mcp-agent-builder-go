@@ -131,6 +131,13 @@ func main() {
 	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
+	mux.HandleFunc("/api/voice/voices", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handleSetVoice(w, r)
+			return
+		}
+		handleVoiceVoices(w, r)
+	})
 	mux.HandleFunc("/api/gmail/status", handleGmailStatus)
 	mux.HandleFunc("/api/gmail/test", handleGmailTest)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)

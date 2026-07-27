@@ -44,14 +44,18 @@ export function stopSpeech() {
  * so each tier's own sample button plays THAT voice — otherwise every sample
  * would sound identical, which defeats the point of comparing them.
  */
-export async function speakText(text: string, tier?: string): Promise<void> {
+export async function speakText(text: string, tier?: string, voice?: string): Promise<void> {
   const clean = stripForSpeech(text)
   if (!clean) return
   stopSpeech()
   const res = await fetch(`${FAMILY_API}/api/voice/speak`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(tier ? { text: clean, tier } : { text: clean }),
+    body: JSON.stringify({
+      text: clean,
+      ...(tier ? { tier } : {}),
+      ...(voice ? { voice } : {}),
+    }),
   })
   if (!res.ok) throw new Error(`speak failed: ${res.status}`)
   const url = URL.createObjectURL(await res.blob())

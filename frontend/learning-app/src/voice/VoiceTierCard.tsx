@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Download, Trash2, Loader2, Volume2 } from 'lucide-react'
 import { speakText } from './speech'
 import { MicTestButton } from './MicTestButton'
-import type { VoiceTier } from '../stores'
+import type { VoiceTier, VoiceChoice } from '../stores'
+import { FAMILY_API } from '../apiBase'
 
 function sizeLabel(mb?: number): string {
   if (!mb) return 'no download'
@@ -38,9 +39,35 @@ export function VoiceTierCard({
   testable?: boolean
 }) {
   const [sampling, setSampling] = useState(false)
+  // Voice options for this tier, loaded only when it's actually usable —
+  // there's nothing to choose between for a tier that isn't installed.
+  const [voices, setVoices] = useState<VoiceChoice[]>([])
+  const [voice, setVoice] = useState('')
+  useEffect(() => {
+    if (!sampleable || !tier.installed) return
+    let cancelled = false
+    fetch(`${FAMILY_API}/api/voice/voices?tier=${encodeURIComponent(tier.id)}`)
+      .then((r) => r.json())
+      .then((d: { voices?: VoiceChoice[]; selected?: string }) => {
+        if (cancelled) return
+        setVoices(d.voices ?? [])
+        setVoice(d.selected ?? '')
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [sampleable, tier.installed, tier.id])
+
+  const chooseVoice = (id: string) => {
+    setVoice(id)
+    fetch(`${FAMILY_API}/api/voice/voices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier: tier.id, voice: id }),
+    }).catch(() => {})
+  }
   const playSample = () => {
     setSampling(true)
-    speakText("Hi! This is how I'll read things out to you.", tier.id)
+    speakText("Hi! Here's how I'll read things out to you. The Prime Meridian passes through Greenwich, in England, and it's the line we measure longitude from. Everything to the east of it is ahead in time, and everything to the west is behind.", tier.id, voice)
       .then(() => setSampling(false))
       .catch(() => setSampling(false))
   }
@@ -88,6 +115,16 @@ export function VoiceTierCard({
         <div className="fl-voice-progress-track" aria-label={`Downloading, ${pct}%`}>
           <span className="fl-voice-progress-fill" style={{ width: `${pct}%` }} />
         </div>
+      )}
+      {voices.length > 1 && (
+        <label className="fl-voice-pick">
+          <span>Voice</span>
+          <select value={voice} onChange={(e) => chooseVoice(e.target.value)}>
+            {voices.map((v) => (
+              <option key={v.id} value={v.id}>{v.accent ? `${v.label} · ${v.accent}` : v.label}</option>
+            ))}
+          </select>
+        </label>
       )}
       {testable && tier.installed && !tier.installing && <MicTestButton tier={tier.id} />}
       {tier.install_error && <p className="fl-voice-tier-error">{tier.install_error}</p>}
