@@ -11,7 +11,29 @@ export type MicState = 'idle' | 'recording' | 'transcribing'
 // exists and does true incremental streaming) after that server behaved
 // unpredictably with Parakeet specifically in testing — this reuses code
 // already proven correct in production instead of an unfamiliar protocol.
-const LIVE_PREVIEW_INTERVAL_MS = 2500
+//
+// 1200ms rather than the original 2500ms: with the models kept warm in a
+// persistent worker (see voice_worker.go), a real call now takes ~1.2-1.5s
+// instead of ~3.5-3.9s, so a shorter interval actually shortens the gap
+// between updates instead of just polling uselessly often against a slower
+// floor (the in-flight guard below still skips a tick if the previous
+// request hasn't finished, so this can't pile up concurrent requests).
+const LIVE_PREVIEW_INTERVAL_MS = 1200
+
+// Auto-stop-on-silence, using the SAME live amplitude signal already driving
+// the level meter — no new dependency, no raw-PCM streaming, no separate VAD
+// model. This is deliberately simple amplitude thresholding, not a real
+// speech classifier (like webrtcvad or Silero VAD): it can be fooled by
+// steady background noise (a fan, a TV) reading as "still talking", or by a
+// loud clatter reading as speech. That trade was made explicitly in favor of
+// shipping something today with zero new dependencies; a real VAD would need
+// either raw PCM streamed to Python or an in-browser WASM model — a bigger
+// build than this.
+const SPEECH_LEVEL_THRESHOLD = 0.16 // above this, "the parent is talking"
+const SILENCE_LEVEL_THRESHOLD = 0.08 // below this, "quiet" — lower than the
+// speech threshold on purpose, so hovering right at the boundary doesn't
+// flicker between the two states tick to tick.
+const SILENCE_STOP_MS = 1800 // sustained quiet, AFTER real speech began, before auto-stopping
 
 /**
  * Mic dictation for a composer: record → transcribe on-device → hand back text.
@@ -23,7 +45,8 @@ const LIVE_PREVIEW_INTERVAL_MS = 2500
  *
  * `level` is a live 0..1 mic amplitude, polled from an AnalyserNode. Without
  * it a recording UI is a lie: you can't tell "listening" from "mic is muted /
- * the wrong input is selected" until after you've already spoken.
+ * the wrong input is selected" until after you've already spoken. The same
+ * signal also drives auto-stop-on-silence (see SILENCE_STOP_MS above).
  *
  * `liveText` is a running preview of what's been said so far, refreshed every
  * LIVE_PREVIEW_INTERVAL_MS. It can revise itself between ticks (more audio
@@ -45,6 +68,9 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const rafRef = useRef<number | null>(null)
   const previewTimerRef = useRef<number | null>(null)
   const previewBusyRef = useRef(false)
+  const hasSpokenRef = useRef(false)
+  const silenceStartRef = useRef<number | null>(null)
+  const stopRef = useRef<() => void>(() => {})
 
   // Everything the browser handed us has to be torn down explicitly: leaving
   // the MediaStream open keeps the OS mic indicator lit, which reads as "this
@@ -57,6 +83,8 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
     audioCtxRef.current?.close().catch(() => {})
     audioCtxRef.current = null
     setLevel(0)
+    hasSpokenRef.current = false
+    silenceStartRef.current = null
   }
 
   const runLivePreview = async (rec: MediaRecorder) => {
@@ -86,6 +114,7 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
     if (rec && rec.state !== 'inactive') rec.stop() // onstop does the transcribe
     else { teardown(); setState('idle') }
   }
+  stopRef.current = stop
 
   const start = async () => {
     setError(null)
@@ -94,7 +123,8 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
 
-      // Live level meter.
+      // Live level meter — also drives auto-stop-on-silence, see the
+      // constants above.
       const ctx = new AudioContext()
       audioCtxRef.current = ctx
       const analyser = ctx.createAnalyser()
@@ -107,7 +137,23 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
         // more responsive for a simple "is sound arriving" indicator.
         let peak = 0
         for (const v of data) peak = Math.max(peak, Math.abs(v - 128))
-        setLevel(Math.min(1, peak / 96))
+        const normalized = Math.min(1, peak / 96)
+        setLevel(normalized)
+
+        if (normalized >= SPEECH_LEVEL_THRESHOLD) {
+          hasSpokenRef.current = true
+          silenceStartRef.current = null
+        } else if (normalized <= SILENCE_LEVEL_THRESHOLD && hasSpokenRef.current) {
+          // Only start the silence clock once real speech has actually
+          // happened — otherwise someone who hasn't started talking yet
+          // (still reading the "go ahead" banner) would get auto-stopped
+          // before ever saying anything.
+          if (silenceStartRef.current === null) silenceStartRef.current = performance.now()
+          else if (performance.now() - silenceStartRef.current > SILENCE_STOP_MS) {
+            stopRef.current()
+            return // the recorder is stopping; no more ticks needed
+          }
+        }
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
