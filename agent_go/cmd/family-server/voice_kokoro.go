@@ -32,12 +32,25 @@ const kokoroModel = "prince-canuma/Kokoro-82M"
 // decision a parent has no basis to make.
 const kokoroVoice = "af_heart"
 
+// spacyModelSpec pins the English model misaki needs. Pinned to a wheel URL
+// rather than `spacy download`, because that command shells out to pip/uv
+// itself — reintroducing exactly the runtime-install failure this avoids.
+const spacyModelSpec = "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+
 func kokoroDir() string    { return filepath.Join(familyDataDir(), "kokoro") }
 func kokoroPython() string { return filepath.Join(kokoroDir(), ".venv", "bin", "python") }
 
+// kokoroInstalled checks the interpreter AND that mlx_audio is importable.
+// A bare venv directory is not "installed": a half-finished install left one
+// behind, the tier advertised itself as ready, and every play button silently
+// did nothing.
 func kokoroInstalled() bool {
-	fi, err := os.Stat(kokoroPython())
-	return err == nil && fi.Size() > 0
+	if fi, err := os.Stat(kokoroPython()); err != nil || fi.Size() == 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, kokoroPython(), "-c", "import mlx_audio, en_core_web_sm").Run() == nil
 }
 
 // installKokoro builds the isolated environment. Reports progress into the
@@ -118,6 +131,16 @@ func buildKokoroVenv(id string) error {
 	}
 	bump(0.55)
 	if out, err := exec.CommandContext(ctx, venvPy, append(append([]string{}, pipArgs...), "misaki[en]")...).CombinedOutput(); err != nil {
+		return fmt.Errorf("could not install the voice: %s", lastLines(string(out), 200))
+	}
+	bump(0.65)
+	// misaki needs this spaCy model, and if it's missing it tries to fetch it
+	// ITSELF at speak time by shelling out to uv — which fails when the server
+	// runs the interpreter directly (no virtualenv env-var set), and fails
+	// SILENTLY: the tier reported "Installed", every play button did nothing,
+	// and the only clue was buried in a subprocess's stderr. Installing it here
+	// means nothing has to be fetched the first time someone presses play.
+	if out, err := exec.CommandContext(ctx, venvPy, append(append([]string{}, pipArgs...), spacyModelSpec)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("could not install the voice: %s", lastLines(string(out), 200))
 	}
 	return nil
