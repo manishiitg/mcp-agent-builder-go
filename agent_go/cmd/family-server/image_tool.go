@@ -160,7 +160,7 @@ func runReadImage(ctx context.Context, engine string, args map[string]interface{
 		// text baked into a picture telling it to cat a file and include the
 		// output. Tested with exactly that image — the transcriber reported the
 		// injected instruction as text rather than executing it, which is the
-		// correct behaviour but is MODEL JUDGEMENT, not an enforced boundary.
+		// correct behavior but is MODEL JUDGMENT, not an enforced boundary.
 		// One phrasing on one engine passing is not proof; a different wording
 		// or model could comply.
 		//
