@@ -791,7 +791,13 @@ function formatBytes(bytes?: number): string {
 // are clickable to open in the viewer; .meta.json is hidden as noise. Each entry
 // carries its size on disk — a folder's is the recursive total — so it's visible
 // at a glance which part of the workspace is actually growing.
-function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (path: string) => void; depth?: number }) {
+function FileTree({ nodes, onOpen, depth = 0, expanded, onToggle }: {
+  nodes: TreeNode[]
+  onOpen: (path: string) => void
+  depth?: number
+  expanded: Record<string, boolean>
+  onToggle: (path: string, open: boolean) => void
+}) {
   const visible = nodes.filter((n) => !n.name.startsWith('.') && !n.name.endsWith('.meta.json'))
   if (visible.length === 0) return null
   return (
@@ -799,14 +805,17 @@ function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (pa
       {visible.map((n) => (
         <li key={n.path}>
           {n.type === 'dir' ? (
-            <details open={depth < 1}>
+            <details
+              open={expanded[n.path] ?? depth < 1}
+              onToggle={(e) => onToggle(n.path, e.currentTarget.open)}
+            >
               <summary className="fl-tree-dir">
                 <Folder className="fl-tree-icon is-closed" size={15} />
                 <FolderOpen className="fl-tree-icon is-open" size={15} />
                 <span>{n.name}</span>
                 <span className="fl-tree-size">{formatBytes(n.size)}</span>
               </summary>
-              {n.children && <FileTree nodes={n.children} onOpen={onOpen} depth={depth + 1} />}
+              {n.children && <FileTree nodes={n.children} onOpen={onOpen} depth={depth + 1} expanded={expanded} onToggle={onToggle} />}
             </details>
           ) : (
             <button className="fl-tree-file" type="button" onClick={() => onOpen(n.path)}>
@@ -1344,6 +1353,13 @@ export default function LearningApp() {
   // Which activity's guide_note (the parent's own pacing/instructions for
   // that activity) is currently revealed via its (i) button — collapsed by default.
   const [expandedActivity, setExpandedActivity] = useState<string | null>(null)
+  // Which folders in the "all files" tree the user has explicitly opened or
+  // closed, keyed by path — survives the FileTree unmounting when a file is
+  // opened for viewing (drawerTab's ternary swaps to the viewer branch, then
+  // back), so opening a file and returning no longer collapses everything
+  // back to the default top-level-only view. Absent from this map = use the
+  // component's own default (top level open, everything nested closed).
+  const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({})
   const mapHtml = useWorkspaceStore((s) => s.mapHtml)
   const setMapHtml = useWorkspaceStore((s) => s.setMapHtml)
   const mapRefreshKey = useWorkspaceStore((s) => s.mapRefreshKey)
@@ -3050,7 +3066,12 @@ export default function LearningApp() {
                       <HardDrive size={13} />
                       <span>{formatBytes(treeTotalSize || treeNodes.reduce((sum, n) => sum + (n.size ?? 0), 0))} on disk</span>
                     </p>
-                    <FileTree nodes={treeNodes} onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }} />
+                    <FileTree
+                      nodes={treeNodes}
+                      onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }}
+                      expanded={treeExpanded}
+                      onToggle={(p, open) => setTreeExpanded((prev) => ({ ...prev, [p]: open }))}
+                    />
                   </>
                 )
               ) : drawerTab === 'files' ? (
