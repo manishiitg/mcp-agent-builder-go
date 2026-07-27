@@ -75,7 +75,7 @@ import {
 } from './stores'
 import { FAMILY_API } from './apiBase'
 import { VoiceSettings } from './voice/VoiceSettings'
-import { readAutoSpeak, speakText } from './voice/speech'
+import { readAutoSpeak, persistAutoSpeak, speakText } from './voice/speech'
 import { useSpeakReply } from './voice/useSpeakReply'
 import { ReplySpeakControls } from './voice/ReplySpeakControls'
 import { MicButton } from './voice/MicButton'
@@ -1078,7 +1078,8 @@ export default function LearningApp() {
   // machine's hardware (see /api/voice/status), so the UI never has to guess
   // what an Intel vs Apple Silicon Mac can actually run.
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
-  const [autoSpeak, setAutoSpeak] = useState(readAutoSpeak)
+  const [parentAutoSpeak, setParentAutoSpeak] = useState(() => readAutoSpeak('parent'))
+  const [childAutoSpeak, setChildAutoSpeak] = useState(() => readAutoSpeak('child'))
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
   // Secrets (credentials the parent saves for Quill's tools, e.g. a school
   // portal login) — settings-form only, never through chat, so a value typed
@@ -1186,7 +1187,15 @@ export default function LearningApp() {
             .then((dd) => {
               if (!dd?.content) return
               const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-              setParentMessages((c.messages || []).map(toParentMsg))
+              const loaded = (c.messages || []).map(toParentMsg)
+              setParentMessages(loaded)
+              // History being resumed on load, not a fresh reply — seed the
+              // baseline so auto-read doesn't fire the instant the page
+              // loads (same fix as the child thread's resume path above).
+              const last = loaded[loaded.length - 1]
+              if (last?.role === 'assistant' && last.text) {
+                lastSpokenParentRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
+              }
             })
             .catch(() => {})
         }
@@ -1548,16 +1557,57 @@ export default function LearningApp() {
   // Auto-read: speak the newest tutor reply once the turn finishes. Keyed on
   // the settled message list (not the streaming text) so it reads the final,
   // reconciled reply exactly once rather than re-firing on every stream tick.
-  const lastSpokenRef = useRef<string | null>(null)
+  // Independent of the parent thread's own auto-read below — a parent may
+  // want the CHILD's replies read aloud (a child who can't read well yet)
+  // without wanting their own parent-chat replies read aloud too.
+  const lastSpokenChildRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!autoSpeak || childSending) return
+    if (!childAutoSpeak || childSending) return
     const last = childMessages[childMessages.length - 1]
     if (!last || last.role !== 'assistant' || !last.text) return
     const key = `${childMessages.length}:${last.text.slice(0, 64)}`
-    if (lastSpokenRef.current === key) return
-    lastSpokenRef.current = key
+    if (lastSpokenChildRef.current === key) return
+    lastSpokenChildRef.current = key
     speakText(last.text).catch(() => {})
-  }, [autoSpeak, childSending, childMessages])
+  }, [childAutoSpeak, childSending, childMessages])
+
+  // Same idea for the parent thread, entirely independent state.
+  const lastSpokenParentRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!parentAutoSpeak || sending) return
+    const last = parentMessages[parentMessages.length - 1]
+    if (!last || last.role !== 'assistant' || !last.text) return
+    const key = `${parentMessages.length}:${last.text.slice(0, 64)}`
+    if (lastSpokenParentRef.current === key) return
+    lastSpokenParentRef.current = key
+    speakText(last.text).catch(() => {})
+  }, [parentAutoSpeak, sending, parentMessages])
+
+  // Wraps the raw setters so flipping the toggle ON seeds the baseline to
+  // whatever reply is ALREADY showing — otherwise the effects above (which
+  // depend on childAutoSpeak/parentAutoSpeak) immediately treat the reply
+  // that's already on screen as newly arrived and speak it right then. Turning
+  // this on should apply going forward, not retroactively read the current
+  // reply the instant you enable it (which also raced against a manual
+  // "Listen" click on that same reply, playing both at once).
+  const handleChildAutoSpeakChange = (on: boolean) => {
+    if (on) {
+      const last = childMessages[childMessages.length - 1]
+      if (last?.role === 'assistant' && last.text) {
+        lastSpokenChildRef.current = `${childMessages.length}:${last.text.slice(0, 64)}`
+      }
+    }
+    setChildAutoSpeak(on)
+  }
+  const handleParentAutoSpeakChange = (on: boolean) => {
+    if (on) {
+      const last = parentMessages[parentMessages.length - 1]
+      if (last?.role === 'assistant' && last.text) {
+        lastSpokenParentRef.current = `${parentMessages.length}:${last.text.slice(0, 64)}`
+      }
+    }
+    setParentAutoSpeak(on)
+  }
 
   const deleteSecret = (name: string) => {
     setDeletingSecret(name)
@@ -1687,7 +1737,17 @@ export default function LearningApp() {
           .then((dd) => {
             if (!dd?.content) return
             const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-            setChildMessages((c.messages || []).map(toParentMsg))
+            const loaded = (c.messages || []).map(toParentMsg)
+            setChildMessages(loaded)
+            // This is HISTORY being resumed (e.g. a page refresh) — not a
+            // fresh reply. Seed the auto-speak baseline to match it, so the
+            // effect below (which re-runs the moment childMessages changes)
+            // finds it already "seen" instead of reading an old reply aloud
+            // the instant the page loads.
+            const last = loaded[loaded.length - 1]
+            if (last?.role === 'assistant' && last.text) {
+              lastSpokenChildRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
+            }
           })
           .catch(() => {})
       })
@@ -2706,11 +2766,12 @@ export default function LearningApp() {
                           <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
                             <Markdown text={m.text ?? ''} />
                             <ReplySpeakControls
+                              scope="parent"
                               speaking={parentSpeakingIdx === i}
                               isLatest={i === parentMessages.length - 1}
-                              autoSpeak={autoSpeak}
+                              autoSpeak={parentAutoSpeak}
                               onToggleSpeak={() => speakParentReply(i, m.text ?? '')}
-                              onAutoSpeakChange={setAutoSpeak}
+                              onAutoSpeakChange={handleParentAutoSpeakChange}
                               onOpenSettings={() => setSettingsOpen(true)}
                             />
                           </div>
@@ -3605,11 +3666,12 @@ export default function LearningApp() {
                       <div className="fl-tbubble">
                         <Markdown text={m.text ?? ''} />
                         <ReplySpeakControls
+                          scope="child"
                           speaking={speakingIdx === i}
                           isLatest={i === childMessages.length - 1}
-                          autoSpeak={autoSpeak}
+                          autoSpeak={childAutoSpeak}
                           onToggleSpeak={() => speakReply(i, m.text ?? '')}
-                          onAutoSpeakChange={setAutoSpeak}
+                          onAutoSpeakChange={handleChildAutoSpeakChange}
                           onOpenSettings={() => setSettingsOpen(true)}
                         />
                       </div>

@@ -3,14 +3,13 @@ import { FAMILY_API } from '../apiBase'
 
 export type MicState = 'idle' | 'recording' | 'transcribing'
 
-// How often to refresh the live preview while recording. Each tick
-// re-transcribes the whole recording-so-far through the SAME one-shot
-// Parakeet call used for the final result — not word-by-word streaming, but
-// genuinely live: text appears while you're still talking, not only after
-// you stop. Chosen over mlx-audio's own realtime WebSocket server (which
-// exists and does true incremental streaming) after that server behaved
-// unpredictably with Parakeet specifically in testing — this reuses code
-// already proven correct in production instead of an unfamiliar protocol.
+// How often to refresh the live preview while recording, as a backstop for
+// continuous speech with no natural pause (see PAUSE_DETECT_MS below, which
+// triggers an EXTRA immediate refresh on a pause — most updates come from
+// that, not this fixed clock). Each tick re-transcribes the whole
+// recording-so-far through the SAME one-shot Parakeet call used for the
+// final result — not word-by-word streaming, but genuinely live: text
+// appears while you're still talking, not only after you stop.
 //
 // 1200ms rather than the original 2500ms: with the models kept warm in a
 // persistent worker (see voice_worker.go), a real call now takes ~1.2-1.5s
@@ -20,20 +19,23 @@ export type MicState = 'idle' | 'recording' | 'transcribing'
 // request hasn't finished, so this can't pile up concurrent requests).
 const LIVE_PREVIEW_INTERVAL_MS = 1200
 
-// Auto-stop-on-silence, using the SAME live amplitude signal already driving
-// the level meter — no new dependency, no raw-PCM streaming, no separate VAD
-// model. This is deliberately simple amplitude thresholding, not a real
-// speech classifier (like webrtcvad or Silero VAD): it can be fooled by
-// steady background noise (a fan, a TV) reading as "still talking", or by a
-// loud clatter reading as speech. That trade was made explicitly in favor of
-// shipping something today with zero new dependencies; a real VAD would need
-// either raw PCM streamed to Python or an in-browser WASM model — a bigger
-// build than this.
+// Live amplitude thresholding — the SAME signal already driving the level
+// meter — used ONLY to notice a natural pause and refresh the preview right
+// then, so it lines up with how someone actually talks (in phrases, with
+// breaks) instead of an arbitrary clock. It does NOT stop the recording:
+// closing the mic is the parent's decision alone, never automatic. This is
+// deliberately simple amplitude thresholding, not a real speech classifier
+// (webrtcvad, Silero VAD) — a proper VAD would need either raw PCM streamed
+// to Python or an in-browser WASM model, both bigger builds than reusing the
+// level meter that already existed. It can be fooled by steady background
+// noise (a fan, a TV) reading as "still talking" — acceptable for a preview
+// refresh trigger, since a missed pause just means the fixed interval above
+// catches it a little later.
 const SPEECH_LEVEL_THRESHOLD = 0.16 // above this, "the parent is talking"
 const SILENCE_LEVEL_THRESHOLD = 0.08 // below this, "quiet" — lower than the
 // speech threshold on purpose, so hovering right at the boundary doesn't
 // flicker between the two states tick to tick.
-const SILENCE_STOP_MS = 1800 // sustained quiet, AFTER real speech began, before auto-stopping
+const PAUSE_DETECT_MS = 450 // brief quiet, AFTER real speech, counts as "paused" — short enough to feel immediate, long enough to not fire mid-word
 
 /**
  * Mic dictation for a composer: record → transcribe on-device → hand back text.
@@ -46,14 +48,15 @@ const SILENCE_STOP_MS = 1800 // sustained quiet, AFTER real speech began, before
  * `level` is a live 0..1 mic amplitude, polled from an AnalyserNode. Without
  * it a recording UI is a lie: you can't tell "listening" from "mic is muted /
  * the wrong input is selected" until after you've already spoken. The same
- * signal also drives auto-stop-on-silence (see SILENCE_STOP_MS above).
+ * signal also triggers an immediate preview refresh on a natural pause (see
+ * PAUSE_DETECT_MS above) — it never stops the recording itself.
  *
- * `liveText` is a running preview of what's been said so far, refreshed every
- * LIVE_PREVIEW_INTERVAL_MS. It can revise itself between ticks (more audio
- * context can change how the model reads an earlier word) — that's expected,
- * the same way any live-captioning UI's in-progress line can shift before it
- * settles. The FINAL result (via onText, on stop) always re-transcribes the
- * complete recording once more for the authoritative version.
+ * `liveText` is a running preview of what's been said so far. It can revise
+ * itself between refreshes (more audio context can change how the model
+ * reads an earlier word) — that's expected, the same way any live-captioning
+ * UI's in-progress line can shift before it settles. The FINAL result (via
+ * onText, on stop) always re-transcribes the complete recording once more
+ * for the authoritative version.
  */
 export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const [state, setState] = useState<MicState>('idle')
@@ -70,7 +73,17 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const previewBusyRef = useRef(false)
   const hasSpokenRef = useRef(false)
   const silenceStartRef = useRef<number | null>(null)
-  const stopRef = useRef<() => void>(() => {})
+  const pauseFiredRef = useRef(false)
+  const runPreviewRef = useRef<() => void>(() => {})
+  // How many recorder chunks the LAST successful preview transcript was built
+  // from, and that exact text. If stop() finds the recording still has
+  // exactly that many chunks — meaning not one byte of new audio arrived
+  // since — the preview's text IS the final answer: same underlying audio,
+  // so re-sending it for an identical answer would just be wasted latency.
+  // Any new chunk (the common case; someone almost always adds a beat of
+  // trailing audio before clicking stop) falls through to a full re-transcribe.
+  const lastPreviewChunkCountRef = useRef(-1)
+  const lastPreviewTextRef = useRef('')
 
   // Everything the browser handed us has to be torn down explicitly: leaving
   // the MediaStream open keeps the OS mic indicator lit, which reads as "this
@@ -85,11 +98,16 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
     setLevel(0)
     hasSpokenRef.current = false
     silenceStartRef.current = null
+    pauseFiredRef.current = false
   }
 
   const runLivePreview = async (rec: MediaRecorder) => {
     if (previewBusyRef.current || chunksRef.current.length === 0) return
     previewBusyRef.current = true
+    // Captured BEFORE the request, not after — more chunks can arrive while
+    // this is in flight, and this must reflect exactly what the blob below
+    // was actually built from.
+    const chunkCountForThisBlob = chunksRef.current.length
     try {
       const ext = (rec.mimeType || '').includes('mp4') ? 'mp4' : 'webm'
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' })
@@ -100,7 +118,11 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       // itself once more audio accumulates — skip this tick rather than show
       // an error for what is only a preview.
       const data = await res.json()
-      if (data.text?.trim()) setLiveText(data.text.trim())
+      if (data.text?.trim()) {
+        setLiveText(data.text.trim())
+        lastPreviewChunkCountRef.current = chunkCountForThisBlob
+        lastPreviewTextRef.current = data.text.trim()
+      }
     } catch {
       // Same reasoning: a preview tick failing silently is fine; the next
       // tick tries again with more audio.
@@ -114,17 +136,20 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
     if (rec && rec.state !== 'inactive') rec.stop() // onstop does the transcribe
     else { teardown(); setState('idle') }
   }
-  stopRef.current = stop
 
   const start = async () => {
     setError(null)
     setLiveText('')
+    lastPreviewChunkCountRef.current = -1
+    lastPreviewTextRef.current = ''
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
 
-      // Live level meter — also drives auto-stop-on-silence, see the
-      // constants above.
+      // Live level meter — also used to notice a natural pause and refresh
+      // the preview right then (see PAUSE_DETECT_MS). Never stops the
+      // recording — only the parent does that.
       const ctx = new AudioContext()
       audioCtxRef.current = ctx
       const analyser = ctx.createAnalyser()
@@ -143,15 +168,17 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
         if (normalized >= SPEECH_LEVEL_THRESHOLD) {
           hasSpokenRef.current = true
           silenceStartRef.current = null
+          pauseFiredRef.current = false // speaking again — the next pause can trigger a fresh refresh
         } else if (normalized <= SILENCE_LEVEL_THRESHOLD && hasSpokenRef.current) {
-          // Only start the silence clock once real speech has actually
-          // happened — otherwise someone who hasn't started talking yet
-          // (still reading the "go ahead" banner) would get auto-stopped
-          // before ever saying anything.
-          if (silenceStartRef.current === null) silenceStartRef.current = performance.now()
-          else if (performance.now() - silenceStartRef.current > SILENCE_STOP_MS) {
-            stopRef.current()
-            return // the recorder is stopping; no more ticks needed
+          if (silenceStartRef.current === null) {
+            silenceStartRef.current = performance.now()
+          } else if (!pauseFiredRef.current && performance.now() - silenceStartRef.current > PAUSE_DETECT_MS) {
+            // A natural pause — refresh right now instead of waiting for the
+            // fixed interval, so the preview lines up with how someone
+            // actually talks. Fires once per pause (not on every tick while
+            // they stay quiet) via pauseFiredRef.
+            pauseFiredRef.current = true
+            runPreviewRef.current()
           }
         }
         rafRef.current = requestAnimationFrame(tick)
@@ -163,9 +190,23 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       chunksRef.current = []
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
       rec.onstop = async () => {
+        const finalChunkCount = chunksRef.current.length
         teardown()
         const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' })
         if (blob.size === 0) { setState('idle'); return }
+
+        // The last live preview already transcribed this EXACT audio (not one
+        // new chunk arrived since) — its text already IS the final answer.
+        // Never taken when `tier` is set: that path forces a specific model
+        // for testing, but the live preview always used the auto-selected
+        // one, so reusing it here would silently test the wrong model.
+        if (!tier && finalChunkCount === lastPreviewChunkCountRef.current && lastPreviewTextRef.current) {
+          onText(lastPreviewTextRef.current)
+          setState('idle')
+          setLiveText('')
+          return
+        }
+
         setState('transcribing')
         try {
           const ext = (rec.mimeType || '').includes('mp4') ? 'mp4' : 'webm'
@@ -190,6 +231,7 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       // container stream, so everything received so far can always be
       // concatenated into one playable clip for the live preview below.
       rec.start(1000)
+      runPreviewRef.current = () => runLivePreview(rec)
       previewTimerRef.current = window.setInterval(() => runLivePreview(rec), LIVE_PREVIEW_INTERVAL_MS)
       setState('recording')
     } catch {

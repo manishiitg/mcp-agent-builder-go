@@ -1,5 +1,5 @@
 import { Volume2, Square, Settings2 } from 'lucide-react'
-import { persistAutoSpeak } from './speech'
+import { persistAutoSpeak, type AutoSpeakScope } from './speech'
 
 /**
  * Read-aloud controls attached to one agent reply.
@@ -15,6 +15,7 @@ import { persistAutoSpeak } from './speech'
  * reachable in one click.
  */
 export function ReplySpeakControls({
+  scope,
   speaking,
   isLatest,
   autoSpeak,
@@ -22,6 +23,11 @@ export function ReplySpeakControls({
   onAutoSpeakChange,
   onOpenSettings,
 }: {
+  /** Which thread's OWN auto-read setting this checkbox controls — parent
+   *  and child persist and apply independently, so a parent who wants the
+   *  child's replies read aloud isn't forced into the same choice for their
+   *  own chat, and vice versa. */
+  scope: AutoSpeakScope
   speaking: boolean
   isLatest: boolean
   autoSpeak: boolean
@@ -48,7 +54,7 @@ export function ReplySpeakControls({
           <input
             type="checkbox"
             checked={autoSpeak}
-            onChange={(e) => { onAutoSpeakChange(e.target.checked); persistAutoSpeak(e.target.checked) }}
+            onChange={(e) => { onAutoSpeakChange(e.target.checked); persistAutoSpeak(scope, e.target.checked) }}
           />
           <span>Read every reply</span>
         </label>
