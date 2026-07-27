@@ -28,8 +28,9 @@ func childShowSceneTool(recordScene func(html string)) agentsession.Tool {
 			"skills/_shared/html-design.md's visual style). One real constraint: this iframe stays mounted in her chat history forever " +
 			"— it is never torn down when the conversation moves on — so any setInterval/requestAnimationFrame loop must have a natural " +
 			"stopping point (finish the animation, end the game, clear the timer) rather than run forever in the background. " +
-			"To offer a real choice you need to see and respond to, use a button that calls SQ.choose — never a `<details>` reveal or a " +
-			"button that does nothing further: `<button onclick=\"parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')\">" +
+			"To offer a real choice you need to see and respond to, use a button that calls `SQ.choose(text, this)` — never a `<details>` " +
+			"reveal or a button that does nothing further. It also disables itself the instant it's tapped, so a slow reply can't be " +
+			"mistaken for a missed tap and answered twice: `<button onclick=\"SQ.choose('Investigate Saturn', this)\">" +
 			"Investigate Saturn</button>`. Call this when a visual moment genuinely helps, not every single turn — plain conversation is " +
 			"fine most of the time.",
 		Category: "family_tools",

@@ -67,7 +67,12 @@ that breaks the moment the page is printed or opened offline.
   the child typed it, making the choice a real turn Quill responds to. A button that
   does anything else — toggling visibility, revealing something, nothing at all — is
   as invisible to Quill as a `<details>` reveal, and just as wrong.
-  - GOOD: `<button onclick="parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')">Investigate Saturn</button>`
+  Always through `SQ.choose(text, this)` (defined once in the base template's own
+  `<script>`, below) — never a raw inline `postMessage` — because it also disables
+  the button the instant it's clicked, so a slow reply can't be mistaken for a
+  missed tap and answered twice.
+  - GOOD: `<button onclick="SQ.choose('Investigate Saturn', this)">Investigate Saturn</button>`
+  - BAD: `<button onclick="parent.postMessage({__sq:1,op:'choose',text:'Investigate Saturn'},'*')">Investigate Saturn</button>` — sends correctly, but the button stays clickable
   - BAD: `<button onclick="document.getElementById('a').style.display='block'">Show answer</button>`
 - For content that should change turn by turn as the conversation unfolds — rather
   than being fixed at creation time — use `show_scene` instead of this file: a small
@@ -133,6 +138,8 @@ that breaks the moment the page is printed or opened offline.
     padding:3px 10px;border-radius:999px;background:#eaf7ee;color:#26765a}
   .chip.is-focus{background:var(--sun-soft);color:#8a6114}
   .chip.is-none{background:#eef1f6;color:#5c6d88}
+  /* Set by SQ.choose the instant a choice button is clicked — see below. */
+  button:disabled{opacity:.55;cursor:default}
 </style>
 </head>
 <body>
@@ -151,6 +158,23 @@ that breaks the moment the page is printed or opened offline.
     window.addEventListener('message', function (e) {
       if (e && e.data && e.data.__sq === 1 && e.data.op === 'print') window.print()
     })
+    // SQ.choose is the ONLY way a click-to-choose button should send its turn —
+    // see "Click-to-CHOOSE" below. Disables the button THE INSTANT it's
+    // clicked, before the message even reaches the app: a real reply can take a
+    // minute or more, and a button that stays clickable invites tapping it
+    // again, which sends the exact same answer as a second, duplicate turn —
+    // confirmed live, a child tapped one five-plus times waiting for a
+    // response, each tap queued as its own separate turn behind the last.
+    // Defined once here rather than left to each button's own onclick so
+    // every generated page gets this for free, consistently, rather than
+    // depending on it being hand-written correctly every time.
+    window.SQ = {
+      choose: function (text, el) {
+        if (el && el.disabled) return
+        if (el) el.disabled = true
+        parent.postMessage({ __sq: 1, op: 'choose', text: text }, '*')
+      }
+    }
   </script>
 </body>
 </html>

@@ -294,6 +294,16 @@ function withSceneResizeScript(html: string): string {
   window.addEventListener('load', report);
   if (window.ResizeObserver) new ResizeObserver(report).observe(document.documentElement);
   setTimeout(report, 50);
+  // Same SQ.choose as the shared full-page template (skills/_shared/html-design.md)
+  // — a scene snippet is a SEPARATE srcDoc document, so it doesn't inherit that
+  // page's own <script>; without this, a scene's SQ.choose button would throw
+  // "SQ is not defined" the instant it's clicked. Disables the button immediately
+  // so a slow reply can't be mistaken for a missed tap and answered twice.
+  window.SQ = { choose: function (text, el) {
+    if (el && el.disabled) return;
+    if (el) el.disabled = true;
+    parent.postMessage({ __sq: 1, op: 'choose', text: text }, '*');
+  } };
 })();</script>`
 }
 
