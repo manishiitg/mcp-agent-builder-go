@@ -516,7 +516,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-child-hi strong { display: block; color: var(--heading); font-size: var(--text-subheading); font-weight: 800; }
 .fl-child-hi small { color: #5f708d; font-size: var(--text-secondary); }
 .fl-today-pill { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: #eaf5ff; color: #2f6db0; font-size: var(--text-secondary); font-weight: 700; }
-.fl-parent-return { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 13px; border: 1px solid #d7e0ec; border-radius: 12px; background: var(--surface); color: #3d567a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
+.fl-parent-return { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; min-height: 40px; padding: 0 13px; border: 1px solid #d7e0ec; border-radius: 12px; background: var(--surface); color: #3d567a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
 .fl-parent-return:hover { border-color: #9db2ca; color: var(--heading); }
 .fl-child-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px) 20px; }
 .fl-child-composer, .fl-child-disclaimer { margin-left: clamp(16px, 2.5vw, 36px); margin-right: clamp(16px, 2.5vw, 36px); }
@@ -998,6 +998,13 @@ audio.fl-viewer-media { background: var(--surface); }
 @container childchat (max-width: 470px) {
   .fl-parent-return > span { display: none; }        /* then the button's label */
   .fl-parent-return { padding: 7px 9px; }
+  /* fl-zoom-btn's OWN label (the "150%" badge, shown once the chat text has
+     been made bigger) had no equivalent rule — every other label-bearing
+     button in this header collapses to icon-only by this width, but this one
+     didn't, so a still-expanded "T 150%" button could overflow the row
+     unevenly and clip a neighboring icon rather than shrinking cleanly. */
+  .fl-zoom-btn .fl-zoom-badge { display: none; }
+  .fl-zoom-btn.is-on { width: 38px; padding: 0; }
 }
 @container childchat (max-width: 440px) {
   .fl-child-top { gap: 8px; padding-left: 12px; padding-right: 12px; }
