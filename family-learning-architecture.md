@@ -9,7 +9,16 @@
 > - **Workspace layout** — the `shared/` / `parent/` / `child/` split was
 >   replaced by self-contained activity folders (`<Subject>/<Topic>/<slug>/`).
 > - **Connectors** — the Gmail / `gws` integration was removed entirely.
->   WhatsApp, Browser (CDP) and voice (STT/TTS) are current.
+>   WhatsApp and Browser (CDP) are current.
+> - **Voice (STT/TTS)** — not in the 07-19 draft at all. Speech-to-text and
+>   text-to-speech both run locally, hardware-tiered: whisper.cpp as the
+>   universal baseline, with Parakeet (STT) and Kokoro (TTS) via MLX on Apple
+>   Silicon. A persistent Python worker keeps models resident with a 15-minute
+>   idle unload, and warm-up runs one real inference — loading weights alone
+>   leaves a JIT compile on the first real call. The composer does live
+>   preview transcription with pause-triggered refresh; the mic is only ever
+>   closed by the user. Read-aloud is per-thread (parent and child toggle
+>   independently) over a shared voice/model choice.
 > - **Secrets** — an encrypted store exists, reaching tools as
 >   `$SECRET_<NAME>` in both the shell and `agent_browser`, with
 >   `set_secret` / `delete_secret` from chat and a Settings form.
