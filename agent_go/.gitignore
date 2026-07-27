@@ -26,3 +26,4 @@ runs
 
 # Example MCP server configs (may contain credentials/paths)
 examples/claude-code-chat/mcp_servers.json
+schema-gen
