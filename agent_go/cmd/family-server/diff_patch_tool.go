@@ -46,8 +46,12 @@ func diffPatchWorkspaceFileTool() agentsession.Tool {
 func childDiffPatchWorkspaceFileTool() agentsession.Tool {
 	return agentsession.Tool{
 		Name: "diff_patch_workspace_file",
-		Description: "Apply a small unified diff patch to the current lesson/test or your own work — " +
-			"faster and more reliable than rewriting the whole file for a small insertion like an answered-note line.",
+		Description: "Use this for any small insertion into the current lesson/test or your own work — faster and more reliable than " +
+			"rewriting the whole file. Its most common job: when she (or whoever's using this) asks you to update, mark, or get the page " +
+			"ready to print, patch in `<p class=\"answered-note\">✎ Answered: <em>{her words, verbatim}</em></p>` for each question she " +
+			"genuinely answered, replacing that question's `<div class=\"answer-space\"></div>`. This is on-demand, not something to do " +
+			"after every single answer — but it's what actually makes the page mean anything when a parent opens or prints it, since " +
+			"nothing else records what she answered ON the page itself.",
 		Category: "family_tools",
 		Params:   diffPatchParams,
 		Handler: func(_ context.Context, args map[string]interface{}) (string, error) {

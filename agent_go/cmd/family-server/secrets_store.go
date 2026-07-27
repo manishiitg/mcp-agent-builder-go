@@ -202,6 +202,35 @@ func secretEnvPairs() []string {
 	return out
 }
 
+// substituteSecretPlaceholders replaces every $SECRET_<NAME> occurrence in s
+// with that secret's real value — the SAME placeholder syntax the model
+// already uses with execute_shell_command (where the shell itself expands
+// it via Cmd.Env), applied here to agent_browser's fill/type arguments
+// instead. The model writes and sees only the placeholder token in its own
+// tool call; the real value is substituted here, server-side, and never
+// enters the model's context. Longer names are matched before shorter ones
+// that happen to be prefixes of them (e.g. SECRET_PASSWORD vs
+// SECRET_PASSWORD_CONFIRM), so a shorter name can't accidentally swallow
+// part of a longer one's suffix.
+func substituteSecretPlaceholders(s string) string {
+	if !strings.Contains(s, "$SECRET_") {
+		return s
+	}
+	secretsMu.Lock()
+	m := loadSecretsMapLocked()
+	secretsMu.Unlock()
+	type pair struct{ key, value string }
+	pairs := make([]pair, 0, len(m))
+	for name, value := range m {
+		pairs = append(pairs, pair{"$" + secretEnvName(name), value})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return len(pairs[i].key) > len(pairs[j].key) })
+	for _, p := range pairs {
+		s = strings.ReplaceAll(s, p.key, p.value)
+	}
+	return s
+}
+
 // redactSecrets replaces every occurrence of any given secret value inside
 // text with a placeholder — used to keep a credential the parent typed in
 // chat from surviving forever in the persisted conversation transcript.

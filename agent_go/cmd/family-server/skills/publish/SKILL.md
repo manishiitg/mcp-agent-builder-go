@@ -39,3 +39,5 @@ Never write status into `publish.json`.
 
 5. **Tell the parent** what was published and where (the link/path), and who can now
    see it.
+
+6. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

@@ -100,6 +100,16 @@ func parentTools(engine, childLabel string, sinks parentToolSinks) []agentsessio
 		suggestActionsTool(sinks),
 		webSearchTool(),
 		readImageTool(engine),
+		// The parent authors pages anywhere in the workspace, so it names the
+		// folder the picture belongs beside; the path is still validated
+		// against the workspace root.
+		findImageTool(func(requested string) (string, bool) {
+			rel := strings.Trim(strings.TrimSpace(requested), "/")
+			if rel == "" {
+				return "", false
+			}
+			return resolveWorkspacePath(rel)
+		}),
 		notifyTool(),
 		shellTool(),
 		diffPatchWorkspaceFileTool(),
@@ -152,7 +162,7 @@ func setChildProfileTool(sinks parentToolSinks) agentsession.Tool {
 			if err != nil {
 				return "", fmt.Errorf("failed to save child profile: %w", err)
 			}
-			seedWorkspace(saved) // keep parent/child-profile.json (read by skills) in sync
+			seedWorkspace(saved) // keep memory/child-profile.json (read by skills) in sync
 			sinks.event(toolEvent{Tool: "set_child_profile", Name: saved.Name, Grade: saved.Grade, Board: saved.Board})
 			return fmt.Sprintf(`{"status":"ok","name":%q,"grade":%q,"board":%q}`, saved.Name, saved.Grade, saved.Board), nil
 		},
@@ -248,14 +258,14 @@ func openActivityTool(sinks parentToolSinks) agentsession.Tool {
 func suggestActionsTool(sinks parentToolSinks) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "suggest_actions",
-		Description: "Offer the parent 2–4 clickable buttons for things they probably ISN'T already thinking about — not the " +
-			"obvious immediate next step (they don't need a button for what they were just about to say themselves). " +
-			"Aim for real value they wouldn't get otherwise: a global best practice or technique for this topic/board " +
-			"(use web_search), a way to personalize further for this specific child's actual pattern (from recent " +
-			"activity, not generic advice), or a genuine improvement to what already " +
-			"exists. Call this at the END of your turn. Each action has a short button label and the exact message that " +
-			"will be sent as if the parent typed it when they click. Do NOT use this for \"give/send/hand X to the " +
-			"child\" — create_learning_activity + open_activity already put that real button on the right automatically.",
+		Description: "Call this at the END of EVERY turn, without exception — a turn that ends without it leaves the parent " +
+			"with nothing to tap, which is a bug, not restraint. Offer 2–4 clickable buttons; each has a short label and " +
+			"the exact message sent as if the parent typed it when clicked. Prefer things they probably AREN'T already " +
+			"thinking about — a best practice or technique for this topic/board (use web_search), a way to personalize " +
+			"further for this specific child's actual pattern (from recent activity, not generic advice), or a genuine " +
+			"improvement to what already exists — but if nothing non-obvious comes to mind, offer the two most useful " +
+			"obvious things rather than skipping the call. Do NOT use this for \"give/send/hand X to the child\" — " +
+			"create_learning_activity + open_activity already put that real button on the right automatically.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -288,10 +298,11 @@ func suggestActionsTool(sinks parentToolSinks) agentsession.Tool {
 				if label == "" || msg == "" {
 					continue
 				}
+				// Every action the model sent is kept. "2–4" is stated in the
+				// tool description and the system prompt, so the count is the
+				// model's call — silently truncating here would drop a button
+				// it deliberately chose and hide that it had done so.
 				out = append(out, suggestion{Label: label, Message: msg})
-				if len(out) >= 4 {
-					break
-				}
 			}
 			sinks.suggestions(out)
 			return fmt.Sprintf(`{"status":"ok","count":%d}`, len(out)), nil

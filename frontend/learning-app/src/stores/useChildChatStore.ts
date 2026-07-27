@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Activity, ChildSuggestion, ParentMsg } from './types'
+import type { Activity, ParentMsg } from './types'
 import { resolveSetState, type SetStateAction } from './storeUtils'
 
 interface ChildChatState {
@@ -9,8 +9,6 @@ interface ChildChatState {
   setChildSending: (v: SetStateAction<boolean>) => void
   childInput: string
   setChildInput: (v: SetStateAction<string>) => void
-  childSuggestions: ChildSuggestion[]
-  setChildSuggestions: (v: SetStateAction<ChildSuggestion[]>) => void
   childLiveStatus: string
   setChildLiveStatus: (v: SetStateAction<string>) => void
   childStreamingReply: string
@@ -34,8 +32,6 @@ export const useChildChatStore = create<ChildChatState>()((set) => ({
   setChildSending: (v) => set((s) => ({ childSending: resolveSetState(v, s.childSending) })),
   childInput: '',
   setChildInput: (v) => set((s) => ({ childInput: resolveSetState(v, s.childInput) })),
-  childSuggestions: [],
-  setChildSuggestions: (v) => set((s) => ({ childSuggestions: resolveSetState(v, s.childSuggestions) })),
   childLiveStatus: '',
   setChildLiveStatus: (v) => set((s) => ({ childLiveStatus: resolveSetState(v, s.childLiveStatus) })),
   childStreamingReply: '',

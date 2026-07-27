@@ -71,9 +71,10 @@ func pulseChecks(s familyState) []pulseCheck {
 		instruction: "This is an automated Pulse check-in — the parent did not just ask you anything; you're reviewing on your own " +
 			"initiative, focused ONLY on " + who + "'s recent learning activity this turn (ignore email and the school portal — those are " +
 			"separate check-ins). Look at what's actually changed since your last check (recent conversations, activity attempts/conversation.json across activities, test results, " +
-			"uploaded materials). If there's real new evidence, rebuild reports/academic-map.html and/or " +
-			"reports/progress.html per their skill files (skills/create-academic-map/SKILL.md, skills/create-progress-report/SKILL.md) — " +
-			"both are fully-regenerated current-state snapshots, never a dated log; replace the whole file with a fresh picture. If a clear gap " +
+			"uploaded materials). Rebuild BOTH reports/academic-map.html and reports/progress.html per their skill files " +
+			"(skills/create-academic-map/SKILL.md, skills/create-progress-report/SKILL.md) every time this check runs, even if one " +
+			"side has less new evidence than the other — both are fully-regenerated current-state snapshots, never a dated log, so " +
+			"each should always reflect today's real picture, not the picture from whenever it last happened to change. If a clear gap " +
 			"or opportunity stands out (a weak topic, something " + who + " hasn't practiced in a while, a natural next step), you may prepare " +
 			"study material or a test (skills/create-study-material/SKILL.md, skills/create-test/SKILL.md) — but do NOT create or hand off an " +
 			"activity for it; nothing gets handed to " + who + " without the parent explicitly asking, so just mention what you made." + pulseReplyRules,
@@ -185,17 +186,32 @@ func runPulseOnce(ctx context.Context, force bool) error {
 		return fmt.Errorf("engine %q has no provider mapping", s.Engine)
 	}
 
+	// Mechanical housekeeping, not an agent turn — see archive.go.
+	archiveStaleActivities()
+
 	// Pulse checks in on the SINGLE parent conversation (same file + warm tmux
 	// session as the web chat and WhatsApp) — one unified thread, not a separate
 	// Pulse channel.
 	convID := parentConversationID
+
+	// Parent and every child activity share the same physical workspace, so
+	// starting a new session here would force-close whatever OTHER session is
+	// currently warm (see agentsession.closeOtherInteractiveSessions) — fine
+	// for a direct user action, but Pulse fires on its own schedule with no
+	// idea whether the child is mid-conversation right now. Defer to the next
+	// cadence tick rather than silently evicting her live session the moment
+	// she pauses between messages.
+	if agentsession.HasOtherWarmInteractiveSession(convID) {
+		log.Printf("[pulse] deferring — another session is currently active on the shared workspace")
+		return nil
+	}
+
 	existing, _ := loadStoredConversation("parent", convID)
 
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
 
 	messages := existing.Messages
-	var replies []string
 	for _, c := range pulseChecks(s) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -208,25 +224,50 @@ func runPulseOnce(ctx context.Context, force bool) error {
 		// check failing (or the process dying) doesn't lose the ones already done.
 		messages = appendPulseTurn(messages, c.trigger, reply)
 		persistConversation("parent", convID, messages)
-		replies = append(replies, reply)
 	}
 
-	// ONE consolidated notification for the whole cycle — the full per-check
-	// detail already lives in the chat; this is the single "ping the parent's
-	// phone/email" digest, following AgentWorks' Pulse pattern (one notify at
-	// the end, not one per check — per-check pushes would spam WhatsApp/email).
-	// deliverNotification fans out to desktop + WhatsApp + Gmail, whichever are
-	// set up.
-	childName := s.Child.Name
-	if childName == "" {
-		childName = "your child"
+	// The agent decides what's worth telling the parent and sends it — Go's
+	// job stops at asking. An earlier version of this function mechanically
+	// joined every check's raw reply into one string and rendered the email
+	// in Go, which meant the actual judgment call (what matters, what's too
+	// trivial to mention, how to weigh it against the parent's own known
+	// preferences in memory/preferences.md) never happened — Go doesn't have
+	// that judgment. The agent does, and it already has notify_user
+	// (parentTools) for exactly this, so this closing turn just asks it to
+	// use it: review this cycle (already in `messages`, no separate context
+	// needed) and call notify_user itself, once, with its own title, message,
+	// and a real email_html it composes — not a template Go fills in.
+	notifyCheck := pulseCheck{
+		trigger: "Automated check-in — sending you a summary",
+		instruction: "This automated Pulse cycle is done — you've just gone through everything above yourself, in this same " +
+			"conversation. Now decide what's ACTUALLY worth telling the parent: skip anything trivial or unchanged, weigh it " +
+			"against anything you know of their preferences (memory/preferences.md), and lead with whatever matters most. " +
+			"Then call notify_user EXACTLY ONCE to send it — a short title, a brief plain message (1-3 sentences, your usual " +
+			"voice; this is what appears on desktop/WhatsApp), and a well-structured, EMAIL-SAFE inline-styled email_html with " +
+			"its own heading per topic that actually has news (skip a topic entirely rather than write \"nothing new\" for " +
+			"it) so the email reads as organized sections, not one dense paragraph. If truly nothing meaningful happened " +
+			"across every check this cycle, still call notify_user with one short, honest line saying so — never skip the " +
+			"call itself; it's the parent's only signal this cycle ran at all. Afterward, report the outcome honestly in " +
+			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't.",
 	}
-	digest := strings.TrimSpace(strings.Join(replies, "\n\n"))
-	if digest == "" {
-		digest = "I checked in on " + childName + "'s learning — nothing new to flag right now."
+	reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, notifyCheck)
+	if err != nil {
+		return fmt.Errorf("summary notification failed: %w", err)
 	}
-	res := deliverNotification(context.Background(), "SparkQuill — check-in on "+childName, digest)
-	log.Printf("[pulse] notification: status=%s delivered=%v failed=%v", res.Status, res.Delivered, res.Failed)
+	messages = appendPulseTurn(messages, notifyCheck.trigger, reply)
+	persistConversation("parent", convID, messages)
+	// Which of these fired is otherwise unrecoverable from the log: the
+	// ticker (startPulseTicker) and the manual "Run Pulse Now" button
+	// (handlePulseRunNow) both land here with no other distinguishing trace,
+	// which made a real investigation (why did Pulse run 4 times in 4
+	// minutes when cadence_hours=12?) unable to rule out a scheduling bug
+	// versus repeated manual clicks — this is the only place that
+	// certainty could have come from.
+	source := "scheduled"
+	if force {
+		source = "manual"
+	}
+	log.Printf("[pulse] cycle complete (%s): %s", source, strings.TrimSpace(reply))
 
 	stateMu.Lock()
 	cur := loadState()
@@ -248,9 +289,12 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 	}
 	history = append(history, agentsession.Message{Role: "user", Text: c.instruction})
 
+	trace := newTurnTrace("pulse", s.Engine)
+
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:                  provider,
 		ModelID:                   mediumTierModelID(provider),
+		ReasoningEffort:           "high",
 		WorkingDir:                filepath.Join(familyDataDir(), "workspace"),
 		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
 		SessionID:                 convID,
@@ -259,11 +303,14 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 		Tools:                     withLiveStatus("pulse:"+convID, parentTools(s.Engine, parentChildLabel(s.Child), parentToolSinks{})),
 	})
 	if err != nil {
+		trace.finish("", err)
 		return "", fmt.Errorf("session setup failed: %w", err)
 	}
+	trace.sessionReady(sess.Resumed())
 	defer sess.Close()
 
 	reply, err := sess.Ask(ctx, history)
+	trace.finish(reply, err)
 	if err != nil {
 		return "", err
 	}

@@ -13,11 +13,17 @@ import (
 // "" (agentsession's own default) if the provider has no published tier
 // defaults.
 //
-// Normally this is the "medium" tier. Cursor CLI is a deliberate exception:
-// its medium tier defaults to composer-2.5, but this app wants Cursor's high
-// tier (grok-4.5) instead — composer-2.5 wasn't strong enough for family
-// tutoring use, so we pin the stronger model for Cursor specifically.
+// Normally this is the "medium" tier. Two deliberate per-provider exceptions:
+//   - Cursor CLI: its medium tier defaults to composer-2.5, but this app wants
+//     Cursor's high tier (grok-4.5) instead — composer-2.5 wasn't strong enough
+//     for family tutoring use, so we pin the stronger model for Cursor specifically.
+//   - Codex CLI: pinned to gpt-5.6-sol rather than the catalog's medium-tier
+//     default (gpt-5.6-terra) — a deliberate choice, not a tier lookup, so it's
+//     a literal here rather than routed through GetCodingAgentDefaultTierModels.
 func mediumTierModelID(provider llm.Provider) string {
+	if llmproviders.Provider(provider) == llmproviders.ProviderCodexCLI {
+		return "gpt-5.6-sol"
+	}
 	tiers, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider))
 	if !ok {
 		return ""
@@ -28,34 +34,10 @@ func mediumTierModelID(provider llm.Provider) string {
 	return tiers.Medium.ModelID
 }
 
-// lowTierModelID resolves the provider's FAST tier model — for Claude Code this
-// is claude-haiku (vs. sonnet at the medium tier). Used for CHILD Mode: the
-// child tutor works one problem at a time in short back-and-forth turns where
-// latency matters far more than deep reasoning, so the smaller/faster model
-// gives a snappier experience without hurting the interaction. Falls back to ""
-// (agentsession default) when the provider has no published tier defaults.
-//
-// Codex CLI is a deliberate exception (same idea as mediumTierModelID's Cursor
-// override): the tier table's own "low" default is gpt-5.6-luna, but the child
-// tutor uses gpt-5.6-terra (the same model the medium/high tiers use) paired
-// with low reasoning effort instead — a stronger model thinking less hard,
-// rather than a smaller model.
-//
-// Cursor CLI is also overridden: its own "low" tier default is "auto" (Cursor's
-// automatic model picker), but this app pins composer-2.5 (Cursor's own medium
-// tier default) for the child specifically instead — unlike the parent (see
-// mediumTierModelID), composer-2.5 is fine for the simpler, faster-paced child
-// tutoring role even though it wasn't strong enough for the parent assistant.
-func lowTierModelID(provider llm.Provider) string {
-	switch llmproviders.Provider(provider) {
-	case llmproviders.ProviderCodexCLI:
-		return "gpt-5.6-terra"
-	case llmproviders.ProviderCursorCLI:
-		return llmproviders.DefaultCursorCLIModel
-	}
-	tiers, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider))
-	if !ok {
-		return ""
-	}
-	return tiers.Low.ModelID
-}
+// A lowTierModelID() used to live here, resolving each provider's FAST tier
+// (haiku for Claude Code, composer-2.5 for Cursor) for CHILD Mode, on the theory
+// that short tutoring turns want latency over depth. Child Mode now uses
+// mediumTierModelID like the parent — the cheaper tier was costing accuracy on
+// the judgment that matters most in a tutor (see child.go) — so it went rather
+// than lingering unused. Both surfaces resolving through one function is also
+// one fewer thing to keep in sync.

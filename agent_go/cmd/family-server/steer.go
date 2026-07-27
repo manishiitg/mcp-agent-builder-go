@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -75,10 +76,25 @@ func trySteer(ctx context.Context, conversationID, message string) bool {
 	if message == "" {
 		return false
 	}
+	if experimentSteeringDisabled() {
+		log.Printf("[steer] %q: refused — steering disabled via FAMILY_DISABLE_STEER", conversationID)
+		return false
+	}
 	activeTurnMu.Lock()
 	at := activeTurn
 	activeTurnMu.Unlock()
-	if at == nil || at.conversationID != conversationID {
+	// Log every refusal with the reason. "Steering didn't work" is otherwise
+	// indistinguishable between three very different causes — no turn was in
+	// flight, a turn was in flight for a DIFFERENT conversation (the slot is
+	// process-wide and single, so a parent/Pulse turn holds it too), or the
+	// delivery itself failed inside the provider — and they need different
+	// fixes. Without this the caller only ever sees {"steered":false}.
+	if at == nil {
+		log.Printf("[steer] %q: no turn in flight", conversationID)
+		return false
+	}
+	if at.conversationID != conversationID {
+		log.Printf("[steer] %q: refused — the in-flight turn belongs to %q", conversationID, at.conversationID)
 		return false
 	}
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -88,7 +104,12 @@ func trySteer(ctx context.Context, conversationID, message string) bool {
 		Message:   message,
 		Intent:    mcpagent.UserMessageDeliveryIntentAuto,
 	})
-	return err == nil
+	if err != nil {
+		log.Printf("[steer] %q: delivery failed: %v", conversationID, err)
+		return false
+	}
+	log.Printf("[steer] %q: delivered into the live turn", conversationID)
+	return true
 }
 
 // handleParentSteer serves POST /api/parent/steer — the browser's fast-path

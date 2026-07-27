@@ -44,6 +44,36 @@ func main() {
 	os.Setenv("CODEX_CLI_STREAM_TRANSCRIPT", "1")
 	os.Setenv("CURSOR_CLI_STREAM_TRANSCRIPT", "1")
 
+	// Give every interactive coding-agent tmux session ITS OWN naming
+	// namespace, distinct from multi-llm-provider-go's shared "mlp-*" default
+	// that AgentWorks also uses (unmodified, confirmed — it sets none of these
+	// overrides). Without this, family-server's orphan-tmux sweep (see
+	// tmux_sweep.go) would match by prefix alone and could kill an AgentWorks
+	// session that happens to be alive on the same machine — a real, harmful
+	// collision this app must never risk. All four providers already support
+	// this via env var; set them for all four regardless of which engine is
+	// actually selected, since the family can switch engines at any time.
+	os.Setenv("CURSOR_CLI_INTERACTIVE_SESSION_PREFIX", "sq-cursor-cli-int")
+	os.Setenv("CLAUDE_CODE_TMUX_SESSION_PREFIX", "sq-claude-code")
+	os.Setenv("CODEX_CLI_INTERACTIVE_SESSION_PREFIX", "sq-codex-cli-int")
+	os.Setenv("PI_CLI_INTERACTIVE_SESSION_PREFIX", "sq-pi-cli-int")
+
+	// Clean up any coding-agent tmux sessions a PAST process left behind
+	// (crash, redeploy, or a plain restart mid-session all orphan whatever was
+	// warm at that moment — confirmed live: 32 accumulated in one day of
+	// development restarts), then keep sweeping hourly for the rest of this
+	// process's own life. See tmux_sweep.go.
+	startTmuxSweepLoop()
+
+	// Manual test knobs (see experiment_flags.go) — announce them loudly at
+	// startup since neither has any other visible effect until a turn runs.
+	if t := experimentCodingAgentTransport(); t != "" {
+		log.Printf("[experiment] FAMILY_CODING_TRANSPORT=%s — every turn (parent + child) runs the structured/JSON transport instead of tmux", t)
+	}
+	if experimentSteeringDisabled() {
+		log.Printf("[experiment] FAMILY_DISABLE_STEER set — live mid-turn steering is refused for every conversation")
+	}
+
 	defaultPort := "8010"
 	if envPort := strings.TrimSpace(os.Getenv("FAMILY_PORT")); envPort != "" {
 		defaultPort = envPort
@@ -95,6 +125,19 @@ func main() {
 	mux.HandleFunc("/api/whatsapp/pair", handleWhatsAppPair)
 	mux.HandleFunc("/api/whatsapp/unpair", handleWhatsAppUnpair)
 	mux.HandleFunc("/api/whatsapp/voice", handleWhatsAppVoiceToggle)
+	mux.HandleFunc("/api/voice/hardware", handleVoiceHardware)
+	mux.HandleFunc("/api/voice/status", handleVoiceStatus)
+	mux.HandleFunc("/api/voice/speak", handleVoiceSpeak)
+	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
+	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
+	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
+	mux.HandleFunc("/api/voice/voices", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handleSetVoice(w, r)
+			return
+		}
+		handleVoiceVoices(w, r)
+	})
 	mux.HandleFunc("/api/gmail/status", handleGmailStatus)
 	mux.HandleFunc("/api/gmail/test", handleGmailTest)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
@@ -134,6 +177,21 @@ func main() {
 			files.ServeHTTP(w, r)
 		})
 		log.Printf("serving frontend from %s", webDir)
+	}
+
+	// If voice was already installed in an earlier session, start warming the
+	// persistent worker in the background right away — a parent's FIRST use
+	// each session should find it already loaded rather than paying the
+	// ~2-3s cold-start cost on whatever happens to be the first click.
+	if mlxVoiceInstalled() {
+		go func() {
+			if err := warmParakeet(context.Background()); err != nil {
+				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
+			}
+			if _, err := sharedVoiceWorker.call(map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
+				log.Printf("[voice] background warm-up (read-aloud voice) failed: %v", err)
+			}
+		}()
 	}
 
 	addr := ":" + strings.TrimPrefix(strings.TrimSpace(*port), ":")

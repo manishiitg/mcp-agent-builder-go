@@ -39,3 +39,5 @@ Whenever there are files in `inbox/`, process each one before doing anything els
    ```
 
 5. **Tell the parent**, in plain words, what you filed and where, and confirm the subject/topic you chose so they can correct you if it is wrong.
+
+6. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.

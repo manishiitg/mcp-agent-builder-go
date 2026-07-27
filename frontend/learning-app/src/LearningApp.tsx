@@ -29,9 +29,15 @@ import {
   Film,
   Folder,
   FolderOpen,
+  HardDrive,
+  Type,
+  Volume2,
+  Square,
   Image as ImageIcon,
   Info,
   LockKeyhole,
+  Maximize2,
+  Minimize2,
   Music,
   Presentation,
   PanelLeftClose,
@@ -61,28 +67,27 @@ import {
   type ApiEngine,
   type ParentMsg,
   type StoredMsg,
+  type DebugToolCall,
   type TreeNode,
   type WsFile,
-  type ChildSuggestion,
   type Activity,
+  type VoiceStatus,
 } from './stores'
-
-// In the packaged desktop app the Go server serves this frontend itself, so the
-// API is same-origin — and must be read from the actual origin rather than a
-// fixed port, since the app falls forward to the next free port when 8010 is
-// taken (see desktop-sparkquill/main.js). The bridge only exists inside
-// Electron; in a browser this falls through to the dev default unchanged.
-const FAMILY_API =
-  (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl()
-  ?? (import.meta as { env?: { VITE_FAMILY_API?: string } }).env?.VITE_FAMILY_API
-  ?? 'http://127.0.0.1:8010'
-
+import { FAMILY_API } from './apiBase'
+import { VoiceSettings } from './voice/VoiceSettings'
+import { readAutoSpeak, persistAutoSpeak, speakText } from './voice/speech'
+import { useSpeakReply } from './voice/useSpeakReply'
+import { ReplySpeakControls } from './voice/ReplySpeakControls'
+import { MicButton } from './voice/MicButton'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
 // back down too (e.g. after deleting text), then grows to fit content up to
 // a cap, beyond which the textarea's own CSS overflow-y:auto takes over.
 const COMPOSER_MAX_HEIGHT = 160
+// How many of the parent's most recent messages render by default — see the
+// parentVisibleCount comment further down for why.
+const PARENT_HISTORY_PAGE_SIZE = 40
 function autoGrowTextarea(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + 'px'
@@ -91,24 +96,9 @@ function autoGrowTextarea(el: HTMLTextAreaElement) {
 // The child/file viewer iframe is deliberately sandbox="allow-scripts" with
 // NO allow-same-origin (adding that would let a srcDoc page's script escape
 // the sandbox and touch the parent page/cookies) — which makes it a
-// cross-origin frame from the app's own perspective. Reading contentWindow.
-// scrollY or calling contentWindow.scrollTo() on a cross-origin frame throws
-// a SecurityError SYNCHRONOUSLY, uncaught, which crashes the whole React
-// render (a blank page) — so both directions must be wrapped, not just
-// best-effort skipped.
-function safeGetScrollY(win: Window | null | undefined): number {
-  try {
-    return win?.scrollY ?? 0
-  } catch {
-    return 0
-  }
-}
-function safeSetScrollY(win: Window | null | undefined, y: number) {
-  try {
-    win?.scrollTo(0, y)
-  } catch { /* cross-origin sandboxed frame — nothing to do */ }
-}
-
+// cross-origin frame from the app's own perspective. So the app can never read
+// or set that frame's scroll from outside; anything positional has to be done
+// by a script injected INTO the document (see withViewerPositionScript).
 function engineStatus(e: ApiEngine): { label: string; ready: boolean } {
   if (e.usable) return { label: 'Ready', ready: true }
   if (!e.runtime_available) return { label: 'Not set up', ready: false }
@@ -120,9 +110,9 @@ function engineStatus(e: ApiEngine): { label: string; ready: boolean } {
 // Order reflects the product preference: ChatGPT → Claude → Cursor → Pi.
 const ENGINE_PRESENTATION: Record<string, { name: string; blurb: string; order: number; preferred?: boolean }> = {
   'codex-cli': { name: 'ChatGPT', blurb: 'Uses your ChatGPT account · can also create images', order: 1, preferred: true },
-  'claude-code': { name: 'Claude', blurb: 'Careful, step-by-step teaching from Anthropic', order: 2 },
-  'cursor-cli': { name: 'Cursor', blurb: 'Cursor’s AI assistant', order: 3 },
-  'pi-cli': { name: 'Pi', blurb: 'Access OpenRouter and many other models', order: 4 },
+  'claude-code': { name: 'Claude', blurb: 'Careful, patient, step-by-step teaching', order: 2 },
+  'cursor-cli': { name: 'Cursor', blurb: 'Uses your Cursor account', order: 3 },
+  'pi-cli': { name: 'Pi', blurb: 'Lets you pick from many other AI models', order: 4 },
 }
 function pres(id: string, fallbackName: string) {
   return ENGINE_PRESENTATION[id] ?? { name: fallbackName, blurb: 'Available on this computer', order: 99, preferred: false }
@@ -179,6 +169,73 @@ function readHandoffSide(): 'tutor' | 'parent' {
   try { return localStorage.getItem(HANDOFF_SIDE_KEY) === 'tutor' ? 'tutor' : 'parent' } catch { return 'parent' }
 }
 
+// How wide the child's right-hand pane is, in px, dragged by the divider between
+// her chat and her worksheet. Persisted because it's a per-child working
+// preference, not a per-session one: whoever likes a big worksheet and a narrow
+// chat should get that on every visit without re-dragging it.
+//
+// Bounds keep both panes usable — a pane dragged to nothing looks like a broken
+// layout rather than a deliberate choice, and there's no affordance to get it
+// back once the handle is off-screen.
+const CHILD_SIDE_WIDTH_KEY = 'sparkquill.child-side-width'
+const CHILD_SIDE_MIN = 320
+const CHILD_SIDE_DEFAULT = 592 // the previous fixed width (348 + 244)
+// The chat's floor is a PIXEL minimum, not a fraction of the window. A fraction
+// looks fine on a large display and collapses on a small one — 20% of 1100px is
+// 220px, which cannot hold a readable message bubble plus the composer. This is
+// the width below which the chat stops being usable, so the worksheet never gets
+// to claim it however wide it is asked to be.
+const CHILD_CHAT_MIN = 400
+
+// childSideMax is how wide the worksheet may get for a given window width.
+// Never negative: on a very narrow window the min wins and the layout falls back
+// to the single-column media query anyway.
+function childSideMax(windowWidth: number): number {
+  return Math.max(CHILD_SIDE_MIN, windowWidth - CHILD_CHAT_MIN)
+}
+
+function readChildSideWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_SIDE_WIDTH_KEY))
+    return Number.isFinite(n) && n >= CHILD_SIDE_MIN ? n : CHILD_SIDE_DEFAULT
+  } catch { return CHILD_SIDE_DEFAULT }
+}
+function persistChildSideWidth(px: number) {
+  try { localStorage.setItem(CHILD_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
+}
+
+// Reading size for the worksheet. Applied as CSS `zoom` inside the viewer
+// iframe rather than a font-size override: the generated pages size everything
+// in px (headings, card padding, SVG diagrams), so scaling only the body font
+// would grow the paragraphs and leave headings and diagrams behind. Zoom scales
+// the whole page coherently, which is what "bigger" should mean on a worksheet.
+const CHILD_ZOOM_KEY = 'sparkquill.child-zoom'
+const CHILD_ZOOM_STEPS = [1, 1.15, 1.35, 1.6]
+function readChildZoom(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_ZOOM_KEY))
+    return CHILD_ZOOM_STEPS.includes(n) ? n : 1
+  } catch { return 1 }
+}
+function persistChildZoom(z: number) {
+  try { localStorage.setItem(CHILD_ZOOM_KEY, String(z)) } catch { /* best-effort */ }
+}
+
+// Reading size for the CHAT side, kept separate from the worksheet's: she may
+// want big text on a dense study sheet but not on the conversation, or the
+// reverse. Real DOM here, not a sandboxed iframe, so this scales the actual
+// font size (via --chat-scale) rather than zooming a whole page.
+const CHILD_CHAT_ZOOM_KEY = 'sparkquill.child-chat-zoom'
+function readChildChatZoom(): number {
+  try {
+    const n = Number(localStorage.getItem(CHILD_CHAT_ZOOM_KEY))
+    return CHILD_ZOOM_STEPS.includes(n) ? n : 1
+  } catch { return 1 }
+}
+function persistChildChatZoom(z: number) {
+  try { localStorage.setItem(CHILD_CHAT_ZOOM_KEY, String(z)) } catch { /* best-effort */ }
+}
+
 // Dark/light theme — follows the OS/browser's own preference (or a
 // previously-stored explicit choice, from when there was an in-app toggle).
 // No in-app toggle for now; kept read-only.
@@ -203,15 +260,22 @@ function readTheme(): Theme {
 // Rewrites bare-relative src="..." references (skipping absolute/data/anchor
 // URLs, which are already fine) into the real /api/workspace/raw endpoint for
 // that exact file, resolved against the HTML file's own directory.
-function rewriteRelativeAssetURLs(html: string, filePath: string): string {
-  if (!/^\s*<(!doctype|html)/i.test(html)) return html
-  const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : ''
+// rewriteImgSrcsRelativeTo resolves every relative src="..." in html against
+// dir and points it at the raw-file API — the one place this actually
+// happens, shared by the full-page viewer and a show_scene snippet alike.
+function rewriteImgSrcsRelativeTo(html: string, dir: string): string {
   return html.replace(/\bsrc=(["'])(.*?)\1/gi, (whole, quote: string, ref: string) => {
     if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('/') || ref.startsWith('data:') || ref.startsWith('#')) return whole
     const resolved = dir ? `${dir}/${ref}` : ref
     const url = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(resolved)}`
     return `src=${quote}${url}${quote}`
   })
+}
+
+function rewriteRelativeAssetURLs(html: string, filePath: string): string {
+  if (!/^\s*<(!doctype|html)/i.test(html)) return html
+  const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : ''
+  return rewriteImgSrcsRelativeTo(html, dir)
 }
 
 // withSceneResizeScript appends a tiny bootstrap script to a show_scene
@@ -233,29 +297,223 @@ function withSceneResizeScript(html: string): string {
 })();</script>`
 }
 
+// withViewerPositionScript keeps the child's place in her worksheet across the
+// re-opens the tutor triggers, and jumps to a specific question only when the
+// tutor deliberately asks for one.
+//
+// Why it has to run inside the frame: the viewer iframe is sandboxed
+// allow-scripts WITHOUT allow-same-origin, so it is cross-origin and the parent
+// can neither read nor write its scroll position. An earlier attempt restored
+// scroll from outside via contentWindow.scrollY, which silently returned 0 every
+// time (the read throws and is caught) — that is why re-opening a page after the
+// tutor recorded an answer always jumped back to the top.
+//
+// So the script reports its own scroll position out to the app as it changes, and
+// the app hands the last known offset back in on the next load. The iframe is
+// recreated whenever srcDoc changes, so the value has to live outside it.
+//
+// Priority, highest first:
+//  1. focusId — open_file's explicit `focus`. A deliberate act by the tutor
+//     ("let's look at that money one again"), so it outranks her scroll position.
+//  2. savedY — where she actually was. This is the common case: the tutor records
+//     an answer, re-opens the file to refresh it, and she should not lose her
+//     place. Restoring a position is strictly better than guessing a question,
+//     which is why the old "scroll to the first unanswered question" behaviour was
+//     dropped: it moved the page under her whenever she was reading elsewhere.
+//  3. Nothing — a genuinely new file opens at the top, as expected.
+function withViewerPositionScript(html: string, focusId?: string, savedY = 0, zoom = 1): string {
+  const wanted = (focusId ?? '').replace(/[^A-Za-z0-9_-]/g, '')
+  // Zoom shrinks the effective viewport, so a page whose .wrap is capped at a
+  // fixed px width would overflow sideways instead of reflowing. Releasing that
+  // cap lets the content just fill the pane at any size.
+  //
+  // Applied to <html>, NOT <body> — confirmed live: zooming body left the page
+  // completely stuck, unable to scroll past whatever fit in one un-zoomed
+  // screen's worth of height. Chromium's `zoom` grows the zoomed element's own
+  // rendered box, but doesn't reliably widen its PARENT's scrollable extent to
+  // match — so with body zoomed, <html> (the actual scrolling element here)
+  // kept thinking the document was only as tall as it was at 100%, and
+  // silently clipped everything past that with no way to reach it. Zooming
+  // the root itself sidesteps the mismatch: there's no parent left to fall
+  // out of sync with.
+  const zoomStyle = zoom === 1 ? '' : `
+<style>
+  html { zoom: ${zoom}; }
+  .wrap { max-width: none !important; }
+</style>`
+  return html + zoomStyle + `
+<script>(function(){
+  var wanted = ${JSON.stringify(wanted)};
+  var savedY = ${Math.max(0, Math.round(savedY))};
+  function restore(){
+    try {
+      var target = wanted ? document.getElementById(wanted) : null;
+      if (target && !target.classList.contains('q')) {
+        // Allow pointing at anything with an id (a study-sheet section), but
+        // prefer its enclosing question so the highlight frames the whole thing.
+        target = target.closest('.q') || target;
+      }
+      if (target) {
+        target.scrollIntoView({ behavior: 'auto', block: 'center' });
+        target.classList.add('is-current');
+        setTimeout(function(){ target.classList.remove('is-current'); }, 2600);
+        return;
+      }
+      if (savedY > 0) window.scrollTo(0, savedY);
+    } catch (e) { /* never break the page over a nice-to-have */ }
+  }
+  window.addEventListener('load', restore);
+  setTimeout(restore, 60);
+  // Report position out so the next load can restore it. Throttled via rAF:
+  // scroll fires far too often to postMessage on every event.
+  var pending = false;
+  window.addEventListener('scroll', function(){
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function(){
+      pending = false;
+      parent.postMessage({ __sq: 1, op: 'viewer-scroll', y: window.scrollY }, '*');
+    });
+  }, { passive: true });
+})();</script>
+<style>
+  /* A brief, calm pulse so she can see WHERE the page landed when the tutor
+     pointed at a specific question. Respects reduced-motion. */
+  .q.is-current{animation:sqFocus 2.6s ease-out both}
+  @keyframes sqFocus{
+    0%{background:#fdeecb;box-shadow:0 0 0 6px #fdeecb}
+    100%{background:transparent;box-shadow:0 0 0 6px transparent}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .q.is-current{animation:none;background:#fdeecb}
+  }
+</style>`
+}
+
+// StartBurst is the moment the child begins an activity: a ring of stars flies
+// out from the centre, spins, and fades. Short (1.5s) and non-blocking — it sits
+// over the screen with pointer-events: none so it can never swallow a tap, and it
+// removes itself when finished.
+//
+// Two things here are deliberate, both learned from getting it wrong:
+//
+//  1. The timer is armed ONCE. onDone is a fresh closure on every parent render,
+//     so depending on it re-armed the timeout continuously — and a child turn
+//     re-renders on every streamed delta, so the burst never removed itself and
+//     the stars just sat on the page. The callback is held in a ref instead.
+//  2. Each star's direction is a static inline transform on a wrapper, NOT a
+//     custom property read inside @keyframes. Animating a transform built from
+//     var() is fragile; keeping the keyframe free of var() means the only thing
+//     animating is a plain translate/rotate/scale, which always works.
+//
+// Purely decorative, so it is skipped entirely under prefers-reduced-motion
+// rather than shown frozen.
+function StartBurst({ onDone }: { onDone: () => void }) {
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  useEffect(() => {
+    const t = window.setTimeout(() => doneRef.current(), 1500)
+    return () => window.clearTimeout(t)
+  }, [])
+  const count = 10
+  return (
+    <div className="fl-start-burst" aria-hidden="true">
+      {Array.from({ length: count }, (_, i) => (
+        <span
+          key={i}
+          className="fl-start-burst-ray"
+          style={{ transform: `rotate(${(360 / count) * i}deg)` }}
+        >
+          <Star
+            className="fl-start-burst-star"
+            size={i % 3 === 0 ? 30 : 20}
+            fill="currentColor"
+            strokeWidth={1}
+            style={{ animationDelay: `${(i % 5) * 0.06}s` }}
+          />
+        </span>
+      ))}
+      <Sparkles className="fl-start-burst-core" size={54} />
+    </div>
+  )
+}
+
+// ToolCallSummary shows what the agent actually called this turn — collapsed
+// to "N tools" by default so a busy turn doesn't clutter the thread; expand to
+// see each call, then click one to see its actual response. Used for BOTH the
+// live in-flight indicator (calls have no result/err yet — still streaming)
+// and the final persisted summary (result/err filled in once the turn
+// completes) — same shape, so nothing has to change when it switches over.
+function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
+  const [open, setOpen] = useState(false)
+  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  if (calls.length === 0) return null
+  return (
+    <div className="fl-tool-summary">
+      <button type="button" className="fl-tool-summary-toggle" onClick={() => setOpen((v) => !v)}>
+        🔧 {calls.length} tool{calls.length === 1 ? '' : 's'} <span className="fl-tool-summary-caret">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="fl-tool-summary-list">
+          {calls.map((c, i) => (
+            <div key={i} className="fl-tool-call">
+              <button type="button" className="fl-tool-call-row" onClick={() => setOpenIdx((cur) => (cur === i ? null : i))}>
+                <span className="fl-tool-call-name">{c.tool}</span>
+                {c.args && <span className="fl-tool-call-args">{c.args}</span>}
+              </button>
+              {openIdx === i && (
+                <pre className="fl-tool-call-response">{c.err ? `Error: ${c.err}` : (c.result || '(still running…)')}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // SceneFrame renders one show_scene snippet, auto-sized to its actual content
 // height (see withSceneResizeScript) instead of a fixed height that would
 // either clip taller scenes or leave dead space under shorter ones. Each
 // instance only reacts to resize reports from its OWN iframe (matched via
 // the message event's source window), so multiple scenes in the same thread
 // don't interfere with each other.
-function SceneFrame({ html }: { html: string }) {
+// activityDir: the current activity folder, so a find_image picture the tutor
+// references with a plain relative `<img src="filename.png">` resolves — the
+// scene's own srcDoc has no such path otherwise, so the image silently
+// rendered as a broken-image glyph (confirmed live: the tutor called
+// find_image, got a real picture back, and it still never appeared).
+// SCENE_MAX_HEIGHT bounds one scene's footprint in the scrolling chat feed —
+// not a content cap (nothing above it is lost: the iframe scrolls internally
+// by default, and no ancestor sets overflow:hidden), just how tall a single
+// inline turn is allowed to make itself before the rest of the conversation
+// gets pushed out of view. Raised from the original 520 now that scenes are
+// meant to include real interactivity (games, simulations), which genuinely
+// wants more room than a passive diagram did.
+const SCENE_MAX_HEIGHT = 720
+
+function SceneFrame({ html, activityDir }: { html: string; activityDir: string }) {
   const ref = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState(160)
+  const [rawHeight, setRawHeight] = useState(160)
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       if (e.source !== ref.current?.contentWindow) return
       const m = e.data
       if (m && typeof m === 'object' && m.__sq === 1 && m.op === 'scene-resize' && typeof m.height === 'number') {
-        setHeight(Math.min(Math.max(m.height, 80), 520))
+        setRawHeight(Math.max(m.height, 80))
       }
     }
     window.addEventListener('message', onMsg)
     return () => window.removeEventListener('message', onMsg)
   }, [])
+  const resolved = rewriteImgSrcsRelativeTo(html, activityDir)
+  // A child should never have to discover a cut-off scene by noticing a faint
+  // scrollbar — when content is genuinely taller than the cap, say so visibly.
+  const clipped = rawHeight > SCENE_MAX_HEIGHT
   return (
     <div className="fl-scene-card">
-      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height }} srcDoc={withSceneResizeScript(html)} />
+      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(resolved)} />
+      {clipped && <div className="fl-scene-more" aria-hidden="true">scroll for more ↓</div>}
     </div>
   )
 }
@@ -389,6 +647,29 @@ function MermaidDiagram({ content }: { content: string }) {
   return <div className="fl-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
+// stabilizeStreamingMarkdown hides markdown syntax that hasn't finished arriving.
+//
+// A stream delivers "**bo" before "**bold**", and react-markdown correctly
+// renders an unmatched "**" as literal asterisks — so mid-stream the reply
+// flickers raw markdown characters (**, `, _, #) that vanish once the closing
+// token lands. The text is never wrong, it just looks broken while it types.
+//
+// So for the STREAMING bubble only, drop a trailing token that is still
+// unbalanced. Applied to the live preview, never to the stored message — the
+// final render always gets the untouched text.
+function stabilizeStreamingMarkdown(text: string): string {
+  let out = text
+  // An odd count means the run that's still open is the last one; cut from there.
+  for (const token of ['**', '`', '*', '_']) {
+    const parts = out.split(token)
+    if (parts.length > 1 && (parts.length - 1) % 2 === 1) {
+      out = parts.slice(0, -1).join(token)
+    }
+  }
+  // A heading or list marker alone on the final line has no content yet.
+  return out.replace(/\n[#>\-*+]+[ \t]*$/, '')
+}
+
 // Markdown renders the agent's reply with react-markdown + GFM — the same
 // battle-tested renderer the main AgentWorks frontend uses (handles tables,
 // nested lists, lazy-continuation of terminal-wrapped list items, mermaid
@@ -475,8 +756,42 @@ const CHILD_WAIT_HINTS = [
   'Tip: ask a parent to connect the school portal so Quill can help with your assignments.',
 ]
 
+// CHILD_QUICK_ACTIONS: fixed one-tap shortcuts for the handful of requests that
+// come up constantly but aren't worth typing out — same Sparkles-icon popover
+// pattern as QUICK_SKILLS in Parent Mode. Unlike suggest_actions (removed from
+// Child Mode entirely), these are deliberately NOT model-generated: a static
+// list of common asks, always the same, always available. Tapping one just
+// sends its message exactly as if she'd typed it — the tutor's own judgment
+// (already covered by its existing prompt) decides what to actually do, same
+// as if she'd typed the words herself. Add more here freely; nothing else
+// needs to change.
+const CHILD_QUICK_ACTIONS: { label: string; message: string }[] = [
+  { label: 'Update answers for print', message: "Please update all my answered questions on this page so it's ready to print." },
+  { label: 'No more hints', message: "Don't give me any more hints — just tell me if I'm right or wrong." },
+  { label: 'Harder question', message: 'Can you give me a harder question?' },
+  { label: 'Easier question', message: 'Can you give me an easier question?' },
+  { label: 'Give me a hint', message: 'Can you give me a hint?' },
+  { label: 'Keep quizzing me, harder each time', message: 'Keep asking me progressively harder questions on this until I fully understand it.' },
+  { label: 'One section at a time', message: "Let's go one section at a time — keep quizzing me on this section until I really understand it before moving to the next." },
+]
+
+// formatBytes renders a byte count the way a person reads it. Sizes here are
+// for keeping an eye on how the workspace grows, so one decimal past KB is
+// plenty of precision.
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes < 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i++ }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
 // FileTree renders the workspace as an expandable tree (AgentWorks-style). Files
-// are clickable to open in the viewer; .meta.json is hidden as noise.
+// are clickable to open in the viewer; .meta.json is hidden as noise. Each entry
+// carries its size on disk — a folder's is the recursive total — so it's visible
+// at a glance which part of the workspace is actually growing.
 function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (path: string) => void; depth?: number }) {
   const visible = nodes.filter((n) => !n.name.startsWith('.') && !n.name.endsWith('.meta.json'))
   if (visible.length === 0) return null
@@ -490,6 +805,7 @@ function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (pa
                 <Folder className="fl-tree-icon is-closed" size={15} />
                 <FolderOpen className="fl-tree-icon is-open" size={15} />
                 <span>{n.name}</span>
+                <span className="fl-tree-size">{formatBytes(n.size)}</span>
               </summary>
               {n.children && <FileTree nodes={n.children} onOpen={onOpen} depth={depth + 1} />}
             </details>
@@ -497,6 +813,7 @@ function FileTree({ nodes, onOpen, depth = 0 }: { nodes: TreeNode[]; onOpen: (pa
             <button className="fl-tree-file" type="button" onClick={() => onOpen(n.path)}>
               <FileGlyph name={n.name} size={14} />
               <span>{n.name}</span>
+              <span className="fl-tree-size">{formatBytes(n.size)}</span>
             </button>
           )}
         </li>
@@ -631,27 +948,6 @@ function NonPreviewableFile({ path, meta }: { path: string; meta: Record<string,
   )
 }
 
-// sanitizeDecorativeHtml allows a tiny, LLM-authored decorative fragment (a
-// dash of inline color/styling around the label) inside a suggestion pill,
-// without letting it execute anything: script/style blocks and their content
-// are stripped entirely, event-handler attributes and javascript: URLs are
-// stripped, and only a small inline-formatting tag whitelist survives — any
-// other tag is dropped (its text content is kept, just not the markup).
-// Click-to-send behavior always lives in the wrapping React <button>, never
-// in this content, so even a maximally hostile fragment can't do more than
-// render inert, differently-colored text.
-function sanitizeDecorativeHtml(html: string): string {
-  if (!html || html.length > 400) return ''
-  let safe = html
-  safe = safe.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
-  safe = safe.replace(/<\/?(script|style)[^>]*>/gi, '')
-  safe = safe.replace(/\son\w+\s*=\s*"(?:[^"\\]|\\.)*"/gi, '')
-  safe = safe.replace(/\son\w+\s*=\s*'(?:[^'\\]|\\.)*'/gi, '')
-  safe = safe.replace(/(href|src)\s*=\s*["']\s*javascript:[^"']*["']/gi, '')
-  safe = safe.replace(/<(?!\/?(span|strong|em|b|i|br|small)\b)[^>]*>/gi, '')
-  return safe
-}
-
 // labelFromFilename turns a bare filename like
 // "2026-07-21-fractions-revision-worksheet.md" into a date + human label.
 // Filenames are sometimes auto-generated noise (WhatsApp Image ..., s02.png),
@@ -706,8 +1002,22 @@ export default function LearningApp() {
         if (cancelled) return
         const sorted = [...data].sort((a, b) => pres(a.id, a.name).order - pres(b.id, b.name).order)
         setEngines(sorted)
-        const firstReady = sorted.find((item) => item.usable) ?? sorted[0]
-        if (firstReady) setEngine(firstReady.id)
+        // Only supply a DEFAULT for a genuinely fresh install — never override an
+        // already-known choice. This used to fire unconditionally, racing the
+        // /api/setup effect below (which loads the family's real saved engine):
+        // /api/setup is a fast state-file read, while this call does live runtime
+        // detection across four CLIs and reliably resolves second, so it was
+        // silently clobbering the real selection back to whichever engine happens
+        // to rank first in ENGINE_PRESENTATION's hardcoded order — confirmed live,
+        // every actual conversation kept running on the real saved engine (its own
+        // session is pinned to it independent of this picker) while Settings showed
+        // a completely different one as "active". Read the CURRENT store value at
+        // call time, not a value captured when this effect was created, since
+        // /api/setup may resolve either before or after this one.
+        if (!useSetupStore.getState().engine) {
+          const firstReady = sorted.find((item) => item.usable) ?? sorted[0]
+          if (firstReady) setEngine(firstReady.id)
+        }
         setEnginesState('ready')
       })
       .catch(() => { if (!cancelled) setEnginesState('error') })
@@ -731,15 +1041,45 @@ export default function LearningApp() {
   const setStreamingReply = useParentChatStore((s) => s.setStreamingReply)
   const suggestions = useParentChatStore((s) => s.suggestions)
   const setSuggestions = useParentChatStore((s) => s.setSuggestions)
+  // Rendering the WHOLE parent↔Quill history (one long-running thread, can
+  // grow to hundreds of messages over months) made every keystroke in the
+  // composer reconcile every bubble in the DOM — visibly laggy typing, and a
+  // heavy initial paint. Show only the most recent PARENT_HISTORY_PAGE_SIZE by
+  // default; "Load earlier messages" reveals more in the same-size chunks.
+  // Growing this only ever reveals OLDER messages — new ones arriving still
+  // show immediately since the window is always "last N", not "first N".
+  const [parentVisibleCount, setParentVisibleCount] = useState(PARENT_HISTORY_PAGE_SIZE)
+  const visibleParentMessages = parentMessages.length > parentVisibleCount ? parentMessages.slice(-parentVisibleCount) : parentMessages
+  // Absolute offset of the visible window's first item within the FULL
+  // history — used as the React key base so a bubble's identity stays stable
+  // across "load more" clicks (which shift every relative index) instead of
+  // remounting everything already on screen.
+  const hiddenParentCount = parentMessages.length - visibleParentMessages.length
   // Before actually switching into Child Mode, ask the parent whether to
   // continue Myra's existing conversation or start a brand-new one — handing
   // off an activity often means "just carry on the same chat", not a fresh
   // start, so this is the parent's call rather than a silent guess.
   const [pendingChildEntry, setPendingChildEntry] = useState<{ dir: string; greetingText: string } | null>(null)
+  // The workspace's TRUE size on disk, from /api/workspace/tree — including
+  // what the listing hides (see workspaceTreeResponse), so the number in the
+  // Files tab is the one worth watching for growth.
+  const [treeTotalSize, setTreeTotalSize] = useState(0)
+  // The current turn's tool calls, live — no result yet (still running), shown
+  // as a collapsible "N tools" chip next to the thinking indicator. Reset at
+  // turn start; replaced by a persisted debug_summary message (WITH results,
+  // from the final response) once the turn completes — see sendChildMessage.
+  const [childLiveToolCalls, setChildLiveToolCalls] = useState<DebugToolCall[]>([])
+  const [liveToolCalls, setLiveToolCalls] = useState<DebugToolCall[]>([])
   const menuOpen = useParentChatStore((s) => s.menuOpen)
   const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [savingEngine, setSavingEngine] = useState(false)
+  // Voice settings — the tier catalog is computed server-side against THIS
+  // machine's hardware (see /api/voice/status), so the UI never has to guess
+  // what an Intel vs Apple Silicon Mac can actually run.
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  const [parentAutoSpeak, setParentAutoSpeak] = useState(() => readAutoSpeak('parent'))
+  const [childAutoSpeak, setChildAutoSpeak] = useState(() => readAutoSpeak('child'))
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
   // Secrets (credentials the parent saves for Quill's tools, e.g. a school
   // portal login) — settings-form only, never through chat, so a value typed
@@ -755,7 +1095,7 @@ export default function LearningApp() {
   // Multiple phones can be linked (one per parent) — accounts is the list of
   // already-paired numbers; pairing reflects whichever NEW phone's QR is
   // currently being shown (there's always room to add one more).
-  const [waStatus, setWaStatus] = useState<{ accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string } } | null>(null)
+  const [waStatus, setWaStatus] = useState<{ accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string } } | null>(null)
   const [voiceToggling, setVoiceToggling] = useState(false)
   const [waQrNonce, setWaQrNonce] = useState(0)
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
@@ -795,8 +1135,6 @@ export default function LearningApp() {
   const setChildSending = useChildChatStore((s) => s.setChildSending)
   const childInput = useChildChatStore((s) => s.childInput)
   const setChildInput = useChildChatStore((s) => s.setChildInput)
-  const childSuggestions = useChildChatStore((s) => s.childSuggestions)
-  const setChildSuggestions = useChildChatStore((s) => s.setChildSuggestions)
   const childLiveStatus = useChildChatStore((s) => s.childLiveStatus)
   const setChildLiveStatus = useChildChatStore((s) => s.setChildLiveStatus)
   const childStreamingReply = useChildChatStore((s) => s.childStreamingReply)
@@ -816,8 +1154,13 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/workspace/tree`)
       .then((res) => res.json())
-      .then((nodes: TreeNode[]) => {
+      .then((data: TreeNode[] | { nodes?: TreeNode[]; total_size?: number }) => {
         if (cancelled) return
+        // Accepts both the current {nodes,total_size} object and the older bare
+        // array, so a packaged frontend built before the size fields still works
+        // against a newer server (and vice versa).
+        const nodes = Array.isArray(data) ? data : (data?.nodes ?? [])
+        setTreeTotalSize(Array.isArray(data) ? 0 : (data?.total_size ?? 0))
         const files: { path: string; name: string }[] = []
         const walk = (ns: TreeNode[]) => ns?.forEach((n) => {
           if (n.type === 'file') files.push({ path: n.path, name: n.name })
@@ -844,7 +1187,15 @@ export default function LearningApp() {
             .then((dd) => {
               if (!dd?.content) return
               const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-              setParentMessages((c.messages || []).map(toParentMsg))
+              const loaded = (c.messages || []).map(toParentMsg)
+              setParentMessages(loaded)
+              // History being resumed on load, not a fresh reply — seed the
+              // baseline so auto-read doesn't fire the instant the page
+              // loads (same fix as the child thread's resume path above).
+              const last = loaded[loaded.length - 1]
+              if (last?.role === 'assistant' && last.text) {
+                lastSpokenParentRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
+              }
             })
             .catch(() => {})
         }
@@ -859,7 +1210,83 @@ export default function LearningApp() {
   const childThreadEndRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const childIframeRef = useRef<HTMLIFrameElement>(null)
-  const childScrollRestoreRef = useRef(0)
+
+  // Child-mode split: how much room her worksheet gets versus the chat. Two ways
+  // to set it, both writing the same persisted preference: dragging the divider
+  // between the panes (fine-grained, and its hit area is deliberately much wider
+  // than the hairline it draws), or the widen/restore button in the worksheet
+  // toolbar for the coarse "normal ⇄ as big as it goes" jump.
+  const [childSideWidthPref, setChildSideWidth] = useState(readChildSideWidth)
+  // Track the window width so the stored preference can be re-clamped when the
+  // window shrinks. Without this, widening on a large display and then resizing
+  // smaller would leave the chat below its minimum (or push it off-screen), since
+  // the preference is an absolute pixel value.
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  // The preference is what the child chose; this is what the layout can honour.
+  const childSideWidth = Math.min(Math.max(childSideWidthPref, CHILD_SIDE_MIN), childSideMax(windowWidth))
+  // Set-and-save in one place, clamped to what the layout allows, so the drag
+  // handle, its arrow keys and the toolbar button can't drift apart.
+  const commitChildSideWidth = (px: number) => {
+    const next = Math.min(Math.max(px, CHILD_SIDE_MIN), childSideMax(windowWidth))
+    setChildSideWidth(next)
+    persistChildSideWidth(next)
+  }
+  const childBodyRef = useRef<HTMLDivElement>(null)
+  const [childResizing, setChildResizing] = useState(false)
+  // Reading size for the worksheet, cycled by the toolbar's "Aa" button and
+  // remembered — a child who needs bigger text needs it every session, not
+  // once.
+  const [childZoom, setChildZoom] = useState(readChildZoom)
+  const cycleChildZoom = () => {
+    const i = CHILD_ZOOM_STEPS.indexOf(childZoom)
+    const next = CHILD_ZOOM_STEPS[(i + 1) % CHILD_ZOOM_STEPS.length]
+    setChildZoom(next)
+    persistChildZoom(next)
+  }
+  const [childChatZoom, setChildChatZoom] = useState(readChildChatZoom)
+  const cycleChildChatZoom = () => {
+    const i = CHILD_ZOOM_STEPS.indexOf(childChatZoom)
+    const next = CHILD_ZOOM_STEPS[(i + 1) % CHILD_ZOOM_STEPS.length]
+    setChildChatZoom(next)
+    persistChildChatZoom(next)
+  }
+  // Pointer-events (not mouse) so the same handler covers trackpad, mouse and
+  // touch. Width is measured from the body's RIGHT edge rather than by
+  // accumulating deltas, so the panel edge tracks the finger exactly and can't
+  // drift after a clamp at either end.
+  const startChildResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    const body = childBodyRef.current
+    if (!body) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLDivElement).focus({ preventScroll: true })
+    const right = body.getBoundingClientRect().right
+    const max = childSideMax(windowWidth)
+    let last = childSideWidth
+    setChildResizing(true)
+    const move = (ev: PointerEvent) => {
+      last = Math.min(Math.max(right - ev.clientX, CHILD_SIDE_MIN), max)
+      setChildSideWidth(last)
+    }
+    const end = () => {
+      setChildResizing(false)
+      // Persist once at the end, not on every move — this writes localStorage.
+      persistChildSideWidth(last)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  }
+  // "Wide" once past the midpoint between default and max, so the button's icon
+  // always shows which way the next tap will move it.
+  const childSideWide = childSideWidth > (CHILD_SIDE_DEFAULT + childSideMax(windowWidth)) / 2
   const drawerTab = useWorkspaceStore((s) => s.drawerTab)
   const setDrawerTab = useWorkspaceStore((s) => s.setDrawerTab)
   // The ONE activity the child is currently bound to (/api/child/activity) —
@@ -872,6 +1299,27 @@ export default function LearningApp() {
   // the child's own active/ copy after editing it to add a progress note, and
   // a same-string setChildViewerPath wouldn't otherwise trigger a refetch.
   const [childViewerRefreshKey, setChildViewerRefreshKey] = useState(0)
+  // Optional element id the tutor asked us to scroll to inside the opened page
+  // (open_file's `focus`). Empty = let the viewer pick the first unanswered question.
+  const [childViewerFocus, setChildViewerFocus] = useState('')
+  const [startBurst, setStartBurst] = useState(false)
+  const [childQuickMenuOpen, setChildQuickMenuOpen] = useState(false)
+  // Last known scroll offset per file, reported out of the sandboxed iframe (see
+  // withViewerPositionScript). A ref, not state: it updates on every scroll frame
+  // and must never trigger a re-render, which would reload the iframe and destroy
+  // the very position being tracked.
+  const childViewerPathRef = useRef<string | null>(null)
+  const childViewerScrollRef = useRef<Record<string, number>>({})
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const m = ev.data as { __sq?: number; op?: string; y?: number } | null
+      if (!m || m.__sq !== 1 || m.op !== 'viewer-scroll' || typeof m.y !== 'number') return
+      const path = childViewerPathRef.current
+      if (path) childViewerScrollRef.current[path] = m.y
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [])
   const childViewerContent = useChildChatStore((s) => s.childViewerContent)
   const setChildViewerContent = useChildChatStore((s) => s.setChildViewerContent)
   const childTreeRefreshKey = useChildChatStore((s) => s.childTreeRefreshKey)
@@ -978,7 +1426,7 @@ export default function LearningApp() {
     const poll = () => {
       fetch(`${FAMILY_API}/api/whatsapp/status`)
         .then((r) => r.json())
-        .then((d: { accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string } }) => {
+        .then((d: { accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string } }) => {
           if (cancelled) return
           setWaStatus(d)
           setWaQrNonce((n) => n + 1) // there's always a pairing slot open for one more phone
@@ -1046,6 +1494,31 @@ export default function LearningApp() {
     return () => { cancelled = true }
   }, [screen, settingsOpen, pulsePopoverOpen])
 
+  // Voice tier catalog — loaded whenever Settings opens. Cheap (a sysctl read
+  // plus two LookPath calls), so it's refetched each time rather than cached:
+  // installing a model elsewhere should be reflected on the next open.
+  const refreshVoiceStatus = useCallback(() => {
+    fetch(`${FAMILY_API}/api/voice/status`)
+      .then((r) => r.json())
+      .then((d: VoiceStatus) => setVoiceStatus(d))
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (!settingsOpen) return
+    refreshVoiceStatus()
+    // Poll while a model is actually downloading (live progress) OR still
+    // warming up in the background (see voice_worker.go's proactive
+    // startup warm-up) — otherwise "Warming up…" would sit stale until the
+    // parent happened to close and reopen Settings. Idle Settings with
+    // nothing in flight shouldn't hit the server every couple seconds though.
+    const allTiers = [...(voiceStatus?.stt_tiers ?? []), ...(voiceStatus?.tts_tiers ?? [])]
+    const anyInstalling = allTiers.some((t) => t.installing)
+    const anyWarming = allTiers.some((t) => t.installed && t.warm === false)
+    if (!anyInstalling && !anyWarming) return
+    const id = window.setInterval(refreshVoiceStatus, 1500)
+    return () => window.clearInterval(id)
+  }, [settingsOpen, refreshVoiceStatus, voiceStatus])
+
   // Secret names (never values) — loaded whenever Settings is opened.
   useEffect(() => {
     if (!settingsOpen) return
@@ -1074,6 +1547,66 @@ export default function LearningApp() {
         setSecretValueDraft('')
       })
       .finally(() => setSavingSecret(false))
+  }
+
+  // Read-aloud, one instance per thread (parent chat and child tutor each
+  // track their own "which reply is speaking" index).
+  const { speakingIdx, speakReply } = useSpeakReply()
+  const { speakingIdx: parentSpeakingIdx, speakReply: speakParentReply } = useSpeakReply()
+
+  // Auto-read: speak the newest tutor reply once the turn finishes. Keyed on
+  // the settled message list (not the streaming text) so it reads the final,
+  // reconciled reply exactly once rather than re-firing on every stream tick.
+  // Independent of the parent thread's own auto-read below — a parent may
+  // want the CHILD's replies read aloud (a child who can't read well yet)
+  // without wanting their own parent-chat replies read aloud too.
+  const lastSpokenChildRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!childAutoSpeak || childSending) return
+    const last = childMessages[childMessages.length - 1]
+    if (!last || last.role !== 'assistant' || !last.text) return
+    const key = `${childMessages.length}:${last.text.slice(0, 64)}`
+    if (lastSpokenChildRef.current === key) return
+    lastSpokenChildRef.current = key
+    speakText(last.text).catch(() => {})
+  }, [childAutoSpeak, childSending, childMessages])
+
+  // Same idea for the parent thread, entirely independent state.
+  const lastSpokenParentRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!parentAutoSpeak || sending) return
+    const last = parentMessages[parentMessages.length - 1]
+    if (!last || last.role !== 'assistant' || !last.text) return
+    const key = `${parentMessages.length}:${last.text.slice(0, 64)}`
+    if (lastSpokenParentRef.current === key) return
+    lastSpokenParentRef.current = key
+    speakText(last.text).catch(() => {})
+  }, [parentAutoSpeak, sending, parentMessages])
+
+  // Wraps the raw setters so flipping the toggle ON seeds the baseline to
+  // whatever reply is ALREADY showing — otherwise the effects above (which
+  // depend on childAutoSpeak/parentAutoSpeak) immediately treat the reply
+  // that's already on screen as newly arrived and speak it right then. Turning
+  // this on should apply going forward, not retroactively read the current
+  // reply the instant you enable it (which also raced against a manual
+  // "Listen" click on that same reply, playing both at once).
+  const handleChildAutoSpeakChange = (on: boolean) => {
+    if (on) {
+      const last = childMessages[childMessages.length - 1]
+      if (last?.role === 'assistant' && last.text) {
+        lastSpokenChildRef.current = `${childMessages.length}:${last.text.slice(0, 64)}`
+      }
+    }
+    setChildAutoSpeak(on)
+  }
+  const handleParentAutoSpeakChange = (on: boolean) => {
+    if (on) {
+      const last = parentMessages[parentMessages.length - 1]
+      if (last?.role === 'assistant' && last.text) {
+        lastSpokenParentRef.current = `${parentMessages.length}:${last.text.slice(0, 64)}`
+      }
+    }
+    setParentAutoSpeak(on)
   }
 
   const deleteSecret = (name: string) => {
@@ -1204,7 +1737,17 @@ export default function LearningApp() {
           .then((dd) => {
             if (!dd?.content) return
             const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-            setChildMessages((c.messages || []).map(toParentMsg))
+            const loaded = (c.messages || []).map(toParentMsg)
+            setChildMessages(loaded)
+            // This is HISTORY being resumed (e.g. a page refresh) — not a
+            // fresh reply. Seed the auto-speak baseline to match it, so the
+            // effect below (which re-runs the moment childMessages changes)
+            // finds it already "seen" instead of reading an old reply aloud
+            // the instant the page loads.
+            const last = loaded[loaded.length - 1]
+            if (last?.role === 'assistant' && last.text) {
+              lastSpokenChildRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
+            }
           })
           .catch(() => {})
       })
@@ -1229,19 +1772,19 @@ export default function LearningApp() {
     if (first) { setChildViewerPath(first.path); setChildViewerRefreshKey((k) => k + 1) }
   }, [screen, childActivity])
 
-  // Load the selected file for the child's own inline viewer. Re-opening the
-  // SAME file (e.g. Quill re-calling open_file after editing in a progress
-  // note) reloads the iframe's document, which resets its scroll to the top
-  // by itself — jarring if the child was actually reading further down the
-  // page. So: capture the current scroll position before a same-path
-  // refresh (not for a genuinely different file, where starting at the top
-  // is correct), and restore it once the refreshed content has loaded.
-  const childPrevViewerPathRef = useRef<string | null>(null)
+  // Load the selected file for the child's own inline viewer.
+  //
+  // Re-opening the SAME file (Quill re-calls open_file after recording an
+  // answer) reloads the iframe's document and resets its scroll to the top.
+  // That used to be handled by capturing contentWindow.scrollY before the
+  // refresh and restoring it after — which never worked: the iframe is
+  // sandboxed WITHOUT allow-same-origin, so the read throws, gets caught, and
+  // returns 0. The page reliably jumped to the top.
+  // withViewerPositionScript now handles this from INSIDE the frame, restoring
+  // the offset she was actually at (reported out of the frame as she scrolls).
+  useEffect(() => { childViewerPathRef.current = childViewerPath }, [childViewerPath])
   useEffect(() => {
-    if (!childViewerPath) { setChildViewerContent(null); childPrevViewerPathRef.current = null; return }
-    const samePath = childPrevViewerPathRef.current === childViewerPath
-    childScrollRestoreRef.current = samePath ? safeGetScrollY(childIframeRef.current?.contentWindow) : 0
-    childPrevViewerPathRef.current = childViewerPath
+    if (!childViewerPath) { setChildViewerContent(null); return }
     let cancelled = false
     setChildViewerContent(null)
     fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(childViewerPath)}`)
@@ -1538,6 +2081,7 @@ export default function LearningApp() {
     setSending(true)
     setLiveStatus('')
     setStreamingReply('')
+    setLiveToolCalls([])
     // Live status labels AND real streamed reply content share one SSE
     // connection (see status_stream.go's sseEvent) — "status" replaces the
     // cosmetic "Quill is: …" line, "delta" appends to the live reply preview
@@ -1551,10 +2095,11 @@ export default function LearningApp() {
         const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
         if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
-        // TEMPORARY tool-call visibility, live as each call happens (not
-        // batched at the end) — see tool_call_debug.go.
+        // Live tool-call visibility as each call happens (not batched at the
+        // end) — see tool_call_debug.go. No result yet; the final response
+        // replaces this with the same calls, results filled in.
         else if (parsed.type === 'tool_call' && parsed.tool) {
-          setParentMessages((cur) => [...cur, { role: 'tool', tool: 'debug_call', text: parsed.tool + (parsed.args ? ' ' + parsed.args : '') }])
+          setLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
         }
       } catch { /* ignore malformed event */ }
     }
@@ -1572,14 +2117,14 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: conversationId, viewer_path: currentViewerPath || undefined }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[] }) => {
+      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[]; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
         const toolMsgs: ParentMsg[] = events.filter((e) => e.tool === 'set_child_profile').map((e) => ({ role: 'tool', tool: e.tool, name: e.name, grade: e.grade, board: e.board }))
         const cp = events.find((e) => e.tool === 'set_child_profile')
         if (cp) { if (cp.name) setChildName(cp.name); if (cp.grade) setGrade(cp.grade); if (cp.board) setBoard(cp.board) }
         const pl = events.find((e) => e.tool === 'set_parent_label' && e.parent_label)
         if (pl?.parent_label) setParentLabel(pl.parent_label)
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(of.path); setViewerRefreshKey((k) => k + 1) }
         const op = events.find((e) => e.tool === 'open_activity' && e.path)
         // Auto-expand so its actual content previews are visible right away —
@@ -1587,10 +2132,11 @@ export default function LearningApp() {
         // until the parent notices and clicks the (easy-to-miss) chevron.
         if (op?.path) { setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(op.path); setExpandedActivity(op.path) }
         setSuggestions(data.suggestions ?? [])
+        if (data.debug_tool_calls?.length) toolMsgs.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
         setParentMessages((cur) => [...cur, ...toolMsgs, { role: 'assistant', text: data.error ? `Sorry — ${data.error}` : (data.reply || '(no response)') }])
       })
       .catch(() => setParentMessages((cur) => [...cur, { role: 'assistant', text: 'Sorry — I couldn’t reach the learning engine.' }]))
-      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); statusSource.close(); setMapRefreshKey((k) => k + 1) })
+      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); setLiveToolCalls([]); statusSource.close(); setMapRefreshKey((k) => k + 1) })
   }
 
   const sendParentMessage = (event: FormEvent<HTMLFormElement>) => {
@@ -1618,11 +2164,14 @@ export default function LearningApp() {
       .finally(() => setUnpairingJid(null))
   }
 
-  // Toggles on-device WhatsApp voice-note transcription. Enabling kicks off a
-  // background install on the server (whisper-cli/ffmpeg via Homebrew if
-  // missing, then the ~148MB model download); the status poll above picks up
-  // "installing" → "installed" as it progresses. Disabling deletes the model
-  // file server-side right away to reclaim the space.
+  // Toggles on-device WhatsApp voice-note transcription (Parakeet, Apple
+  // Silicon only). Enabling kicks off the shared MLX voice install if it
+  // isn't already there — the same install that also powers the "most
+  // natural" read-aloud voice; the status poll above picks up "installing" →
+  // "installed" as it progresses. Disabling does NOT delete anything: doing
+  // so would silently break read-aloud too, since they share one
+  // environment. Deleting it is only ever a deliberate action via a tier's
+  // own "Remove" button in Settings → Voice.
   const toggleVoiceTranscription = (enabled: boolean) => {
     setVoiceToggling(true)
     fetch(`${FAMILY_API}/api/whatsapp/voice`, {
@@ -1631,7 +2180,7 @@ export default function LearningApp() {
       body: JSON.stringify({ enabled }),
     })
       .then((r) => r.json())
-      .then((d: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; error?: string }) => {
+      .then((d: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string }) => {
         setWaStatus((cur) => (cur ? { ...cur, voice_transcription: d } : cur))
       })
       .finally(() => setVoiceToggling(false))
@@ -1673,10 +2222,10 @@ export default function LearningApp() {
     const next: ParentMsg[] = [...(base ?? childMessages), { role: 'user', text }]
     setChildMessages(next)
     setChildInput('')
-    setChildSuggestions([])
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
+    setChildLiveToolCalls([])
     const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
     statusSource.onmessage = (ev) => {
       // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
@@ -1685,7 +2234,7 @@ export default function LearningApp() {
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
         else if (parsed.type === 'tool_call' && parsed.tool) {
-          setChildMessages((cur) => [...cur, { role: 'tool', tool: 'debug_call', text: parsed.tool + (parsed.args ? ' ' + parsed.args : '') }])
+          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
         }
       } catch { /* ignore malformed event */ }
     }
@@ -1700,21 +2249,33 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
+        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
-        setChildSuggestions(data.suggestions ?? [])
+        // Snap the still-visible streaming bubble to the FINAL reply text
+        // before swapping it for the real message. The live stream tails a
+        // raw tmux pane (hard-wrapped, markdown stripped); the final reply is
+        // the reconciled, properly-formatted version (see ReconcileFinalAnswer
+        // in multi-llm-provider-go) — without this, the words she was
+        // reading visibly change the instant the turn finishes, which reads
+        // as the tutor's "thinking" being deleted and replaced. Setting this
+        // first means the streaming bubble already shows the exact final
+        // text by the time it's swapped for the real message, so nothing
+        // visibly changes — only the bubble's own styling settles.
+        if (data.reply) setChildStreamingReply(data.reply)
         setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur, { role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') }]
+          const next: ParentMsg[] = [...cur]
+          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // sendChildKickoff silently starts a turn after a handoff WITHOUT showing a
@@ -1729,16 +2290,19 @@ export default function LearningApp() {
     const convId = childActivity?.dir ?? ''
     const hidden: ParentMsg[] = [...base, { role: 'user', text }]
     setChildInput('')
-    setChildSuggestions([])
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
+    setChildLiveToolCalls([])
     const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
     statusSource.onmessage = (ev) => {
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
+        else if (parsed.type === 'tool_call' && parsed.tool) {
+          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        }
       } catch { /* ignore malformed event */ }
     }
     statusSource.onerror = () => statusSource.close()
@@ -1752,24 +2316,29 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; stars?: number; total?: number; reason?: string }[]; suggestions?: ChildSuggestion[]; scene?: string }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
         const events = data.tool_events ?? []
-        const of = events.find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
+        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
+        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
         const cel = events.find((e) => e.tool === 'celebrate')
-        setChildSuggestions(data.suggestions ?? [])
+        // Snap the still-visible streaming bubble to the FINAL reply text
+        // before swapping it for the real message — see sendChildMessage's
+        // identical comment above for why.
+        if (data.reply) setChildStreamingReply(data.reply)
         // Append to base (not hidden) — the synthetic kickoff message never
         // joins the visible thread, only Quill's real reply (and any debug
         // tool-call bubbles / scene) do.
         setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur, { role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') }]
+          const next: ParentMsg[] = [...cur]
+          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // The SQ postMessage bridge (below) is registered once on mount, so it
@@ -1802,7 +2371,6 @@ export default function LearningApp() {
       ? `(For you, Quill — not from ${childName || 'the child'}: the parent's own instructions for${activityTitle ? ` "${activityTitle}"` : ' this'}: ${guideNote} Follow this pacing/order exactly.${newSession ? ` Open your very first reply with one short, plain sentence stating the actual plan in your own words (e.g. "Here's our plan: ...") before anything else — this is the only place ${childName || 'the child'} sees what this session is about, so state it concretely, not generically.` : ''})`
       : undefined
     if (newSession) {
-      setChildSuggestions([])
       setChildMessages([])
       sendChildKickoff(greeting, [], modelExtra)
     } else {
@@ -2138,11 +2706,20 @@ export default function LearningApp() {
                 </div>
               </div>
 
-              {parentMessages.map((m, i) => {
+              {hiddenParentCount > 0 && (
+                <button
+                  type="button"
+                  className="fl-load-earlier"
+                  onClick={() => setParentVisibleCount((c) => c + PARENT_HISTORY_PAGE_SIZE)}
+                >
+                  Load {Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE)} earlier message{Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE) === 1 ? '' : 's'}
+                </button>
+              )}
+              {visibleParentMessages.map((m, idx) => {
+                const i = hiddenParentCount + idx
                 if (m.role === 'tool') {
-                  if (m.tool === 'debug_call') {
-                    // TEMPORARY: raw tool-call visibility, live via SSE tool_call events.
-                    return <div key={i} className="fl-debug-call">🔧 {m.text}</div>
+                  if (m.tool === 'debug_summary') {
+                    return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   }
                   if (m.tool === 'upload' || m.tool === 'upload_error') {
                     const bad = m.tool === 'upload_error'
@@ -2186,7 +2763,18 @@ export default function LearningApp() {
                       <>
                         <span className={`fl-msg-avatar ${m.source === 'pulse' ? 'is-pulse' : 'is-sun'}`}>{m.source === 'pulse' ? <PulseIcon size={17} /> : <Sun size={18} />}</span>
                         <div className="fl-msg-col">
-                          <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}><Markdown text={m.text ?? ''} /></div>
+                          <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
+                            <Markdown text={m.text ?? ''} />
+                            <ReplySpeakControls
+                              scope="parent"
+                              speaking={parentSpeakingIdx === i}
+                              isLatest={i === parentMessages.length - 1}
+                              autoSpeak={parentAutoSpeak}
+                              onToggleSpeak={() => speakParentReply(i, m.text ?? '')}
+                              onAutoSpeakChange={handleParentAutoSpeakChange}
+                              onOpenSettings={() => setSettingsOpen(true)}
+                            />
+                          </div>
                         </div>
                       </>
                     )}
@@ -2199,12 +2787,13 @@ export default function LearningApp() {
                   <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
                   <div className="fl-msg-col">
                     {streamingReply && (
-                      <div className="fl-bubble is-streaming"><Markdown text={streamingReply} /></div>
+                      <div className="fl-bubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(streamingReply)} /></div>
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
                       <span>{liveStatus ? `Quill is: ${liveStatus}…` : PARENT_WAIT_HINTS[parentHintIndex]}</span>
                     </div>
+                    <ToolCallSummary calls={liveToolCalls} />
                   </div>
                 </div>
               )}
@@ -2236,6 +2825,11 @@ export default function LearningApp() {
             <form className="fl-composer" onSubmit={sendParentMessage}>
               <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf" onChange={onFilesSelected} style={{ display: 'none' }} />
               <button className="composer-icon" type="button" aria-label="Attach a photo or PDF" onClick={onPickFiles} disabled={uploading}><Paperclip size={19} /></button>
+              <MicButton
+                onText={(text) => setFocusInput((cur) => (cur ? `${cur} ${text}` : text))}
+                disabled={uploading}
+                shortcutEnabled={screen === 'parent'}
+              />
               <textarea
                 ref={focusTextareaRef}
                 aria-label="Message the learning guide"
@@ -2500,7 +3094,15 @@ export default function LearningApp() {
                   </div>
                 )
               })() : drawerTab === 'allfiles' ? (
-                treeNodes.length === 0 ? <p className="fl-note">No files yet.</p> : <FileTree nodes={treeNodes} onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }} />
+                treeNodes.length === 0 ? <p className="fl-note">No files yet.</p> : (
+                  <>
+                    <p className="fl-tree-total">
+                      <HardDrive size={13} />
+                      <span>{formatBytes(treeTotalSize || treeNodes.reduce((sum, n) => sum + (n.size ?? 0), 0))} on disk</span>
+                    </p>
+                    <FileTree nodes={treeNodes} onOpen={(p) => { setViewerImageList([]); setViewerPath(p) }} />
+                  </>
+                )
               ) : drawerTab === 'files' ? (
                 <>
                   {(() => {
@@ -2764,11 +3366,14 @@ export default function LearningApp() {
                                   <div>
                                     <p className="fl-wa-voice-title">Understand voice notes</p>
                                     <p className="fl-note">
-                                      {waStatus.voice_transcription.installing
-                                        ? `Setting this up on your computer (~${waStatus.voice_transcription.model_size_mb}MB, one-time) — this can take a minute…`
-                                        : waStatus.voice_transcription.enabled && waStatus.voice_transcription.installed
-                                          ? `On — voice notes are transcribed right on this computer (~${waStatus.voice_transcription.model_size_mb}MB used). Nothing is sent to the cloud for this.`
-                                          : `Let Quill understand voice notes you send on WhatsApp. Transcribed entirely on this computer — a one-time ~${waStatus.voice_transcription.model_size_mb}MB download, no ongoing cost.`}
+                                      {(() => {
+                                        const vt = waStatus.voice_transcription!
+                                        const sizeLabel = vt.model_size_mb >= 1000 ? `${(vt.model_size_mb / 1000).toFixed(1)}GB` : `${vt.model_size_mb}MB`
+                                        if (!vt.available) return 'Needs a newer Mac (2020 or later) — not available on this computer.'
+                                        if (vt.installing) return `Setting this up on your computer (~${sizeLabel}, one-time) — this can take several minutes on a home connection…`
+                                        if (vt.enabled && vt.installed) return `On — voice notes are transcribed right on this computer (~${sizeLabel} used). Nothing is sent to the cloud for this. English only.`
+                                        return `Let Quill understand voice notes you send on WhatsApp — English only. Transcribed entirely on this computer, a one-time ~${sizeLabel} download, no ongoing cost.`
+                                      })()}
                                     </p>
                                     {waStatus.voice_transcription.error && (
                                       <p className="fl-note fl-wa-voice-error">Couldn’t set this up: {waStatus.voice_transcription.error}</p>
@@ -2778,7 +3383,7 @@ export default function LearningApp() {
                                     <input
                                       type="checkbox"
                                       checked={waStatus.voice_transcription.enabled}
-                                      disabled={voiceToggling || waStatus.voice_transcription.installing}
+                                      disabled={voiceToggling || waStatus.voice_transcription.installing || !waStatus.voice_transcription.available}
                                       onChange={(e) => toggleVoiceTranscription(e.target.checked)}
                                     />
                                     <span className="fl-toggle-slider" />
@@ -2875,12 +3480,12 @@ export default function LearningApp() {
                   <button className="fl-wa-close" type="button" onClick={() => setSettingsOpen(false)} aria-label="Close">×</button>
                 </div>
                 <div className="fl-settings-body">
-                  <p className="fl-drawer-label">AI engine</p>
-                  <p className="fl-note">Which coding-agent engine Quill runs on for both the parent chat and {childName || 'your child'}’s tutor.</p>
+                  <p className="fl-drawer-label">Which AI Quill uses</p>
+                  <p className="fl-note">The AI behind both your chat and {childName || 'your child'}’s tutor. They all work — pick whichever account you already pay for.</p>
                   {enginesState === 'loading' ? (
-                    <p className="fl-note">Checking available engines…</p>
+                    <p className="fl-note">Checking what’s available…</p>
                   ) : engines.length === 0 ? (
-                    <p className="fl-note">No engines detected on this machine.</p>
+                    <p className="fl-note">None found on this computer yet.</p>
                   ) : (
                     <div className="fl-settings-engines">
                       {engines.map((item) => {
@@ -2902,7 +3507,10 @@ export default function LearningApp() {
                               }).finally(() => setSavingEngine(false))
                             }}
                           >
-                            <span className="fl-settings-engine-name">{item.name}</span>
+                            <span className="fl-settings-engine-col">
+                              <span className="fl-settings-engine-name">{pres(item.id, item.name).name}</span>
+                              <span className="fl-settings-engine-blurb">{pres(item.id, item.name).blurb}</span>
+                            </span>
                             <span className={`fl-settings-engine-status ${status.ready ? 'is-ready' : ''}`}>{status.label}</span>
                             {active && <Check size={16} />}
                           </button>
@@ -2910,6 +3518,8 @@ export default function LearningApp() {
                       })}
                     </div>
                   )}
+
+                  <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
 
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Secrets</p>
                   <p className="fl-note">Credentials Quill's tools can use — e.g. a school portal login. Saved here, never through chat, so a value you type below never appears in any saved conversation. Quill only ever sees the name, never the value.</p>
@@ -2972,8 +3582,12 @@ export default function LearningApp() {
     return (
       <main className="learning-app" data-theme={theme}>
         <div className="fl-child">
-          <div className="fl-child-body">
-            <section className="fl-child-chat">
+          <div
+            ref={childBodyRef}
+            className={`fl-child-body${childResizing ? ' is-resizing' : ''}`}
+            style={{ ['--child-side-w' as string]: `${Math.round(childSideWidth)}px` }}
+          >
+            <section className="fl-child-chat" style={{ ['--chat-scale' as string]: childChatZoom }}>
               <header className="fl-child-top">
                 <div className="fl-child-id">
                   <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
@@ -3005,14 +3619,25 @@ export default function LearningApp() {
                   )
                 })()}
                 <div className="fl-child-top-right">
-                  <button className="fl-parent-return" type="button" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /> Parent Mode</button>
+                  {/* Chat reading size — same cycle as the worksheet's button but
+                      its own preference, since the two sides are read differently. */}
+                  <button
+                    className={`fl-icon-btn fl-zoom-btn${childChatZoom > 1 ? ' is-on' : ''}`}
+                    type="button"
+                    aria-label={`Chat text size: ${Math.round(childChatZoom * 100)}% — tap for bigger`}
+                    title={childChatZoom > 1 ? `Chat text ${Math.round(childChatZoom * 100)}% — tap for bigger` : 'Make the chat text bigger'}
+                    onClick={cycleChildChatZoom}
+                  >
+                    <Type size={14} />
+                    {childChatZoom > 1 && <span className="fl-zoom-badge">{Math.round(childChatZoom * 100)}%</span>}
+                  </button>
+                  <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
               <div className="fl-child-thread" aria-label="Tutor conversation">
                 {childMessages.map((m, i) => (
-                  // TEMPORARY: raw tool-call visibility, live via SSE tool_call events.
-                  m.role === 'tool' && m.tool === 'debug_call' ? (
-                    <div key={i} className="fl-debug-call">🔧 {m.text}</div>
+                  m.role === 'tool' && m.tool === 'debug_summary' ? (
+                    <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   ) : m.role === 'tool' && (m.tool === 'upload' || m.tool === 'upload_error') ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
@@ -3033,12 +3658,23 @@ export default function LearningApp() {
                   ) : m.role === 'tool' && m.tool === 'scene' ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <SceneFrame html={m.html ?? ''} />
+                      <SceneFrame html={m.html ?? ''} activityDir={childActivity?.dir ?? ''} />
                     </div>
                   ) : m.role === 'assistant' ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <div className="fl-tbubble"><Markdown text={m.text ?? ''} /></div>
+                      <div className="fl-tbubble">
+                        <Markdown text={m.text ?? ''} />
+                        <ReplySpeakControls
+                          scope="child"
+                          speaking={speakingIdx === i}
+                          isLatest={i === childMessages.length - 1}
+                          autoSpeak={childAutoSpeak}
+                          onToggleSpeak={() => speakReply(i, m.text ?? '')}
+                          onAutoSpeakChange={handleChildAutoSpeakChange}
+                          onOpenSettings={() => setSettingsOpen(true)}
+                        />
+                      </div>
                     </div>
                   ) : (
                     <div key={i} className="fl-tmsg is-child">
@@ -3052,12 +3688,13 @@ export default function LearningApp() {
                     <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                     <div className="fl-tbubble-col">
                       {childStreamingReply && (
-                        <div className="fl-tbubble is-streaming"><Markdown text={childStreamingReply} /></div>
+                        <div className="fl-tbubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(childStreamingReply)} /></div>
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
                         <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : CHILD_WAIT_HINTS[childHintIndex]}</span>
                       </div>
+                      <ToolCallSummary calls={childLiveToolCalls} />
                     </div>
                   </div>
                 )}
@@ -3069,29 +3706,20 @@ export default function LearningApp() {
                 ))}
                 <div ref={childThreadEndRef} />
               </div>
-              {childSuggestions.length > 0 && !childSending && (
-                <div className="fl-child-actions" aria-label="Quick replies">
-                  {childSuggestions.map((s, i) => {
-                    const safeHtml = s.html ? sanitizeDecorativeHtml(s.html) : ''
-                    return (
-                      <button key={i} type="button" className={`tone-${s.tone || 'neutral'}`} onClick={() => sendChildText(s.message)}>
-                        {s.emoji && <span className="fl-pill-emoji">{s.emoji}</span>}
-                        {safeHtml ? <span dangerouslySetInnerHTML={{ __html: safeHtml }} /> : <span>{s.label}</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
               <form className="fl-child-composer" onSubmit={sendChildMessage}>
                 <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
                 <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>
+                <MicButton
+                  onText={(text) => setChildInput((cur) => (cur ? `${cur} ${text}` : text))}
+                  disabled={childUploading}
+                  shortcutEnabled={screen === 'tutor'}
+                />
                 <textarea
                   ref={childTextareaRef}
                   aria-label="Message your tutor"
-                  placeholder="Type your answer or ask for help…"
+                  placeholder={childSending ? 'You can still type — Quill will hear you…' : 'Type your answer or ask for help…'}
                   value={childInput}
                   rows={1}
-                  disabled={childSending}
                   onChange={(e) => { setChildInput(e.target.value); autoGrowTextarea(e.target) }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -3100,9 +3728,42 @@ export default function LearningApp() {
                     }
                   }}
                 />
-                <button className="composer-send" type="submit" aria-label="Send message" disabled={childSending}><Send size={18} /></button>
+                <div className="fl-composer-menu">
+                  {childQuickMenuOpen && <div className="fl-menu-backdrop" onClick={() => setChildQuickMenuOpen(false)} />}
+                  <button type="button" className="composer-icon" aria-label="Quick requests" aria-expanded={childQuickMenuOpen} onClick={() => setChildQuickMenuOpen((v) => !v)}><Sparkles size={19} /></button>
+                  {childQuickMenuOpen && (
+                    <div className="fl-menu" role="menu">
+                      {CHILD_QUICK_ACTIONS.map((qa) => (
+                        <button key={qa.label} type="button" role="menuitem" onClick={() => { setChildQuickMenuOpen(false); sendChildText(qa.message) }}>{qa.label}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
             </section>
+            <div
+              className="fl-child-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Drag to resize the worksheet"
+              aria-valuenow={Math.round(childSideWidth)}
+              aria-valuemin={CHILD_SIDE_MIN}
+              aria-valuemax={Math.round(childSideMax(windowWidth))}
+              tabIndex={0}
+              onPointerDown={startChildResize}
+              // Keyboard equivalent — a drag handle that only works with a
+              // pointer is unreachable for anyone tabbing, and this is the only
+              // fine-grained control (the toolbar button is coarse: default vs max).
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 80 : 24
+                if (e.key === 'ArrowLeft') { e.preventDefault(); commitChildSideWidth(childSideWidth + step) }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); commitChildSideWidth(childSideWidth - step) }
+                else if (e.key === 'Home') { e.preventDefault(); commitChildSideWidth(CHILD_SIDE_DEFAULT) }
+              }}
+            >
+              <span className="fl-child-resizer-grip" aria-hidden="true" />
+            </div>
             <aside className="fl-child-side">
               <div className="fl-child-side-scroll">
               {childViewerPath ? (
@@ -3110,6 +3771,36 @@ export default function LearningApp() {
                   <div className="fl-viewer-bar">
                     <button className="fl-viewer-back" type="button" onClick={() => setChildViewerPath(null)}><ArrowLeft size={15} /> Back</button>
                     <span className="fl-viewer-name">{labelFromFilename(childViewerPath.split('/').pop() || childViewerPath).label}</span>
+                    {/* Reading size. Cycles through the steps and wraps back to
+                        normal, so one button covers both directions — simpler
+                        than a +/- pair on a child's toolbar, and the current
+                        step is shown on the button itself. */}
+                    <button
+                      className={`fl-icon-btn fl-zoom-btn${childZoom > 1 ? ' is-on' : ''}`}
+                      type="button"
+                      aria-label={`Text size: ${Math.round(childZoom * 100)}% — tap for bigger`}
+                      title={childZoom > 1 ? `Text size ${Math.round(childZoom * 100)}% — tap for bigger` : 'Make the text bigger'}
+                      onClick={cycleChildZoom}
+                    >
+                      <Type size={14} />
+                      {childZoom > 1 && <span className="fl-zoom-badge">{Math.round(childZoom * 100)}%</span>}
+                    </button>
+                    {/* Widen/restore the worksheet, beside refresh and print.
+                        Complements the drag divider between the panes: the
+                        button is a coarse two-state jump (normal ⇄ as wide as
+                        possible), the divider is for anything in between. */}
+                    <button
+                      className={`fl-icon-btn fl-widen-btn${childSideWide ? ' is-on' : ''}`}
+                      type="button"
+                      aria-label={childSideWide ? 'Shrink the worksheet' : 'Widen the worksheet'}
+                      title={childSideWide ? 'Give the chat more room' : 'Give the worksheet more room'}
+                      aria-pressed={childSideWide}
+                      onClick={() => {
+                        commitChildSideWidth(childSideWide ? CHILD_SIDE_DEFAULT : childSideMax(windowWidth))
+                      }}
+                    >
+                      {childSideWide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
                     <button
                       className="fl-icon-btn"
                       type="button"
@@ -3150,8 +3841,7 @@ export default function LearningApp() {
                       className="fl-viewer-frame"
                       title="Preview"
                       sandbox="allow-scripts"
-                      srcDoc={childViewerContent.content}
-                      onLoad={(e) => safeSetScrollY(e.currentTarget.contentWindow, childScrollRestoreRef.current)}
+                      srcDoc={withViewerPositionScript(childViewerContent.content, childViewerFocus, childViewerScrollRef.current[childViewerPath] ?? 0, childZoom)}
                     />
                   ) : childViewerPath.endsWith('.md') ? (
                     <div className="fl-viewer-md"><Markdown text={childViewerContent.content} /></div>
@@ -3181,7 +3871,7 @@ export default function LearningApp() {
                             <div className="fl-child-package">
                               <div className="fl-package-title"><BookOpen size={16} /><span>{childActivity?.title || 'Your activity'}<small>{currentItems.length} part{currentItems.length === 1 ? '' : 's'}{dateTimeLabel(childActivity?.created_at) ? ` · ${dateTimeLabel(childActivity?.created_at)}` : ''}</small></span></div>
                               {currentItems.map((item, i) => (
-                                <button key={item.path} type="button" className="fl-file-item fl-package-item" onClick={() => setChildViewerPath(item.path)}>
+                                <button key={item.path} type="button" className="fl-file-item fl-package-item" onClick={() => { setChildViewerFocus(''); setChildViewerPath(item.path) }}>
                                   <span className="fl-package-step">{i + 1}</span>
                                   <FileGlyph name={item.name} size={15} />
                                   <span>{labelFromFilename(item.name).label}</span>
@@ -3193,7 +3883,11 @@ export default function LearningApp() {
                           // Instruction-only activity (no files): kick off the live activity in chat.
                           <section className="fl-asset-group">
                             <p className="fl-drawer-label">From your parent</p>
-                            <button type="button" className="fl-file-item is-package" onClick={() => { setChildViewerPath(null); sendChildText(`Let's start ${childActivity?.title || 'my activity'}!`) }}>
+                            <button type="button" className="fl-file-item is-package" onClick={() => {
+                              if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) setStartBurst(true)
+                              setChildViewerPath(null)
+                              sendChildText(`Let's start ${childActivity?.title || 'my activity'}!`)
+                            }}>
                               <BookOpen size={16} /><span>{childActivity?.title || 'Your activity'}<small>Adaptive practice{dateTimeLabel(childActivity?.created_at) ? ` · ${dateTimeLabel(childActivity?.created_at)}` : ''}</small></span>
                             </button>
                           </section>
@@ -3392,6 +4086,7 @@ export default function LearningApp() {
           </section>
         )}
       </section>
+      {startBurst && <StartBurst onDone={() => setStartBurst(false)} />}
     </main>
   )
 }

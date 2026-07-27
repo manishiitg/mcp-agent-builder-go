@@ -2,8 +2,14 @@
 
 Every HTML file the app generates (progress reports, academic map, study material,
 tests, and anything else) shares this look so they feel like one product. Build a
-**complete standalone document** — inline everything, no external assets, fonts,
-images, or network calls.
+**complete standalone document** — inline the CSS, no web fonts, no hotlinked
+images, no network calls at load time.
+
+The one thing that may live beside the page rather than inside it is a picture
+saved by `find_image` (see "Real pictures" below). It sits in the same folder and
+is referenced with a plain relative `<img src="filename.png">`; the app resolves
+that when it displays the page. Never reference a URL on the internet directly —
+that breaks the moment the page is printed or opened offline.
 
 ## Rules
 
@@ -12,15 +18,45 @@ images, or network calls.
   clear title with the child's name and date. Only ever real data — never an invented
   score.
 - **Make it visually engaging** — children respond to this far more than plain text.
-  Use CSS transitions and animation freely: a gentle fade-in on load, hover effects,
-  an animated diagram, a subtle progress-fill bar. These are passive: they play on
-  their own or on hover, with nothing to click.
+  You are not limited to a fixed list of effects: use whatever CSS (transitions,
+  keyframe animation, transforms) genuinely brings a page to life, at whatever
+  richness the moment deserves. Judge tastefully — quality over quantity, and
+  never at the cost of the content being clear and correct — but don't hold back
+  on capability you actually have.
 - **No form controls at all** — no `<input>`, `<textarea>`, `<select>`, or `<form>`,
   not even an unscripted one. An empty text box is still wrong: the child will type
   into it expecting something to happen, and nothing will. Write "try it yourself"
   questions as plain text with space to work on paper.
   - BAD: `<input type="text" placeholder="Type your answer...">`
-  - GOOD: `<p><strong>1. What is 2/5 + 1/5?</strong></p><div class="answer-space"></div>`
+- **Give every major section, sub-section, and figure a real, predictable `id`** —
+  not just questions. `open_file`'s `focus` parameter scrolls the page straight to
+  any id on it, so when you're talking about "the worked example" or "Figure 2" the
+  page can actually jump there instead of leaving her to scroll and hunt while you're
+  mid-explanation. One scheme, applied consistently in document order:
+  - Each major section (a `.card`): `id="s1"`, `id="s2"`, ...
+  - A sub-section inside one (a sub-heading, a worked example): `id="s2-1"`, `id="s2-2"`, ...
+  - Each figure (a `.fig`, including a `find_image` picture): `id="fig1"`, `id="fig2"`, ...
+  - GOOD: `<div class="card" id="s2"><h2>Worked examples</h2><div id="s2-1">...</div></div>`
+  You wrote these ids, so you know them — reference them later without re-reading the
+  file. A turn that's clearly ABOUT one section or figure and doesn't pass focus is a
+  missed opportunity, the same way naming a question by number without focus is.
+- **Wrap every question in `<div class="q" id="q1">`**, the id's number matching the
+  question's own. This is load-bearing beyond ordinary addressability: `open_file`
+  with NO `focus` lands the page at the first `.q` that has no answer recorded inside
+  it, so the child lands on the question she's up to instead of back at the top every
+  time the tutor records something. A question outside a `.q` is invisible to that,
+  and the page keeps reopening at the top.
+  - GOOD:
+    ```html
+    <div class="q" id="q1">
+      <p><strong>1. What is 2/5 + 1/5?</strong> <span class="badge">2 marks</span></p>
+      <div class="answer-space"></div>
+    </div>
+    ```
+- **`.answer-space` is the blank for working on paper, and belongs to an UNANSWERED
+  question only.** When the tutor records an answer it replaces that question's
+  `.answer-space` with the `.answered-note`. Leaving both makes a finished question
+  look unfinished and invites her to answer it twice.
 - **No click-to-REVEAL** — no `<details>/<summary>`, no tap-to-flip cards. They
   silently show hidden content with no record it happened, so Quill never learns she
   looked or what she guessed. Write the "guess before you peek" moment as plain text
@@ -54,15 +90,15 @@ images, or network calls.
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:18px 22px}
-  .wrap{max-width:840px;margin:0 auto}
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:14px 16px}
+  .wrap{max-width:1100px;margin:0 auto}
   .head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .head .sun{width:30px;height:30px;border-radius:50%;background:var(--sun);
     display:grid;place-items:center;font-size:16px;flex:0 0 auto}
   h1{font-size:19px;margin:0;line-height:1.2}
   .sub{color:var(--muted);font-size:14px;margin-top:2px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
-    padding:20px 22px;margin:16px 0;box-shadow:0 2px 10px rgba(22,34,58,.05)}
+    padding:16px 18px;margin:12px 0;box-shadow:0 2px 10px rgba(22,34,58,.05)}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 12px}
   .badge{display:inline-block;background:var(--sun-soft);color:#8a6114;font-size:12px;
     font-weight:700;padding:3px 10px;border-radius:999px}
@@ -71,8 +107,32 @@ images, or network calls.
   ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
   .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
   .note{background:var(--sun-soft);border-radius:12px;padding:12px 16px;color:#6f5a2a;font-size:14px;margin-top:14px}
-  .answered-note{color:var(--good);font-size:13px;font-weight:600;margin:8px 0 0}
+  /* Deliberately NEUTRAL — not green, no tick. This records WHAT she answered,
+     never whether it was right; a green tick was being read as "correct" by both
+     parent and child. Reads as a pencil note in the margin. */
+  .answered-note{color:var(--muted);font-size:13px;margin:8px 0 0;
+    padding:7px 11px;background:#f4f1ea;border-left:3px solid #d9d2c4;border-radius:8px}
   .foot{color:var(--muted);font-size:13px;margin-top:26px;text-align:center}
+  /* --- showing data: a meter row + status chip. See "Showing data" below. --- */
+  .rows{display:flex;flex-direction:column;gap:10px;margin:10px 0}
+  .row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:baseline}
+  .row .name{font-size:14px;font-weight:600}
+  .row .val{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+  /* Track + fill. The fill is a thin mark anchored to the left with rounded
+     data-ends, per the shared mark spec. Width is set inline as a percentage. */
+  .meter{grid-column:1/-1;height:9px;border-radius:999px;background:#efe7d8;overflow:hidden}
+  .meter>span{display:block;height:100%;border-radius:999px;background:var(--good);
+    /* grows on load so the page feels alive without anything to click */
+    animation:grow .8s ease-out both}
+  .meter.is-focus>span{background:var(--focus)}
+  .meter.is-none>span{background:#c9d0dc}
+  @keyframes grow{from{width:0 !important}}
+  @media (prefers-reduced-motion:reduce){.meter>span{animation:none}}
+  /* Status chip. ALWAYS carries its word + mark — never colour alone. */
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;
+    padding:3px 10px;border-radius:999px;background:#eaf7ee;color:#26765a}
+  .chip.is-focus{background:var(--sun-soft);color:#8a6114}
+  .chip.is-none{background:#eef1f6;color:#5c6d88}
 </style>
 </head>
 <body>
@@ -99,6 +159,87 @@ images, or network calls.
 Use `.card` for each section, `.badge` for marks or a "Current" tag, `.good`/`.focus`
 for going-well / to-practise, a `.grid` of `.card`s for the academic map's subjects,
 `.note` for honest caveats, and `.answered-note` for the tutor's progress marks.
+
+`.answered-note` records WHAT she answered and never whether it was right. Write it
+as `✎ Answered: <em>her words</em>` — a pencil, never a tick, and never green. A tick
+and a green note were both being read as "correct" by the parent AND the child, which
+quietly turns a neutral record into a grade the tutor never gave — and under a strict
+`teaching_mode` the tutor must not reveal correctness at all. Marking is the parent's
+job, from the answer key.
+
+## Real pictures
+
+Some things are far easier to understand from a real picture than from any
+description: what a plateau actually looks like, where the Tropic of Cancer falls
+on a world map, how the digestive system is arranged. `find_image` fetches one
+from Wikimedia Commons, saves it beside the page, and hands back the filename plus
+the credit to print under it.
+
+- **Use it where seeing the thing IS the teaching** — a real landform, a map, a
+  labeled biological diagram, a historical photograph.
+- **Not for what you can draw better yourself.** A relationship, a process, a
+  comparison, a bar of progress — an inline SVG or CSS diagram is sharper, scales
+  cleanly, and can use the page's own colours. A fetched picture is for things
+  that genuinely exist in the world.
+- **Reference it relatively and give it real alt text**, describing what it shows
+  rather than repeating the caption:
+  ```html
+  <figure class="fig" id="fig1">
+    <img src="latitude-map.png" alt="World map with the Equator, both Tropics and the polar circles marked">
+    <figcaption>The main latitude circles · Thesevenseas · CC BY-SA 3.0</figcaption>
+  </figure>
+  ```
+- **Always print the credit** from the tool's `attribution` field in the
+  `figcaption`. These images are openly licensed, which is what makes them safe to
+  include in a page the parent may share — attribution is the condition of that.
+- **Never invent a filename.** Only reference what `find_image` actually returned;
+  if it found nothing, write the page without a picture rather than leaving a
+  broken image on a child's screen.
+
+Add this to the CSS when a page uses pictures:
+
+```css
+.fig{margin:14px 0;text-align:center}
+.fig img{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}
+.fig figcaption{margin-top:6px;color:var(--muted);font-size:12px}
+```
+
+## Showing data
+
+Prefer something a parent can SEE over a paragraph they have to read. Where a page
+reports how things stand per subject or topic, lead with the visual and let prose
+explain only what a picture can't.
+
+Aim for a warm **teacher's report to a family** — not a business dashboard. The
+child reads these pages too, so keep the feel of something a favourite teacher
+wrote: a subject icon or emoji beside each heading, rounded cards, a kind sentence
+next to the numbers, and the child addressed by name where it fits. Imaginative and
+encouraging beats clinical and dense. What must stay strict is the *honesty* of the
+numbers, never the tone around them: no KPI walls, no grades-as-verdict, no red.
+
+- **A meter row per topic** is the workhorse — name, a short value, and a bar:
+  ```html
+  <div class="row"><span class="name">Fractions</span><span class="val">2 of 8 · needs work</span>
+    <span class="meter is-focus"><span style="width:25%"></span></span></div>
+  ```
+  Wrap a set in `<div class="rows">`. Bars sharing a card must share one scale, so
+  their lengths are comparable at a glance.
+- **Three states only**, each with its own class AND its own word: secure
+  (`.meter`/`.chip`, "confident"), needs work (`.is-focus`), not started
+  (`.is-none`). Never a fourth colour.
+- **Always label the number.** Every bar carries its real value as text, and every
+  chip carries its word — never colour alone. This is not decoration: the green and
+  amber are only ΔE 6.2 apart for red-blind (protanopia) readers, measured, so the
+  colour is a hint and the text is the actual information. A bar with no number is a
+  bug.
+- **Never invent a number to make a bar.** A bar needs a real count ("2 of 8
+  attempted"). With no evidence, use `.is-none` and the word "not started" — an
+  honest empty state beats a fabricated 40%.
+- **No pie or donut charts** (angles are hard to compare, and topic counts are
+  usually too small to be meaningful), and never two different scales in one chart.
+  A simple bar or a count is almost always the right answer here.
+- Motion is passive and already handled: bars grow on load, and reduced-motion is
+  respected. Nothing here is clickable, so none of the SQ.choose rules apply.
 
 The parent can print any page from the print icon in the app's viewer — no print
 button belongs in the generated page itself.

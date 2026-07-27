@@ -109,6 +109,14 @@ type Config struct {
 	// at process startup, not per-call. Nil is a no-op: the turn behaves exactly
 	// as before, reply available only once Ask returns.
 	StreamCallback func(text string)
+	// Transport, when set, overrides the provider contract's declared process
+	// transport for this one session — llm.CodingAgentTransportStructured runs
+	// the CLI's one-shot JSON mode (no tmux pane, no live steering — Deliver
+	// only queues) instead of the default llm.CodingAgentTransportTmux. Empty
+	// keeps the contract's default (tmux, for every coding-agent provider
+	// today). This exists to A/B the two transports from a live conversation;
+	// see mcpagent.WithCodingAgentTransport's own doc comment for the tradeoff.
+	Transport llm.CodingAgentTransport
 }
 
 // Session bundles a live agent with its in-process executor server. Not safe
@@ -210,10 +218,15 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 			},
 		}))
 	}
-	if resume {
+	if cfg.Transport != "" {
+		opts = append(opts, mcpagent.WithCodingAgentTransport(cfg.Transport))
+	}
+	if resume && cfg.Transport != llm.CodingAgentTransportStructured {
 		// Keep the coding agent's interactive (tmux) session alive so the next
 		// turn resumes it with full context instead of cold-starting. The
 		// provider owns that session in its registry and reaps it on idle.
+		// Meaningless under structured transport (no tmux process to keep warm
+		// — each turn is a one-shot CLI invocation resumed via SessionHandle).
 		switch cfg.Provider {
 		case llm.ProviderClaudeCode:
 			opts = append(opts, mcpagent.WithClaudeCodePersistentInteractiveSession(true))
@@ -264,6 +277,24 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		opts = append(opts, mcpagent.WithAdditionalBridgeTools(names...))
 	}
 
+	if resume {
+		// Parent and child (any activity) always share the SAME physical
+		// workspace directory as their coding-agent working dir — and an
+		// interactive CLI's own per-session setup (Cursor's .cursor/hooks/,
+		// Codex/Claude's own project-scoped config) writes shared files INTO
+		// that directory, torn down again when ITS OWNER session closes.
+		// Confirmed live: Cursor's deny-builtin-tools hook script vanished out
+		// from under a still-running turn — the child side's (or a stale
+		// prior) warm session was reaped and deleted the very hook script
+		// this turn's tool calls depended on, and Cursor's failClosed hook
+		// config denies everything when the hook command can't be found —
+		// "I can't reach the workspace tools", with zero tool calls actually
+		// attempted. Only one warm interactive session may exist at a time
+		// for this workspace, full stop — closing any OTHER owner here before
+		// creating this one is what actually prevents that collision, not
+		// just documenting it.
+		closeOtherInteractiveSessions(sessionID)
+	}
 	agent, err := mcpagent.NewAgent(ctx, model, b.mcpConfigPath, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
@@ -293,6 +324,17 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	// (the provider reuses a live tmux when present, else mints a fresh one and
 	// resumes via this handle). This is what AgentWorks does after a restart.
 	if cfg.SessionHandle != nil && !cfg.SessionHandle.Empty() {
+		// ApplyAgentSessionHandle restores handle.Provider.WorkingDir onto the
+		// agent, OVERWRITING the WithCodingAgentWorkingDir value opts already
+		// set above — confirmed live: a persisted handle saved before this
+		// activity's own working dir existed kept restoring the OLD shared
+		// workspace-root path every single turn, silently undoing the whole
+		// point of scoping each activity to its own folder. cfg.WorkingDir is
+		// this app's own current, authoritative choice — never a stale one to
+		// defer to — so pin it onto the handle before applying it.
+		if strings.TrimSpace(cfg.WorkingDir) != "" {
+			cfg.SessionHandle.Provider.WorkingDir = cfg.WorkingDir
+		}
 		agent.ApplyAgentSessionHandle(cfg.SessionHandle)
 	}
 
@@ -425,6 +467,28 @@ func hasWarmInteractiveOwner(sessionID string, provider llm.Provider) bool {
 	return ok && p == provider
 }
 
+// HasOtherWarmInteractiveSession reports whether some session OTHER than
+// exceptSessionID is currently warm — i.e. whether starting a new session now
+// would force-close someone else's still-active one (see closeOtherInteractiveSessions).
+// For a deliberate, direct user action (opening parent or child chat) that's
+// an acceptable cold-start cost. For an automatic background process like
+// Pulse it is NOT: Pulse has no idea whether the child is mid-conversation
+// when its own cadence happens to fire, so it should defer to the next cycle
+// instead of silently evicting her live session out from under her the
+// instant she stops actively typing. Callers that must not evict should check
+// this FIRST and skip their turn if it's true, rather than calling New() and
+// letting closeOtherInteractiveSessions do it unconditionally.
+func HasOtherWarmInteractiveSession(exceptSessionID string) bool {
+	ownerMu.Lock()
+	defer ownerMu.Unlock()
+	for id := range warmOwners {
+		if id != exceptSessionID {
+			return true
+		}
+	}
+	return false
+}
+
 // CloseAllInteractiveSessions closes every warm coding-agent (tmux) session we
 // have started, via the provider's owner-scoped close. Use on reset/shutdown for
 // a clean slate; absent this call the provider reaps them on idle anyway. There
@@ -439,16 +503,41 @@ func CloseAllInteractiveSessions() {
 	ownerMu.Unlock()
 
 	for id, p := range owners {
-		switch p {
-		case llm.ProviderClaudeCode:
-			llmproviders.CloseClaudeCodeInteractiveSessionForOwner(id, "reset")
-		case llm.ProviderCodexCLI:
-			llmproviders.CloseCodexCLIInteractiveSessionForOwner(id, "reset")
-		case llm.ProviderCursorCLI:
-			llmproviders.CloseCursorCLIInteractiveSessionForOwner(id, "reset")
-		case llm.ProviderPiCLI:
-			llmproviders.ClosePiCLIInteractiveSessionForOwner(id, "reset")
+		closeInteractiveOwner(id, p, "reset")
+	}
+}
+
+// closeOtherInteractiveSessions closes every warm owner EXCEPT keepSessionID —
+// see this function's call site in New() for why this must run before a new
+// session is created, not just document the invariant.
+func closeOtherInteractiveSessions(keepSessionID string) {
+	ownerMu.Lock()
+	toClose := make(map[string]llm.Provider)
+	for id, p := range warmOwners {
+		if id == keepSessionID {
+			continue
 		}
+		toClose[id] = p
+		delete(warmOwners, id)
+	}
+	ownerMu.Unlock()
+
+	for id, p := range toClose {
+		closeInteractiveOwner(id, p, "another session needs this shared workspace")
+	}
+}
+
+// closeInteractiveOwner dispatches to the provider-specific owner-scoped close.
+func closeInteractiveOwner(id string, p llm.Provider, reason string) {
+	switch p {
+	case llm.ProviderClaudeCode:
+		llmproviders.CloseClaudeCodeInteractiveSessionForOwner(id, reason)
+	case llm.ProviderCodexCLI:
+		llmproviders.CloseCodexCLIInteractiveSessionForOwner(id, reason)
+	case llm.ProviderCursorCLI:
+		llmproviders.CloseCursorCLIInteractiveSessionForOwner(id, reason)
+	case llm.ProviderPiCLI:
+		llmproviders.ClosePiCLIInteractiveSessionForOwner(id, reason)
 	}
 }
 
@@ -510,6 +599,21 @@ func sanitizeReply(reply string) string {
 // Agent exposes the underlying agent for advanced callers (event listeners,
 // usage stats). May be nil after Close.
 func (s *Session) Agent() *mcpagent.Agent { return s.agent }
+
+// Resumed reports whether this session continues an existing coding-agent
+// session — a warm tmux owner in this process, or a restored provider-native
+// --resume handle — rather than cold-starting the CLI.
+//
+// Exposed for latency attribution. A cold start pays the coding CLI's entire
+// launch cost (spawn tmux, boot the CLI, load its own context) before the model
+// sees a single token, and in a turn's total duration that is indistinguishable
+// from a slow model unless it's recorded separately. See turntrace.go.
+func (s *Session) Resumed() bool {
+	if s == nil {
+		return false
+	}
+	return s.holdsPriorContext
+}
 
 // Handle returns the coding agent's latest provider-native continuation handle
 // (Claude Code's `--resume` UUID, etc.), captured from the just-completed turn.

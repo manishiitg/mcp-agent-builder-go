@@ -22,9 +22,13 @@ for that activity; this file is the standing default/context, not a per-activity
 1. **Read what's already captured**: `cat memory/preferences.md` if it exists (it may
    not, on a fresh family — that's fine, start from empty).
 
-2. **Scan for anything durable the parent has said**: read `conversations/parent.json`
-   — the one ongoing parent thread (web, WhatsApp, and Pulse all share it, so this one
-   file has everything). Look for things like:
+2. **Scan for anything durable the parent has said recently** — you already carry this
+   conversation's own context, so don't `cat` the whole of `conversations/parent.json`;
+   it's the one ongoing parent thread (web, WhatsApp, and Pulse all share it) and only
+   grows, so a full read gets more wasteful every time you run this. `tail -c 20000
+   conversations/parent.json` is plenty to catch anything since your last check; widen
+   it only if you have a real reason to think something durable is further back than
+   that AND still uncaptured. Look for things like:
    - Exam/test dates or deadlines ("her board exam is in March")
    - Scheduling or pacing preferences ("short daily practice, not long weekend sessions")
    - Emotional/behavioral notes relevant to teaching ("she gets anxious with timed

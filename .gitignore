@@ -151,3 +151,7 @@ terraform.rc
 gws-credentials.json
 agent_go/migrate-mode-names
 diff.txt
+
+# Local Go workspace (machine-specific absolute paths; CI uses go mod edit -replace)
+go.work
+go.work.sum

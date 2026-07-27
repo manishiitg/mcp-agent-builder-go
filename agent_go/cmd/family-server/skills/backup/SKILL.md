@@ -55,3 +55,5 @@ Never write status fields into `backup.json`.
 4. **Write `backup/status.json`** — `state` (`healthy` for a verified remote, `local_only`, or `failed`), last attempt + success timestamps, per-destination result, any error, and the current source hash.
 
 5. **Tell the parent** in plain words: what was backed up, where, and whether it is durable (remote) or just a local checkpoint. If no remote is configured, offer to set one up.
+
+6. **Then end the turn with `suggest_actions`** — "Tell the parent" above is not the last step.
