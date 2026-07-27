@@ -161,8 +161,16 @@ github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0
 github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
 github.com/manishiitg/mcpagent v1.7.12-0.20260726181631-19351f785e95 h1:RRZiHTmEmqzGns4N+xj9cSsHlpBvQU5wUcCWAoymmW8=
 github.com/manishiitg/mcpagent v1.7.12-0.20260726181631-19351f785e95/go.mod h1:lQ26Ko6mMKGetWy/qYvpz2EBF0x/fX+Om11/5MQaOLk=
+github.com/manishiitg/mcpagent v1.7.12-0.20260727083918-2f2c462da135 h1:DEOSFBKI5C/e0rzSWbmzoG4OycKDwTcY2B+b2tWIunA=
+github.com/manishiitg/mcpagent v1.7.12-0.20260727083918-2f2c462da135/go.mod h1:lQ26Ko6mMKGetWy/qYvpz2EBF0x/fX+Om11/5MQaOLk=
+github.com/manishiitg/mcpagent v1.7.12-0.20260727121856-c1eeea17caae h1:KB0G34tzmJlhcIaOkc10jOsXuFPFBBpvxB1l37qX11E=
+github.com/manishiitg/mcpagent v1.7.12-0.20260727121856-c1eeea17caae/go.mod h1:HOr/rzEv4XpNOsbMxbA4SU7skeEsMWL0KJZ8JCsJmtU=
 github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260726183757-d6db65510e06 h1:TBSHT4gJxGKoIi5TfuL3m4q7N05dEJjUQ0tOiZPQ3RA=
 github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260726183757-d6db65510e06/go.mod h1:PRWPB4E2sH34IxW6aEbRm2v1V1kyxHLemHZVzX/DRWU=
+github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260727083858-e22a7e82fd38 h1:EHXPHQvPrZTCX7j+hxvOEVFSQawtC9xy1P3Ukx5fFis=
+github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260727083858-e22a7e82fd38/go.mod h1:PRWPB4E2sH34IxW6aEbRm2v1V1kyxHLemHZVzX/DRWU=
+github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260727121715-19b58a972fc5 h1:UxZXWHBexVZpD44vGuQZl/Ou9TmxDVlnUG8oJFL3hUo=
+github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260727121715-19b58a972fc5/go.mod h1:PRWPB4E2sH34IxW6aEbRm2v1V1kyxHLemHZVzX/DRWU=
 github.com/mark3labs/mcp-go v0.45.0 h1:s0S8qR/9fWaQ3pHxz7pm1uQ0DrswoSnRIxKIjbiQtkc=
 github.com/mark3labs/mcp-go v0.45.0/go.mod h1:YnJfOL382MIWDx1kMY+2zsRHU/q78dBg9aFb8W6Thdw=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=

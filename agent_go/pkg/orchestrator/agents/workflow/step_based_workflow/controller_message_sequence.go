@@ -14,6 +14,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -1042,6 +1043,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) closeMessageSequenceRuntime(session *
 	}
 	closeMessageSequenceCodingSession(runtime.Provider, runtime.SessionID, reason)
 	common.ClearSessionShellConfig(runtime.SessionID)
+	// Reclaim the isolated coding-CLI workspace for this runtime. Agent.Close
+	// above deliberately leaves it in place — a new Agent is built per turn, so
+	// closing one turn's agent must not delete the workspace the next turn
+	// resumes into. This IS the end of the sequence, so the dir goes now.
+	// Without it the workspace (and the CLI conversation inside it) leaks, one
+	// per message_sequence step.
+	mcpagent.RemoveIsolatedSessionWorkspace(runtime.SessionID)
 }
 
 func closeMessageSequenceCodingSession(provider string, ownerSessionID string, reason string) {

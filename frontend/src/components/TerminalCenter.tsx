@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, Network, Power, RefreshCw, Search, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, Network, Power, RefreshCw, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -2451,19 +2451,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const [dismissedErrorIDs, setDismissedErrorIDs] = useState<Set<string>>(() => readDismissedTerminalErrorIDs(currentSessionId))
   const [expandedErrorIDs, setExpandedErrorIDs] = useState<Set<string>>(() => new Set())
   const terminalColorScheme = DEFAULT_TERMINAL_COLOR_SCHEME
-  // Slim each agent rail card to one line whenever the report/plan pane is up
-  // (chat sits in the side-by-side split). When the workspace pane is hidden and
-  // chat is full-width, the cards render with their full meta row. NOTE: this is
-  // deliberately NOT keyed off focusedPane — clicking into the chat input must
-  // not resize the agent tree; only opening/closing the report/plan view does.
-  const slimAgentRail = useWorkflowStore(s => s.showChatArea && s.showWorkspacePane)
-  // Manual width override for the agent rail: null = follow the auto narrow
-  // behavior (slim in the report/plan rail), true/false = user-pinned narrow/wide.
-  // A toggle in the rail controls lets the user resize it themselves.
-  const [railManualNarrow, setRailManualNarrow] = useState<boolean | null>(true)
-  const railNarrow = railManualNarrow !== null ? railManualNarrow : slimAgentRail
+  // The rail is always narrow now — decided there was no case where expanding
+  // it to the wide, full-label layout earned back the space it cost. The
+  // narrow rail still surfaces Live/Issues/Done via the status-colored dots
+  // in renderRailControls; it just never grows a text-label column.
+  const railNarrow = true
   const [terminalRailFilter, setTerminalRailFilter] = useState<TerminalRailFilter>('all')
-  const [terminalRailSearch, setTerminalRailSearch] = useState('')
+  // The rail's search box was part of the wide-mode UI, now retired along with
+  // it (see railNarrow above). Kept as an always-empty constant rather than
+  // threading a removal through every filter/empty-state branch that reads it.
+  const terminalRailSearch = ''
   const [expandedRailGroupKeys, setExpandedRailGroupKeys] = useState<Set<string>>(() => new Set())
   const [collapsedRailSections, setCollapsedRailSections] = useState<Set<TerminalRailSection>>(() => new Set(['other']))
   const [error, setError] = useState<string | null>(null)
@@ -3567,13 +3564,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   }, [measureTerminalElementSize, sendTerminalSizeHint])
 
   const renderRailControls = () => {
-    const filterButtonClass = (filter: TerminalRailFilter) => (
-      `inline-flex min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded px-0.5 py-1.5 text-[10px] font-medium leading-none transition-colors ${
-        terminalRailFilter === filter
-          ? 'bg-neutral-800 text-neutral-100 shadow-sm'
-          : 'text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200'
-      }`
-    )
     const completedCount = groupedTerminals.sectionCounts.workflow + groupedTerminals.sectionCounts.review + groupedTerminals.sectionCounts.other
     const filters: Array<{ key: TerminalRailFilter; label: string; narrowLabel: string; count: number }> = [
       { key: 'all', label: 'All', narrowLabel: 'A', count: groupedTerminals.logicalGroups.length },
@@ -3585,31 +3575,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     return (
       <div key="terminal-rail-controls" data-testid="terminal-rail-controls" className="border-y border-neutral-800/80 bg-[#0b0d0c] p-2">
         <div className="flex min-w-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setRailManualNarrow(!railNarrow)}
-            data-testid="terminal-rail-toggle"
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-emerald-300"
-            title={railNarrow ? 'Expand agents' : 'Collapse agents'}
-            aria-label={railNarrow ? 'Expand agents' : 'Collapse agents'}
-          >
-            {railNarrow ? <ChevronsRight className="h-3 w-3" /> : <ChevronsLeft className="h-3 w-3" />}
-          </button>
-          <div className={`grid min-w-0 flex-1 grid-cols-4 gap-0.5 rounded bg-neutral-950/70 p-0.5 ${railNarrow ? 'hidden' : ''}`}>
-            {filters.map(filter => (
-              <button
-                key={filter.key}
-                type="button"
-                onClick={() => setTerminalRailFilter(filter.key)}
-                data-testid={`terminal-rail-filter-${filter.key}`}
-                className={filterButtonClass(filter.key)}
-                title={`Show ${filter.label.toLowerCase()} agents`}
-              >
-                <span className="max-w-full truncate whitespace-nowrap">{railNarrow ? filter.narrowLabel : filter.label}</span>
-                {!railNarrow && <span className="text-[9px] tabular-nums text-neutral-500">{filter.count}</span>}
-              </button>
-            ))}
-          </div>
           <button
             type="button"
             onClick={clearNonRunningTerminals}
@@ -3628,7 +3593,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
             do (emerald=live, amber=attention, sky=done) without needing text,
             and rows with nothing to report just don't render — four rows of
             "0" told the reader nothing four times over. */}
-        {railNarrow && filters.some(filter => filter.key !== 'all' && filter.count > 0) && (
+        {filters.some(filter => filter.key !== 'all' && filter.count > 0) && (
           <div className="mt-1 flex flex-col gap-0.5">
             {filters.filter(filter => filter.key !== 'all' && filter.count > 0).map(filter => (
               <button
@@ -3648,31 +3613,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
               </button>
             ))}
           </div>
-        )}
-        {!railNarrow && (
-          <label className="mt-2 flex h-7 items-center gap-1.5 rounded border border-neutral-800 bg-[#121413] px-2 text-neutral-500 focus-within:border-neutral-600 focus-within:text-neutral-300">
-            <Search className="h-3 w-3 shrink-0" aria-hidden />
-            <input
-            type="search"
-              data-testid="terminal-rail-search"
-              value={terminalRailSearch}
-              onChange={event => setTerminalRailSearch(event.target.value)}
-              placeholder="Find agent"
-              className="min-w-0 flex-1 bg-transparent text-[11px] text-neutral-200 outline-none placeholder:text-neutral-600"
-              aria-label="Find agent"
-            />
-            {terminalRailSearch && (
-              <button
-                type="button"
-                onClick={() => setTerminalRailSearch('')}
-                className="rounded p-0.5 text-neutral-600 hover:text-neutral-200"
-                title="Clear search"
-                aria-label="Clear search"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </label>
         )}
       </div>
     )

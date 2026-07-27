@@ -1580,7 +1580,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Save execution log so debug_step and direct file inspection can see fast-path output
 				hcpo.saveScriptedFastPathLog(ctx, stepIndex, artifactStepID, artifactStepPath, savedScriptPath, fastResult)
 			}
-			if fastResult.RanScript && fastResult.Success {
+			scriptedDecision := decideScriptedFastPath(fastResult)
+			learnCodePriorScript = scriptedDecision.PriorScript
+			learnCodePriorError = scriptedDecision.PriorError
+			switch {
+			case scriptedDecision.FastPathDone:
 				// Saved script executed and validated — skip LLM entirely
 				learnCodeFastPathDone = true
 				executionResult = fastResult.Output
@@ -1593,16 +1597,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// from a previous attempt), save the working version back to learnings.
 				learnCodeScriptNeedsSaving = true
 				hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted] Fast path succeeded for step %d — skipping execution loop", stepIndex+1))
-			} else if fastResult.RanScript {
+			case fastResult.RanScript:
 				// Script ran but failed — fall through to LLM for relearn
-				learnCodePriorScript = fastResult.ExistingScript
-				learnCodePriorError = fastResult.Error
 				hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted] Script failed for step %d — falling back to LLM with error context", stepIndex+1))
-			} else if fastResult.ExistingScript != "" {
+			case scriptedDecision.PriorScript != "":
 				// A saved script exists but wasn't executed successfully. Pass it to the LLM
 				// so it can adapt the working script rather than rewriting from scratch.
-				learnCodePriorScript = fastResult.ExistingScript
-				// No prior error — this is an update/reuse path, not a failure
 				hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted] Step %d found an existing saved script — LLM will update it in place", stepIndex+1))
 			}
 
