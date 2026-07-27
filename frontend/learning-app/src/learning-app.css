@@ -1127,3 +1127,8 @@ audio.fl-viewer-media { background: var(--surface); }
    than one voice, so a single-voice tier shows no pointless dropdown. */
 .fl-voice-pick { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: var(--text-caption); color: var(--muted, #8a8478); font-weight: 600; }
 .fl-voice-pick select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--heading); font: inherit; font-size: var(--text-caption); cursor: pointer; }
+
+/* Live transcription preview while recording — refreshes every couple of
+   seconds (see useMicDictation's LIVE_PREVIEW_INTERVAL_MS), not word-by-word.
+   Positioned like the mic error bubble since only one is ever shown at once. */
+.fl-mic-live-preview { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 5; width: max-content; max-width: 280px; padding: 7px 11px; border-radius: 10px; background: var(--navy); color: #fff; font-size: var(--text-caption); font-style: italic; line-height: 1.35; box-shadow: 0 10px 24px rgba(13, 35, 76, .25); }

@@ -23,7 +23,7 @@ export function MicButton({
   /** Only the visible composer should own the global shortcut. */
   shortcutEnabled?: boolean
 }) {
-  const { state, level, error, toggle, clearError } = useMicDictation(onText)
+  const { state, level, liveText, error, toggle, clearError } = useMicDictation(onText)
 
   // Cmd/Ctrl+Shift+M — deliberately not a bare key: a child typing an answer
   // must never trigger recording by accident.
@@ -66,6 +66,9 @@ export function MicButton({
           <span className="fl-mic-level" style={{ transform: `scale(${1 + level * 0.7})` }} aria-hidden="true" />
         )}
       </button>
+      {state === 'recording' && liveText && (
+        <span className="fl-mic-live-preview" role="status">{liveText}</span>
+      )}
       {error && (
         <span className="fl-mic-error" role="status" onClick={clearError} title="Dismiss">{error}</span>
       )}

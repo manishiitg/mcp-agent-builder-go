@@ -14,7 +14,7 @@ import { useMicDictation } from './useMicDictation'
  */
 export function MicTestButton({ tier }: { tier?: string }) {
   const [heard, setHeard] = useState<string | null>(null)
-  const { state, level, error, toggle } = useMicDictation((text) => setHeard(text), tier)
+  const { state, level, liveText, error, toggle } = useMicDictation((text) => setHeard(text), tier)
 
   const recording = state === 'recording'
   const busy = state === 'transcribing'
@@ -37,7 +37,7 @@ export function MicTestButton({ tier }: { tier?: string }) {
       {recording && (
         <span className="fl-mic-test-live">
           <span className="fl-mic-test-bar" style={{ transform: `scaleX(${0.15 + level * 0.85})` }} />
-          Say something…
+          {liveText || 'Say something…'}
         </span>
       )}
       {heard && <p className="fl-mic-test-heard">Heard: “{heard}”</p>}
