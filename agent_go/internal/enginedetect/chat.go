@@ -60,6 +60,14 @@ func Chat(ctx context.Context, provider, modelID, workingDir, systemPrompt strin
 	case "codex-cli":
 		llmProvider = llm.ProviderCodexCLI
 		defaultModel = "medium"
+		// Codex was the one provider here that ignored workingDir, so it ran in
+		// whatever directory the server process happened to be launched from and
+		// projected its per-session artifacts (AGENTS.md, .codex/config.toml)
+		// there. Found live: those files appearing in the source repo, because
+		// family-server had been started from agent_go/.
+		if workingDir != "" {
+			callOpts = append(callOpts, llm.WithCodexProjectDirID(workingDir))
+		}
 		if k := strings.TrimSpace(os.Getenv("CODEX_API_KEY")); k != "" {
 			keys.CodexCLI = &k
 		}
