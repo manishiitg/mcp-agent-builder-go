@@ -1,6 +1,26 @@
 # Family Learning — Architecture (working draft)
 
-**Status:** working draft · 2026-07-19 · branch `codex/family-learning-prd`
+**Status:** ⚠️ PARTIALLY STALE · last full pass 2026-07-19 · branch `codex/family-learning-prd`
+
+> **Read this first.** The product moved on after 2026-07-19 and this document
+> has not had a full pass since. Trust the code over this file where they
+> disagree. Known-stale areas, as of 2026-07-27:
+>
+> - **Workspace layout** — the `shared/` / `parent/` / `child/` split was
+>   replaced by self-contained activity folders (`<Subject>/<Topic>/<slug>/`).
+> - **Connectors** — the Gmail / `gws` integration was removed entirely.
+>   WhatsApp, Browser (CDP) and voice (STT/TTS) are current.
+> - **Secrets** — an encrypted store exists, reaching tools as
+>   `$SECRET_<NAME>` in both the shell and `agent_browser`, with
+>   `set_secret` / `delete_secret` from chat and a Settings form.
+> - **Security/isolation** — the parent shell is now deny-by-default
+>   (`StrictAllowlist`) and `agent_browser` rejects `file://` URLs outside the
+>   workspace/Downloads. See
+>   [`docs/agent-execution-architecture.html`](docs/agent-execution-architecture.html),
+>   which is canonical for execution and isolation — do not restate it here.
+>
+> The PRD this doc used to reference was deleted on 2026-07-27 as outdated; it
+> remains in git history.
 **Companion docs:** [`family-learning-design-guidelines.md`](family-learning-design-guidelines.md) · [`docs/agent-execution-architecture.html`](docs/agent-execution-architecture.html)
 
 Legend: ✅ locked · ⚠️ risk / gap to design · ❓ open decision
