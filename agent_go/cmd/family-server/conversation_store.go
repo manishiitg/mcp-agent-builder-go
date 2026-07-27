@@ -253,6 +253,20 @@ func loadStoredConversation(scope, id string) (storedConversation, bool) {
 	return conv, true
 }
 
+// binaryWorkspaceExts are file types this endpoint must never try to read as
+// text, regardless of size. Office/archive formats are compressed binary
+// containers (a .docx is literally a ZIP file) — reading one as text and
+// stuffing the raw bytes into a JSON string field produces exactly what a
+// parent will describe as "it shows encrypted"; there was previously no
+// extension check here at all, only a size cutoff, so any office file under
+// 1MB fell straight through and hit this. The frontend's NonPreviewableFile /
+// download path (see handleWorkspaceRaw's own comment, which already named
+// these types) already existed and worked — it was simply unreachable.
+var binaryWorkspaceExts = map[string]bool{
+	".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".ppt": true, ".pptx": true,
+	".zip": true, ".rar": true, ".7z": true, ".tar": true, ".gz": true,
+}
+
 // handleWorkspaceFile serves GET /api/workspace/file?path=... — read one
 // workspace text file. This is the generic file-system READ primitive the
 // file-based UI needs (drawer preview, the academic map, a saved conversation).
@@ -273,7 +287,7 @@ func handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	if info.Size() > 1024*1024 {
+	if info.Size() > 1024*1024 || binaryWorkspaceExts[strings.ToLower(filepath.Ext(abs))] {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"path": rel, "is_text": false, "size": info.Size()})
 		return
 	}
