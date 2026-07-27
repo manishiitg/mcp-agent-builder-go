@@ -157,31 +157,17 @@ connection pooling in `mcpagent` is independent of browser state.
 
 ### `file://` URLs are restricted to approved folders
 
-In CDP mode the browser is the user's **own Chrome** — a pre-existing host
-process the app does not own and does not sandbox. It reads with the user's
-full privileges, so no sandbox applied to the app's own child processes
-constrains it. Without a guard that makes `agent_browser` a way to read any
+In CDP mode the browser is the user's **own** Chrome — a host process this app
+neither owns nor sandboxes — so without a guard `agent_browser` can read any
 file on the machine, including files the shell tool is explicitly denied.
+`family-server` therefore rejects any `file://` URL resolving outside the
+workspace or host Downloads (`validateBrowserFileURLs` in
+`cmd/family-server/browser_tool.go`).
 
-Verified before the guard existed: `execute_shell_command` was refused a decoy
-file in the home directory (`Operation not permitted`) while `agent_browser`
-returned the same file's contents through `file://`.
-
-`family-server`'s `agent_browser` therefore validates every argument and
-rejects any `file://` URL resolving outside the workspace or the host Downloads
-folder (see `validateBrowserFileURLs` in `cmd/family-server/browser_tool.go`).
-Reads inside those roots stay allowed — previewing a generated page or a
-downloaded PDF is a legitimate use. Rejected spellings include absolute paths,
-`FILE://` casing, `view-source:file://` wrappers, `../` and `%2e%2e`
-URL-encoded traversal, symlinks inside the workspace pointing out of it, and
-remote `file://host/share` URLs. Validation runs *after* secret substitution,
-so what is checked is exactly what reaches the browser.
-
-Writes are a separate path and were already validated: artifact transfers go
-through `StageBrowserUpload` / `FinalizeBrowserArtifact`, which check
-destinations against the folder guard's write paths. Not yet verified: whether
-`agent-browser` exposes CDP's `Browser.setDownloadBehavior`, which could
-redirect downloads to an arbitrary directory.
+**Canonical reference:** [`docs/agent-execution-architecture.html`](../agent-execution-architecture.html)
+§4 — the measured before/after, the full list of rejected spellings, and how
+this relates to the shell and image-sub-agent boundaries. Keep the detail
+there, not here.
 
 ## Debugging and evidence
 
