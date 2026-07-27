@@ -172,6 +172,19 @@ func shellTool() agentsession.Tool {
 				ReadPaths:         readPaths,
 				WritePaths:        writePaths,
 				BlockedWritePaths: blockedWrites,
+				// StrictAllowlist: deny-by-default, same as the child's shell.
+				// Without it this shell could read anything in the real home
+				// directory — verified live with a decoy file, and predicted by
+				// RFC coding-agent-loop#181. That permissive default exists so
+				// AgentWorks WORKFLOWS can drive arbitrary user-installed CLIs
+				// (aws, gcloud, kubectl); SparkQuill needs none of them, and its
+				// last host-CLI dependency (gws) is gone, so the tradeoff that
+				// justified it does not apply here.
+				//
+				// This is also the one isolation that holds for EVERY provider:
+				// it runs in this process, not in the CLI, so switching engine
+				// in Settings cannot weaken it.
+				StrictAllowlist: true,
 			}
 			cmd, cleanup, err := iso.ExecuteIsolated(cctx, command, nil)
 			if err != nil {

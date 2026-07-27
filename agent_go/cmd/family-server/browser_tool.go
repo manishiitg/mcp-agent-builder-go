@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -84,6 +86,90 @@ func rawStringArgs(raw interface{}) []string {
 	}
 }
 
+// browserAllowedFileRoots are the only directories a file:// URL may resolve
+// into: the family workspace and the host Downloads folder — the same two the
+// browser tool is already granted through browserFolderGuardContext.
+func browserAllowedFileRoots() []string {
+	roots := []string{workspaceRoot()}
+	if dl := hostDownloadsPath(); dl != "" {
+		roots = append(roots, dl)
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if abs, err := filepath.Abs(strings.TrimSpace(r)); err == nil && abs != "" {
+			if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+				abs = resolved
+			}
+			out = append(out, filepath.Clean(abs))
+		}
+	}
+	return out
+}
+
+// validateBrowserFileURLs rejects a file:// URL pointing outside those roots.
+//
+// This closes a real, verified bypass: the CDP browser is the PARENT'S OWN
+// Chrome — a pre-existing host process family-server does not own — so it reads
+// with the user's full privileges and no sandbox we apply to our own child
+// processes can reach it. Confirmed live: execute_shell_command was denied
+// ~/sparkquill-decoy-test.txt ("Operation not permitted") while agent_browser
+// read the same file through file:// and returned its contents. Reads inside
+// the workspace/Downloads stay allowed, since previewing a generated page or a
+// downloaded PDF is a legitimate use.
+//
+// Checked AFTER secret substitution, so what is validated is exactly what
+// reaches the browser.
+func validateBrowserFileURLs(args []string) error {
+	roots := browserAllowedFileRoots()
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		idx := strings.Index(lower, "file:")
+		if idx < 0 {
+			continue
+		}
+		// Covers "file:..." and wrappers such as "view-source:file:...".
+		raw := strings.TrimSpace(arg[idx:])
+		u, err := url.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("refusing malformed file URL %q", raw)
+		}
+		// A host other than localhost would be a remote file share, not a
+		// local path — reject rather than guess at its meaning.
+		if h := strings.ToLower(u.Host); h != "" && h != "localhost" {
+			return fmt.Errorf("refusing non-local file URL %q", raw)
+		}
+		decoded, err := url.PathUnescape(u.Path)
+		if err != nil {
+			decoded = u.Path
+		}
+		if strings.TrimSpace(decoded) == "" {
+			return fmt.Errorf("refusing file URL with no path: %q", raw)
+		}
+		abs, err := filepath.Abs(decoded)
+		if err != nil {
+			return fmt.Errorf("refusing unresolvable file URL %q", raw)
+		}
+		// Resolve symlinks so a link inside the workspace cannot point out of
+		// it. A path that does not exist yet keeps its cleaned absolute form.
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		abs = filepath.Clean(abs)
+		allowed := false
+		for _, root := range roots {
+			if abs == root || strings.HasPrefix(abs, root+string(filepath.Separator)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("refusing to open %q: file:// URLs are limited to the family workspace and Downloads. "+
+				"The browser runs outside this app's sandbox, so it must not be used to read elsewhere on this computer", decoded)
+		}
+	}
+	return nil
+}
+
 func agentBrowserTool() agentsession.Tool {
 	return agentsession.Tool{
 		Name: "agent_browser",
@@ -142,6 +228,11 @@ func agentBrowserTool() agentsession.Tool {
 				resolved := rawStringArgs(rawArgs)
 				for i, a := range resolved {
 					resolved[i] = substituteSecretPlaceholders(a)
+				}
+				// Validate AFTER substitution: what is checked is exactly what
+				// reaches the browser.
+				if err := validateBrowserFileURLs(resolved); err != nil {
+					return "", err
 				}
 				args["args"] = resolved
 			}
