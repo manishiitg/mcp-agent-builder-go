@@ -155,3 +155,15 @@ diff.txt
 # Local Go workspace (machine-specific absolute paths; CI uses go mod edit -replace)
 go.work
 go.work.sum
+
+# Per-session artifacts the coding-CLI adapters project into an agent's working
+# directory and delete again at session cleanup (they carry an
+# "orchestrator-generated / auto-removed at session cleanup" header). They only
+# survive a run that was killed before cleanup, and they should never appear in
+# the repo at all — a run that writes them HERE means something passed the wrong
+# working directory (see enginedetect.Chat, where codex-cli used to drop it).
+# Ignored as a backstop so a regression can't commit them; if you ever want a
+# real, hand-written AGENTS.md tracked, force-add it and narrow this line.
+AGENTS.md
+.codex/
+transcript.txt
