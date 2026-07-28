@@ -564,6 +564,17 @@ Mark due when workflow behavior changed or learning state may be stale:
   learnings with **no** `_freshness.json` means there is no freshness baseline
   yet; mark due to establish one. When fresh (recently confirmed this run or
   last), record the confirmation cadence and skip with a next-check.
+- **contradiction (stale relative to a decision) — treat as higher severity than
+  the recency case above:** items in `_freshness.json` carrying `stale_since` and
+  `stale_reason` were last confirmed BEFORE an owner-side edit (a plan-mod call or
+  a soul.md change) and may now describe retired behavior. This is not the same as
+  neglect: a merely unconfirmed item is unverified, while a contradicted one is
+  actively wrong and is still being served to every run and advertised in the
+  skill index. The backend stamps these at run end and files a matching
+  `store-freshness:*` concern visible in `get_pulse_module_state`. Mark due
+  whenever such items exist, and prefer them over recency-only candidates. The fix
+  is to reconcile each item against the current plan/soul and update or retract
+  it — a re-confirmation clears the mark, so do not clear it by hand.
 
 The read-only reviewer identifies stale learning content and lock/unlock changes.
 The Pulse Fixer applies bounded learning and step-config edits directly. Use
@@ -581,6 +592,14 @@ has content but `knowledgebase/_freshness.json.last_confirmed_run` is many runs 
 long business interval behind the current run, so notes may have silently gone stale
 without any run contradicting them. A missing `_freshness.json` beside existing notes
 means no freshness baseline yet — mark due to establish one.
+
+Mark due at **higher priority** on a **contradiction** signal: notes carrying
+`stale_since` / `stale_reason` in `_freshness.json` were last confirmed before an
+owner-side plan or soul.md edit, so they may describe retired behavior while still
+being served. The backend stamps these at run end and files a matching
+`store-freshness:knowledgebase` concern in `get_pulse_module_state`. Reconcile each
+against the current plan/soul and update or retract it; a re-confirmation clears the
+mark, so never clear it by hand.
 
 `knowledgebase/context` is user-owned runtime business context. Read it for
 evidence, but do not rewrite it. The read-only reviewer proposes precise note or

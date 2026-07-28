@@ -65,6 +65,18 @@ type ItemFreshness struct {
 	LastConfirmedAt  string `json:"last_confirmed_at,omitempty"`
 	ConfirmCount     int    `json:"confirm_count"`
 	LastAction       string `json:"last_action,omitempty"`
+
+	// StaleSince records that an owner-side edit (a plan-mod tool call or a
+	// soul.md change) landed AFTER this item was last confirmed, so the item may
+	// now describe retired behavior.
+	//
+	// This is a different failure from ordinary neglect and must not be conflated
+	// with it: an item nobody has touched in a while is merely unverified, while
+	// an item contradicted by a newer decision is actively wrong and is still
+	// being served to every run. LastConfirmedAt alone cannot distinguish them —
+	// it is only ever compared to nothing.
+	StaleSince  string `json:"stale_since,omitempty"`
+	StaleReason string `json:"stale_reason,omitempty"`
 }
 
 // FreshnessLedger is the code-owned freshness record for one store.
