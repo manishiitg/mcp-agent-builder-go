@@ -731,3 +731,52 @@ describe('formatted view for a tmux terminal', () => {
     expect(answer).toBeDefined()
   })
 })
+
+describe('a terminal does not repeat its own name as an opening card', () => {
+  const t = terminal({ session_id: 's1', owner_id: 'exec-1', execution_id: 'exec-1' })
+  const ev = (id: string, type: string, execution_id: string, name = 'Review Artifact Drift Review') =>
+    evt({ id, type, session_id: 's1', execution_id, data: { data: { name } } as never })
+
+  // The panel header already shows this agent's name ("Review artifact drift
+  // review · Sub-agent · updated now"). Its own start card then repeated it
+  // verbatim as the very first thing in the transcript -- the same class of
+  // bug as the earlier "Full Run" container row, just for a plain sub-agent.
+  it('drops the terminal\'s own start card', () => {
+    const events = selectTerminalEvents(
+      [ev('start', 'background_agent_started', 'exec-1'), ev('msg', 'user_message', 'exec-1')],
+      t,
+    )
+    expect(events.map(e => e.id)).toEqual(['msg'])
+  })
+
+  // The completion card is kept: it carries the outcome, which the header
+  // does not show, unlike the start card which only repeats the name.
+  it('keeps the terminal\'s own completion card', () => {
+    const events = selectTerminalEvents(
+      [ev('start', 'background_agent_started', 'exec-1'), ev('done', 'background_agent_completed', 'exec-1')],
+      t,
+    )
+    expect(events.map(e => e.id)).toEqual(['done'])
+  })
+
+  // A CHILD's start card must survive -- it announces new work, not a
+  // restatement of the terminal the reader already opened. Modeled on the
+  // MAIN-agent transcript, where a background/sub-agent's start is rendered
+  // inline alongside the main terminal's own (this terminal's own start is
+  // an agent_start with the main terminal's OWN execution_id; the child's is
+  // a background_agent_started with its own, different, execution_id).
+  it('keeps a child agent\'s start card inline in the main-agent transcript', () => {
+    const mainTerminal = terminal({
+      session_id: 's1', owner_id: '', execution_id: 'main:s1',
+      execution_kind: 'main_agent',
+    } as never)
+    const events = selectTerminalEvents(
+      [
+        evt({ id: 'own-start', type: 'agent_start', session_id: 's1', execution_id: 'main:s1' }),
+        evt({ id: 'child', type: 'background_agent_started', session_id: 's1', execution_id: 'exec-2' }),
+      ],
+      mainTerminal,
+    )
+    expect(events.map(e => e.id)).toEqual(['child'])
+  })
+})

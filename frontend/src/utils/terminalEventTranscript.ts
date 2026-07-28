@@ -354,6 +354,28 @@ export type TranscriptItem =
  *     that list is genuinely unavailable; the fallback below is deliberately
  *     permissive (shows too much rather than silently hiding a live turn).
  */
+// A terminal's own opening lifecycle card duplicates its panel header: the
+// header already names this agent (title, "Sub-agent", state), so a
+// background_agent_started/orchestrator_agent_start card whose execution_id
+// IS this terminal's own execution_id adds nothing above what the reader
+// already knows just from having opened this terminal -- it is the same
+// bug as the earlier "Full Run" container row, just for a plain sub-agent
+// instead of a full_run: "Review artifact drift review" (header) followed
+// immediately by "Review Artifact Drift Review" (its own start card).
+//
+// Only the START half is dropped. The matching completion card is kept: it
+// carries genuinely new information the header does not show (status,
+// duration), where the start card only repeats the name.
+//
+// A CHILD's start card is never touched -- a child has its own distinct
+// execution_id, so this only ever matches the terminal's own root event.
+function isOwnTerminalLifecycleStart(event: PollingEvent, terminal: TerminalSnapshot): boolean {
+  const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
+  if (!descriptor?.start) return false
+  const terminalExecutionId = (terminal.execution_id || '').trim()
+  return Boolean(terminalExecutionId) && lifecycleExecutionID(event) === terminalExecutionId
+}
+
 export function selectTerminalEvents(
   events: PollingEvent[] | undefined,
   terminal: TerminalSnapshot | null | undefined,
@@ -409,6 +431,7 @@ export function selectTerminalEvents(
   // flushes) would otherwise render in arrival order and read as scrambled.
   return matched
     .filter(isTranscriptEvent)
+    .filter(event => !isOwnTerminalLifecycleStart(event, terminal))
     .map((event, index) => ({ event, index }))
     .sort((a, b) => {
       const at = Date.parse(a.event.timestamp || '')
