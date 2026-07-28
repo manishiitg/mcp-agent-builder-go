@@ -1044,7 +1044,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadExecutionResultsFromLogs(ctx cont
 // paths — so without this a step has no idea whether it is the first of nine or
 // the last, or what runs next. It only ever saw backward context via
 // buildPreviousStepsSummary. Knowing the shape of the run is what lets a step
-// judge how much to do here versus leave for a later step, and recognise when
+// judge how much to do here versus leave for a later step, and recognize when
 // its own output is the thing another step is waiting on.
 //
 // Consumers are listed ONLY when a later step actually declares a dependency on
