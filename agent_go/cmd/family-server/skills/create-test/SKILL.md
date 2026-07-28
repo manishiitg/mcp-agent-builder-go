@@ -22,13 +22,50 @@ description: Create a practice test for the child from their materials and progr
 
 3. **Write the test** as static HTML in the activity folder (see
    `skills/_shared/html-design.md`). It should read like a real test paper: a clear
-   header with her name, grade/board, subject and topic, then numbered questions
-   easy → harder, marks shown as a `.badge`, and genuine space to work under each.
+   header with her name, grade/board, subject and topic, then numbered questions,
+   marks shown as a `.badge`, and genuine space to work under each.
    Cover the methods that appear in her own materials, and make **most of the
    questions target the specific weak moves from step 1** — a couple she can already
    do (so it isn't demoralizing), the rest on the moves that actually need work,
    approached from a different angle than last time rather than the same items again.
    No answers, and no hints that give them away.
+
+   **Difficulty must genuinely escalate, not just reword the same problem.** A test
+   that swaps the cover story every question while the operation count stays flat
+   (ten word problems that are all "add three decimals," just about a different
+   thing each time) is NOT increasingly difficult, even numbered 1 to 10 — it just
+   *looks* like a ladder. Structure each section into real tiers, and make every
+   tier genuinely harder than the last in at least one of: number of steps, number
+   of concepts combined, or reasoning demanded (recall < apply < combine <
+   justify/critique):
+   - **Warm-up** (1–2 questions): single concept, single step — she should get
+     these without a hitch; this is what keeps it from being demoralizing.
+   - **Core practice** (the bulk): the actual weak moves from step 1, one to two
+     steps, varied cover stories — this is where most marks live.
+   - **Stretch** (a handful): multi-step, or combines two concepts from this test
+     (e.g. a decimal calculation whose result then has to be read off a
+     pictograph), or asks her to justify a claim rather than just compute one.
+   - **Challenge** (1–2 questions, clearly marked, at the very end): genuinely
+     hard for her grade — non-routine, synthesizes more than one idea, or asks her
+     to find/explain an error in someone else's reasoning. It is fine if she
+     cannot finish this one; that is what makes it a real challenge question, not
+     a demoralizing one (there are only one or two, and they come after she has
+     already succeeded on everything else).
+   Vary the **question format** across the set too, not just the numbers — mix
+   direct computation, word problems, "find the error" / critique-a-claim
+   questions, and (where the topic supports it) a short design/justify question —
+   real diversity is different *kinds* of thinking, not just different nouns in
+   the same template.
+
+   **Never reuse the same numbers or scenario across two places in the same
+   file.** A worked example, a "closed" hidden example, and a graded question must
+   each be a genuinely different problem — reusing a scenario (even with a
+   different label) hands her the answer to a real question the moment she
+   glances at an example, or makes two questions read as the same one repeated.
+   Before moving on, scan your OWN draft question-by-question and confirm no two
+   entries (examples included) share the same numbers, story, or answer, and that
+   each question asks for exactly one clear, unambiguous deliverable.
+
    A test still stays a real test paper first: if a genuine interest from
    `interests.md` fits ONE word problem's cover story naturally (a fraction
    question set at a Quidditch match, say), use it — but never at the cost of
