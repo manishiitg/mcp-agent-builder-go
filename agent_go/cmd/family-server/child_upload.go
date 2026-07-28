@@ -11,22 +11,23 @@ import (
 // handoffs.
 func currentUploadPath() (string, bool) { return resolveWorkspacePath("current-upload.json") }
 
-func loadCurrentUpload() (string, bool) {
+func loadCurrentUpload() (path string, note string, ok bool) {
 	abs, ok := currentUploadPath()
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	b, err := os.ReadFile(abs)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	var v struct {
 		Path string `json:"path"`
+		Note string `json:"note,omitempty"`
 	}
 	if json.Unmarshal(b, &v) != nil || strings.TrimSpace(v.Path) == "" {
-		return "", false
+		return "", "", false
 	}
-	return v.Path, true
+	return v.Path, strings.TrimSpace(v.Note), true
 }
 
 func clearCurrentUpload() {
@@ -48,10 +49,17 @@ func clearCurrentUpload() {
 // model's, only the "which folder" guess is removed. Always clears the
 // pointer so the same photo is never re-flagged as new on a later turn.
 func pendingChildUploadSuffix() string {
-	path, ok := loadCurrentUpload()
+	path, note, ok := loadCurrentUpload()
 	if !ok {
 		return ""
 	}
 	clearCurrentUpload()
-	return "\n\n(I uploaded it to " + path + ")"
+	suffix := "\n\n(I uploaded it to " + path + ")"
+	if note != "" {
+		// A parent's own note about the photo (e.g. a WhatsApp caption sent
+		// alongside it) — passed through as context, not as a claim to trust
+		// blindly; the model still looks at the file itself via read_image.
+		suffix += " (note from the parent: " + note + ")"
+	}
+	return suffix
 }

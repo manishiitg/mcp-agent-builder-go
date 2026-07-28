@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -187,11 +188,18 @@ func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filenam
 // download or transcription just degrades gracefully (any accompanying text
 // still gets handled normally; a voice note that fails to transcribe still
 // gets saved and silently acknowledged, same as an image/document).
-// savedPath is the workspace-relative path of what's left in inbox/ after this
-// call, or "" when nothing remains there (download failed, or a voice note
-// was transcribed and its audio removed) — the caller uses it to tell the
-// NEXT real turn what's waiting, see waBot.noteUpload.
-func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceText string, savedPath string) {
+// savedPath is the workspace-relative path of what's left after this call
+// (inside destDir, or "" when nothing remains there — download failed, or a
+// voice note was transcribed and its audio removed) — the caller uses it to
+// tell the NEXT real turn what's waiting, see waBot.noteUpload.
+//
+// destDir is workspace-relative; "" defaults to "inbox" (the normal parent
+// path). A caller that recognized an "@child" mention (see
+// extractChildMention) passes the child's current activity dir instead, so
+// the attachment lands where the child's own turn will actually look for it
+// (via pendingChildUploadSuffix), not in the shared inbox no child turn ever
+// reads from.
+func (a *waAccount) ingestWhatsAppMedia(evt *events.Message, destDir string) (saved bool, voiceText string, savedPath string) {
 	m := evt.Message
 	if m == nil {
 		return false, "", ""
@@ -228,7 +236,10 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 	}
 
 	name = sanitizeInboxName(name)
-	relDir := "inbox"
+	relDir := strings.TrimSpace(destDir)
+	if relDir == "" {
+		relDir = "inbox"
+	}
 	absDir := filepath.Join(familyDataDir(), "workspace", relDir)
 	if err := os.MkdirAll(absDir, 0o700); err != nil {
 		log.Printf("[whatsapp] inbox mkdir failed: %v", err)
@@ -786,6 +797,24 @@ func sanitizeInboxName(name string) string {
 	return name
 }
 
+// childMentionRe matches "@child" as a whole word, case-insensitive, so
+// "@childhood" or "email@childcare.com" don't false-positive.
+var childMentionRe = regexp.MustCompile(`(?i)@child\b`)
+
+// extractChildMention reports whether the parent tagged this message for the
+// child (see childMentionRe) and returns the caption with the mention itself
+// stripped out — e.g. "@child she got stuck on Q5" -> ("she got stuck on
+// Q5", true). Whitespace left behind by removing the mention is collapsed so
+// the remaining text reads naturally either way ("@child" was at the start,
+// the end, or mid-sentence).
+func extractChildMention(text string) (rest string, isChild bool) {
+	if !childMentionRe.MatchString(text) {
+		return text, false
+	}
+	stripped := childMentionRe.ReplaceAllString(text, " ")
+	return strings.Join(strings.Fields(stripped), " "), true
+}
+
 func extractWhatsAppMessageText(m *waProto.Message) string {
 	if m == nil {
 		return ""
@@ -816,15 +845,65 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 	text := extractWhatsAppMessageText(evt.Message)
 
-	// An image or document attachment: save it straight into the inbox and
-	// stop there — only text messages ever reach the agent. A bare attachment
-	// with no caption just gets acknowledged (👀) below and never starts a
-	// turn; the file waits in the inbox, NAMED in w.pendingUploads, until the
-	// next real turn — which gets told about it explicitly (see below), not
-	// left to notice it on its own. A voice note is the exception: its local
+	// "@child" anywhere in the caption routes THIS attachment straight into
+	// the child's current activity instead of the shared parent inbox — see
+	// extractChildMention. A bare voice note (no caption) never matches this,
+	// so voice notes keep going through the normal parent-conversation path
+	// below unchanged.
+	childNote, isChildTarget := extractChildMention(text)
+	var childActivityDir string
+	destDir := ""
+	if isChildTarget {
+		childActivityDir = currentActivityDir()
+		if childActivityDir != "" {
+			destDir = childActivityDir
+		}
+	}
+
+	// An image or document attachment: save it straight into the inbox (or,
+	// for an "@child" message, the child's current activity folder) and stop
+	// there — only text messages ever reach the agent. A bare attachment with
+	// no caption just gets acknowledged (👀) below and never starts a turn;
+	// the file waits in the inbox, NAMED in w.pendingUploads, until the next
+	// real turn — which gets told about it explicitly (see below), not left
+	// to notice it on its own. A voice note is the exception: its local
 	// transcript (see ingestWhatsAppMedia) stands in for typed text below, so
 	// it drives a turn just like normal.
-	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt)
+	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt, destDir)
+
+	if isChildTarget {
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		label := parentChildLabel(s.Child)
+		if childActivityDir == "" {
+			// destDir was left "" above, so any attachment already fell back
+			// to the shared inbox — not lost, just not where it needs to be.
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "There's no activity open for "+label+" right now, so I couldn't send this to her — open one on her side first, or resend without @child and I'll take a look myself.", 2, 15*time.Second, "@child no-activity")
+			}
+			return
+		}
+		if !gotMedia || savedPath == "" {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "Attach a photo along with @child and I'll add it to "+label+"'s current activity.", 2, 15*time.Second, "@child no-attachment")
+			}
+			return
+		}
+		saveCurrentUploadWithNote(savedPath, childNote)
+		title := childActivityDir
+		if act, ok := loadActivity(childActivityDir); ok && act.Title != "" {
+			title = act.Title
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "✅")
+		if acct.client != nil {
+			_ = acct.sendTextWithRetry(info.Chat, fmt.Sprintf("Added to %q — I'll look at it as soon as %s is back in that activity.", title, label), 2, 15*time.Second, "@child confirmation")
+		}
+		return
+	}
+
 	if strings.TrimSpace(text) == "" && voiceText != "" {
 		text = "🎙️ " + voiceText
 		// Confirm what was actually heard right away, decoupled from the real
