@@ -25,14 +25,14 @@ import "strings"
 // IMPORTANT — Unknown is not "does not own a terminal". Most events in flight
 // today declare no kind at all, so consumers must gate on
 // `kind != ExecutionKindUnknown && !kind.OwnsTerminal()` and otherwise fall
-// through to their existing behaviour. Treating an undeclared kind as
+// through to their existing behavior. Treating an undeclared kind as
 // "suppress" would silently delete almost every terminal.
 //
 // Historically these facts were re-derived independently in the terminal store,
 // the rail, and the event dispatcher, each by pattern-matching ID prefixes
 // ("msgseq-", "exec-", "workflow-full-"). Every divergence between those copies
 // was a bug: message-sequence items fragmenting into empty terminals, "Full run"
-// appearing in the rail as if it were an agent, scripted steps synthesising fake
+// appearing in the rail as if it were an agent, scripted steps synthesizing fake
 // conversation panes. Declaring the kind once at creation removes the whole class.
 type ExecutionKind string
 
@@ -129,7 +129,7 @@ func (k ExecutionKind) IsContainer() bool {
 }
 
 // ParseExecutionKind maps a wire/metadata string onto a kind, tolerating the
-// legacy aliases that predate this type. Unrecognised values return
+// legacy aliases that predate this type. Unrecognized values return
 // ExecutionKindUnknown so callers fall back to legacy inference instead of
 // silently mis-classifying work.
 func ParseExecutionKind(value string) ExecutionKind {

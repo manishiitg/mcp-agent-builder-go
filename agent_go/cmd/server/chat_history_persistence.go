@@ -968,10 +968,6 @@ func chatHistoryDisplayKey(sessionID string, _ map[string]string) string {
 	return "session:" + sessionID
 }
 
-func chatHistoryIsScheduleSessionID(sessionID string) bool {
-	return strings.HasPrefix(sessionID, "schedule-") || strings.HasPrefix(sessionID, "sched_")
-}
-
 func chatHistoryScheduleSessionPrefix(sessionID string) string {
 	if strings.HasPrefix(sessionID, "schedule-") {
 		parts := strings.SplitN(sessionID, "--", 2)

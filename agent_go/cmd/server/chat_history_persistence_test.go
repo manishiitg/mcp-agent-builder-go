@@ -750,7 +750,7 @@ func TestListChatHistorySessionsFromDiskKeepsEveryMultiAgentScheduleRun(t *testi
 // Renamed from ...CollapsesScheduleRunsBySchedule. That test asserted every run
 // of a schedule but the newest was hidden, on the reasoning that schedule-runs.json
 // held the detail instead -- it does not (status and duration only, no error text,
-// no route into the conversation). The assertion pinned the behaviour that hid a
+// no route into the conversation). The assertion pinned the behavior that hid a
 // failed run and a whole day of history, so it is inverted here rather than kept.
 func TestListWorkflowChatHistorySessionsKeepsEveryScheduleRun(t *testing.T) {
 	root := t.TempDir()

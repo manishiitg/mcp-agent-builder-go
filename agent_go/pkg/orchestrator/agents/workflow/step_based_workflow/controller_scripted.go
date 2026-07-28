@@ -173,7 +173,7 @@ type ScriptedFastPathDecision struct {
 // Extracted as a pure function because the fallback is the feature: when a
 // scripted step's main.py fails, the run must NOT fail — it must fall back to
 // the LLM carrying the broken script and its error so the model can fix it.
-// Inline, that behaviour was three easily-transposed branches with no test
+// Inline, that behavior was three easily-transposed branches with no test
 // coverage at all.
 func decideScriptedFastPath(result *ScriptedFastPathResult) ScriptedFastPathDecision {
 	if result == nil {
