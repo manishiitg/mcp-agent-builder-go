@@ -16,11 +16,24 @@ waits for its synchronous result. The parent then validates and applies any
 bounded safe edit. Do not create a dedicated KB-maintenance agent or use
 `run_in_background` for this review.
 
-Return only: `module=knowledgebase_health`, `verdict`, `next_check`, and ordered
-`findings`. Every finding includes stable `finding_id`, `target_key`, severity,
-plain-language summary, precise `evidence`, a bounded `recommended_fix`, exact
-`verification`, and `user_judgment_required` with reason. Use the remaining
-document only as the KB-health audit checklist.
+Return only: `module=knowledgebase_health`, `verdict`, `note_shape`, `next_check`,
+and ordered `findings`. Every finding includes stable `finding_id`, `target_key`,
+severity, plain-language summary, precise `evidence`, a bounded
+`recommended_fix`, exact `verification`, and `user_judgment_required` with
+reason. Use the remaining document only as the KB-health audit checklist.
+
+`note_shape` is **required — measure it, do not estimate.** Report the number of
+topic files, the largest two with their sizes, whether any note is dominated by
+repeated near-identical dated entries, and whether `notes/_index.json` matches
+what is actually on disk. Fill it on every review, including a `clean` one.
+
+It is required because shape review is otherwise reliably skipped: content
+correctness is more interesting than file shape, so attention goes there while
+notes quietly accrete. In one live workflow a single topic note reached ~100 KB
+across 147 near-duplicate sections before a human compacted it by hand. A note
+that repeats the same conclusion every run is not accumulating knowledge — it is
+accumulating restatements, and the fix is condensation into
+`## Historical context`, not another appended entry.
 
 Read `builder/improve.html` for prior context and matching open findings, but do
 not write it. Use targeted semantic reads only; do not inspect CSS, load HTML

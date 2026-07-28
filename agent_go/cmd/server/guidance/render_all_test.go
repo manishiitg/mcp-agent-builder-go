@@ -775,6 +775,11 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"call_generic_agent",
 			"Pulse Fixer",
 			"recommended_fix",
+			// Structure review is skipped unless the output contract forces it:
+			// consecutive real reviews returned detailed content findings while
+			// SKILL.md grew to 272 lines, never once mentioning its shape.
+			"`index_shape`",
+			"do not estimate",
 		},
 		"improve-knowledge": {
 			"READ-ONLY KNOWLEDGEBASE HEALTH REVIEW",
@@ -783,6 +788,10 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"call_generic_agent",
 			"Pulse Fixer",
 			"recommended_fix",
+			// Same reason as improve-learnings: a topic note reached ~100 KB of
+			// near-duplicate sections before anyone looked at its shape.
+			"`note_shape`",
+			"do not estimate",
 		},
 		"improve-database": {
 			"READ-ONLY DATABASE HEALTH REVIEW",
