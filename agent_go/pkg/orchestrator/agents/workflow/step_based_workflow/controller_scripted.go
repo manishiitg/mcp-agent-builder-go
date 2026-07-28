@@ -911,7 +911,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 	if err != nil {
 		// Transport failure or a non-2xx status: the request never became a
 		// process, so this is the harness failing, not the script.
-		return "", -1, fmt.Errorf("%w: %v", ErrScriptedHarnessRejection, err)
+		return "", -1, fmt.Errorf("%w: %w", ErrScriptedHarnessRejection, err)
 	}
 
 	combined := result.Stdout
