@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -871,6 +872,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		return "", -1, fmt.Errorf("create shell request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// /api/execute is the workspace service's one token-protected route. This path
+	// builds its own request instead of going through workspace.Client.doRequest,
+	// which is where the token is normally attached — so without this every scripted
+	// fast-path run failed with "workspace execution authorization required" at
+	// exit_code=-1 and 0ms, before the script ran at all.
+	//
+	// That failure was extremely misleading. The step agent sees only the error text
+	// and its own script, so it blames the script: one workflow concluded DB_PATH was
+	// missing and removed the required-env read, another concluded Python's sqlite3
+	// could not open the database and switched to the sqlite3 CLI, writing that into
+	// its permanent learnings. Neither had run a single line of Python.
+	if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
+		req.Header.Set("X-Workspace-Token", token)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -913,8 +928,23 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		mainPyAbsPath,
 	))
 	if !apiResp.Success && exitCode == 0 {
+		// The workspace API rejected the request itself, so the interpreter was
+		// never started. Say that explicitly: this error is handed straight to the
+		// step agent as "Previous Script (Failed)", and on its own the text reads
+		// like the script misbehaved. Two workflows have already rewritten a
+		// perfectly good script against this error — one deciding DB_PATH was
+		// missing, another deciding Python's sqlite3 could not open the database
+		// and switching to the sqlite3 CLI permanently in its learnings — when
+		// neither had executed a single line.
 		exitCode = -1
-		execErr = fmt.Errorf("workspace API error: %s", apiResp.Error)
+		execErr = fmt.Errorf(
+			"workspace API error: %s\n\n"+
+				"IMPORTANT: this is a harness failure, not a script failure. The workspace API "+
+				"refused to start the process, so main.py never ran and produced no output. "+
+				"Do NOT rewrite the script, remove required env vars, or switch libraries to "+
+				"work around this — the script's behavior is untested by this run. Report the "+
+				"error as-is with a CONCERNS: line and leave the script alone.",
+			apiResp.Error)
 	}
 	return combined, exitCode, execErr
 }
