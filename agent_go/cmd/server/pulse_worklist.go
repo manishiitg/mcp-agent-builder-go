@@ -928,11 +928,20 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// already stamps the ones that have been reconciled; nothing counted
 			// the remainder, so Gate had to derive it from the files each run.
 			planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
+			// What each reviewer has actually been finding. Without this the choice
+			// between modules is a guess: nothing distinguished a module that keeps
+			// surfacing real breakage from one that returns clean every time.
+			reviewHistory, historyErr := step_based_workflow.LoadModuleReviewHistory(ctx, workspacePath, 3)
+			if historyErr != nil {
+				log.Printf("[PULSE] get_pulse_module_state: review history unavailable for %s: %v", workspacePath, historyErr)
+			}
 			payload, _ := json.Marshal(map[string]interface{}{
-				"modules":             states,
-				"open_concerns":       concerns,
-				"concerns_note":       "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
-				"plan_change_backlog": planBacklog,
+				"modules":               states,
+				"open_concerns":         concerns,
+				"concerns_note":         "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
+				"plan_change_backlog":   planBacklog,
+				"module_review_history": reviewHistory,
+				"review_history_note":   "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 			})
 			return string(payload), nil
 		},

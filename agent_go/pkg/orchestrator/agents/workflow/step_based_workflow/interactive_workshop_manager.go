@@ -3562,6 +3562,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					iwm.controller.recordStepConcerns(ctx, module, map[string]string{
 						ConcernPhaseReview: completed,
 					})
+					// Log that this reviewer ran and what it concluded. Without it,
+					// Gate cannot tell a module that keeps finding real problems from
+					// one that never finds anything, and its next choice is a guess.
+					// Recorded here rather than by the Fixer: reviews that found live
+					// breakages have gone entirely unrecorded because the Fixer never
+					// called mark_pulse_module_result.
+					if err := RecordPulseReview(ctx, iwm.controller.GetWorkspacePath(), module, reviewRunID, pulseRunID, resultPath, completed); err != nil {
+						logger.Warn(fmt.Sprintf("⚠️ Failed to log Pulse review outcome for %s: %v", module, err))
+					}
 					return fmt.Sprintf("Pulse reviewer completed and was persisted.\nmodule: %s\nreview_result_path: %s\nRead that file before applying or recording fixes.", module, resultPath), nil
 				}
 				incompleteErr = completionErr
