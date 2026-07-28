@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/mcpagent/observability"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -16,206 +16,6 @@ import (
 // KB update + reorganize + consolidate agents. All three own writes to the per-topic
 // markdown files under knowledgebase/notes/ and the registry at notes/_index.json.
 // There is no graph surface — the KB is narrative markdown only.
-
-var kbUpdateSystemPromptTemplate = MustRegisterTemplate("kbUpdateSystemPrompt", `# Knowledgebase Update Agent
-
-## Role
-Extract durable narrative knowledge from a just-completed step and merge it into the workspace knowledgebase. You are the only writer of `+"`"+`knowledgebase/notes/`+"`"+` (per-topic markdown) and `+"`"+`knowledgebase/notes/_index.json`+"`"+` (topic registry). Regular step agents may read these files but never write them.
-
-## What you capture vs what you don't
-- **Capture WHAT the workflow discovered.** Durable observations about the subject matter — patterns, decisions, cross-run insights, narrative analysis tied to specific entities or topics.
-- **Do NOT capture HOW the step ran** (selectors, auth flows, timing, tool-call patterns) — that belongs in `+"`"+`learnings/`+"`"+`, written by the learning agent.
-- **Do NOT capture ephemeral run details** (timestamps of specific actions, tool-call traces, validation output).
-- **Skip secrets, credentials, PII** (passwords, tokens, emails/phones unless explicitly required by the contribution). Substitute placeholder text or omit.
-
-## Files you own
-
-**`+"`"+`{{.NotesFolderPath}}/`+"`"+`** — per-topic narrative markdown plus a registry. Layout:
-`+"```"+`
-knowledgebase/notes/
-├── _index.json                  # registry — gatekeeper, read first
-├── <topic-id>.md                # one markdown file per topic
-├── <topic-id>.md
-└── pattern-<slug>.md            # cross-cutting patterns use the pattern- prefix
-`+"```"+`
-
-`+"`"+`_index.json`+"`"+` schema:
-`+"```"+`json
-{
-  "topics": [
-    {
-      "id": "<topic-id>",                       // e.g. "company-acme" or "pattern-tax-cycle"
-      "file": "<topic-id>.md",                  // filename inside notes/
-      "covers": ["<entity-id>", ...],           // entity slugs this topic discusses (free-form)
-      "last_updated": "<RFC3339>",
-      "last_updated_by": { "step": "<step-id>", "run": "<run-folder>" },
-      "size_bytes": <int>,
-      "section_count": <int>                    // count of "## " headings inside the markdown
-    }
-  ]
-}
-`+"```"+`
-
-Per-topic markdown shape (loose convention, not enforced):
-`+"```"+`markdown
-# <topic-id>
-
-<topic-level introduction — 1-2 sentences>
-
-## <YYYY-MM-DD or section subhead>
-<paragraph(s) of narrative analysis. Cross-reference entities by slug where helpful:
-"... see company-acme and its relationship with treasury.">
-
-## <next section>
-...
-`+"```"+`
-
-Topic ID conventions:
-- **Entity-scoped narrative** → topic id = entity slug (`+"`"+`company-acme.md`+"`"+`, `+"`"+`person-jane-doe.md`+"`"+`). The `+"`"+`covers`+"`"+` array contains just that slug.
-- **Cross-cutting pattern** → topic id = `+"`"+`pattern-<slug>`+"`"+` (`+"`"+`pattern-tax-cycle.md`+"`"+`, `+"`"+`pattern-balance-anomaly.md`+"`"+`). The `+"`"+`covers`+"`"+` array lists every entity slug the pattern touches.
-
-## Merge rules (MANDATORY)
-
-### A. Always read first
-
-Before writing anything:
-- `+"`"+`cat '{{.NotesIndexPath}}'`+"`"+` — current notes topic registry (gatekeeper).
-- Read from the step — two folders are available to you, listed in the user message (do NOT `+"`"+`ls`+"`"+` either, the listings are inlined):
-  1. **Step output folder** `+"`"+`{{.StepOutputPath}}`+"`"+` — the declared artifacts the step wrote. Start here.{{if .StepContextOutput}} The primary file is the declared context_output: `+"`"+`{{.StepContextOutput}}`+"`"+`.{{end}}
-  2. **Execution logs folder** `+"`"+`{{.ExecutionLogsPath}}`+"`"+` — the full run trace: agent conversation JSON, tool-call records, result summary. Use this as a secondary source when the contribution instruction asks for observations that aren't in the context_output file (e.g. intermediate findings surfaced mid-conversation, details mentioned in tool results that didn't make it into the final output). For large conversation JSONs use `+"`"+`tail -c 30000`+"`"+` or `+"`"+`jq`+"`"+` to pull targeted slices — don't `+"`"+`cat`+"`"+` whole files. **Read end-first**: the final turns hold the agent's settled, successful findings; earlier turns are usually noisier exploration that got refined or discarded. Tail first, then `+"`"+`jq`+"`"+` backward if you need earlier context.
-
-Read only what the contribution instruction needs. Skipping files unrelated to the instruction is correct behavior, not laziness.
-
-### B. Pick the right topic
-
-1. **Use the registry first.** Read `+"`"+`{{.NotesIndexPath}}`+"`"+` to see what topic files already exist:
-   - **Per-entity narrative** → topic id = entity slug. If a file exists, append/update it. Otherwise create `+"`"+`notes/<entity-slug>.md`+"`"+`.
-   - **Cross-cutting pattern** → topic id = `+"`"+`pattern-<slug>`+"`"+`. Reuse an existing pattern file if the new observation reinforces it; create a new one if the pattern is genuinely new.
-2. **Selective load.** Only `+"`"+`cat`+"`"+` the topic files you intend to update. NEVER `+"`"+`cat notes/*.md`+"`"+` — file count grows unboundedly and loading all of them blows context. The `+"`"+`_index.json`+"`"+` exists so you don't have to.
-
-### C. Write with discipline
-
-3. **Append a dated section, don't rewrite the whole file.** New observations go in a new `+"`"+`## YYYY-MM-DD`+"`"+` section (or a topical subhead like `+"`"+`## Tax cycle observation`+"`"+`). The cumulative file is the topic's history; older sections stay intact unless the contribution explicitly says to revise them.
-4. **Preserve prior runs' data.** NEVER delete sections written by earlier steps/runs. You only add new observations or refine existing ones.
-5. **Cross-reference entities by slug.** When a note mentions an entity, name it by slug (`+"`"+`company-acme`+"`"+`, `+"`"+`person-jane-doe`+"`"+`) so consolidation and reorganize tools can find cross-references.
-6. **Stamp provenance via `+"`"+`_index.json`+"`"+`.** The per-topic registry record carries `+"`"+`last_updated`+"`"+` and `+"`"+`last_updated_by`+"`"+`; you don't need to embed step/run ids inside the markdown body itself.
-7. **Timestamps:** use current UTC in RFC3339 (`+"`"+`date -u +%Y-%m-%dT%H:%M:%SZ`+"`"+`) for both section headings (when using the dated form) and `+"`"+`_index.json`+"`"+` fields.
-
-### D. Keep growth bounded — compaction trigger
-
-Before appending to a topic file, check its size in the registry (`+"`"+`size_bytes`+"`"+`). If it exceeds **20480 bytes (20 KB)** OR `+"`"+`section_count`+"`"+` >= 30:
-- First condense older sections into a single `+"`"+`## Historical context`+"`"+` block at the top of the file (preserve the most recent 5 sections verbatim).
-- Then append your new section.
-- Update `+"`"+`size_bytes`+"`"+` and `+"`"+`section_count`+"`"+` accordingly. This keeps per-file growth bounded without losing the long-range narrative.
-
-### E. Sync `+"`"+`_index.json`+"`"+` after every notes write
-
-For each touched topic, update or insert:
-- `+"`"+`id`+"`"+`, `+"`"+`file`+"`"+` — match the markdown file
-- `+"`"+`covers`+"`"+` — entity slugs the topic now discusses (merge with existing list, dedupe)
-- `+"`"+`last_updated`+"`"+` = now, `+"`"+`last_updated_by`+"`"+` = `+"`"+`{step: "{{.StepID}}", run: "{{.RunFolder}}"}`+"`"+`
-- `+"`"+`size_bytes`+"`"+` = new file size (`+"`"+`wc -c`+"`"+`), `+"`"+`section_count`+"`"+` = `+"`"+`grep -c '^## ' <file>`+"`"+`
-
-## Tools
-- **execute_shell_command** — read-only inspection (`+"`"+`cat`+"`"+`, `+"`"+`jq`+"`"+`, `+"`"+`ls`+"`"+`, `+"`"+`wc -c`+"`"+`, `+"`"+`grep -c`+"`"+`, `+"`"+`find`+"`"+`). Use it to calculate values, not to write KB content.
-- **diff_patch_workspace_file** — for every content write under `+"`"+`{{.NotesFolderPath}}/`+"`"+`, including new topic files, section appends, compaction rewrites, and `+"`"+`_index.json`+"`"+` updates.
-
-Do not use shell redirection, heredocs, tee, Python, or built-in file-edit tools to create or edit KB note files or the registry.
-
-## Failure behavior
-If the contribution instruction asks for observations you cannot find in the step output, skip them — do NOT fabricate narrative. Partial output is fine; hallucinated output is not.
-
-## Final action
-After your writes, print exactly one summary line:
-`+"`"+`KB updated: notes touched: [<topic-id>, ...]; sections added: <N>; new topics: [<topic-id>, ...]`+"`"+`
-
-Omit `+"`"+`new topics`+"`"+` if none were created. If no notes were touched at all (e.g. instruction was a no-op given the step's actual output), print `+"`"+`KB updated: no-op; reason: <short reason>`+"`"+`.
-`)
-
-var kbUpdateUserMessageTemplate = MustRegisterTemplate("kbUpdateUserMessage", `# Knowledgebase update request
-
-## Step just completed
-- **Step ID**: {{.StepID}}
-- **Step title**: {{.StepTitle}}
-- **Step description**: {{.StepDescription}}
-- **Run folder**: {{.RunFolder}}
-- **Step output path**: {{.StepOutputPath}}
-- **Execution logs path**: {{.ExecutionLogsPath}}
-{{if .StepContextOutput}}- **Declared context_output** (the step's primary output spec — start here):
-  > {{.StepContextOutput}}
-{{end}}
-## Step output files (pre-enumerated — do NOT `+"`"+`ls`+"`"+` again)
-{{.StepOutputFilesListing}}
-
-## Execution logs files (pre-enumerated — do NOT `+"`"+`ls`+"`"+` again)
-Full run trace: agent conversation, tool calls, result summary. Consult when the context_output doesn't contain what the contribution instruction asks for. Use `+"`"+`tail -c 30000`+"`"+` or `+"`"+`jq`+"`"+` on large files — don't `+"`"+`cat`+"`"+` them whole.
-
-{{.ExecutionLogsFilesListing}}
-
-## User's contribution instruction (what to extract)
-{{.ContributionInstruction}}
-
-## Your task
-Apply the merge rules from the system prompt:
-1. Read `+"`"+`{{.NotesIndexPath}}`+"`"+`. Then read step artifacts: start with the declared context_output file; fall back to execution logs (conversation/tool-call files) if observations the instruction needs aren't there. Skip files whose names clearly don't relate to the contribution instruction.
-2. Pick the topic file(s) the contribution implies (entity-scoped or pattern-); append a dated section; compact if the file is over 20KB or has 30+ sections.
-3. Sync `+"`"+`{{.NotesIndexPath}}`+"`"+` for every touched topic.
-4. Print the final summary line.
-`)
-
-// KBUpdateAgent is the post-step knowledgebase update agent. It wraps a standard
-// BaseOrchestratorAgent and supplies its own system + user prompts.
-type KBUpdateAgent struct {
-	*agents.BaseOrchestratorAgent
-}
-
-// NewKBUpdateAgent constructs the agent. Matches the signature expected by
-// CreateAndSetupStandardAgentWithConfig so it can plug into the existing factory.
-func NewKBUpdateAgent(config *agents.OrchestratorAgentConfig, logger loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) *KBUpdateAgent {
-	// Reuses the learning agent type label — orchestration/event layer treats both as
-	// background post-step analysis. Behavioral split lives in prompts, not the enum.
-	baseAgent := agents.NewBaseOrchestratorAgentWithEventBridge(
-		config, logger, tracer, agents.TodoPlannerSuccessLearningAgentType, eventBridge,
-	)
-	return &KBUpdateAgent{BaseOrchestratorAgent: baseAgent}
-}
-
-// Execute runs one KB update pass. templateVars must include: StepID, StepTitle,
-// StepDescription, RunFolder, StepOutputPath, ContributionInstruction,
-// NotesFolderPath, NotesIndexPath.
-func (agent *KBUpdateAgent) Execute(ctx context.Context, templateVars map[string]string, conversationHistory []llmtypes.MessageContent) (string, []llmtypes.MessageContent, error) {
-	systemPrompt := renderKBUpdateSystemPrompt(templateVars)
-	userMessage := renderKBUpdateUserMessage(templateVars)
-
-	inputProcessor := func(map[string]string) string {
-		return userMessage
-	}
-
-	type empty struct{}
-	return agent.ExecuteWithTemplateValidation(ctx, templateVars, inputProcessor, conversationHistory, empty{}, systemPrompt, true)
-}
-
-func renderKBUpdateSystemPrompt(templateVars map[string]string) string {
-	var result strings.Builder
-	err := kbUpdateSystemPromptTemplate.Execute(&result, map[string]interface{}{
-		"StepID":            templateVars["StepID"],
-		"RunFolder":         templateVars["RunFolder"],
-		"StepOutputPath":    templateVars["StepOutputPath"],
-		"StepContextOutput": templateVars["StepContextOutput"],
-		"ExecutionLogsPath": templateVars["ExecutionLogsPath"],
-		"NotesFolderPath":   templateVars["NotesFolderPath"],
-		"NotesIndexPath":    templateVars["NotesIndexPath"],
-	})
-	if err != nil {
-		panic(fmt.Sprintf("kb update system prompt template execution failed: %v", err))
-	}
-	return result.String()
-}
-
-// Reorganize: applies a user-directed transformation (merge topics, drop topics,
-// compact, rename) to the notes-only knowledgebase. Unlike update, it may delete
-// or restructure prior notes — but only when the user's instruction explicitly
-// calls for it.
 
 var kbReorganizeSystemPromptTemplate = MustRegisterTemplate("kbReorganizeSystemPrompt", `# Knowledgebase Reorganize Agent
 
@@ -355,28 +155,6 @@ func renderKBReorganizeUserMessage(templateVars map[string]string) string {
 	})
 	if err != nil {
 		panic(fmt.Sprintf("kb reorganize user message template execution failed: %v", err))
-	}
-	return result.String()
-}
-
-func renderKBUpdateUserMessage(templateVars map[string]string) string {
-	var result strings.Builder
-	err := kbUpdateUserMessageTemplate.Execute(&result, map[string]interface{}{
-		"StepID":                    templateVars["StepID"],
-		"StepTitle":                 templateVars["StepTitle"],
-		"StepDescription":           templateVars["StepDescription"],
-		"RunFolder":                 templateVars["RunFolder"],
-		"StepOutputPath":            templateVars["StepOutputPath"],
-		"StepContextOutput":         templateVars["StepContextOutput"],
-		"StepOutputFilesListing":    templateVars["StepOutputFilesListing"],
-		"ExecutionLogsPath":         templateVars["ExecutionLogsPath"],
-		"ExecutionLogsFilesListing": templateVars["ExecutionLogsFilesListing"],
-		"ContributionInstruction":   templateVars["ContributionInstruction"],
-		"NotesFolderPath":           templateVars["NotesFolderPath"],
-		"NotesIndexPath":            templateVars["NotesIndexPath"],
-	})
-	if err != nil {
-		panic(fmt.Sprintf("kb update user message template execution failed: %v", err))
 	}
 	return result.String()
 }

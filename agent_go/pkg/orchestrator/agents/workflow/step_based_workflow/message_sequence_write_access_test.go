@@ -123,10 +123,9 @@ func TestMessageSequenceItemInheritsStepWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
-		DBAccess:                 DBAccessReadWrite,
-		KnowledgebaseAccess:      KBAccessReadWrite,
-		KnowledgebaseWriteMethod: KBWriteMethodDirect,
-		LearningsAccess:          LearningsAccessReadWrite,
+		DBAccess:            DBAccessReadWrite,
+		KnowledgebaseAccess: KBAccessReadWrite,
+		LearningsAccess:     LearningsAccessReadWrite,
 	}
 
 	got := hcpo.resolveMessageSequenceItemWriteAccess(config, MessageSequenceItem{
@@ -142,10 +141,9 @@ func TestMessageSequenceItemOverrideNarrowsStepWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
-		DBAccess:                 DBAccessReadWrite,
-		KnowledgebaseAccess:      KBAccessReadWrite,
-		KnowledgebaseWriteMethod: KBWriteMethodDirect,
-		LearningsAccess:          LearningsAccessReadWrite,
+		DBAccess:            DBAccessReadWrite,
+		KnowledgebaseAccess: KBAccessReadWrite,
+		LearningsAccess:     LearningsAccessReadWrite,
 	}
 
 	got := hcpo.resolveMessageSequenceItemWriteAccess(config, MessageSequenceItem{

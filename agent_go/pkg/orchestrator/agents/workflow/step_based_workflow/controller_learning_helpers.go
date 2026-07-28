@@ -65,35 +65,6 @@ func canWriteLearnings(agentConfigs *AgentConfigs, step PlanStepInterface, isEva
 	return strings.TrimSpace(agentConfigs.LearningObjective) != ""
 }
 
-// Learnings write methods — mirror of knowledgebase_write_method. Only meaningful
-// when canWriteLearnings reports true for the step (access == read-write AND
-// objective non-empty AND not eval/routing). lock_learnings is still honored
-// separately: locked → no writes regardless of method.
-const (
-	// LearnWriteMethodAgent — historical "agent" mode (separate post-step
-	// learning agent). Retired: kept as a string constant so existing
-	// plan.json files that still carry "learnings_write_method": "agent"
-	// parse cleanly and are then coerced to direct.
-	LearnWriteMethodAgent = "agent"
-	// LearnWriteMethodDirect hands learnings writes to the step agent itself
-	// via a dedicated post-completion user-message turn. The only supported
-	// runtime method.
-	LearnWriteMethodDirect = "direct"
-)
-
-// resolveLearningsWriteMethod is now a constant — every step uses direct mode.
-// The argument is retained for call-site compatibility (and to give grep a
-// hint that the field still exists in plan.json) but its value is ignored.
-//
-// Historically the default was "agent" (a separate post-step learning agent
-// analyzed the trace and wrote SKILL.md). That mode was retired: it cost an
-// extra LLM turn per step, doubled [AUTO-NOTIFICATION] noise, and direct mode
-// produces equivalent SKILL.md content via the step agent's own post-completion
-// turn at a fraction of the cost. See controller_execution.go for the trigger.
-func resolveLearningsWriteMethod(_ *AgentConfigs) string {
-	return LearnWriteMethodDirect
-}
-
 // shouldDirectWriteLearnings reports whether the step is configured for
 // learnings writes. Since direct is now the only mode, this collapses to
 // "is the step access+objective gate satisfied?". Kept as a named helper so

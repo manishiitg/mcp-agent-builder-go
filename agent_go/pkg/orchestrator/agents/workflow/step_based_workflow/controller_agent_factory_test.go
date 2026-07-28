@@ -71,7 +71,7 @@ func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(
 		"step-1", "eval-result", KBAccessNone, LearningsAccessNone,
-		KBWriteMethodAgent, resolveEffectiveDBAccess(nil, true, false),
+		resolveEffectiveDBAccess(nil, true, false),
 	)
 	dbPath := "Workflow/testing/db"
 	if !slices.Contains(readPaths, dbPath) {
@@ -412,7 +412,6 @@ func TestSetupExecutionFolderGuardHonorsLearningsAndKBNone(t *testing.T) {
 		"forbidden-probe",
 		KBAccessNone,
 		LearningsAccessNone,
-		KBWriteMethodAgent,
 		DBAccessReadWrite,
 	)
 
@@ -458,7 +457,6 @@ func TestSetupExecutionFolderGuardGivesGenericReviewerWorkflowWideReadOnlyView(t
 		"generic-parent-report-health",
 		KBAccessRead,
 		LearningsAccessRead,
-		KBWriteMethodAgent,
 		DBAccessRead,
 	)
 
@@ -509,7 +507,6 @@ func TestSetupExecutionFolderGuardAddsOnlyConfiguredStores(t *testing.T) {
 		"kb-direct",
 		KBAccessReadWrite,
 		LearningsAccessRead,
-		KBWriteMethodDirect,
 		DBAccessReadWrite,
 	)
 

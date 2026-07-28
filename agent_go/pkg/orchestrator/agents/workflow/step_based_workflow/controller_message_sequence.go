@@ -154,8 +154,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceClosingItems(ctx conte
 	// Agent-mode contributions are handled by maybeEnqueueKBUpdate after the
 	// sequence completes (see the message-sequence dispatch path).
 	if contribution := strings.TrimSpace(kbContributionForPrompt(cfg)); contribution != "" &&
-		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) &&
-		resolveKnowledgebaseWriteMethod(cfg) == KBWriteMethodDirect {
+		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) {
 		var b strings.Builder
 		b.WriteString("## Knowledgebase Contribution (dedicated turn)\n\n")
 		b.WriteString("The sequence is complete. In this turn you have WRITE access to the knowledgebase. Fulfill this step's knowledgebase contribution, then stop.\n\n")
@@ -1124,7 +1123,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	return MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1138,7 +1137,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	return MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1146,7 +1145,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
 	return MessageSequenceWriteAccess{
 		DB:            requested.DB && resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())),
 		Learnings:     requested.Learnings && resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1185,7 +1184,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	if itemWriteAccess.DB && dbAccess == DBAccessReadWrite {
 		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
 	}
-	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect {
+	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
 	if itemWriteAccess.Learnings && learningsAccess == LearningsAccessReadWrite {
@@ -1262,8 +1261,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 		"UseCodeStyleRules":         "",
 		"KbAccess":                  kbAccess,
 		"KbAccessLabel":             kbAccessLabel(kbAccess),
-		"KbWriteMethod":             KBWriteMethodDirect,
-		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, KBWriteMethodDirect, "", hcpo.messageSequenceAbsPath(filepath.Join(KnowledgebaseFolderName, KBNotesFolderName))),
+		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, "", hcpo.messageSequenceAbsPath(filepath.Join(KnowledgebaseFolderName, KBNotesFolderName))),
 		"MessageSequenceAccessNote": buildMessageSequenceAccessNote(writeAccess),
 		"HasLearnings":              "false",
 		"CurrentDate":               time.Now().Format("2006-01-02"),

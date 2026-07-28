@@ -4305,7 +4305,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"clear_fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_tier, servers, tools, enabled_custom_tools, enabled_skills, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, transport, description_reviewed, knowledgebase_access, knowledgebase_contribution, knowledgebase_write_method, learnings_access, learnings_write_method, db_access, review_notes, declared_execution_mode, declared_execution_mode_reason, global_skill_objective, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
+					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_tier, servers, tools, enabled_custom_tools, enabled_skills, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, transport, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, db_access, review_notes, declared_execution_mode, declared_execution_mode_reason, global_skill_objective, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
 				},
 				"servers": map[string]interface{}{
 					"type":        "array",
@@ -4342,7 +4342,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "write", "read-write", "none"},
-					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute (writer is decided by knowledgebase_write_method: direct = normal path where the step agent writes notes/ inline with diff_patch_workspace_file, agent = separate post-step KB writer only when the user explicitly asks); 'none' — no access. Omit to keep the default.",
+					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
 				},
 				"learnings_access": map[string]interface{}{
 					"type":        "string",
@@ -4356,17 +4356,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"knowledgebase_contribution": map[string]interface{}{
 					"type":        "string",
-					"description": "Natural-language contribution instruction. In knowledgebase_write_method='direct', it becomes the step agent's contribution contract, injected into its post-completion self-review turn. In knowledgebase_write_method='agent', it is handed to a separate post-step KB update agent; choose agent only when the user explicitly asks for that separate reviewer/writer. KB writes only happen when this is non-empty AND knowledgebase_access grants write. Leave empty to skip KB updates for this step.",
-				},
-				"knowledgebase_write_method": map[string]interface{}{
-					"type":        "string",
-					"enum":        []string{"agent", "direct"},
-					"description": "How KB writes happen when knowledgebase_access permits them. Set 'direct' explicitly for new KB-writing steps: the step agent writes notes/ itself with diff_patch_workspace_file during execution, with an automatic post-completion self-review turn that enumerates contributions against the contract. Choose 'agent' only when the user explicitly asks for a separate post-step KB writer/reviewer. Do not choose agent merely because the output is long, messy, or analytical. If omitted, runtime fallback may be agent, so do not omit this field when enabling KB writes.",
-				},
-				"learnings_write_method": map[string]interface{}{
-					"type":        "string",
-					"enum":        []string{"direct"},
-					"description": "Optional and effectively ignored. SKILL.md writes always happen through the step agent's own dedicated post-completion turn (shell + diff_patch_workspace_file, folder guard widens only for that turn). Omit this field from new plans; if set, only 'direct' is accepted. Concurrency across parallel sub-agents is serialized by an in-process mutex.",
+					"description": "Natural-language contribution instruction. It becomes the step agent's contribution contract, injected into its post-completion self-review turn. KB writes only happen when this is non-empty AND knowledgebase_access grants write — an empty contribution means the step performs no KB writes regardless of access. Leave empty to skip KB updates for this step.",
 				},
 				"disable_parallel_tool_execution": map[string]interface{}{
 					"type":        "boolean",
@@ -4575,19 +4565,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.KnowledgebaseContribution = s
 				}
 			}
-			if val, ok := args["knowledgebase_write_method"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.KnowledgebaseWriteMethod = s
-				}
-			}
 			if val, ok := args["learnings_access"]; ok && val != nil {
 				if s, ok := val.(string); ok {
 					targetConfig.AgentConfigs.LearningsAccess = s
-				}
-			}
-			if val, ok := args["learnings_write_method"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.LearningsWriteMethod = s
 				}
 			}
 			if val, ok := args["db_access"]; ok && val != nil {
@@ -4887,39 +4867,21 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// 8. Validate KB write-method enum + direct-mode pairing: direct write
 			// needs access permitting writes AND a non-empty contribution string
 			// (which becomes the self-review turn's contract).
-			kbWriteMethodRaw := strings.TrimSpace(targetConfig.AgentConfigs.KnowledgebaseWriteMethod)
-			if kbWriteMethodRaw != "" && kbWriteMethodRaw != KBWriteMethodAgent && kbWriteMethodRaw != KBWriteMethodDirect {
-				errors = append(errors, fmt.Sprintf("knowledgebase_write_method %q is not recognized. Valid values: \"agent\", \"direct\".", kbWriteMethodRaw))
+			// KB writes always run as the step agent's own closing turn now, so the
+			// access + contribution requirements apply whenever write access is granted
+			// — not only when "direct" was set explicitly.
+			if kbAccessAllowsWrite(targetConfig.AgentConfigs.KnowledgebaseAccess) &&
+				strings.TrimSpace(targetConfig.AgentConfigs.KnowledgebaseContribution) == "" {
+				warnings = append(warnings, "knowledgebase_access grants writes but knowledgebase_contribution is empty, so this step performs no KB writes. Set a contribution or drop the write access.")
 			}
-			if kbWriteMethodRaw == KBWriteMethodDirect {
-				if !kbAccessAllowsWrite(targetConfig.AgentConfigs.KnowledgebaseAccess) {
-					errors = append(errors, fmt.Sprintf("knowledgebase_write_method=\"direct\" requires knowledgebase_access that permits writes (\"write\" or \"read-write\"). Current value: %q.", targetConfig.AgentConfigs.KnowledgebaseAccess))
-				}
-				if strings.TrimSpace(targetConfig.AgentConfigs.KnowledgebaseContribution) == "" {
-					errors = append(errors, "knowledgebase_write_method=\"direct\" requires a non-empty knowledgebase_contribution. The contribution becomes the step agent's contract for the automatic post-completion self-review turn; without it the self-review has nothing to verify against.")
-				}
-			}
-
-			// Nudge: write access + a contribution are set but write-method is
-			// omitted, so runtime silently falls back to the separate post-step
-			// "agent" writer. Surface it (non-blocking) so the inline ("direct")
-			// vs separate ("agent") writer choice is explicit, not defaulted.
-			if kbWriteMethodRaw == "" &&
-				kbAccessAllowsWrite(targetConfig.AgentConfigs.KnowledgebaseAccess) &&
-				strings.TrimSpace(targetConfig.AgentConfigs.KnowledgebaseContribution) != "" {
-				warnings = append(warnings, "knowledgebase_write_method is unset while KB write access is granted; runtime defaults to the separate post-step \"agent\" writer. Set it to \"direct\" for inline writes by the step agent, or \"agent\" to make that choice explicit.")
+			if strings.TrimSpace(targetConfig.AgentConfigs.KnowledgebaseContribution) != "" &&
+				!kbAccessAllowsWrite(targetConfig.AgentConfigs.KnowledgebaseAccess) {
+				errors = append(errors, fmt.Sprintf("knowledgebase_contribution is set but knowledgebase_access %q does not permit writes. Use \"write\" or \"read-write\", or clear the contribution.", targetConfig.AgentConfigs.KnowledgebaseAccess))
 			}
 
-			// 9. Validate learnings write-method enum + direct-mode pairing.
-			// SKILL.md writes always happen through the step agent's own
-			// post-completion turn (resolveLearningsWriteMethod is hardcoded to
-			// direct). The legacy "agent" value still parses cleanly — it is
-			// silently coerced to direct so old plan.json files keep loading.
-			// The access + objective gates below are the actual write contract.
-			learningsWriteMethodRaw := strings.TrimSpace(targetConfig.AgentConfigs.LearningsWriteMethod)
-			if learningsWriteMethodRaw != "" && learningsWriteMethodRaw != LearnWriteMethodAgent && learningsWriteMethodRaw != LearnWriteMethodDirect {
-				errors = append(errors, fmt.Sprintf("learnings_write_method %q is not recognized. Omit the field or set it to \"direct\".", learningsWriteMethodRaw))
-			}
+			// 9. Learnings write contract: access + objective. SKILL.md writes always
+			// happen through the step agent's own post-completion turn; there is no
+			// write-method choice to validate.
 			if effectiveAccess == LearningsAccessReadWrite {
 				if !hasObjective {
 					errors = append(errors, "learnings_access=\"read-write\" requires a non-empty learning_objective. The objective is injected into the step's dedicated learnings turn as the SKILL.md contribution contract; without it the turn has nothing to instruct.")
@@ -8197,8 +8159,8 @@ This is a **read-only review**:
 7. **Do not drift into full redesign**: You may suggest a concrete correction, but the primary task is to review and explain what is wrong with the current decision.
 8. **Check portability and secrecy**: Flag plan-visible secrets, user-specific values, absolute paths, run-folder-specific values, and brittle environment assumptions.
 9. **Check persistent-store discipline**: Stores survive across runs — `+"`"+`learnings/`+"`"+` (HOW to run), `+"`knowledgebase/context/`"+` (user-supplied runtime business context), `+"`"+`knowledgebase/notes/`+"`"+` (workflow-discovered durable narrative observations), `+"`"+`db/db.sqlite`+"`"+` (structured durable SQLite tables for cross-run state, read live by HTML reports via `+"`window.report.query`"+`), and `+"`db/assets/`"+` (durable media/file assets referenced by db rows or reports). Flag steps that confuse these stores: stashing durable facts in learnings or plan.json, stashing user-owned context in notes, writing report data only to run folders, embedding assets as blobs, or failing to declare `+"`"+`knowledgebase_contribution`+"`"+` / `+"`"+`db/README.md`+"`"+` contracts when steps produce persistent facts.
-10. **Check learning and mode discipline**: A step should write learnings only when it has reusable HOW-to-run knowledge worth capturing across runs, and it must have a concrete `+"`"+`learning_objective`+"`"+`. `+"`"+`learnings_write_method`+"`"+` is compatibility-only; do not add it to new plans. Deterministic API/SDK calls, CLI commands, data fetching, known pagination, stable parsing/normalization/transforms, and mechanical persistence should be `+"`"+`scripted`+"`"+` from initial design with an authored/tested `+"`learnings/{step-id}/main.py`"+`; no run-history threshold is required to choose that mode. Browser/UI work, adaptive discovery, and judgment stay agentic. The 10+ representative-run bar applies to `+"`"+`lock_code`+"`"+`, not to declaring deterministic work scripted.
-11. **Check KB discipline**: KB writes require a useful `+"`"+`knowledgebase_contribution`+"`"+`, correct read/write access, and preferably `+"`"+`knowledgebase_write_method=\"direct\"`+"`"+`. `+"`knowledgebase/context/`"+` should contain user-supplied runtime context; `+"`knowledgebase/notes/`"+` should contain workflow-discovered durable narrative observations, not execution recipes, raw rows, or volatile run state. If `+"`"+`knowledgebase/notes/_index.json`+"`"+` exists, it must point to coherent topic notes.
+10. **Check learning and mode discipline**: A step should write learnings only when it has reusable HOW-to-run knowledge worth capturing across runs, and it must have a concrete `+"`"+`learning_objective`+"`"+`. Deterministic API/SDK calls, CLI commands, data fetching, known pagination, stable parsing/normalization/transforms, and mechanical persistence should be `+"`"+`scripted`+"`"+` from initial design with an authored/tested `+"`learnings/{step-id}/main.py`"+`; no run-history threshold is required to choose that mode. Browser/UI work, adaptive discovery, and judgment stay agentic. The 10+ representative-run bar applies to `+"`"+`lock_code`+"`"+`, not to declaring deterministic work scripted.
+11. **Check KB discipline**: KB writes require a useful `+"`"+`knowledgebase_contribution`+"`"+` and correct read/write access. `+"`knowledgebase/context/`"+` should contain user-supplied runtime context; `+"`knowledgebase/notes/`"+` should contain workflow-discovered durable narrative observations, not execution recipes, raw rows, or volatile run state. If `+"`"+`knowledgebase/notes/_index.json`+"`"+` exists, it must point to coherent topic notes.
 12. **Check db discipline**: `+"`"+`db/db.sqlite`+"`"+` should be a clean relational surface: each table documented in `+"`"+`db/README.md`+"`"+` with DDL, PRIMARY KEY, upsert rule (`+"`INSERT ... ON CONFLICT`"+`), indexes, writer ownership, group separation, report consumers (the HTML report `+"`window.report.query`"+` SQL that reads it), and correct references to durable assets under `+"`db/assets/`"+`.
 13. **Check skill discipline**: Installed skills live under `+"`skills/{folder}/SKILL.md`"+` and are reusable capability instructions shared across workflows. Review workflow-selected skills and per-step `+"`enabled_skills`"+` against the actual plan. Flag missing needed skills, selected-but-unused skills, descriptions that reference skills not enabled for the execution agent, malformed skill folders, and skills that duplicate workflow-specific learnings or contain workflow-specific secrets/paths/run state. Do not assume workflow-level selected skills automatically reach step execution; verify step-level `+"`enabled_skills`"+` when runtime requires explicit scoping.
 14. **Check lock consistency**: Three locks freeze workflow state — `+"`"+`lock_learnings`+"`"+` (per-step: freezes SKILL.md writes), `+"`"+`lock_code`+"`"+` (per-step, scripted only: freezes `+"`"+`learnings/{step-id}/main.py`+"`"+` against fix-loop rewrites), `+"`"+`lock_knowledgebase`+"`"+` (workflow-level: freezes post-step KB update agent). Flag inconsistency like `+"`"+`lock_code=true`+"`"+` without the scripted evidence gate or `+"`"+`lock_learnings=true`+"`"+` with stale/mismatched learning metadata. If a step description has meaningfully changed since the last review, recommend clearing `+"`"+`description_reviewed`+"`"+` and re-reviewing before keeping the locks.
@@ -8833,11 +8795,9 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 			lockCode := false
 			learningAccess := ""
 			learningObjective := ""
-			learningsWriteMethod := ""
 			learningOptedIn := false
 			kbAccess := ""
 			kbContribution := ""
-			kbWriteMethod := ""
 			enabledSkills := []string{}
 			reviewNotes := ""
 			descriptionReviewed := false
@@ -8857,18 +8817,16 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 				}
 				learningAccess = resolveLearningsAccess(sc.AgentConfigs)
 				learningObjective = sc.AgentConfigs.LearningObjective
-				learningsWriteMethod = resolveLearningsWriteMethod(sc.AgentConfigs)
 				learningOptedIn = learningAccess == LearningsAccessReadWrite && strings.TrimSpace(learningObjective) != ""
 				kbAccess = sc.AgentConfigs.KnowledgebaseAccess
 				kbContribution = sc.AgentConfigs.KnowledgebaseContribution
-				kbWriteMethod = resolveKnowledgebaseWriteMethod(sc.AgentConfigs)
 				enabledSkills = append([]string(nil), sc.AgentConfigs.EnabledSkills...)
 				reviewNotes = sc.AgentConfigs.ReviewNotes
 				if sc.AgentConfigs.DescriptionReviewed != nil {
 					descriptionReviewed = *sc.AgentConfigs.DescriptionReviewed
 				}
 			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, lock_learnings=%v, lock_code=%v, enabled_skills=%v, learnings_access=%s, learning_objective=%q, learnings_write_method=%s, learning_opted_in=%v, kb_access=%s, kb_contribution=%q, kb_write_method=%s, description_reviewed=%v, review_notes=%q\n", sc.ID, mode, declaredMode, successfulRuns, lockLearnings, lockCode, enabledSkills, learningAccess, learningObjective, learningsWriteMethod, learningOptedIn, kbAccess, kbContribution, kbWriteMethod, descriptionReviewed, reviewNotes))
+			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, lock_learnings=%v, lock_code=%v, enabled_skills=%v, learnings_access=%s, learning_objective=%q, learning_opted_in=%v, kb_access=%s, kb_contribution=%q, description_reviewed=%v, review_notes=%q\n", sc.ID, mode, declaredMode, successfulRuns, lockLearnings, lockCode, enabledSkills, learningAccess, learningObjective, learningOptedIn, kbAccess, kbContribution, descriptionReviewed, reviewNotes))
 		}
 		stepConfigSummary = sb.String()
 	}

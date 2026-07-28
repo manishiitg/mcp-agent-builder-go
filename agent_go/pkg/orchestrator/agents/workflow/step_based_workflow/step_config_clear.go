@@ -60,14 +60,10 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 	// String fields (empty string + omitempty drops the key)
 	case "learnings_access":
 		ac.LearningsAccess = ""
-	case "learnings_write_method":
-		ac.LearningsWriteMethod = ""
 	case "knowledgebase_access":
 		ac.KnowledgebaseAccess = ""
 	case "knowledgebase_contribution":
 		ac.KnowledgebaseContribution = ""
-	case "knowledgebase_write_method":
-		ac.KnowledgebaseWriteMethod = ""
 	case "db_access":
 		ac.DBAccess = ""
 	case "review_notes":

@@ -175,19 +175,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueWorkflowContinuationRecovery(ctx
 			switch phase {
 			case workflowContinuationPhaseLearningAgent:
 				// Agent-mode post-step learning is retired (see
-				// resolveLearningsWriteMethod / controller_execution.go). Any
+				// controller_execution.go). Any
 				// pending learning-agent phase recovered from disk is marked
 				// skipped — direct-mode learning happens inline in the step
 				// agent's own post-completion turn and has its own recovery
 				// path (workflowContinuationPhaseDirectLearning below).
 				hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, phase, workflowContinuationStatusSkipped, "Agent-mode learning retired; direct mode handles writes", nil)
 			case workflowContinuationPhaseKBUpdateAgent:
-				hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, phase, workflowContinuationStatusRecoveryQueued, "", nil)
-				if hcpo.maybeEnqueueKBUpdateWithHandle(runtime.StepIndex, runtime.StepPath, runtime.Step, workflowContinuationPhaseHandle(state, phase)) {
-					queued++
-				} else {
-					hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, phase, workflowContinuationStatusSkipped, "KB update gates disabled during recovery", nil)
-				}
+				// Agent-mode post-step KB update is retired (see
+				// controller_execution.go). Any pending kb_update_agent phase
+				// recovered from an older run's state file is marked skipped — direct
+				// mode writes notes/ inline in the step agent's own turn and recovers
+				// through workflowContinuationPhaseKBReview below.
+				hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, phase, workflowContinuationStatusSkipped, "Agent-mode KB update retired; direct mode handles writes", nil)
 			case workflowContinuationPhaseKBReview:
 				hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, phase, workflowContinuationStatusRecoveryQueued, "", nil)
 				hcpo.queueRecoveredDirectKBReview(state, runtime, workflowContinuationPhaseHandle(state, phase))
@@ -298,7 +298,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectKBReview(state *W
 	stepCfg := getAgentConfigs(runtime.Step)
 	reviewMsg := BuildKBContributionReviewMessageWithTarget(
 		resolveKnowledgebaseAccess(stepCfg, hcpo.UseKnowledgebase()),
-		resolveKnowledgebaseWriteMethod(stepCfg),
 		kbContributionForPrompt(stepCfg),
 		filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), KnowledgebaseFolderName, KBNotesFolderName),
 	)

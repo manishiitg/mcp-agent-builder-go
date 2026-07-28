@@ -7,7 +7,7 @@ import (
 
 func TestBuildStepKBGuidanceWithTargetRequiresPatchToolForAllWrites(t *testing.T) {
 	target := "/app/workspace-docs/Workflow/social-media/knowledgebase/notes"
-	prompt := BuildStepKBGuidanceWithTarget(KBAccessReadWrite, KBWriteMethodDirect, "Capture durable audience facts.", target)
+	prompt := BuildStepKBGuidanceWithTarget(KBAccessReadWrite, "Capture durable audience facts.", target)
 
 	required := []string{
 		"Knowledgebase contribution",
@@ -37,7 +37,7 @@ func TestBuildStepKBGuidanceWithTargetRequiresPatchToolForAllWrites(t *testing.T
 
 func TestBuildKBContributionReviewMessageWithTargetRequiresPatchTool(t *testing.T) {
 	target := "/app/workspace-docs/Workflow/social-media/knowledgebase/notes"
-	prompt := BuildKBContributionReviewMessageWithTarget(KBAccessReadWrite, KBWriteMethodDirect, "Capture durable audience facts.", target)
+	prompt := BuildKBContributionReviewMessageWithTarget(KBAccessReadWrite, "Capture durable audience facts.", target)
 
 	required := []string{
 		"**Target:** `" + target + "/`",

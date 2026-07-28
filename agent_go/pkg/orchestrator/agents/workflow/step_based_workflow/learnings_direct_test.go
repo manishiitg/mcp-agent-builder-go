@@ -245,3 +245,27 @@ func TestLearningsContributionTurnStaysWithinSizeBudget(t *testing.T) {
 		t.Fatalf("learnings turn (browser) grew to %d chars (budget 7100) — trim before adding", len(brow))
 	}
 }
+
+// The learnings turn is the only point where one agent has seen the execution
+// trail, the step description, the binding constraints and the existing learnings
+// together — and learnings is the only store it can write. Without an explicit
+// escalation line, a real cross-store contradiction gets written up as a caveat
+// inside a reference file (observed in production: a "step description says 1%,
+// soul.md says 1.5%, prefer 1.5%" note buried in references/), which leaves the
+// wrong copy in place and is invisible to whoever owns it.
+func TestLearningsContributionTurnOffersConcernsChannel(t *testing.T) {
+	msg := BuildLearningsContributionTurnWithTarget("s", "Do the thing.", "Capture the flow.", false,
+		"/tmp/workspace-docs/Workflow/wf/learnings/_global")
+	for _, want := range []string{
+		"CONCERNS: <what contradicts what, naming both sources and the evidence path>",
+		"contradicts the constraints",
+		// Burying the finding next to the stale content is the exact failure mode.
+		"Never leave a \"this is stale, use X\" caveat beside the wrong content",
+		// Constraint values must be referenced, never copied into a durable store.
+		"Never copy an owner constraint VALUE",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("learnings turn missing %q:\n%s", want, msg)
+		}
+	}
+}

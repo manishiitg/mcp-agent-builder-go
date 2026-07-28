@@ -3288,7 +3288,6 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			learningObjective := ""
 			learningsAccess := ""
 			knowledgebaseAccess := ""
-			knowledgebaseWriteMethod := ""
 			knowledgebaseContribution := ""
 			if meta != nil {
 				if t := meta["title"]; t != "" {
@@ -3304,7 +3303,6 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				learningObjective = meta["learning_objective"]
 				learningsAccess = meta["learnings_access"]
 				knowledgebaseAccess = meta["knowledgebase_access"]
-				knowledgebaseWriteMethod = meta["knowledgebase_write_method"]
 				knowledgebaseContribution = meta["knowledgebase_contribution"]
 			}
 
@@ -3319,7 +3317,6 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"learning_objective":         learningObjective,
 				"learnings_access":           learningsAccess,
 				"knowledgebase_access":       knowledgebaseAccess,
-				"knowledgebase_write_method": knowledgebaseWriteMethod,
 				"knowledgebase_contribution": knowledgebaseContribution,
 				"output_content":             nil, // Will be populated if output file exists
 				"artifacts":                  []map[string]interface{}{},
@@ -4185,7 +4182,6 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 		learningObjective := stringFromStepOrAgentConfig(step, agentConfigs, "learning_objective")
 		learningsAccess := stringFromStepOrAgentConfig(step, agentConfigs, "learnings_access")
 		knowledgebaseAccess := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_access")
-		knowledgebaseWriteMethod := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_write_method")
 		knowledgebaseContribution := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_contribution")
 
 		// Handle inner steps for complex types
@@ -4223,7 +4219,6 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			"learning_objective":         learningObjective,
 			"learnings_access":           learningsAccess,
 			"knowledgebase_access":       knowledgebaseAccess,
-			"knowledgebase_write_method": knowledgebaseWriteMethod,
 			"knowledgebase_contribution": knowledgebaseContribution,
 		}
 
@@ -4251,7 +4246,6 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 							"learning_objective":         stringFromStepOrAgentConfig(subStep, subAgentConfigs, "learning_objective"),
 							"learnings_access":           stringFromStepOrAgentConfig(subStep, subAgentConfigs, "learnings_access"),
 							"knowledgebase_access":       stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_access"),
-							"knowledgebase_write_method": stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_write_method"),
 							"knowledgebase_contribution": stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_contribution"),
 						}
 						metadata[subAgentKey] = subMeta

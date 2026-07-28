@@ -58,7 +58,16 @@ func getDBPath(workspaceRoot string) string {
 
 // SoulFolderName is the name of the builder's long-term memory folder at workspace root.
 // Contains soul.md — a free-form markdown file maintained by the workflow interactive builder
-// across sessions. Not read or written by execution, evaluation, learning, or KB agents.
+// across sessions.
+//
+// WRITE is builder-only: soul/ never appears in an execution step's write paths, so a
+// constraint has exactly one author. READ is granted to every execution step
+// unconditionally (see setupExecutionFolderGuard, which puts soul/ in readPaths alongside
+// execution/ and builder/), and `## Objective` / `## Success Criteria` / `## Constraints`
+// are extracted and injected into agent prompts — see soul_helpers.go. An earlier version
+// of this comment claimed soul/ was "not read by execution, evaluation, learning, or KB
+// agents"; that was never true of the folder guard and is not true of prompt injection.
+//
 // Kept outside planning/ because planning/ is read-only to the builder (modifications go
 // through typed plan-mod tools); soul.md is updated by shell write directly.
 // See docs/workflow/persistent_stores_design.md section 8.
@@ -183,41 +192,9 @@ func kbContributionForPrompt(stepConfig *AgentConfigs) string {
 // kbAccessAllowsWrite reports whether the mode is eligible for KB contribution.
 // This gates whether KB writes happen at all for the step; the mechanism
 // (post-step agent vs step-level direct upserts) is picked separately by
-// resolveKnowledgebaseWriteMethod.
+// the retired agent-mode KB writer.
 func kbAccessAllowsWrite(mode string) bool {
 	return mode == KBAccessWrite || mode == KBAccessReadWrite
-}
-
-// Knowledgebase write methods — picked per step, only meaningful when
-// kbAccessAllowsWrite(kbAccess) is true.
-const (
-	// KBWriteMethodAgent is the default: the step executes, and the post-step KB
-	// update agent (controller_kb_update.go) reads the step's tool trail plus its
-	// knowledgebase_contribution and merges observations into the relevant notes/
-	// topic file(s).
-	KBWriteMethodAgent = "agent"
-	// KBWriteMethodDirect gives the step agent itself direct write authority:
-	// notes/ is added to its folder-guard writePaths and it writes narrative via
-	// shell + diff_patch_workspace_file inline, with a post-completion self-review
-	// turn. The post-step KB update agent does NOT run for steps using this method.
-	KBWriteMethodDirect = "direct"
-)
-
-// resolveKnowledgebaseWriteMethod returns which mechanism writes KB for the step.
-// Only consulted when kbAccessAllowsWrite reports true for the effective access mode.
-// Default when unset is "agent" so every existing workflow keeps current behavior.
-func resolveKnowledgebaseWriteMethod(stepConfig *AgentConfigs) string {
-	if stepConfig == nil {
-		return KBWriteMethodAgent
-	}
-	switch stepConfig.KnowledgebaseWriteMethod {
-	case KBWriteMethodDirect:
-		return KBWriteMethodDirect
-	case KBWriteMethodAgent, "":
-		return KBWriteMethodAgent
-	default:
-		return KBWriteMethodAgent
-	}
 }
 
 // kbAccessLabel returns a human-readable label for prompt display.
@@ -1254,9 +1231,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	if sessionID := hcpo.GetMCPSessionID(); sessionID != "" && !isSubAgent {
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
-		narrowKBWriteMethod := resolveKnowledgebaseWriteMethod(narrowAgentCfg)
 		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
-		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, narrowKBWriteMethod, resolveDBAccess(narrowAgentCfg))
+		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg))
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
 			prevRead = prevCfg.ReadPaths
@@ -1371,7 +1347,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 		// Resolve KB access mode for this step (explicit step config > preset default)
 		kbAccess := resolveKnowledgebaseAccess(agentConfigs, hcpo.UseKnowledgebase())
-		kbWriteMethod := resolveKnowledgebaseWriteMethod(agentConfigs)
 		useKnowledgebase := kbAccess != KBAccessNone
 		knowledgebasePath := ""
 		if useKnowledgebase {
@@ -1385,7 +1360,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			evaluationDBWrite = evalStep.DBWrite
 		}
 		dbAccess := resolveEffectiveDBAccess(agentConfigs, hcpo.isEvaluationMode, evaluationDBWrite)
-		folderGuardReadPaths, folderGuardWritePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, kbWriteMethod, dbAccess)
+		folderGuardReadPaths, folderGuardWritePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess)
 
 		// Learn code mode: add code/ subdir to write paths so LLM can write main.py there
 		if isScriptedMode {
@@ -1446,28 +1421,35 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 		kbNotesPathForPrompt := toAbsPath(filepath.Join(getKnowledgebasePath(hcpo.GetWorkspacePath()), KBNotesFolderName))
 
+		// Owner-approved constraints from soul.md are injected as binding context so a
+		// step never has to discover them by reading soul.md itself — and so a stale
+		// literal in a step description can be recognised as stale. Resolved per step
+		// rather than cached: soul.md is small, and a mid-run builder edit should take
+		// effect on the next step rather than be pinned for the whole run.
+		workflowConstraintsBlock := BuildWorkflowConstraintsBlock(hcpo.ResolveWorkflowConstraints(ctx))
+
 		templateVars := map[string]string{
 			"StepTitle":                 stepTitleForPrompt,
 			"StepDescription":           stepDescriptionForPrompt,
 			"StepSuccessCriteria":       "",
 			"StepContextOutput":         ResolveVariables(step.GetContextOutput().String(), hcpo.variableValues),
-			"WorkspacePath":             toAbsPath(executionWorkspacePath),                                                                                   // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
-			"LearningsPath":             toAbsPath(learningsPath),                                                                                            // Absolute learnings folder path
-			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                                                                                        // Absolute knowledgebase folder path
-			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())),                                                                       // Absolute db folder path (always enabled)
-			"UseKnowledgebase":          fmt.Sprintf("%v", useKnowledgebase),                                                                                 // Whether knowledgebase is enabled (deprecated, retained for backward compat)
-			"KbAccess":                  kbAccess,                                                                                                            // KB access mode: "read" | "write" | "read-write" | "none"
-			"KbAccessLabel":             kbAccessLabel(kbAccess),                                                                                             // Human-readable label for prompt display
-			"KbWriteMethod":             kbWriteMethod,                                                                                                       // "agent" | "direct" — who writes KB
-			"KnowledgebaseContribution": kbContributionForPrompt(agentConfigs),                                                                               // Author's contribution instruction (direct mode surfaces it to the step)
-			"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, kbWriteMethod, kbContributionForPrompt(agentConfigs), kbNotesPathForPrompt), // Direct-mode-only KB contribution guidance
-			"IsCodeExecutionMode":       fmt.Sprintf("%v", isCodeExecutionMode),                                                                              // Code execution mode flag (step-specific or preset)
-			"StepNumber":                stepPath,                                                                                                            // Step identifier (e.g., "step-8" or "step-3-sub-fetch")
-			"StepExecutionPath":         toAbsPath(stepExecutionPath),                                                                                        // Absolute step execution folder path
-			"FolderGuardReadPaths":      strings.Join(toAbsPathSlice(folderGuardReadPaths), ", "),                                                            // Absolute folder guard read paths
-			"FolderGuardWritePaths":     strings.Join(toAbsPathSlice(folderGuardWritePaths), ", "),                                                           // Absolute folder guard write paths
-			"IsEvaluationMode":          fmt.Sprintf("%v", hcpo.isEvaluationMode),                                                                            // Evaluation mode flag for eval-specific prompt guidance
-			"WorkflowRoot":              toAbsPath(workflowRoot),                                                                                             // Absolute workflow root path (e.g., "/app/workspace-docs/Workflow/HRMS")
+			"WorkspacePath":             toAbsPath(executionWorkspacePath),                                                                    // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
+			"LearningsPath":             toAbsPath(learningsPath),                                                                             // Absolute learnings folder path
+			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                                                                         // Absolute knowledgebase folder path
+			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())),                                                        // Absolute db folder path (always enabled)
+			"UseKnowledgebase":          fmt.Sprintf("%v", useKnowledgebase),                                                                  // Whether knowledgebase is enabled (deprecated, retained for backward compat)
+			"KbAccess":                  kbAccess,                                                                                             // KB access mode: "read" | "write" | "read-write" | "none"
+			"KbAccessLabel":             kbAccessLabel(kbAccess),                                                                              // Human-readable label for prompt display
+			"KnowledgebaseContribution": kbContributionForPrompt(agentConfigs),                                                                // Author's contribution instruction (direct mode surfaces it to the step)
+			"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, kbContributionForPrompt(agentConfigs), kbNotesPathForPrompt), // Direct-mode-only KB contribution guidance
+			"IsCodeExecutionMode":       fmt.Sprintf("%v", isCodeExecutionMode),                                                               // Code execution mode flag (step-specific or preset)
+			"StepNumber":                stepPath,                                                                                             // Step identifier (e.g., "step-8" or "step-3-sub-fetch")
+			"StepExecutionPath":         toAbsPath(stepExecutionPath),                                                                         // Absolute step execution folder path
+			"FolderGuardReadPaths":      strings.Join(toAbsPathSlice(folderGuardReadPaths), ", "),                                             // Absolute folder guard read paths
+			"FolderGuardWritePaths":     strings.Join(toAbsPathSlice(folderGuardWritePaths), ", "),                                            // Absolute folder guard write paths
+			"IsEvaluationMode":          fmt.Sprintf("%v", hcpo.isEvaluationMode),                                                             // Evaluation mode flag for eval-specific prompt guidance
+			"WorkflowConstraints":       workflowConstraintsBlock,                                                                             // Binding owner-approved constraints from soul.md (empty when the section is absent)
+			"WorkflowRoot":              toAbsPath(workflowRoot),                                                                              // Absolute workflow root path (e.g., "/app/workspace-docs/Workflow/HRMS")
 			"IsScriptedMode":            fmt.Sprintf("%v", isScriptedMode),
 			"IsScriptedLocked":          fmt.Sprintf("%v", isScriptedMode && getAgentConfigs(step) != nil && getAgentConfigs(step).LockCode != nil && *getAgentConfigs(step).LockCode),
 			"IsRelearnMode":             fmt.Sprintf("%v", isScriptedMode && learnCodePriorScript != ""),
@@ -2331,7 +2313,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						stepCfgForReview := getAgentConfigs(step)
 						reviewMsg := BuildKBContributionReviewMessageWithTarget(
 							resolveKnowledgebaseAccess(stepCfgForReview, hcpo.UseKnowledgebase()),
-							resolveKnowledgebaseWriteMethod(stepCfgForReview),
 							kbContributionForPrompt(stepCfgForReview),
 							filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), KnowledgebaseFolderName, KBNotesFolderName),
 						)
@@ -2529,23 +2510,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					}
 				}
 
-				// Populate runtime fields once — shared by both learning AND KB update.
-				// Done outside the learning skip-block so KB still runs when learning is
-				// disabled or locked (KB and learning are orthogonal persistent stores).
-				var populatedTodoStep PlanStepInterface
-				if validationResponse.IsSuccessCriteriaMet {
-					stepConfigs, cfgErr := hcpo.ReadStepConfigs(ctx)
-					if cfgErr != nil {
-						hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to read step_config.json: %v (using defaults)", cfgErr))
-						stepConfigs = []StepConfig{}
-					}
-					ts, popErr := populateStepRuntimeFields(step, stepConfigs)
-					if popErr != nil {
-						hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to populate runtime fields for post-step phases: %v", popErr))
-					} else {
-						populatedTodoStep = ts
-					}
-				}
+				// Runtime-field population for post-step phases used to happen here,
+				// feeding the learning agent and the KB update agent. Both are retired
+				// and the direct-mode turns run inline earlier in this method with the
+				// step's own live config, so nothing needs re-populating.
 
 				// Post-step learning AGENT (the separate analytical reviewer that
 				// reads the step trace and writes SKILL.md as its own LLM turn) is
@@ -2561,17 +2529,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					hcpo.GetLogger().Info(fmt.Sprintf("🔒 Learnings locked: Skipping learning for step %d (using existing learnings)", stepIndex+1))
 				}
 
-				// Post-step knowledgebase update — INDEPENDENT of learning lock/disable.
-				// KB and learnings are orthogonal stores: a frozen SKILL.md does NOT mean
-				// we should stop accumulating durable domain facts. Gated only on:
-				//   - validation success (don't extract from a failed run's output)
-				//   - the three conditions inside maybeEnqueueKBUpdate (KB enabled +
-				//     not workflow-locked + per-step write access + non-empty contribution)
-				// Serialized through kbUpdateQueue so concurrent step completions don't
-				// race on knowledgebase/notes/ writes.
-				if validationResponse.IsSuccessCriteriaMet && populatedTodoStep != nil {
-					hcpo.maybeEnqueueKBUpdate(stepIndex, stepPath, populatedTodoStep)
-				}
+				// Post-step KB update AGENT (the separate reviewer that re-read the step
+				// trace from disk and wrote notes/ as its own LLM conversation) is
+				// retired, mirroring the learning agent above. All KB writes now go
+				// through direct mode: the step agent writes notes/ inline and closes
+				// with the contribution self-review turn (BuildKBContributionReviewMessage),
+				// gated earlier in this method. No background launch happens here.
 
 				// Check if success criteria was met
 				// Check IsSuccessCriteriaMet instead of just ExecutionStatus - PARTIAL/INCOMPLETE can also mean criteria not met
@@ -3282,12 +3245,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			if err := hcpo.saveStepProgress(ctx, progress); err != nil {
 				hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to save progress after message sequence step: %v", err))
 			}
-			// KB write_method=agent: the sequence appends no KB closing turn (notes/
-			// is not writable by the step agent under agent mode), so the post-step
-			// KB update agent owns the contribution — same as the regular/todo path.
-			// maybeEnqueueKBUpdate self-gates (no-op for direct mode, empty
-			// contribution, KB disabled, or workflow-level lock).
-			hcpo.maybeEnqueueKBUpdate(i, stepPath, sequenceExecutionStep)
+			// KB contributions for message-sequence steps are owned by the sequence's
+			// own closing turn under direct mode. The post-step KB update agent that
+			// used to cover write_method=agent here is retired — see
+			// the retired agent-mode KB writer.
+			_ = sequenceExecutionStep
 			if hcpo.runSingleStepOnly && i == hcpo.singleStepTarget {
 				hcpo.GetLogger().Info(fmt.Sprintf("🎯 Single step mode: completed target step %d, stopping execution", i+1))
 				hcpo.SetRunSingleStepMode(false, -1)
