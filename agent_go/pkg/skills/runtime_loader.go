@@ -63,11 +63,11 @@ When you need to recall how a step worked in this workflow — selectors, API qu
 - %s/learnings/_global/SKILL.md (the main guide)
 - %s/learnings/_global/references/ (per-topic detail files, if any)
 - %s/learnings/_global/scripts/ and assets/ (if any)
-
+%s
 These files are written by step agents during successful runs and shared across the workflow. They live in the workflow folder rather than this skills directory so they remain the single source of truth as the workflow learns more.
 
 If a referenced file does not exist, the workflow has not accumulated that piece of knowledge yet — proceed with general best practices for that area.
-`, workflowPath, workflowPath, workflowPath)
+`, workflowPath, workflowPath, workflowPath, buildStaleLearningsWarning(client, workflowPath))
 	return &llmtypes.Skill{
 		Name:        "workflow-learnings",
 		Description: "Pointer to the workflow's accumulated learnings (selectors, timings, API quirks, conventions). Read learnings/_global/ in the workflow folder for the full content.",
