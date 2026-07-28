@@ -51,7 +51,7 @@ const pulseReviewLogIndex = `CREATE INDEX IF NOT EXISTS idx_pulse_review_log_mod
 // stays in the reviewer artifact; this is the index into it.
 const maxVerdictChars = 400
 
-// ModuleReviewHistory summarises what one reviewer has been finding.
+// ModuleReviewHistory summarizes what one reviewer has been finding.
 type ModuleReviewHistory struct {
 	Module        string   `json:"module"`
 	RunCount      int      `json:"run_count"`
@@ -129,7 +129,7 @@ func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, 
 	return err
 }
 
-// LoadModuleReviewHistory summarises recent reviews per module, most recently run
+// LoadModuleReviewHistory summarizes recent reviews per module, most recently run
 // first, so Gate can weigh "this one keeps finding things" against "this one has
 // come back clean five times".
 func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModule int) ([]ModuleReviewHistory, error) {
