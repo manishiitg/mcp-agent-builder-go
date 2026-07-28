@@ -3192,6 +3192,22 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     },
     [selectedTerminalView, priorArchivedTurns, archivedTurnContents],
   )
+  // Tmux terminals the user switched to the formatted view. A tmux pane shows
+  // raw TUI bytes, but the same turn is ALSO emitted as structured events
+  // (tool_call_start/end with arguments, llm_generation_end with the answer) --
+  // that is what the transcript renders for structured providers. Both views
+  // describe the same run, so which one is useful is a reading choice, not a
+  // property of the transport. Kept per terminal id and not persisted: it is a
+  // way to look at something, not a setting.
+  const [formattedViewTerminalIDs, setFormattedViewTerminalIDs] = useState<Set<string>>(() => new Set())
+  const toggleFormattedView = useCallback((terminalID: string) => {
+    setFormattedViewTerminalIDs(current => {
+      const next = new Set(current)
+      if (next.has(terminalID)) next.delete(terminalID)
+      else next.add(terminalID)
+      return next
+    })
+  }, [])
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
   const selectedTerminalIsTmux = Boolean(
     selectedTerminalView &&
@@ -3207,6 +3223,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     () => selectedTerminalEvents.length > 0,
     [selectedTerminalEvents],
   )
+  // Offer the toggle only when there is something to switch TO. A tmux terminal
+  // with no captured events would render an empty transcript, which reads as a
+  // broken view rather than an empty one.
+  const canShowFormattedView = Boolean(
+    selectedTerminalIsTmux && selectedTerminalID && selectedTerminalHasEvents,
+  )
+  const showFormattedView = Boolean(
+    canShowFormattedView && selectedTerminalID && formattedViewTerminalIDs.has(selectedTerminalID),
+  )
   const selectedTerminalHasPreValidationEvent = useMemo(
     () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
     [selectedTerminalEvents],
@@ -3216,8 +3241,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // falling back to server-parsed rows: those rows are a lossy compatibility
   // format and, when stale metadata crossed between parallel siblings, could
   // display one step's lifecycle card under another step's selected header.
+  //
+  // Hydrated for tmux terminals too, not just synthetic ones: the formatted
+  // view is now reachable from a raw pane by toggle, and that toggle is only
+  // offered when the terminal has events. Gating hydration on "is already
+  // showing the transcript" made that unreachable -- the events would only be
+  // fetched for terminals that never needed the toggle. One fetch per
+  // session+terminal, guarded by eventHydrationAttemptedRef.
   useEffect(() => {
-    if (!currentSessionId || !selectedTerminalID || !selectedTerminalIsSynthetic || selectedTerminalHasEvents) {
+    const canRenderTranscript = selectedTerminalIsSynthetic || selectedTerminalIsTmux
+    if (!currentSessionId || !selectedTerminalID || !canRenderTranscript || selectedTerminalHasEvents) {
       return
     }
     const hydrationKey = `${currentSessionId}:${selectedTerminalID}`
@@ -3242,6 +3275,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     selectedTerminalHasEvents,
     selectedTerminalID,
     selectedTerminalIsSynthetic,
+    selectedTerminalIsTmux,
   ])
   const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
   const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
@@ -4109,6 +4143,24 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                           {terminalStateLabel(selectedTerminalView)}
                         </span>
                       )}
+                      {canShowFormattedView && selectedTerminalID && (
+                        <button
+                          type="button"
+                          onClick={() => toggleFormattedView(selectedTerminalID)}
+                          aria-pressed={showFormattedView}
+                          className={`inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium transition-colors ${
+                            showFormattedView
+                              ? 'bg-neutral-800 text-neutral-100'
+                              : 'text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100'
+                          }`}
+                          title={showFormattedView
+                            ? 'Showing the formatted conversation. Switch back to the raw terminal.'
+                            : 'Show the formatted conversation (tool calls and replies) instead of the raw terminal.'}
+                        >
+                          {showFormattedView ? <Terminal className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
+                          <span>{showFormattedView ? 'Raw' : 'Formatted'}</span>
+                        </button>
+                      )}
                       {selectedTerminalIsTmux && (
                         <>
                           <button
@@ -4417,10 +4469,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       })}
                     </div>
                   )}
-                  {selectedTerminalIsSynthetic ? (
+                  {selectedTerminalIsSynthetic || showFormattedView ? (
                     // Clean view always renders the real event stream. Never
                     // substitute the legacy parsed-row card: it is not the
                     // conversation UI and can carry stale sibling metadata.
+                    //
+                    // A tmux terminal reaches this by toggle: the pane and the
+                    // transcript are two renderings of one run, and the events
+                    // carry what the pane cannot show well -- tool arguments,
+                    // results, and an unwrapped final answer.
                     <TerminalEventTranscript
                       events={sessionEvents}
                       terminal={selectedTerminalView}

@@ -2637,7 +2637,7 @@ func isStructuredExecutionMetadata(sessionID string, event storeevents.Event, me
 	if ownerID == "" || terminalOwnerIsCanonicalMain(sessionID, ownerID) {
 		return false
 	}
-	// Honour an explicitly DECLARED kind: a full run is a container, a
+	// Honor an explicitly DECLARED kind: a full run is a container, a
 	// message-sequence item is an internal turn, a router is a decision
 	// record. None of them is a conversation, so none gets a terminal.
 	//

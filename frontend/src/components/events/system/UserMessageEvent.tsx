@@ -6,17 +6,22 @@ import { PlainMarkdown } from '../../ui/PlainMarkdown'
 interface UserMessageEventDisplayProps {
   event: UserMessageEvent
   mode?: 'compact' | 'detailed'
+  /** True when the surrounding terminal header already names this step. */
+  hideContext?: boolean
 }
 
-export const UserMessageEventDisplay: React.FC<UserMessageEventDisplayProps> = ({ 
-  event, 
-  mode = 'detailed' 
+export const UserMessageEventDisplay: React.FC<UserMessageEventDisplayProps> = ({
+  event,
+  mode = 'detailed',
+  hideContext = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false)
   // Auto-notifications are short and are the reason the turn resumed, so they
   // open by default rather than hiding behind a click.
   const [isAutoExpanded, setIsAutoExpanded] = useState(true)
   const CHAR_LIMIT = 300
+  // Above this, the prompt is a document rather than a sentence.
+  const EXECUTION_PROMPT_AUTO_OPEN_CHARS = 600
   const messageSource = event.metadata?.source
   const isLiveCodingAgentInput = messageSource === 'coding_agent_live_input'
   const hasStepScope = typeof event.metadata?.current_step_id === 'string' ||
@@ -106,23 +111,42 @@ export const UserMessageEventDisplay: React.FC<UserMessageEventDisplayProps> = (
           <ListTodo className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">Task</div>
-            <div className="mt-0.5 break-words text-sm font-medium text-neutral-100">
-              {stepName || 'Execute this workflow step'}
-            </div>
+            {/* The terminal header already carries the step name with its
+                context ("... · Orchestrator · updated 54s ago"). Repeating it
+                verbatim one line below made a 55-character title appear twice
+                in the same viewport. */}
+            {!hideContext && (
+              <div className="mt-0.5 break-words text-sm font-medium text-neutral-100">
+                {stepName || 'Execute this workflow step'}
+              </div>
+            )}
           </div>
         </div>
         {/* Open by default: the instructions ARE the task, and hiding the only
             substantive content behind a click made the card a header with
             nothing under it. The "Instructions sent to the agent" caption went
             with it -- it described what is now visible directly below. */}
+        {/* Auto-expanded only when short. A step prompt here runs to several
+            thousand characters of operational contract; opening that by default
+            filled the whole pane and pushed every tool call and reply below the
+            fold, so the view led with what we SENT instead of what happened.
+            Short prompts still open, because a collapsed one-liner is a header
+            with nothing under it. */}
         {content && (
-          <details open className="group mt-2 border-t border-neutral-800 pt-2">
+          <details
+            open={content.length <= EXECUTION_PROMPT_AUTO_OPEN_CHARS}
+            className="group mt-2 border-t border-neutral-800 pt-2"
+          >
             <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-300">
               <ChevronDown
                 className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
                 aria-hidden="true"
               />
-              <span className="group-open:hidden">Show instructions</span>
+              <span className="group-open:hidden">
+                Show instructions{content.length > EXECUTION_PROMPT_AUTO_OPEN_CHARS
+                  ? ` · ${content.length.toLocaleString()} chars`
+                  : ''}
+              </span>
               <span className="hidden group-open:inline">Instructions</span>
             </summary>
             {/* Rendered as markdown, not raw text: these prompts are written in
