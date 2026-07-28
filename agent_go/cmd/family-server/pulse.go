@@ -88,7 +88,10 @@ func pulseChecks(s familyState) []pulseCheck {
 				"Use agent_browser (it reuses the parent's own signed-in browser). FIRST run tab list to see all open tabs — the parent's browser " +
 				"usually has many, and the active one is often unrelated (a work site, etc.); find the tab(s) that match the site(s) above and switch " +
 				"to each, or open the URL yourself if it isn't already a tab. NEVER read or act on an unrelated tab just because it's in front. " +
-				"Then explore each of the parent's site(s) THOROUGHLY. These can be a school portal, a class website, or any third-party site — a school portal for instance " +
+				"BEFORE navigating each site, check memory/browser-notes.md for anything you've already saved about it — the menu path to " +
+				"assignments, where grades actually live, a login quirk, a dead end to skip. Go straight there instead of re-discovering it from " +
+				"scratch every single check-in; a recurring check should get FASTER over time, the way a person who's used a site before navigates " +
+				"it quicker than a first-timer. Then explore each of the parent's site(s) THOROUGHLY. These can be a school portal, a class website, or any third-party site — a school portal for instance " +
 				"usually has a lot: assignments/homework, due dates, uploaded books/materials/handouts, grades or graded work, teacher " +
 				"announcements/notices, timetable or calendar changes, messages, attendance. Don't stop at the first page: navigate into the main " +
 				"sections (snapshot the page, follow the obvious links) and gather as much concrete detail as you can — specific item names, due " +
@@ -101,7 +104,10 @@ func pulseChecks(s familyState) []pulseCheck {
 				"summary). The goal is that a useful resource on a site ends up usable INSIDE SparkQuill, not just noticed. Then tell the parent " +
 				"plainly what's actually new across the site(s) and what matters for " + who + " — be specific (names, dates, what you pulled in), not " +
 				"vague. If a site needs a login you can't get past, say it needs them to sign in first (via the Browser connector) rather than " +
-				"guessing." + pulseReplyRules,
+				"guessing. Before finishing, update memory/browser-notes.md with anything you learned this run that will save time next check-in — " +
+				"a menu path, a section that turned out to be a dead end, a login quirk. Keep it SHORT (a few lines per site, not a transcript of the " +
+				"visit) and edit your own existing entry for that site rather than appending a new one each time, so the file stays a compact, " +
+				"current cheat sheet instead of growing forever." + pulseReplyRules,
 		})
 	}
 
@@ -232,6 +238,12 @@ func runPulseOnce(ctx context.Context, force bool) error {
 		instruction: "This automated Pulse cycle is done — you've just gone through everything above yourself, in this same " +
 			"conversation. Now decide what's ACTUALLY worth telling the parent: skip anything trivial or unchanged, weigh it " +
 			"against anything you know of their preferences (memory/preferences.md), and lead with whatever matters most. " +
+			"MORE THAN ONE PARENT MAY USE THIS FAMILY — one by chat, another only by WhatsApp — and notify_user is the ONLY " +
+			"thing that reaches WhatsApp, so it must not be scoped to Pulse's own checks alone. Also look back over this SAME " +
+			"conversation for anything a parent directly asked, decided, or had you do since your last check-in (a new activity, " +
+			"a real decision, a setting changed) that a parent who ONLY sees WhatsApp would otherwise never learn about. Fold " +
+			"anything genuinely worth surfacing into this summary too, so both parents stay in sync regardless of which one of " +
+			"them you actually spoke with. " +
 			"Then call notify_user EXACTLY ONCE to send it — a short title, a brief plain message (1-3 sentences, your usual " +
 			"voice; this is what appears on desktop/WhatsApp), and a well-structured, EMAIL-SAFE inline-styled email_html with " +
 			"its own heading per topic that actually has news (skip a topic entirely rather than write \"nothing new\" for " +
