@@ -797,22 +797,29 @@ func sanitizeInboxName(name string) string {
 	return name
 }
 
-// childMentionRe matches "@child" as a whole word, case-insensitive, so
-// "@childhood" or "email@childcare.com" don't false-positive.
+// childMentionRe / parentMentionRe match "@child"/"@parent" as whole words,
+// case-insensitive, so "@childhood" or "email@childcare.com" don't
+// false-positive. These are MODE SWITCHES (see whatsapp_routing.go), not
+// per-message tags: sending "@child" once puts every later image message
+// into the child's current activity until "@parent" switches back.
 var childMentionRe = regexp.MustCompile(`(?i)@child\b`)
+var parentMentionRe = regexp.MustCompile(`(?i)@parent\b`)
 
-// extractChildMention reports whether the parent tagged this message for the
-// child (see childMentionRe) and returns the caption with the mention itself
-// stripped out — e.g. "@child she got stuck on Q5" -> ("she got stuck on
-// Q5", true). Whitespace left behind by removing the mention is collapsed so
-// the remaining text reads naturally either way ("@child" was at the start,
-// the end, or mid-sentence).
-func extractChildMention(text string) (rest string, isChild bool) {
-	if !childMentionRe.MatchString(text) {
-		return text, false
+// extractModeSwitch checks for an "@child"/"@parent" mode-switch keyword
+// anywhere in the text and returns the caption with it stripped out — e.g.
+// "@child she got stuck on Q5" -> ("she got stuck on Q5", "child"). "" for
+// mode means no switch keyword was present. Whitespace left behind by
+// removing the keyword is collapsed so the remaining text reads naturally
+// either way (the keyword was at the start, the end, or mid-sentence).
+func extractModeSwitch(text string) (rest string, mode string) {
+	switch {
+	case childMentionRe.MatchString(text):
+		return strings.Join(strings.Fields(childMentionRe.ReplaceAllString(text, " ")), " "), waRoutingModeChild
+	case parentMentionRe.MatchString(text):
+		return strings.Join(strings.Fields(parentMentionRe.ReplaceAllString(text, " ")), " "), waRoutingModeParent
+	default:
+		return text, ""
 	}
-	stripped := childMentionRe.ReplaceAllString(text, " ")
-	return strings.Join(strings.Fields(stripped), " "), true
 }
 
 func extractWhatsAppMessageText(m *waProto.Message) string {
@@ -845,15 +852,47 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 	text := extractWhatsAppMessageText(evt.Message)
 
-	// "@child" anywhere in the caption routes THIS attachment straight into
-	// the child's current activity instead of the shared parent inbox — see
-	// extractChildMention. A bare voice note (no caption) never matches this,
-	// so voice notes keep going through the normal parent-conversation path
-	// below unchanged.
-	childNote, isChildTarget := extractChildMention(text)
-	var childActivityDir string
+	// "@child"/"@parent" flip a PERSISTENT routing mode (see
+	// whatsapp_routing.go) rather than tagging just this one message — once
+	// switched, every later image attachment goes to that target until
+	// switched back, so snapping several photos in a row doesn't need the
+	// keyword retyped each time.
+	if rest, switchTo := extractModeSwitch(text); switchTo != "" {
+		setWaRoutingMode(switchTo)
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		label := parentChildLabel(s.Child)
+		var confirmation string
+		if switchTo == waRoutingModeChild {
+			title := ""
+			if dir := currentActivityDir(); dir != "" {
+				if act, ok := loadActivity(dir); ok && act.Title != "" {
+					title = act.Title
+				}
+			}
+			if title != "" {
+				confirmation = fmt.Sprintf("Switched to child mode — photos now go to %q. Send @parent to switch back.", title)
+			} else {
+				confirmation = "Switched to child mode — photos will go to " + label + "'s activity once one is open. Send @parent to switch back."
+			}
+		} else {
+			confirmation = "Back to our conversation — photos come to me again."
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "🔀")
+		if acct.client != nil {
+			_ = acct.sendTextWithRetry(info.Chat, confirmation, 2, 15*time.Second, "whatsapp mode switch")
+		}
+		text = rest // whatever text (if any) is left after stripping the keyword, e.g. "@child she got Q5 wrong"
+	}
+
+	// Where an attachment in THIS message lands: the child's current
+	// activity if we're currently in child mode, otherwise the shared parent
+	// inbox — unchanged default behavior.
 	destDir := ""
-	if isChildTarget {
+	var childActivityDir string
+	inChildMode := loadWaRoutingMode() == waRoutingModeChild
+	if inChildMode {
 		childActivityDir = currentActivityDir()
 		if childActivityDir != "" {
 			destDir = childActivityDir
@@ -861,45 +900,42 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 
 	// An image or document attachment: save it straight into the inbox (or,
-	// for an "@child" message, the child's current activity folder) and stop
-	// there — only text messages ever reach the agent. A bare attachment with
-	// no caption just gets acknowledged (👀) below and never starts a turn;
-	// the file waits in the inbox, NAMED in w.pendingUploads, until the next
-	// real turn — which gets told about it explicitly (see below), not left
-	// to notice it on its own. A voice note is the exception: its local
+	// in child mode, the child's current activity folder) and stop there —
+	// only text messages ever reach the agent. A bare attachment with no
+	// caption just gets acknowledged (👀) below and never starts a turn; the
+	// file waits in the inbox, NAMED in w.pendingUploads, until the next real
+	// turn — which gets told about it explicitly (see below), not left to
+	// notice it on its own. A voice note is the exception: its local
 	// transcript (see ingestWhatsAppMedia) stands in for typed text below, so
-	// it drives a turn just like normal.
+	// it drives a turn just like normal — and is NEVER child-routed, even in
+	// child mode, since it's genuinely meant to converse, not attach a photo.
 	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt, destDir)
 
-	if isChildTarget {
+	if inChildMode && gotMedia && voiceText == "" {
 		stateMu.Lock()
 		s := loadState()
 		stateMu.Unlock()
 		label := parentChildLabel(s.Child)
 		if childActivityDir == "" {
-			// destDir was left "" above, so any attachment already fell back
+			// destDir was left "" above, so the attachment already fell back
 			// to the shared inbox — not lost, just not where it needs to be.
 			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
 			if acct.client != nil {
-				_ = acct.sendTextWithRetry(info.Chat, "There's no activity open for "+label+" right now, so I couldn't send this to her — open one on her side first, or resend without @child and I'll take a look myself.", 2, 15*time.Second, "@child no-activity")
+				_ = acct.sendTextWithRetry(info.Chat, "You're in child mode, but there's no activity open right now, so I couldn't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity")
 			}
 			return
 		}
-		if !gotMedia || savedPath == "" {
-			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
-			if acct.client != nil {
-				_ = acct.sendTextWithRetry(info.Chat, "Attach a photo along with @child and I'll add it to "+label+"'s current activity.", 2, 15*time.Second, "@child no-attachment")
-			}
-			return
+		if savedPath == "" {
+			return // download failed — ingestWhatsAppMedia already logged why
 		}
-		saveCurrentUploadWithNote(savedPath, childNote)
+		saveCurrentUploadWithNote(savedPath, strings.TrimSpace(text))
 		title := childActivityDir
 		if act, ok := loadActivity(childActivityDir); ok && act.Title != "" {
 			title = act.Title
 		}
 		acct.react(info.Chat, info.Sender, info.ID, "✅")
 		if acct.client != nil {
-			_ = acct.sendTextWithRetry(info.Chat, fmt.Sprintf("Added to %q — I'll look at it as soon as %s is back in that activity.", title, label), 2, 15*time.Second, "@child confirmation")
+			_ = acct.sendTextWithRetry(info.Chat, fmt.Sprintf("Added to %q — I'll look at it as soon as %s is back in that activity.", title, label), 2, 15*time.Second, "child photo confirmation")
 		}
 		return
 	}
