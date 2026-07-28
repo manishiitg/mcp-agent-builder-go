@@ -10,6 +10,7 @@ import {
   toolBatchLabel,
   type TranscriptItem,
 } from '../utils/terminalEventTranscript'
+import { formatDurationCompact } from '../utils/duration'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 
 // Clean view = the SAME rich event components the tree used, laid out as one
@@ -49,12 +50,11 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
   const mark = pair.status === 'error' ? '✗' : pair.status === 'ok' ? '✓' : '⋯'
   const markClass =
     pair.status === 'error' ? 'text-red-400' : pair.status === 'ok' ? 'text-emerald-400' : 'text-neutral-500'
+  // Shared formatter rather than a local one: the local copy assumed milliseconds
+  // while the wire value is nanoseconds, and it had no minutes branch, so long
+  // calls printed absurd second counts.
   const duration =
-    pair.durationMs != null && pair.durationMs > 0
-      ? pair.durationMs >= 1000
-        ? `${(pair.durationMs / 1000).toFixed(1)}s`
-        : `${pair.durationMs}ms`
-      : null
+    pair.durationNs != null && pair.durationNs > 0 ? formatDurationCompact(pair.durationNs) : null
 
   return (
     <div data-testid="terminal-clear-tool-call" className="rounded border border-neutral-800 bg-neutral-900/40">

@@ -679,13 +679,32 @@ func buildScriptedEnvVarNamesForPrompt(isScriptedMode bool, workspaceEnvRef map[
 	if !isScriptedMode {
 		return ""
 	}
-	names := []string{"STEP_OUTPUT_DIR", "MCP_API_URL"}
-	for k := range workspaceEnvRef {
-		if k != "MCP_API_URL" { // avoid duplicate
-			names = append(names, k)
-		}
+	// Every name the runtime actually injects must appear here. execScriptedScript
+	// sets STEP_OUTPUT_DIR, STEP_EXECUTION_DIR and DB_PATH alongside the workspace
+	// env, but this list used to omit the last two — so a script author was told the
+	// database path did not exist while the runtime was handing it over.
+	//
+	// That mismatch is expensive, not cosmetic. An author reading this list finds no
+	// DB_PATH, concludes the db is unreachable, and works around it: one workflow
+	// removed the required-env read and derived the path from STEP_EXECUTION_DIR,
+	// another shelled out to the sqlite3 CLI and wrote that into its permanent
+	// learnings. Both workarounds are explicitly forbidden by the stores contract,
+	// which insists steps use $DB_PATH and report an open failure as a runtime bug
+	// rather than routing around it. The framework was contradicting itself.
+	fixed := []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "MCP_API_URL"}
+	seen := make(map[string]bool, len(fixed)+len(workspaceEnvRef))
+	for _, n := range fixed {
+		seen[n] = true
 	}
-	sort.Strings(names[2:]) // sort the SECRET_*/VAR_* part
+	names := append([]string{}, fixed...)
+	for k := range workspaceEnvRef {
+		if seen[k] {
+			continue // already declared above; never list a name twice
+		}
+		seen[k] = true
+		names = append(names, k)
+	}
+	sort.Strings(names[len(fixed):]) // sort only the SECRET_*/VAR_* tail
 	return strings.Join(names, "\n")
 }
 

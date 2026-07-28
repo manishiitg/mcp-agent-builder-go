@@ -412,12 +412,13 @@ describe('pairToolCalls', () => {
   it('collapses a start/end pair into ONE row instead of two', () => {
     const pairs = pairToolCalls([
       tool('a', 'tool_call_start', { tool_name: 'ToolSearch' }),
-      tool('b', 'tool_call_end', { tool_name: 'ToolSearch', duration: 1200 }),
+      tool('b', 'tool_call_end', { tool_name: 'ToolSearch', duration: 1_200_000_000 }),
     ])
     expect(pairs).toHaveLength(1)
     expect(pairs[0].name).toBe('ToolSearch')
     expect(pairs[0].status).toBe('ok')
-    expect(pairs[0].durationMs).toBe(1200)
+    // Nanoseconds, as Go's time.Duration sends them — 1.2s, not 1200ms.
+    expect(pairs[0].durationNs).toBe(1_200_000_000)
     expect(pairs[0].events).toHaveLength(2)
   })
 
@@ -476,12 +477,12 @@ describe('pairToolCalls — args and result surfaced on the pair', () => {
     })
     const end = evt({
       id: 'b', session_id: 's1', type: 'tool_call_end',
-      data: { data: { tool_call_id: 'c1', tool_name: 'agent_browser', result: 'CDP connected', duration: 1200 } } as never,
+      data: { data: { tool_call_id: 'c1', tool_name: 'agent_browser', result: 'CDP connected', duration: 1_200_000_000 } } as never,
     })
     const [pair] = pairToolCalls([start, end])
     expect(pair.args).toBe('{"action":"status"}')
     expect(pair.result).toBe('CDP connected')
-    expect(pair.durationMs).toBe(1200)
+    expect(pair.durationNs).toBe(1_200_000_000)
     expect(pair.status).toBe('ok')
   })
 

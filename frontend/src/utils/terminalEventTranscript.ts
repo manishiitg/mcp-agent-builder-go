@@ -548,7 +548,13 @@ export interface PairedToolCall {
   /** start/end/error events for this call, in arrival order, for detail rendering. */
   events: PollingEvent[]
   status: 'running' | 'ok' | 'error'
-  durationMs?: number
+  /**
+   * Tool-call duration in NANOSECONDS, as Go's time.Duration serializes it.
+   * Named for its real unit: this was previously `durationMs`, so the card divided
+   * nanoseconds by 1000 and printed the microseconds with an `s` suffix — a 120ms
+   * query rendered as "120193.5s".
+   */
+  durationNs?: number
   /** Arguments the model passed. Carried on the START event (tool_params). */
   args?: string
   /** What the tool returned. Carried on the END event. */
@@ -616,7 +622,7 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
         status: type === 'tool_call_error' ? 'error' : type === 'tool_call_end' ? 'ok' : 'running',
       }
       const duration = toolCallField(event, 'duration')
-      if (typeof duration === 'number') item.durationMs = duration
+      if (typeof duration === 'number') item.durationNs = duration
       const args = toolCallArgs(event)
       if (args) item.args = args
       const result = textField(toolCallField(event, 'result'))
@@ -630,7 +636,7 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
     if (type === 'tool_call_error') existing.status = 'error'
     else if (type === 'tool_call_end' && existing.status !== 'error') existing.status = 'ok'
     const duration = toolCallField(event, 'duration')
-    if (typeof duration === 'number') existing.durationMs = duration
+    if (typeof duration === 'number') existing.durationNs = duration
     const args = toolCallArgs(event)
     if (args) existing.args = args
     const result = textField(toolCallField(event, 'result'))
