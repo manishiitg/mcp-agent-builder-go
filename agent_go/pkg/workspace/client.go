@@ -561,6 +561,12 @@ func (c *Client) UploadBinary(ctx context.Context, folderPath, fileName string, 
 		return "", fmt.Errorf("create upload request: %w", err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	// Multipart upload builds its own request rather than going through
+	// doRequest, so the workspace token has to be attached here too. Harmless
+	// when the route is unprotected; required the moment it is.
+	if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
+		req.Header.Set("X-Workspace-Token", token)
+	}
 	if userID := c.getUserIDFromContext(ctx); userID != "" {
 		req.Header.Set("X-User-ID", userID)
 	}

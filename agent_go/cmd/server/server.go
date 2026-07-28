@@ -1530,6 +1530,13 @@ func runServer(cmd *cobra.Command, args []string) {
 			req, _ := http.NewRequestWithContext(ctx, "POST", workspaceAPIURL+"/api/execute", bytes.NewBuffer(jsonBody))
 			if req != nil {
 				req.Header.Set("Content-Type", "application/json")
+				// /api/execute is token-protected. This fallback builds its request
+				// by hand instead of going through workspace.Client.doRequest, which
+				// is the only place the token is normally attached — so without this
+				// it 401s and the cleanup silently never happens.
+				if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
+					req.Header.Set("X-Workspace-Token", token)
+				}
 				resp, execErr := http.DefaultClient.Do(req)
 				if execErr != nil {
 					log.Printf("[BROWSER_CLEANUP] Startup cleanup failed: %v (browsers may still be running)", execErr)
