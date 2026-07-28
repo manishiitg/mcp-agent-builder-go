@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense, type FormEvent, type ChangeEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense, type FormEvent, type ChangeEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -202,6 +202,28 @@ function readChildSideWidth(): number {
 }
 function persistChildSideWidth(px: number) {
   try { localStorage.setItem(CHILD_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
+}
+
+// Parent Mode's own drag-to-resize for the workspace drawer — same mechanism
+// as the child's worksheet, but capped at HALF the window rather than nearly
+// all of it: the drawer here is a reference panel beside the conversation
+// (Academics/Progress/Files), not the primary thing being read, so the chat
+// should never be squeezed to a sliver the way the child's worksheet is
+// allowed to claim most of the screen.
+const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width'
+const PARENT_SIDE_MIN = 320
+const PARENT_SIDE_DEFAULT = 592 // the previous fixed width
+function parentSideMax(windowWidth: number): number {
+  return Math.max(PARENT_SIDE_MIN, Math.floor(windowWidth * 0.5))
+}
+function readParentSideWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(PARENT_SIDE_WIDTH_KEY))
+    return Number.isFinite(n) && n >= PARENT_SIDE_MIN ? n : PARENT_SIDE_DEFAULT
+  } catch { return PARENT_SIDE_DEFAULT }
+}
+function persistParentSideWidth(px: number) {
+  try { localStorage.setItem(PARENT_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
 }
 
 // Reading size for the worksheet. Applied as CSS `zoom` inside the viewer
@@ -1307,6 +1329,41 @@ export default function LearningApp() {
     window.addEventListener('pointerup', end)
     window.addEventListener('pointercancel', end)
   }
+  // Parent Mode's own resizer — same pointer-tracking approach as the
+  // child's, clamped to parentSideMax's 50%-of-window ceiling instead.
+  const [parentSideWidthPref, setParentSideWidth] = useState(readParentSideWidth)
+  const parentSideWidth = Math.min(Math.max(parentSideWidthPref, PARENT_SIDE_MIN), parentSideMax(windowWidth))
+  const commitParentSideWidth = (px: number) => {
+    const next = Math.min(Math.max(px, PARENT_SIDE_MIN), parentSideMax(windowWidth))
+    setParentSideWidth(next)
+    persistParentSideWidth(next)
+  }
+  const parentBodyRef = useRef<HTMLDivElement>(null)
+  const [parentResizing, setParentResizing] = useState(false)
+  const startParentResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    const body = parentBodyRef.current
+    if (!body) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLDivElement).focus({ preventScroll: true })
+    const right = body.getBoundingClientRect().right
+    const max = parentSideMax(windowWidth)
+    let last = parentSideWidth
+    setParentResizing(true)
+    const move = (ev: PointerEvent) => {
+      last = Math.min(Math.max(right - ev.clientX, PARENT_SIDE_MIN), max)
+      setParentSideWidth(last)
+    }
+    const end = () => {
+      setParentResizing(false)
+      persistParentSideWidth(last)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  }
   // "Wide" once past the midpoint between default and max, so the button's icon
   // always shows which way the next tap will move it.
   const childSideWide = childSideWidth > (CHILD_SIDE_DEFAULT + childSideMax(windowWidth)) / 2
@@ -1344,6 +1401,23 @@ export default function LearningApp() {
     return () => window.removeEventListener('message', onMsg)
   }, [])
   const childViewerContent = useChildChatStore((s) => s.childViewerContent)
+  // Reading childViewerScrollRef.current DURING render (instead of only here,
+  // memoized) would re-bake the latest scroll position into srcDoc on every
+  // unrelated re-render of this component (e.g. each composer keystroke) —
+  // React would then see a changed srcDoc string and reload the iframe,
+  // replaying the position-restore highlight/scroll for no reason. Memoizing
+  // on the intentional inputs only means the live-updating ref is read once
+  // per genuine content/focus/path/zoom change, not once per render.
+  const childViewerSrcDoc = useMemo(
+    () => withViewerPositionScript(
+      childViewerContent?.content ?? '',
+      childViewerFocus,
+      childViewerScrollRef.current[childViewerPath ?? ''] ?? 0,
+      childZoom,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [childViewerContent, childViewerFocus, childZoom, childViewerPath],
+  )
   const setChildViewerContent = useChildChatStore((s) => s.setChildViewerContent)
   const childTreeRefreshKey = useChildChatStore((s) => s.childTreeRefreshKey)
   const setChildTreeRefreshKey = useChildChatStore((s) => s.setChildTreeRefreshKey)
@@ -2548,7 +2622,13 @@ export default function LearningApp() {
   if (screen === 'parent') {
     return (
       <main className="learning-app" data-theme={theme}>
-        <div className="fl-shell" data-rail="closed" data-drawer={drawerOpen ? 'open' : 'closed'}>
+        <div
+          ref={parentBodyRef}
+          className={`fl-shell${parentResizing ? ' is-resizing' : ''}`}
+          data-rail="closed"
+          data-drawer={drawerOpen ? 'open' : 'closed'}
+          style={{ ['--parent-side-w' as string]: `${Math.round(parentSideWidth)}px` }}
+        >
           <section className="fl-center">
             <div className="fl-toolbar">
               <div className="fl-toolbar-left">
@@ -2856,6 +2936,25 @@ export default function LearningApp() {
             </form>
             <p className="fl-disclaimer">SparkQuill can make mistakes. Please review important content before sharing it with {childName || 'your child'}.</p>
           </section>
+          <div
+            className="fl-parent-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Drag to resize the workspace panel"
+            aria-valuenow={Math.round(parentSideWidth)}
+            aria-valuemin={PARENT_SIDE_MIN}
+            aria-valuemax={Math.round(parentSideMax(windowWidth))}
+            tabIndex={0}
+            onPointerDown={startParentResize}
+            onKeyDown={(e) => {
+              const step = e.shiftKey ? 80 : 24
+              if (e.key === 'ArrowLeft') { e.preventDefault(); commitParentSideWidth(parentSideWidth + step) }
+              else if (e.key === 'ArrowRight') { e.preventDefault(); commitParentSideWidth(parentSideWidth - step) }
+              else if (e.key === 'Home') { e.preventDefault(); commitParentSideWidth(PARENT_SIDE_DEFAULT) }
+            }}
+          >
+            <span className="fl-parent-resizer-grip" aria-hidden="true" />
+          </div>
 
           <aside className="fl-drawer" aria-label="Learning workspace">
             {!((drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath) && (
@@ -3827,7 +3926,7 @@ export default function LearningApp() {
                       className="fl-viewer-frame"
                       title="Preview"
                       sandbox="allow-scripts"
-                      srcDoc={withViewerPositionScript(childViewerContent.content, childViewerFocus, childViewerScrollRef.current[childViewerPath] ?? 0, childZoom)}
+                      srcDoc={childViewerSrcDoc}
                     />
                   ) : childViewerPath.endsWith('.md') ? (
                     <div className="fl-viewer-md"><Markdown text={childViewerContent.content} /></div>

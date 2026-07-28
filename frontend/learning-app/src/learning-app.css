@@ -191,8 +191,34 @@ html, body, #root { margin: 0; height: 100%; }
 /* ===== Parent operating shell: three-rail workspace ===== */
 /* Two columns now — the conversation list rail was removed (one unified parent
    conversation), so it's just the chat + the workspace drawer. */
-.fl-shell { display: grid; grid-template-columns: minmax(0, 1fr) 592px; height: 100vh; height: 100dvh; background: var(--cream); transition: grid-template-columns .2s ease; }
-.fl-shell[data-drawer="closed"] { grid-template-columns: minmax(0, 1fr) 0; }
+/* Three columns, not two: center pane, the drag handle (auto — sized to its
+   own ~9px content), then the drawer. Matches .fl-child-body's own pattern —
+   this grid now has three grid-item children (section, resizer div, aside),
+   so the column count has to say so explicitly or the browser silently
+   misplaces the third. */
+.fl-shell { display: grid; grid-template-columns: minmax(0, 1fr) auto var(--parent-side-w, 592px); height: 100vh; height: 100dvh; background: var(--cream); transition: grid-template-columns .2s ease; }
+.fl-shell[data-drawer="closed"] { grid-template-columns: minmax(0, 1fr) 0 0; }
+.fl-shell.is-resizing { transition: none; cursor: col-resize; user-select: none; }
+.fl-shell.is-resizing iframe { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .fl-shell { transition: none; } }
+
+/* Drag handle between the conversation and the workspace drawer — same visual
+   treatment as the child's own worksheet resizer (.fl-child-resizer), just a
+   separate element/class since it sits in a different layout (CSS grid here,
+   not the child's flex body). */
+.fl-parent-resizer { position: relative; width: 9px; margin: 0 -4px; z-index: 2; cursor: col-resize; touch-action: none; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; }
+.fl-parent-resizer::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); background: var(--line); transition: background .12s ease, width .12s ease; }
+.fl-parent-resizer:hover::before,
+.fl-parent-resizer:focus-visible::before,
+.fl-shell.is-resizing .fl-parent-resizer::before { width: 3px; background: var(--yellow); }
+.fl-parent-resizer:focus-visible { outline: none; }
+.fl-parent-resizer-grip { position: relative; width: 6px; height: 30px; border-radius: 999px; background: var(--yellow); box-shadow: 0 0 0 2px var(--surface-2), 0 1px 3px rgba(13, 35, 58, .25); opacity: 0; transition: opacity .12s ease; }
+.fl-parent-resizer:hover .fl-parent-resizer-grip,
+.fl-parent-resizer:focus-visible .fl-parent-resizer-grip,
+.fl-shell.is-resizing .fl-parent-resizer-grip { opacity: 1; }
+@media (max-width: 1180px) {
+  .fl-parent-resizer { display: none; }
+}
 
 /* Left conversation/history rail */
 .fl-rail { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--navy); color: #cddaf0; font-family: var(--font-ui); }
