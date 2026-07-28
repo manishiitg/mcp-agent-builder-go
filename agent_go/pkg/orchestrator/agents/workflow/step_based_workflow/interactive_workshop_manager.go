@@ -4865,6 +4865,21 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					warnings = append(warnings, "execution_tier is set but execution_llm takes precedence, so the tier override will be ignored until execution_llm is cleared.")
 				}
 			}
+			// 6c. Validate execution_llm shape.
+			//
+			// execution_tier and coding_agent_tmux_lifecycle were validated here but
+			// execution_llm was not, so a malformed override reached the runtime
+			// untouched and failed the step at turn 1 with "all LLMs failed (primary +
+			// 0 fallbacks)". A live workflow had all four evaluation steps pinned to
+			// provider "claude-code" with model_id "claude-code" — the provider name
+			// repeated in the model slot — which the CLI rejects as a model that does
+			// not exist. These are cheap structural checks; they cannot confirm a model
+			// exists, only that the pairing is not self-evidently wrong.
+			for _, llm := range collectStepLLMConfigsForValidation(targetConfig.AgentConfigs.ExecutionLLM) {
+				if err := validateStepLLMConfig(llm.label, llm.publishedID, llm.provider, llm.modelID); err != "" {
+					errors = append(errors, err)
+				}
+			}
 			if rawLifecycle := strings.TrimSpace(targetConfig.AgentConfigs.CodingAgentTmuxLifecycle); rawLifecycle != "" {
 				if normalizeCodingAgentTmuxLifecycle(rawLifecycle) == "" {
 					errors = append(errors, fmt.Sprintf("coding_agent_tmux_lifecycle %q is not recognized. Valid values: \"close_on_completion\", \"keep_alive\".", rawLifecycle))
@@ -10006,4 +10021,67 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	}
 
 	return result, nil
+}
+
+// stepLLMConfigForValidation flattens a primary override and its fallbacks so both
+// get the same structural checks — a broken fallback is only discovered when the
+// primary has already failed, which is the worst moment to learn about it.
+type stepLLMConfigForValidation struct {
+	label       string
+	publishedID string
+	provider    string
+	modelID     string
+}
+
+func collectStepLLMConfigsForValidation(cfg *AgentLLMConfig) []stepLLMConfigForValidation {
+	if cfg == nil {
+		return nil
+	}
+	out := []stepLLMConfigForValidation{{
+		label:       "execution_llm",
+		publishedID: cfg.PublishedLLMID,
+		provider:    cfg.Provider,
+		modelID:     cfg.ModelID,
+	}}
+	for i, fb := range cfg.Fallbacks {
+		out = append(out, stepLLMConfigForValidation{
+			label:       fmt.Sprintf("execution_llm.fallbacks[%d]", i),
+			publishedID: fb.PublishedLLMID,
+			provider:    fb.Provider,
+			modelID:     fb.ModelID,
+		})
+	}
+	return out
+}
+
+// validateStepLLMConfig returns an error string, or "" when the shape is usable.
+//
+// It deliberately does not try to confirm the model exists — that needs a live
+// provider call. It catches the shapes that cannot be right under any provider.
+func validateStepLLMConfig(label, publishedID, provider, modelID string) string {
+	publishedID = strings.TrimSpace(publishedID)
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+
+	if publishedID == "" && provider == "" && modelID == "" {
+		return fmt.Sprintf("%s is set but empty. Give a published_llm_id, or both provider and model_id, or clear the field so the step uses the workflow default.", label)
+	}
+	// A published id resolves both halves on its own.
+	if publishedID != "" {
+		return ""
+	}
+	if provider == "" {
+		return fmt.Sprintf("%s sets model_id %q with no provider. Use get_llm_config to see which provider serves that model.", label, modelID)
+	}
+	if modelID == "" {
+		return fmt.Sprintf("%s sets provider %q with no model_id. Use get_llm_config (or list_coding_agent_models for a CLI provider) to pick one.", label, provider)
+	}
+	if strings.EqualFold(provider, modelID) {
+		hint := "Use get_llm_config to pick a real model for that provider."
+		if common.IsCLIProvider(provider) {
+			hint = fmt.Sprintf("%q is a CLI runtime, not a model. Use list_coding_agent_models to pick the model it should run (for example %q with a specific Claude model).", provider, provider)
+		}
+		return fmt.Sprintf("%s sets model_id %q, which is the provider name repeated in the model slot — that is never a real model and the step will fail at turn 1 with \"all LLMs failed\". %s", label, modelID, hint)
+	}
+	return ""
 }
