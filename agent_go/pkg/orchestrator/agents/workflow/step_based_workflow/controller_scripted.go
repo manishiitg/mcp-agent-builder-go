@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,6 +141,29 @@ type StreakInfo struct {
 	Count int    `json:"count"`
 }
 
+// ErrScriptedHarnessRejection means the workspace API refused the execute
+// request, so main.py never started and produced no output at all.
+//
+// This is deliberately a distinct failure kind rather than "the script failed",
+// because the two demand opposite responses. A failed script is the relearn
+// path's whole purpose: the step agent is handed the source plus the error and
+// told to "fix the bug and rewrite it", and its rewrite is then saved back as
+// the canonical script. Feed a harness rejection into that path and the agent
+// is asked to explain an error its code did not cause, against a script it
+// cannot observe running. It complies, because the prompt presumes the script
+// is at fault and offers no branch for "the error is not yours".
+//
+// That is not hypothetical. One workflow concluded DB_PATH was missing; another
+// concluded Python's sqlite3 could not open the database and wrote a permanent
+// learning to shell out to the sqlite3 CLI instead. Neither script had executed
+// a line, and both rewrites were persisted over working code.
+//
+// So a rejection aborts the step instead. It is infrastructure being down, and
+// it surfaces through the ordinary step-failure notification the operator
+// already watches — not as a workflow concern, which Pulse Gate reads to choose
+// reviewers that could do nothing about it.
+var ErrScriptedHarnessRejection = errors.New("workspace refused to start the script")
+
 // ScriptedFastPathResult is returned by tryRunSavedScriptedScript.
 type ScriptedFastPathResult struct {
 	RanScript       bool   // true if a saved script was found and attempted
@@ -151,6 +175,11 @@ type ScriptedFastPathResult struct {
 	ValidationError string // output/pre-validation failure, if any
 	FailureReason   string // "execution_error", "validation_error", or "execution_and_validation_error"
 	ExistingScript  string // old script content (for LLM relearn prompt)
+	// HarnessFailure means the script never started (ErrScriptedHarnessRejection).
+	// Mutually exclusive with RanScript: nothing was executed, so there is no
+	// exit code, no output, and nothing for the LLM to repair.
+	HarnessFailure bool
+	HarnessError   string
 }
 
 // ScriptedFastPathDecision is what the saved-script attempt means for the rest
@@ -167,6 +196,10 @@ type ScriptedFastPathDecision struct {
 	// a script actually ran and failed — an untried script is a reuse case, not
 	// a failure, and must not be presented to the model as one.
 	PriorError string
+	// HarnessFailure aborts the step: the runtime refused to start the script,
+	// so neither the fast path nor the LLM fallback has anything to work with.
+	HarnessFailure bool
+	HarnessError   string
 }
 
 // decideScriptedFastPath maps a saved-script attempt onto the step's next move.
@@ -181,6 +214,10 @@ func decideScriptedFastPath(result *ScriptedFastPathResult) ScriptedFastPathDeci
 		return ScriptedFastPathDecision{}
 	}
 	switch {
+	case result.HarnessFailure:
+		// The script never started. Handing the LLM a script and an error it did
+		// not cause is how working code gets rewritten — abort instead.
+		return ScriptedFastPathDecision{HarnessFailure: true, HarnessError: result.HarnessError}
 	case result.RanScript && result.Success:
 		// Saved script executed and validated — skip the LLM entirely.
 		return ScriptedFastPathDecision{FastPathDone: true}
@@ -928,23 +965,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		mainPyAbsPath,
 	))
 	if !apiResp.Success && exitCode == 0 {
-		// The workspace API rejected the request itself, so the interpreter was
-		// never started. Say that explicitly: this error is handed straight to the
-		// step agent as "Previous Script (Failed)", and on its own the text reads
-		// like the script misbehaved. Two workflows have already rewritten a
-		// perfectly good script against this error — one deciding DB_PATH was
-		// missing, another deciding Python's sqlite3 could not open the database
-		// and switching to the sqlite3 CLI permanently in its learnings — when
-		// neither had executed a single line.
+		// The workspace API rejected the request itself, so no interpreter was
+		// ever started. That is not a script failure and must not be reported as
+		// one — see ErrScriptedHarnessRejection.
 		exitCode = -1
-		execErr = fmt.Errorf(
-			"workspace API error: %s\n\n"+
-				"IMPORTANT: this is a harness failure, not a script failure. The workspace API "+
-				"refused to start the process, so main.py never ran and produced no output. "+
-				"Do NOT rewrite the script, remove required env vars, or switch libraries to "+
-				"work around this — the script's behavior is untested by this run. Report the "+
-				"error as-is with a CONCERNS: line and leave the script alone.",
-			apiResp.Error)
+		execErr = fmt.Errorf("%w: %s", ErrScriptedHarnessRejection, apiResp.Error)
 	}
 	return combined, exitCode, execErr
 }
@@ -1071,6 +1096,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 	// builder can spot a frozen-but-broken script via consecutive_failures / needs_review.
 	fastPathAgentCfgs := getAgentConfigs(step)
 	isLocked := fastPathAgentCfgs != nil && fastPathAgentCfgs.LockCode != nil && *fastPathAgentCfgs.LockCode
+
+	// A refused request is not a run. Return before pre-validation and before
+	// updateScriptedRunStats: recording it as a failure would inflate
+	// current_streak and lock_code_stats.consecutive_failures, which is what
+	// flips needs_review and argues for unlocking a script that never ran.
+	if errors.Is(execErr, ErrScriptedHarnessRejection) {
+		hcpo.GetLogger().Error(fmt.Sprintf(
+			"🚨 [scripted] Workspace refused to start main.py for step %d (%s) — the script did not run",
+			stepIndex+1, stepID), execErr)
+		return &ScriptedFastPathResult{
+			HarnessFailure: true,
+			HarnessError:   execErr.Error(),
+			ExitCode:       -1,
+			ExistingScript: existingScript,
+		}
+	}
 
 	if execErr != nil || exitCode != 0 {
 		var execErrMsg string
