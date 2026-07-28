@@ -748,6 +748,20 @@ func (c *ContextAwareEventBridge) HandleEvent(ctx context.Context, event *events
 					newMeta["step_triggered_by"] = currentTriggeredBy
 				}
 
+				// A step-scoped agent's first user-role message is the generated
+				// executor prompt, not a human chat message. Preserve any
+				// explicit source (for example live user input) and tag only
+				// otherwise-unclassified turn-zero messages. Step scope is the
+				// stable signal here: parallel children carry it in the immutable
+				// context even before provider transport metadata is available.
+				if event.Type == events.UserMessage && hasStepID {
+					if _, alreadyClassified := newMeta["source"]; !alreadyClassified {
+						if message, ok := event.Data.(*events.UserMessageEvent); ok && message.Turn == 0 {
+							newMeta["source"] = "execution_prompt"
+						}
+					}
+				}
+
 				// Atomically replace the metadata map (all writes done before assignment)
 				baseData.Metadata = newMeta
 

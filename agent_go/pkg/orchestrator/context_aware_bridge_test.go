@@ -125,6 +125,61 @@ func TestContextAwareBridgePushContextRichTagsTerminalStreamWithStepType(t *test
 	}
 }
 
+func TestContextAwareBridgeClassifiesStructuredExecutionPrompt(t *testing.T) {
+	listener := &captureEventListener{}
+	bridge := NewContextAwareEventBridge(listener, loggerv2.NewNoop())
+	bridge.SetOrchestratorContext("execution", 0, "write-report", "Write report")
+	bridge.SetRichStepContext(RichStepContext{
+		StepName:  "Write report",
+		StepType:  "message_sequence",
+		Transport: "structured",
+	})
+
+	event := &mcpagent_events.AgentEvent{
+		Type:      mcpagent_events.UserMessage,
+		Timestamp: time.Now(),
+		Data:      mcpagent_events.NewUserMessageEvent(0, "generated executor instructions", "user"),
+	}
+
+	if err := bridge.HandleEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	message, ok := listener.event.Data.(*mcpagent_events.UserMessageEvent)
+	if !ok {
+		t.Fatalf("forwarded event data = %T, want *UserMessageEvent", listener.event.Data)
+	}
+	if got := message.Metadata["source"]; got != "execution_prompt" {
+		t.Fatalf("metadata source = %v, want execution_prompt", got)
+	}
+}
+
+func TestContextAwareBridgePreservesExplicitUserMessageSource(t *testing.T) {
+	listener := &captureEventListener{}
+	bridge := NewContextAwareEventBridge(listener, loggerv2.NewNoop())
+	bridge.SetOrchestratorContext("execution", 0, "write-report", "Write report")
+	bridge.SetRichStepContext(RichStepContext{
+		StepName:  "Write report",
+		StepType:  "message_sequence",
+		Transport: "structured",
+	})
+
+	message := mcpagent_events.NewUserMessageEvent(0, "human follow-up", "user")
+	message.Metadata = map[string]interface{}{"source": "coding_agent_live_input"}
+	event := &mcpagent_events.AgentEvent{
+		Type:      mcpagent_events.UserMessage,
+		Timestamp: time.Now(),
+		Data:      message,
+	}
+
+	if err := bridge.HandleEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	forwarded := listener.event.Data.(*mcpagent_events.UserMessageEvent)
+	if got := forwarded.Metadata["source"]; got != "coding_agent_live_input" {
+		t.Fatalf("metadata source = %v, want coding_agent_live_input", got)
+	}
+}
+
 func TestContextAwareBridgeUsesExecutionLocalContextForParallelChildren(t *testing.T) {
 	listener := &captureEventListener{}
 	bridge := NewContextAwareEventBridge(listener, loggerv2.NewNoop())

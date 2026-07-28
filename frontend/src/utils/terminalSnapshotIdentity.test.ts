@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalSnapshot } from '../services/api-types'
-import { reconcileTerminalSnapshots } from './terminalSnapshotIdentity'
+import {
+  mergeTerminalSnapshotBody,
+  reconcileTerminalSnapshots,
+  shouldStreamTerminal,
+} from './terminalSnapshotIdentity'
 
 const terminal = (id: string, overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot => ({
   terminal_id: id,
@@ -71,5 +75,51 @@ describe('reconcileTerminalSnapshots', () => {
 
     expect(reconcileTerminalSnapshots(current, [current[0], added])).toEqual([current[0], added])
     expect(reconcileTerminalSnapshots(current, [current[0]])).toEqual([current[0]])
+  })
+})
+
+describe('mergeTerminalSnapshotBody', () => {
+  it('does not let stale detail metadata downgrade a live terminal', () => {
+    const base = terminal('main', {
+      state: 'running',
+      active: true,
+      process_state: 'live',
+      content: '',
+    })
+    const detail = terminal('main', {
+      state: 'completed',
+      active: false,
+      process_state: 'closed',
+      content: 'captured transcript',
+    })
+
+    expect(mergeTerminalSnapshotBody(base, detail)).toMatchObject({
+      state: 'running',
+      active: true,
+      process_state: 'live',
+      content: 'captured transcript',
+    })
+  })
+})
+
+describe('shouldStreamTerminal', () => {
+  it('keeps an interactive CLI attached after its current turn completes', () => {
+    expect(shouldStreamTerminal(terminal('main', {
+      state: 'completed',
+      active: false,
+      process_state: 'live',
+      snapshot_kind: 'live',
+      tmux_session: 'tmux-main',
+    }))).toBe(true)
+  })
+
+  it('does not stream an archived or closed pane', () => {
+    expect(shouldStreamTerminal(terminal('main', {
+      state: 'completed',
+      active: false,
+      process_state: 'closed',
+      snapshot_kind: 'archived',
+      tmux_session: 'tmux-main',
+    }))).toBe(false)
   })
 })

@@ -127,6 +127,12 @@ import type {
   BatchGroupStartEvent,
   BatchGroupEndEvent,
   BatchExecutionEndEvent,
+  // Background Agent Events
+  BackgroundAgentStartedEvent,
+  BackgroundAgentCompletedEvent,
+  BackgroundAgentTerminatedEvent,
+  SyntheticTurnReadyEvent,
+  AutoNotificationSteeredEvent,
 } from './events-bridge';
 
 // =============================================================================
@@ -293,7 +299,13 @@ export type EventTypeString =
   | 'todo_task_status_update'
   // Delegation Events
   | 'delegation_start'
-  | 'delegation_end';
+  | 'delegation_end'
+  // Background Agent Events
+  | 'background_agent_started'
+  | 'background_agent_completed'
+  | 'background_agent_terminated'
+  | 'synthetic_turn_ready'
+  | 'auto_notification_steered';
 
 // =============================================================================
 // EVENT TYPE TO DATA TYPE MAPPING
@@ -419,6 +431,12 @@ export interface EventTypeToDataMap {
   'delegation_end': DelegationEndEvent;
   // Broken Pipe Events
   'broken_pipe': BrokenPipeEvent;
+  // Background Agent Events
+  'background_agent_started': BackgroundAgentStartedEvent;
+  'background_agent_completed': BackgroundAgentCompletedEvent;
+  'background_agent_terminated': BackgroundAgentTerminatedEvent;
+  'synthetic_turn_ready': SyntheticTurnReadyEvent;
+  'auto_notification_steered': AutoNotificationSteeredEvent;
 }
 
 // Todo Task event data types (not in generated schema)
@@ -620,36 +638,14 @@ export interface DelegationEndEvent {
   duration?: string;
 }
 
-// Background agent event data types (async delegation in multi-agent mode)
-export interface BackgroundAgentStartedEvent {
-  agent_id?: string;
-  name?: string;
-  instruction?: string;
-  timestamp?: string;
-}
-
-export interface BackgroundAgentCompletedEvent {
-  agent_id?: string;
-  name?: string;
-  status?: string;
-  result?: string;
-  error?: string;
-  duration?: string;
-  timestamp?: string;
-}
-
-export interface BackgroundAgentTerminatedEvent {
-  agent_id?: string;
-  name?: string;
-  timestamp?: string;
-}
-
-export interface SyntheticTurnReadyEvent {
-  session_id?: string;
-  query?: string;
-  message?: string;
-  timestamp?: string;
-}
+// Background agent event data types (BackgroundAgentStartedEvent,
+// BackgroundAgentCompletedEvent, BackgroundAgentTerminatedEvent,
+// SyntheticTurnReadyEvent, AutoNotificationSteeredEvent) now come from the
+// generated schema (see the events-bridge import above) — they used to be
+// hand-written stubs here, drafted but never wired into EventTypeString /
+// EventTypeToDataMap, so every consumer fell back to ad-hoc `as` casts
+// regardless. The backend now emits real typed structs for these, so the
+// generated interfaces are authoritative.
 
 // Workflow event data types (not in generated schema)
 export interface WorkflowStartEventData {
@@ -933,6 +929,12 @@ export type {
   BatchGroupStartEvent,
   BatchGroupEndEvent,
   BatchExecutionEndEvent,
+  // Background Agent Events
+  BackgroundAgentStartedEvent,
+  BackgroundAgentCompletedEvent,
+  BackgroundAgentTerminatedEvent,
+  SyntheticTurnReadyEvent,
+  AutoNotificationSteeredEvent,
 } from './events-bridge';
 
 // Export nested types from events.ts (used by event types but not in events-bridge.ts)

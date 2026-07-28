@@ -1,4 +1,4 @@
-import type { ActiveSessionInfo, RuntimeSnapshot, SessionExecutionTreeResponse } from '../services/api-types'
+import type { ActiveSessionInfo, RuntimeSnapshot, SessionExecutionTreeResponse, TerminalSnapshot } from '../services/api-types'
 
 export type RuntimeDisplayStatus = 'busy' | 'idle' | 'stopped'
 
@@ -44,6 +44,105 @@ export function runtimeNeedsUserInput(session?: Pick<ActiveSessionInfo, 'runtime
 export function runtimeCanSteer(session?: Pick<ActiveSessionInfo, 'runtime_state' | 'can_steer'> | null): boolean {
   if (!session) return false
   return session.runtime_state?.foreground_turn.can_steer ?? session.can_steer === true
+}
+
+type RuntimeExecutionRecord = {
+  id: string
+  status: string
+  startedAt?: string
+  completedAt?: string
+}
+
+const LIVE_EXECUTION_STATUSES = new Set(['active', 'in_progress', 'pending', 'queued', 'running', 'starting'])
+const FAILED_EXECUTION_STATUSES = new Set(['canceled', 'cancelled', 'error', 'failed', 'stale'])
+const SETTLED_SESSION_STATUSES = new Set(['canceled', 'cancelled', 'completed', 'error', 'failed', 'stopped'])
+const GENERIC_EXECUTION_ID_TOKENS = new Set([
+  'agent', 'main', 'pulse', 'review', 'reviewer', 'step', 'workflow', 'workshop',
+])
+
+function normalizedExecutionTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map(token => token.replace(/s$/, ''))
+    .filter(token => (
+      token.length > 2 &&
+      !/^\d+$/.test(token) &&
+      !GENERIC_EXECUTION_ID_TOKENS.has(token)
+    ))
+}
+
+function terminalRuntimeIdentities(terminal: TerminalSnapshot): string[] {
+  return [
+    terminal.terminal_id,
+    terminal.owner_id,
+    terminal.execution_id,
+    terminal.parent_step_id,
+  ].filter((value): value is string => Boolean(value))
+}
+
+function runtimeRecordMatchesTerminal(recordID: string, terminal: TerminalSnapshot): boolean {
+  const identities = terminalRuntimeIdentities(terminal)
+  if (identities.some(identity => identity === recordID || identity.includes(recordID))) return true
+
+  // Wrapper terminals use IDs such as `agent:workshop-review-costs-*`, while
+  // the tracked execution is `review-costs-*`. Compare the meaningful slug
+  // tokens so both panes inherit the same authoritative lifecycle.
+  const recordTokens = normalizedExecutionTokens(recordID)
+  if (recordTokens.length === 0) return false
+  return identities.some(identity => {
+    const identityTokens = new Set(normalizedExecutionTokens(identity))
+    return recordTokens.every(token => identityTokens.has(token))
+  })
+}
+
+function runtimeExecutionRecords(runtime: RuntimeSnapshot): RuntimeExecutionRecord[] {
+  return [
+    ...(runtime.child_executions || []).map(record => ({
+      id: record.execution_id,
+      status: record.status,
+      startedAt: record.started_at,
+      completedAt: record.completed_at,
+    })),
+    ...(runtime.background_agents || []).map(record => ({
+      id: record.agent_id,
+      status: record.status,
+      startedAt: record.created_at,
+      completedAt: record.completed_at,
+    })),
+  ]
+}
+
+function runtimeRecordTime(record: RuntimeExecutionRecord): number {
+  const parsed = Date.parse(record.completedAt || record.startedAt || '')
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+export function reconcileTerminalRuntimeState(
+  terminal: TerminalSnapshot,
+  runtime?: RuntimeSnapshot | null,
+): TerminalSnapshot {
+  const appearsRunning = terminal.active || terminal.state === 'running'
+  if (!appearsRunning || !runtime) return terminal
+
+  const matches = runtimeExecutionRecords(runtime)
+    .filter(record => runtimeRecordMatchesTerminal(record.id, terminal))
+    .sort((left, right) => runtimeRecordTime(right) - runtimeRecordTime(left))
+
+  if (matches.some(record => LIVE_EXECUTION_STATUSES.has(record.status.trim().toLowerCase()))) {
+    return terminal
+  }
+
+  const sessionSettled = SETTLED_SESSION_STATUSES.has((runtime.raw_session_status || '').trim().toLowerCase())
+  if (matches.length === 0 && (!sessionSettled || runtime.foreground_turn.busy)) return terminal
+
+  const latest = matches[0]
+  const failed = latest && FAILED_EXECUTION_STATUSES.has(latest.status.trim().toLowerCase())
+  return {
+    ...terminal,
+    active: false,
+    state: failed ? 'failed' : 'completed',
+  }
 }
 
 function legacyDisplayStatus(status?: string): RuntimeDisplayStatus {

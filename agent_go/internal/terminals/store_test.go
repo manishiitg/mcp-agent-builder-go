@@ -6,9 +6,716 @@ import (
 	"time"
 
 	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	agentevents "github.com/manishiitg/mcpagent/events"
 )
+
+func genericTerminalLifecycleEvent(eventType, executionID string, metadata map[string]interface{}, timestamp time.Time) storeevents.Event {
+	return storeevents.Event{
+		Type:          eventType,
+		Timestamp:     timestamp,
+		SessionID:     "session-1",
+		ExecutionID:   executionID,
+		ExecutionKind: "workflow_step",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.EventType(eventType),
+			Data: &agentevents.GenericEventData{
+				BaseEventData: agentevents.BaseEventData{Metadata: metadata},
+				Data:          map[string]interface{}{},
+			},
+		},
+	}
+}
+
+func TestStoreKeepsStructuredWorkflowExecutionInDone(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	metadata := map[string]interface{}{
+		"execution_owner_id": "workflow-step:exec-1:math-solver",
+		"execution_kind":     "workflow_step",
+		"step_id":            "math-solver",
+		"step_title":         "Math Solver",
+		"workflow_path":      "Workflow/testing",
+	}
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		"workflow-step:exec-1:math-solver",
+		metadata,
+		now,
+	))
+
+	running, ok := store.Get("session-1:workflow-step:exec-1:math-solver")
+	if !ok {
+		t.Fatal("expected structured child to appear as soon as it starts")
+	}
+	if !running.Active || running.State != "running" || running.StepTransport != "structured" {
+		t.Fatalf("unexpected running lifecycle: active=%v state=%q transport=%q", running.Active, running.State, running.StepTransport)
+	}
+
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          "streaming_chunk",
+		Timestamp:     now.Add(time.Second),
+		SessionID:     "session-1",
+		ExecutionID:   "workflow-step:exec-1:math-solver",
+		ExecutionKind: "workflow_step",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.StreamingChunk,
+			Data: &agentevents.StreamingChunkEvent{
+				BaseEventData: agentevents.BaseEventData{Metadata: metadata},
+				Content:       "The answer is 327.",
+				ChunkIndex:    1,
+				Source:        agentevents.StreamingChunkSourceTranscript,
+			},
+		},
+	})
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_end",
+		"workflow-step:exec-1:math-solver",
+		metadata,
+		now.Add(2*time.Second),
+	))
+
+	done, ok := store.Get("session-1:workflow-step:exec-1:math-solver")
+	if !ok {
+		t.Fatal("expected completed structured child to remain available")
+	}
+	if done.Active || done.State != "completed" || done.ProcessState != "closed" || done.SnapshotKind != "archived" {
+		t.Fatalf("unexpected completed lifecycle: active=%v state=%q process=%q snapshot=%q", done.Active, done.State, done.ProcessState, done.SnapshotKind)
+	}
+	if done.Content != "The answer is 327." {
+		t.Fatalf("unexpected structured content: %q", done.Content)
+	}
+	if done.ClosesAt != nil || done.RetentionSeconds != 0 {
+		t.Fatalf("completed structured child must stay in Done until dismissed: closes_at=%v retention=%d", done.ClosesAt, done.RetentionSeconds)
+	}
+	if snapshots := store.List("session-1"); len(snapshots) != 1 {
+		t.Fatalf("expected one retained Done entry, got %d", len(snapshots))
+	}
+}
+
+func TestStoreUsesExecutionIdentityWhenParallelStepContextIsStale(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const executionID = "exec-word-task-1785053307584570000"
+	const expectedOwner = "workflow-step:" + executionID + ":word-task"
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		executionID,
+		map[string]interface{}{
+			"agent_id":        executionID,
+			"execution_kind":  "workflow_step",
+			"current_step_id": "calc-task",
+			"step_id":         "calc-task",
+			"step_title":      "Nested Calc Task",
+		},
+		now,
+	))
+
+	snapshot, ok := store.Get("session-1:" + expectedOwner)
+	if !ok {
+		t.Fatal("expected execution identity to retain word-task ownership")
+	}
+	if snapshot.StepID != "word-task" {
+		t.Fatalf("step id = %q, want word-task", snapshot.StepID)
+	}
+	if snapshot.StepName == "Nested Calc Task" {
+		t.Fatal("stale sibling title relabeled the word task")
+	}
+	if _, crossed := store.Get("session-1:workflow-step:" + executionID + ":calc-task"); crossed {
+		t.Fatal("stale shared context created a crossed calc-task terminal")
+	}
+}
+
+func TestStoreCanonicalizesCrossedWorkflowStepOwner(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const executionID = "exec-calc-task-1785055325563679000"
+	const correctOwner = "workflow-step:" + executionID + ":calc-task"
+	const crossedOwner = "workflow-step:" + executionID + ":word-task"
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		crossedOwner,
+		map[string]interface{}{
+			"execution_id":    crossedOwner,
+			"execution_kind":  "message_sequence_item",
+			"current_step_id": "word-task",
+			"step_id":         "word-task",
+			"step_title":      "Nested Word Task",
+		},
+		now,
+	))
+
+	snapshot, ok := store.Get("session-1:" + correctOwner)
+	if !ok {
+		t.Fatal("expected crossed owner to be canonicalized to calc-task")
+	}
+	if snapshot.StepID != "calc-task" {
+		t.Fatalf("step id = %q, want calc-task", snapshot.StepID)
+	}
+	if snapshot.StepName == "Nested Word Task" {
+		t.Fatal("stale sibling title relabeled the calc task")
+	}
+	if _, crossed := store.Get("session-1:" + crossedOwner); crossed {
+		t.Fatal("crossed workflow-step owner was retained")
+	}
+}
+
+func TestStorePreservesStepTitleWhenCompletionCarriesSiblingTitle(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const executionID = "exec-calc-task-1785055325563679000"
+	const ownerID = "workflow-step:" + executionID + ":calc-task"
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		executionID,
+		map[string]interface{}{
+			"agent_id":        executionID,
+			"execution_kind":  "workflow_step",
+			"current_step_id": "calc-task",
+			"step_id":         "calc-task",
+			"step_title":      "Nested Calc Task",
+		},
+		now,
+	))
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_end",
+		ownerID,
+		map[string]interface{}{
+			"execution_id":    ownerID,
+			"execution_kind":  "workflow_step",
+			"current_step_id": "calc-task",
+			"step_id":         "calc-task",
+			"step_title":      "Nested Word Task",
+		},
+		now.Add(time.Second),
+	))
+
+	snapshot, ok := store.Get("session-1:" + ownerID)
+	if !ok {
+		t.Fatal("expected calc-task transcript")
+	}
+	if snapshot.StepName != "Nested Calc Task" {
+		t.Fatalf("step name = %q, want Nested Calc Task", snapshot.StepName)
+	}
+}
+
+func TestStoreKeepsInterleavedParallelStepContentWithExecutionOwner(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const calcExecutionID = "exec-calc-task-1785055325563679000"
+	const wordExecutionID = "exec-word-task-1785055325563679001"
+
+	chunk := func(executionID, staleStepID, staleTitle, content string, at time.Time) storeevents.Event {
+		return storeevents.Event{
+			Type:          "streaming_chunk",
+			SessionID:     "session-1",
+			ExecutionID:   "workflow-step:" + executionID + ":" + staleStepID,
+			ExecutionKind: "message_sequence_item",
+			Timestamp:     at,
+			Data: &agentevents.AgentEvent{
+				Type: agentevents.StreamingChunk,
+				Data: &agentevents.StreamingChunkEvent{
+					BaseEventData: agentevents.BaseEventData{Metadata: map[string]interface{}{
+						"execution_id":    "workflow-step:" + executionID + ":" + staleStepID,
+						"execution_kind":  "message_sequence_item",
+						"current_step_id": staleStepID,
+						"step_id":         staleStepID,
+						"step_title":      staleTitle,
+					}},
+					Content:    content,
+					ChunkIndex: 1,
+					Source:     agentevents.StreamingChunkSourceTranscript,
+				},
+			},
+		}
+	}
+
+	// Shared workflow context points at the opposite sibling for both chunks.
+	// The execution ID still carries the authoritative owning plan step.
+	store.HandleEvent("session-1", chunk(
+		calcExecutionID,
+		"word-task",
+		"Nested Word Task",
+		"42 is the arithmetic result.",
+		now,
+	))
+	store.HandleEvent("session-1", chunk(
+		wordExecutionID,
+		"calc-task",
+		"Nested Calc Task",
+		"ALPHA is the word result.",
+		now.Add(time.Second),
+	))
+
+	calc, ok := store.Get("session-1:workflow-step:" + calcExecutionID + ":calc-task")
+	if !ok {
+		t.Fatal("expected calc-task transcript")
+	}
+	word, ok := store.Get("session-1:workflow-step:" + wordExecutionID + ":word-task")
+	if !ok {
+		t.Fatal("expected word-task transcript")
+	}
+	if calc.StepID != "calc-task" || calc.Content != "42 is the arithmetic result." {
+		t.Fatalf("calc transcript crossed: step=%q content=%q", calc.StepID, calc.Content)
+	}
+	if word.StepID != "word-task" || word.Content != "ALPHA is the word result." {
+		t.Fatalf("word transcript crossed: step=%q content=%q", word.StepID, word.Content)
+	}
+	if strings.Contains(calc.Content, "ALPHA") || strings.Contains(word.Content, "42") {
+		t.Fatalf("parallel sibling content was mixed: calc=%q word=%q", calc.Content, word.Content)
+	}
+}
+
+func TestStoreNestedMessageSequenceEndSettlesAndNextTurnReactivates(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const parentExecutionID = "exec-calc-task-1785053307554142000"
+	const ownerID = "workflow-step:" + parentExecutionID + ":calc-task"
+	firstAgentID := "msgseq-calc-task-execute-and-verify-1785053307579788000"
+	firstMetadata := map[string]interface{}{
+		"agent_id":            firstAgentID,
+		"parent_execution_id": parentExecutionID,
+		"execution_kind":      "message_sequence_item",
+		"step_id":             "calc-task",
+		"step_title":          "Nested Calc Task",
+	}
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		firstAgentID,
+		firstMetadata,
+		now,
+	))
+	endMetadata := map[string]interface{}{}
+	for key, value := range firstMetadata {
+		endMetadata[key] = value
+	}
+	endMetadata["result"] = "Calculation completed."
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_end",
+		firstAgentID,
+		endMetadata,
+		now.Add(time.Second),
+	))
+
+	done, ok := store.Get("session-1:" + ownerID)
+	if !ok {
+		t.Fatal("expected owning message-sequence transcript")
+	}
+	if done.Active || done.State != "completed" {
+		t.Fatalf("nested item end must settle transcript: active=%v state=%q", done.Active, done.State)
+	}
+	if !strings.Contains(done.Content, "Calculation completed.") {
+		t.Fatalf("nested result missing from transcript: %q", done.Content)
+	}
+
+	nextAgentID := "msgseq-calc-task-automatic-final-validation-1785053307579788001"
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		nextAgentID,
+		map[string]interface{}{
+			"agent_id":            nextAgentID,
+			"parent_execution_id": parentExecutionID,
+			"execution_kind":      "message_sequence_item",
+			"step_id":             "calc-task",
+		},
+		now.Add(2*time.Second),
+	))
+	running, _ := store.Get("session-1:" + ownerID)
+	if !running.Active || running.State != "running" {
+		t.Fatalf("next item must reactivate transcript: active=%v state=%q", running.Active, running.State)
+	}
+}
+
+func TestStoreUnifiesBackgroundDelegationContentWithItsLifecycleTerminal(t *testing.T) {
+	// A delegate-tool background agent (e.g. Chief of Staff's "delegate" tool)
+	// has two disjoint event sources for the SAME logical execution: the
+	// lifecycle wrapper (background_agent_started/completed, tagged with
+	// agent_id) and the real content (tool calls, messages), forwarded by
+	// DelegationEventObserver tagged only with correlation_id — a freshly
+	// minted delegationID, never agent_id. Without delegation_start linking
+	// the two, the content lands under a second, disjoint terminal ID and the
+	// lifecycle entry never leaves "running" (terminalExecutionKind used to
+	// bail out on an empty kind before reaching the agent_id fallback).
+	store := NewStore()
+	now := time.Now()
+	const agentID = "chat-0001"
+	const delegationID = "delegation-0-1785039217239436000"
+
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:      "delegation_start",
+		Timestamp: now,
+		SessionID: "session-1",
+		Data: &agentevents.AgentEvent{
+			Type:          agentevents.EventType("delegation_start"),
+			SessionID:     "session-1",
+			CorrelationID: delegationID,
+			Data: &storeevents.DelegationStartEventData{
+				DelegationID:      delegationID,
+				BackgroundAgentID: agentID,
+				Instruction:       "Audit the Chats folder",
+			},
+		},
+	})
+
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:      "background_agent_started",
+		Timestamp: now,
+		SessionID: "session-1",
+		Data: &agentevents.AgentEvent{
+			Type:      agentevents.EventType("background_agent_started"),
+			SessionID: "session-1",
+			Data: &orchestratorevents.BackgroundAgentStartedEvent{
+				AgentID: agentID,
+				Name:    "Chats folder age audit",
+				Kind:    orchestratorevents.ExecutionKindSubAgent,
+			},
+		},
+	})
+
+	// The real content, tagged only with correlation_id — exactly what
+	// DelegationEventObserver.HandleEvent produces for a background delegation.
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:      "streaming_chunk",
+		Timestamp: now.Add(time.Second),
+		SessionID: "session-1",
+		Data: &agentevents.AgentEvent{
+			Type:          agentevents.StreamingChunk,
+			SessionID:     "session-1",
+			CorrelationID: delegationID,
+			Data: &agentevents.StreamingChunkEvent{
+				Content:    "65 items total: 45 very old, 14 stale, 6 recent.",
+				ChunkIndex: 1,
+				Source:     agentevents.StreamingChunkSourceTranscript,
+			},
+		},
+	})
+
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:      "background_agent_completed",
+		Timestamp: now.Add(2 * time.Second),
+		SessionID: "session-1",
+		Data: &agentevents.AgentEvent{
+			Type:      agentevents.EventType("background_agent_completed"),
+			SessionID: "session-1",
+			Data: &orchestratorevents.BackgroundAgentCompletedEvent{
+				AgentID: agentID,
+				Name:    "Chats folder age audit",
+				Status:  "completed",
+				Result:  "report written",
+			},
+		},
+	})
+
+	snapshots := store.List("session-1")
+	if len(snapshots) != 1 {
+		t.Fatalf("expected the lifecycle and content events to collapse into ONE terminal, got %d: %+v", len(snapshots), snapshots)
+	}
+
+	done, ok := store.Get("session-1:" + agentID)
+	if !ok {
+		t.Fatalf("expected the terminal to be keyed by the background agent's own id %q", agentID)
+	}
+	if done.Active || done.State != "completed" {
+		t.Fatalf("expected the completion event to mark it done (stuck running means terminalExecutionKind rejected the completed event): active=%v state=%q", done.Active, done.State)
+	}
+	if !strings.Contains(done.Content, "65 items total") {
+		t.Fatalf("expected the delegation's real content (tagged only with correlation_id) to land on the same terminal as its agent_id-tagged lifecycle events, got content: %q", done.Content)
+	}
+}
+
+func TestStoreDoesNotCreateStructuredDuplicateForMainTranscript(t *testing.T) {
+	store := NewStore()
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          "streaming_chunk",
+		Timestamp:     time.Now(),
+		SessionID:     "session-1",
+		ExecutionID:   "main:session-1",
+		ExecutionKind: "main_agent",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.StreamingChunk,
+			Data: &agentevents.StreamingChunkEvent{
+				BaseEventData: agentevents.BaseEventData{
+					Metadata: map[string]interface{}{"execution_kind": "main_agent"},
+				},
+				Content:    "clean main transcript",
+				ChunkIndex: 1,
+				Source:     agentevents.StreamingChunkSourceTranscript,
+			},
+		},
+	})
+	if snapshots := store.List("session-1"); len(snapshots) != 0 {
+		t.Fatalf("main transcript must not create a second terminal entry: %+v", snapshots)
+	}
+}
+
+func TestStoreCollapsesMessageSequenceLifecycleIntoOneDetailedStep(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	rootExecutionID := "exec-math-solver-1784967748400792000"
+	ownerID := "workflow-step:" + rootExecutionID + ":math-solver"
+	baseMetadata := map[string]interface{}{
+		"current_step_id": "math-solver",
+		"step_title":      "Math Solver",
+		"workflow_path":   "Workflow/testing",
+	}
+	backgroundEvent := func(eventType string, data map[string]interface{}, at time.Time) storeevents.Event {
+		return storeevents.Event{
+			Type:      eventType,
+			Timestamp: at,
+			SessionID: "session-1",
+			Data: &agentevents.AgentEvent{
+				Type: agentevents.EventType(eventType),
+				Data: &agentevents.GenericEventData{
+					BaseEventData: agentevents.BaseEventData{Metadata: baseMetadata},
+					Data:          data,
+				},
+			},
+		}
+	}
+
+	store.HandleEvent("session-1", backgroundEvent("background_agent_started", map[string]interface{}{
+		"agent_id": rootExecutionID,
+		"name":     "Math Solver",
+	}, now))
+	store.HandleEvent("session-1", backgroundEvent("background_agent_started", map[string]interface{}{
+		"agent_id":            "msgseq-math-solver-execute-and-verify-1784967748408960000",
+		"parent_execution_id": rootExecutionID,
+		"name":                "Message sequence item: execute and verify",
+	}, now.Add(time.Second)))
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          string(agentevents.UserMessage),
+		Timestamp:     now.Add(2 * time.Second),
+		SessionID:     "session-1",
+		ExecutionID:   ownerID,
+		ExecutionKind: "workflow_step",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.UserMessage,
+			Data: &agentevents.UserMessageEvent{
+				BaseEventData: agentevents.BaseEventData{Metadata: baseMetadata},
+				Content:       "Solve the expression and verify the output.",
+				Role:          "user",
+			},
+		},
+	})
+	store.HandleEvent("session-1", toolStartEvent(ownerID, "tool-1", "execute_shell_command", `{"command":"jq . fixture.json"}`, baseMetadata))
+	store.HandleEvent("session-1", toolEndEvent(ownerID, "tool-1", "execute_shell_command", `{"expression":"17 * 19 + 4"}`, baseMetadata))
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          "streaming_chunk",
+		Timestamp:     now.Add(3 * time.Second),
+		SessionID:     "session-1",
+		ExecutionID:   ownerID,
+		ExecutionKind: "workflow_step",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.StreamingChunk,
+			Data: &agentevents.StreamingChunkEvent{
+				BaseEventData: agentevents.BaseEventData{Metadata: baseMetadata},
+				Content:       "< asst: The verified result is 327.",
+				ChunkIndex:    1,
+			},
+		},
+	})
+	store.HandleEvent("session-1", backgroundEvent("background_agent_completed", map[string]interface{}{
+		"agent_id":            "msgseq-math-solver-execute-and-verify-1784967748408960000",
+		"parent_execution_id": rootExecutionID,
+		"status":              "completed",
+		"result":              "The item completed.",
+	}, now.Add(4*time.Second)))
+	store.HandleEvent("session-1", backgroundEvent("background_agent_started", map[string]interface{}{
+		"agent_id":            "msgseq-math-solver-automatic-final-validation-1784967795644586000",
+		"parent_execution_id": rootExecutionID,
+		"name":                "Automatic final validation",
+	}, now.Add(5*time.Second)))
+	store.HandleEvent("session-1", backgroundEvent("background_agent_completed", map[string]interface{}{
+		"agent_id":            "msgseq-math-solver-automatic-final-validation-1784967795644586000",
+		"parent_execution_id": rootExecutionID,
+		"status":              "completed",
+		"result":              "Validation passed.",
+	}, now.Add(6*time.Second)))
+	store.HandleEvent("session-1", backgroundEvent("background_agent_completed", map[string]interface{}{
+		"agent_id": rootExecutionID,
+		"name":     "Math Solver",
+		"status":   "completed",
+	}, now.Add(7*time.Second)))
+
+	snapshots := store.List("session-1")
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one logical step terminal, got %d: %#v", len(snapshots), snapshots)
+	}
+	snapshot := snapshots[0]
+	if snapshot.TerminalID != "session-1:"+ownerID {
+		t.Fatalf("terminal id = %q, want canonical workflow step owner", snapshot.TerminalID)
+	}
+	if snapshot.DisplayTitle != "Testing -> Math Solver" {
+		t.Fatalf("display title = %q", snapshot.DisplayTitle)
+	}
+	for _, want := range []string{
+		"> user: Solve the expression and verify the output.",
+		"→ tool: execute_shell_command(",
+		`✓ result execute_shell_command: {"expression":"17 * 19 + 4"}`,
+		"< asst: The verified result is 327.",
+		"< asst: Validation passed.",
+	} {
+		if !strings.Contains(snapshot.Content, want) {
+			t.Fatalf("content missing %q:\n%s", want, snapshot.Content)
+		}
+	}
+	if strings.TrimSpace(snapshot.Content) == "The execution completed." {
+		t.Fatalf("detailed execution must not collapse to the generic completion fallback")
+	}
+	if snapshot.Active || snapshot.State != "completed" {
+		t.Fatalf("outer completion should close the logical step: active=%v state=%q", snapshot.Active, snapshot.State)
+	}
+}
+
+func TestStoreAsyncCompletionBatchSettlesVisibleStructuredTranscript(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const routeID = "word-task"
+	const executionID = "todo-sub-word-task-sub-word-task-todo-id-1785050966672382000"
+	const ownerID = "workflow-step:exec-word-task-1785050966675717000:word-task"
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"background_agent_started",
+		executionID,
+		map[string]interface{}{
+			"agent_id":       executionID,
+			"execution_kind": "background_agent",
+			"step_id":        routeID,
+			"step_title":     "Nested Word Task",
+		},
+		now,
+	))
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		ownerID,
+		map[string]interface{}{
+			"execution_owner_id": ownerID,
+			"execution_kind":     "workflow_step",
+			"step_id":            routeID,
+			"step_title":         "Nested Word Task",
+		},
+		now.Add(time.Second),
+	))
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          "streaming_chunk",
+		Timestamp:     now.Add(2 * time.Second),
+		SessionID:     "session-1",
+		ExecutionID:   ownerID,
+		ExecutionKind: "workflow_step",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.StreamingChunk,
+			Data: &agentevents.StreamingChunkEvent{
+				BaseEventData: agentevents.BaseEventData{Metadata: map[string]interface{}{
+					"execution_owner_id": ownerID,
+					"step_id":            routeID,
+				}},
+				Content:    "The word probe completed with detailed evidence.",
+				ChunkIndex: 1,
+			},
+		},
+	})
+
+	// Completion batches arrive as a main-conversation auto-notification, not
+	// as a child event. The store must still consume their lifecycle payload.
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:          string(agentevents.UserMessage),
+		Timestamp:     now.Add(3 * time.Second),
+		SessionID:     "session-1",
+		ExecutionID:   "main:session-1",
+		ExecutionKind: "main_agent",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.UserMessage,
+			Data: &agentevents.UserMessageEvent{
+				Content: `[AUTO-NOTIFICATION] SUB-AGENT COMPLETION BATCH
+
+The runtime waited for every child launched in your previous turn. These are authoritative terminal results:
+
+[
+  {
+    "execution_id": "` + executionID + `",
+    "todo_id": "sub-word-task-todo-id",
+    "route_id": "` + routeID + `",
+    "agent_type": "predefined",
+    "status": "completed"
+  }
+]
+
+Continue the same task now. Use successful results as evidence.`,
+				Role: "user",
+			},
+		},
+	})
+
+	for _, terminalID := range []string{"session-1:" + executionID, "session-1:" + ownerID} {
+		snapshot, ok := store.Get(terminalID)
+		if !ok {
+			t.Fatalf("expected terminal %q", terminalID)
+		}
+		if snapshot.Active || snapshot.State != "completed" || snapshot.ProcessState != "closed" || snapshot.SnapshotKind != "archived" {
+			t.Fatalf("terminal %q was not settled: active=%v state=%q process=%q snapshot=%q", terminalID, snapshot.Active, snapshot.State, snapshot.ProcessState, snapshot.SnapshotKind)
+		}
+	}
+	transcript, _ := store.Get("session-1:" + ownerID)
+	if !strings.Contains(transcript.Content, "detailed evidence") {
+		t.Fatalf("completion reconciliation must preserve the real transcript, got %q", transcript.Content)
+	}
+}
+
+func TestStoreAsyncCompletionBatchPropagatesFailureToVisibleTranscript(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	const routeID = "calc-task"
+	const ownerID = "workflow-step:exec-calc-task-1785050966675890000:calc-task"
+
+	store.HandleEvent("session-1", genericTerminalLifecycleEvent(
+		"orchestrator_agent_start",
+		ownerID,
+		map[string]interface{}{
+			"execution_owner_id": ownerID,
+			"execution_kind":     "workflow_step",
+			"step_id":            routeID,
+		},
+		now,
+	))
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:        string(agentevents.UserMessage),
+		Timestamp:   now.Add(time.Second),
+		SessionID:   "session-1",
+		ExecutionID: "main:session-1",
+		Data: &agentevents.AgentEvent{
+			Type: agentevents.UserMessage,
+			Data: &agentevents.UserMessageEvent{
+				Content: `[AUTO-NOTIFICATION] SUB-AGENT COMPLETION BATCH
+
+[
+  {
+    "execution_id": "todo-sub-calc-task-sub-calc-task-todo-id-1",
+    "route_id": "` + routeID + `",
+    "status": "failed",
+    "error": "validation failed"
+  }
+]
+
+Continue the same task now.`,
+				Role: "user",
+			},
+		},
+	})
+
+	snapshot, ok := store.Get("session-1:" + ownerID)
+	if !ok {
+		t.Fatal("expected visible transcript")
+	}
+	if snapshot.Active || snapshot.State != "failed" || snapshot.CloseReason != "validation failed" {
+		t.Fatalf("failure was not propagated: active=%v state=%q reason=%q", snapshot.Active, snapshot.State, snapshot.CloseReason)
+	}
+}
 
 func TestStoreTracksTerminalChunksByOwner(t *testing.T) {
 	store := NewStore()
@@ -271,6 +978,41 @@ func TestStoreMergesNonTmuxWorkflowToolCallsIntoTerminalContent(t *testing.T) {
 	doneIdx := strings.Index(snapshot.Content, "[done")
 	if toolIdx < 0 || doneIdx < 0 || toolIdx > doneIdx {
 		t.Fatalf("tool rows should appear before done footer:\n%s", snapshot.Content)
+	}
+}
+
+func TestStoreUsesToolMetadataNameWhenStructuredEventOmitsIt(t *testing.T) {
+	store := NewStore()
+	ownerID := "workflow-step:workflow-full-1:check-cdp"
+	metadata := map[string]interface{}{
+		"execution_owner_id": ownerID,
+		"step_transport":     "structured",
+		"current_step_id":    "check-cdp",
+		"execution_kind":     "workflow_step",
+		"scope":              "workflow_step",
+		"workflow_path":      "Workflow/upwork",
+		"tool_name":          "execute_shell_command",
+	}
+
+	store.HandleEvent("session-1", terminalEventWithMetadata(
+		ownerID,
+		"> user: inspect the workspace",
+		1,
+		metadata,
+		time.Now(),
+	))
+	store.HandleEvent("session-1", toolStartEvent(ownerID, "call-1", "", `{"command":"pwd"}`, metadata))
+	store.HandleEvent("session-1", toolEndEvent(ownerID, "call-1", "", `{"stdout":"/workspace"}`, metadata))
+
+	snapshot, ok := store.Get("session-1:" + ownerID)
+	if !ok {
+		t.Fatalf("expected terminal snapshot")
+	}
+	if !strings.Contains(snapshot.Content, "→ tool: execute_shell_command") {
+		t.Fatalf("expected metadata tool name in content:\n%s", snapshot.Content)
+	}
+	if strings.Contains(snapshot.Content, "→ tool: tool") {
+		t.Fatalf("unexpected anonymous tool label in content:\n%s", snapshot.Content)
 	}
 }
 

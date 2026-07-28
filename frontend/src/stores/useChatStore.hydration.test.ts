@@ -42,13 +42,14 @@ describe('useChatStore hydration bootstrap', () => {
     })
   }, 15_000)
 
-  it('does not persist 1,000 streaming chunks and coalesces durable changes', async () => {
+  it('does not persist streaming chunks or an obsolete tree preference', async () => {
     vi.useFakeTimers()
     const storage = createMemoryStorage()
     const setItem = vi.spyOn(storage, 'setItem')
     vi.stubGlobal('localStorage', storage)
     const chatStore = await import('./useChatStore')
     await chatStore.waitForChatStoreHydration()
+    expect(chatStore.normalizeEventViewMode('tree')).toBe('terminal')
     chatStore.useChatStore.setState({ eventViewModePreference: 'terminal' })
     vi.advanceTimersByTime(250)
     setItem.mockClear()
@@ -64,7 +65,7 @@ describe('useChatStore hydration bootstrap', () => {
     chatStore.useChatStore.setState({ eventViewModePreference: 'tree' })
     vi.advanceTimersByTime(250)
 
-    expect(setItem).toHaveBeenCalledTimes(1)
+    expect(setItem).not.toHaveBeenCalled()
   })
 
   it('coalesces repeated workflow switches into one durable write', async () => {

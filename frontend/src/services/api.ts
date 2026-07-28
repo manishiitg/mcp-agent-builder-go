@@ -788,9 +788,13 @@ export const agentApi = {
     })
   },
 
-  getChatHistoryConversation: async (sessionId: string, workspacePath?: string): Promise<ChatHistoryConversation> => {
+  // previewMessages trims the response server-side to the last N messages and
+  // drops ui_events / terminal_snapshots. A real builder session is 1.3 MB, of
+  // which the preview needs a few kilobytes.
+  getChatHistoryConversation: async (sessionId: string, workspacePath?: string, previewMessages?: number): Promise<ChatHistoryConversation> => {
     const params: Record<string, string> = {}
     if (workspacePath) params.workspace_path = workspacePath
+    if (previewMessages && previewMessages > 0) params.preview_messages = String(previewMessages)
     const response = await api.get(`/api/chat-history/sessions/${sessionId}`, { params })
     return response.data
   },

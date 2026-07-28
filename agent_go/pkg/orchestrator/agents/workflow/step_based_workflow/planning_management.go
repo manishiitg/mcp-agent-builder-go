@@ -248,6 +248,19 @@ func validateLoadedPlanStructureCore(plan *PlanningResponse) error {
 	return validateLoadedPlanStructureCoreWithOptions(plan, false)
 }
 
+// validateLoadedPlanStructureCoreAllowLegacyMessageSequenceCode is the
+// readPlanForMutation-side counterpart to
+// validateLoadedPlanStructureAllowLegacyMessageSequenceCode above: it lets a
+// pre-v1.0.10 plan be loaded (not persisted) by mutation tools — e.g. so
+// delete_plan_steps or update_message_sequence_step can remove or repair the
+// offending step — without also re-validating cross-step graph references
+// that only the full read path checks. Every write still calls
+// ValidatePlanStructure, so a legacy code item can never execute or be
+// saved again.
+func validateLoadedPlanStructureCoreAllowLegacyMessageSequenceCode(plan *PlanningResponse) error {
+	return validateLoadedPlanStructureCoreWithOptions(plan, true)
+}
+
 func validateLoadedPlanStructureCoreWithOptions(plan *PlanningResponse, allowLegacyMessageSequenceCode bool) error {
 	if plan == nil {
 		return fmt.Errorf("plan is nil")

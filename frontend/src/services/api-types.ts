@@ -1098,6 +1098,10 @@ export interface StartRestoredTerminalResponse {
 export interface ChatHistoryPreviewMessage {
   role: string;
   text: string;
+  /** Present on role === 'tool': which tool produced this result. */
+  toolName?: string;
+  /** Present on role === 'tool': the tool reported a failure. */
+  isError?: boolean;
 }
 
 export interface ChatHistorySession {

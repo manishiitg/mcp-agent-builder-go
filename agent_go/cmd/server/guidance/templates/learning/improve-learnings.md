@@ -20,6 +20,11 @@ Return only this compact contract:
 
 - `module`: learning_health
 - `verdict`: clean | needs_fix | blocked
+- `index_shape`: **required, measure it — do not estimate.** Report
+  `SKILL.md` line count, how many of those lines are links to `references/`
+  versus inline detail, the number of reference files, and the largest two with
+  their sizes. Then state whether `SKILL.md` is still functioning as an index.
+  Fill this on every review, including a `clean` one.
 - `findings`: stable `finding_id`, `target_key`, severity, plain-language
   summary, exact problem, and why it matters
 - `evidence`: precise paths and relevant step ids
@@ -27,6 +32,12 @@ Return only this compact contract:
 - `verification`: exact checks for the Pulse Fixer
 - `user_judgment_required`: yes/no with reason
 - `next_check`: evidence or cadence condition for another review
+
+`index_shape` is a required field because structure review is otherwise reliably
+skipped. Content correctness is more interesting than file shape, so attention
+goes there and the index quietly accretes — in one live workflow `SKILL.md`
+reached 272 lines and 67 KB while consecutive reviews returned detailed,
+correct content findings and never once mentioned its shape.
 
 Use the remaining document only as the learning-health audit checklist.
 
@@ -37,6 +48,32 @@ the consolidated log update.
 
 Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing or qualifying stale assumptions and surface consequential unresolved ones for Pulse's Assumptions challenged.
 
+## Reconcile against unreviewed plan changes
+
+The parent may pass `plan_change_backlog` from `get_pulse_module_state`: plan-mod
+calls whose knock-on effects nobody has traced yet, each with its reason,
+affected step ids and changed field names.
+
+Treat that list as evidence, never as a verdict. Most edits invalidate nothing —
+a `review_notes` touch or a typo fix moves the same timestamps as a rewritten step
+description, and only reading the diff against the actual learning tells you which
+happened. Do not report an item as stale merely because it predates an edit.
+
+For each edit that plausibly changes how a step runs, open the learnings it could
+affect and check the specific claim:
+
+- the learning describes a flow, selector, path, or rule the edit changed → report
+  it with the exact contradicting text and the edit that supersedes it
+- the learning restates a value the owner has since changed (a cap, limit, or
+  threshold) → report it; constraint values belong in `soul.md` and must never be
+  copied into a learning, so the fix is to remove the number, not update it
+- the learning still holds → say so explicitly, so the reviewer's silence is not
+  mistaken for "not checked"
+
+If a plan edit removed or renamed a step, its learnings are orphaned: recommend
+retiring them rather than leaving them to be matched by a step that no longer
+exists.
+
 This command maintains reusable HOW-to-run knowledge such as selectors, tool/API patterns, auth quirks, timing/wait strategies, file-format pitfalls, reusable recovery steps, and common failure signatures.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 BOUNDARIES
@@ -45,7 +82,9 @@ BOUNDARIES
 2. Work on `learnings/_global/` only. Do not edit `planning/`, `evaluation/`, `reports/`, `db/`, `knowledgebase/`, or per-step `learnings/{step-id}/main.py` from this command. Never edit or delete `learnings/_global/_freshness.json` — it is a code-owned freshness ledger written by the runtime; read it, do not touch it.
 3. If you discover stale per-step scripts, bad `learning_objective`, wrong `learnings_access`, or lock issues, record/recommend them for the parent Pulse Fixer or an explicit manual fix. Eval rubric, coverage, or scoring issues belong to `/improve-evaluation`, not here.
 4. Keep WHAT-the-workflow-discovered out of learnings. User-supplied runtime context belongs in `knowledgebase/context/`; workflow-discovered subject-matter facts belong in `knowledgebase/notes/` or `db/db.sqlite`, not `learnings/_global/`.
-5. Enforce a lean index shape: `learnings/_global/SKILL.md` should stay under roughly 80-100 lines and act as an overview plus links to focused files under `learnings/_global/references/`. Detailed selectors, API quirks, auth flows, file-format notes, retry patterns, and step-specific HOW guidance belong in reference files, not in the root `SKILL.md`.
+5. Enforce a lean index shape. `learnings/_global/SKILL.md` is an **index**: frontmatter, a short scope note, and links to focused files under `learnings/_global/references/`. Detailed selectors, API quirks, auth flows, file-format notes, retry patterns, and step-specific HOW guidance belong in reference files, not in the root `SKILL.md`. Keep it as lean as the content allows; there is no line quota to fill, and a mostly-links index of any length is healthier than a short one stuffed with detail.
+
+   **Anti-pattern to watch for in your own findings:** recommending an edit *inside* a detailed section of `SKILL.md` accepts that the detail belongs there and maintains the bloat. If a finding targets prose that should never have been in the index, the fix is to **move that section into a reference file and leave a link**, not to correct it in place. Check your own `recommended_fix` entries against this before returning them.
 
 READ FIRST
 

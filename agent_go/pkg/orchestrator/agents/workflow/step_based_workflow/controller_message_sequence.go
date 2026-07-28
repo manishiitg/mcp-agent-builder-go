@@ -14,6 +14,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -100,6 +101,20 @@ func shouldNormalizeRegularStepToMessageSequence(step PlanStepInterface) bool {
 	return ok && !isScriptedExecutionModeConfig(regular.AgentConfigs)
 }
 
+// effectiveRuntimeStepType reports the execution model users actually see.
+// Persisted non-scripted regular steps run through message_sequence for
+// compatibility, so exposing them as "regular" in terminal metadata is
+// misleading even though the saved plan still has the legacy type.
+func effectiveRuntimeStepType(step PlanStepInterface) string {
+	if shouldNormalizeRegularStepToMessageSequence(step) {
+		return string(StepTypeMessageSeq)
+	}
+	if step == nil {
+		return ""
+	}
+	return string(step.StepType())
+}
+
 // messageSequenceClosingItems builds synthetic trailing items so a standalone
 // message_sequence honors its step-level learning_objective and
 // knowledgebase_contribution — the same post-step learnings/KB a regular step
@@ -139,8 +154,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceClosingItems(ctx conte
 	// Agent-mode contributions are handled by maybeEnqueueKBUpdate after the
 	// sequence completes (see the message-sequence dispatch path).
 	if contribution := strings.TrimSpace(kbContributionForPrompt(cfg)); contribution != "" &&
-		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) &&
-		resolveKnowledgebaseWriteMethod(cfg) == KBWriteMethodDirect {
+		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) {
 		var b strings.Builder
 		b.WriteString("## Knowledgebase Contribution (dedicated turn)\n\n")
 		b.WriteString("The sequence is complete. In this turn you have WRITE access to the knowledgebase. Fulfill this step's knowledgebase contribution, then stop.\n\n")
@@ -406,6 +420,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 	_ = hcpo.saveMessageSequenceSession(ctx, sessionRelPath, session)
 	finalSummary := hcpo.summarizeMessageSequenceSession(session)
+	// The aggregated summary carries each item's CONCERNS: line prefixed with its
+	// item ID. File them durably here — this is the message-sequence equivalent of
+	// the regular step's composition point.
+	hcpo.recordStepConcerns(ctx, sequenceStep.GetID(), map[string]string{
+		ConcernPhaseMessageSequence: finalSummary,
+	})
 	if err := hcpo.saveFinalExecutionSummary(sequenceStep.GetID(), stepPath, finalSummary); err != nil {
 		hcpo.recordRunPersistenceError(context.Background(), sequenceStep.GetID(), err)
 	}
@@ -1028,6 +1048,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) closeMessageSequenceRuntime(session *
 	}
 	closeMessageSequenceCodingSession(runtime.Provider, runtime.SessionID, reason)
 	common.ClearSessionShellConfig(runtime.SessionID)
+	// Reclaim the isolated coding-CLI workspace for this runtime. Agent.Close
+	// above deliberately leaves it in place — a new Agent is built per turn, so
+	// closing one turn's agent must not delete the workspace the next turn
+	// resumes into. This IS the end of the sequence, so the dir goes now.
+	// Without it the workspace (and the CLI conversation inside it) leaks, one
+	// per message_sequence step.
+	mcpagent.RemoveIsolatedSessionWorkspace(runtime.SessionID)
 }
 
 func closeMessageSequenceCodingSession(provider string, ownerSessionID string, reason string) {
@@ -1102,7 +1129,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	return MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1116,7 +1143,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	return MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1124,7 +1151,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
 	return MessageSequenceWriteAccess{
 		DB:            requested.DB && resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect,
+		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())),
 		Learnings:     requested.Learnings && resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
 }
@@ -1163,7 +1190,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	if itemWriteAccess.DB && dbAccess == DBAccessReadWrite {
 		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
 	}
-	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) && resolveKnowledgebaseWriteMethod(stepConfig) == KBWriteMethodDirect {
+	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
 	if itemWriteAccess.Learnings && learningsAccess == LearningsAccessReadWrite {
@@ -1240,8 +1267,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 		"UseCodeStyleRules":         "",
 		"KbAccess":                  kbAccess,
 		"KbAccessLabel":             kbAccessLabel(kbAccess),
-		"KbWriteMethod":             KBWriteMethodDirect,
-		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, KBWriteMethodDirect, "", hcpo.messageSequenceAbsPath(filepath.Join(KnowledgebaseFolderName, KBNotesFolderName))),
+		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, "", hcpo.messageSequenceAbsPath(filepath.Join(KnowledgebaseFolderName, KBNotesFolderName))),
 		"MessageSequenceAccessNote": buildMessageSequenceAccessNote(writeAccess),
 		"HasLearnings":              "false",
 		"CurrentDate":               time.Now().Format("2006-01-02"),

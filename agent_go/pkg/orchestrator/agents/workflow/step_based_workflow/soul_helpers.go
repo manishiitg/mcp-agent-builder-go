@@ -32,8 +32,15 @@ import (
 // optimize.
 
 const (
-	soulObjectiveSection        = "Objective"
-	soulSuccessCriteriaSection  = "Success Criteria"
+	soulObjectiveSection       = "Objective"
+	soulSuccessCriteriaSection = "Success Criteria"
+	// soulConstraintsSection holds explicit owner-approved boundaries (risk limits,
+	// capacity caps, policy rules). Extracted and injected into agent prompts as
+	// BINDING context — see ResolveWorkflowConstraints. Steps have read access to
+	// soul/ but never write access, so a constraint has exactly one author (the
+	// builder) and many readers. Restating a constraint value in a step description
+	// or a learnings file creates a copy that drifts; reference this section instead.
+	soulConstraintsSection      = "Constraints"
 	soulDefaultScaffoldTemplate = `# %s
 
 ## Objective
@@ -53,18 +60,35 @@ func ReadWorkflowObjectiveFromSoul(
 	workspacePath string,
 	readFile func(context.Context, string) (string, error),
 ) (objective, successCriteria string, err error) {
+	objective, successCriteria, _, err = ReadWorkflowSoulSections(ctx, workspacePath, readFile)
+	return objective, successCriteria, err
+}
+
+// ReadWorkflowSoulSections loads soul/soul.md once and extracts Objective,
+// Success Criteria, and Constraints together. Callers that need more than one
+// section should use this rather than calling the single-section helpers twice —
+// soul.md is fetched over the workspace API, so each call is a round trip.
+//
+// Same missing-file semantics as ReadWorkflowObjectiveFromSoul: absent file or
+// absent section yields empty strings, not an error.
+func ReadWorkflowSoulSections(
+	ctx context.Context,
+	workspacePath string,
+	readFile func(context.Context, string) (string, error),
+) (objective, successCriteria, constraints string, err error) {
 	path := normalizePathForWorkspaceAPI(SoulFolderName+"/"+SoulFileName, workspacePath)
 	content, readErr := readFile(ctx, path)
 	if readErr != nil {
 		// "file not found" is expected for workflows that haven't scaffolded soul.md yet.
 		lower := strings.ToLower(readErr.Error())
 		if strings.Contains(lower, "not found") || strings.Contains(lower, "no such file") {
-			return "", "", nil
+			return "", "", "", nil
 		}
-		return "", "", readErr
+		return "", "", "", readErr
 	}
 	return extractSoulSection(content, soulObjectiveSection),
 		extractSoulSection(content, soulSuccessCriteriaSection),
+		extractSoulSection(content, soulConstraintsSection),
 		nil
 }
 

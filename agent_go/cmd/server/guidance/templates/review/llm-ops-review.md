@@ -18,7 +18,11 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    retained `efficiency_or_coaching` findings, workflow version, and current
    backup/publish/notify readiness. Also inspect the current trustworthy Goal
    verdict and material success-criterion evidence. Use actual retained evidence,
-   not provider assumptions or generic best practices.
+   not provider assumptions or generic best practices. Inventory exact model
+   pins in explicit workflow roles and planning/evaluation step config. Call
+   `list_provider_models` once per pinned provider and compare against its
+   catalog and `default_tier_models`; never infer recency from model names.
+   Provider-profile defaults update automatically and are not stale pins.
 3. Launch exactly one generic reviewer with a prompt beginning
    `READ-ONLY REVIEW`. It must not edit files or config, create questions,
    publish, notify, run the workflow, call Pulse module-state tools, or launch
@@ -33,6 +37,11 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    deterministic non-bottleneck step with representative evidence proving
    quality-equivalent output and no downstream outcome loss; label it as an
    approval-required reversible trial. Missing evidence means keep the tier.
+   For an unavailable/deprecated pin or a materially useful newer provider-owned
+   default, recommend either clearing the pin to inherit its tier or one exact
+   supported replacement. Label it user approval required and include current
+   model, affected roles/steps, capability/cost/reasoning comparison, expected
+   benefit, and risk. A newer model is not automatically better.
    Return a non-HTML packet with `module=llm_ops_review`, `verdict`, `next_check`,
    and ordered findings. Every finding includes a stable `finding_id`,
    `target_key`, severity, plain-language summary, exact evidence, bounded

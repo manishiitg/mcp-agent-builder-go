@@ -36,7 +36,7 @@ const isMarkdownContent = (content: string): boolean => {
 }
 
 export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> = ({ event }) => {
-  const { isExpanded: showContent, toggle } = useExpandable(false)
+  const { isExpanded: showContent, toggle } = useExpandable(true)
   
   if (!event.tool_params?.arguments) {
     return null
@@ -86,7 +86,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center">
                 📖 Read Workspace File{parallelBadge}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
                 </span>
               </div>
@@ -123,7 +123,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center">
                 📂 List Workspace Files{parallelBadge}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
                 </span>
               </div>
@@ -173,7 +173,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center">
                 🔧 Patch Workspace File{parallelBadge}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
                 </span>
               </div>
@@ -246,7 +246,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center">
                 📝 Update Workspace File{parallelBadge}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
                 </span>
               </div>
@@ -331,7 +331,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center">
                 🗑️ Delete Workspace File{parallelBadge}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
                 </span>
               </div>
@@ -382,7 +382,7 @@ export const WorkspaceToolCallDisplay: React.FC<WorkspaceToolCallDisplayProps> =
             <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
               🔧 Workspace Tool: {toolName}{' '}
               <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                {event.turn && `• Turn: ${event.turn}`}
+                {event.turn != null && `• Turn: ${event.turn}`}
                 {event.server_name && ` • Server: ${event.server_name}`}
               </span>
             </div>

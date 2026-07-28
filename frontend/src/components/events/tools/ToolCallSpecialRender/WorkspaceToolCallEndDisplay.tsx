@@ -50,7 +50,7 @@ const formatDuration = (durationNs: number) => {
 }
 
 export const WorkspaceToolCallEndDisplay: React.FC<WorkspaceToolCallEndDisplayProps> = ({ event }) => {
-  const { isExpanded: showContent, toggle } = useExpandable(false)
+  const { isExpanded: showContent, toggle } = useExpandable(true)
   
   if (!event.result) {
     return null
@@ -132,10 +132,10 @@ export const WorkspaceToolCallEndDisplay: React.FC<WorkspaceToolCallEndDisplayPr
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center gap-2">
                 📂 Files Listed Successfully{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.tool_name && ` • Tool: ${event.tool_name}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {/* Context completion indicator */}
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -204,10 +204,10 @@ export const WorkspaceToolCallEndDisplay: React.FC<WorkspaceToolCallEndDisplayPr
               <div className="text-sm font-medium text-blue-700 dark:text-blue-300 flex items-center gap-2">
                 📖 {resultMessage}{' '}
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.tool_name && ` • Tool: ${event.tool_name}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {/* Context completion indicator */}
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -308,10 +308,10 @@ export const WorkspaceToolCallEndDisplay: React.FC<WorkspaceToolCallEndDisplayPr
               <div className="text-sm font-medium text-green-700 dark:text-green-300 flex items-center gap-2">
                 {icon} File {action} Successfully{' '}
                 <span className="text-xs font-normal text-green-600 dark:text-green-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.tool_name && ` • Tool: ${event.tool_name}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {/* Context completion indicator */}
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -395,10 +395,10 @@ export const WorkspaceToolCallEndDisplay: React.FC<WorkspaceToolCallEndDisplayPr
               <div className="text-sm font-medium text-green-700 dark:text-green-300 flex items-center gap-2">
                 🗑️ File Deleted Successfully{' '}
                 <span className="text-xs font-normal text-green-600 dark:text-green-400">
-                  {event.turn && `• Turn: ${event.turn}`}
+                  {event.turn != null && `• Turn: ${event.turn}`}
                   {event.tool_name && ` • Tool: ${event.tool_name}`}
                   {event.server_name && ` • Server: ${event.server_name}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {/* Context completion indicator */}
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (

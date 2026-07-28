@@ -2,10 +2,14 @@ import React from 'react';
 import type { OrchestratorAgentStartEvent } from '../../../generated/events';
 import { ConversationMarkdownRenderer } from '../../ui/MarkdownRenderer';
 import { useExpandable } from '../useExpandable';
-import { Plus, Minus } from 'lucide-react';
+import { Plus, Minus, ListTodo, ChevronDown } from 'lucide-react';
 import { useLLMStore } from '../../../stores'
 import { getModelDisplayName } from '../../../utils/llmDisplay'
 import { isEvaluationAgentEvent } from './eventDisplayUtils'
+
+function firstLine(value: string): string {
+  return value.trim().split('\n').find(line => line.trim()) || value.trim()
+}
 
 function titleCaseIdentifier(value: string): string {
   return value
@@ -24,7 +28,7 @@ function titleCaseIdentifier(value: string): string {
 function friendlyAgentName(event: OrchestratorAgentStartEvent): string {
   const rawName = event.agent_name || ''
   const stepTitle = typeof event.input_data?.step_title === 'string' ? event.input_data.step_title : ''
-  const title = stepTitle || rawName
+  const title = (stepTitle || rawName).replace(/^message-sequence-/, '')
   const executionMarker = title.lastIndexOf('execution-')
   if (executionMarker >= 0) {
     return titleCaseIdentifier(title.slice(executionMarker + 'execution-'.length))
@@ -56,6 +60,7 @@ function isSequenceWorkEvent(event: OrchestratorAgentStartEvent): boolean {
 
 interface OrchestratorAgentStartEventDisplayProps {
   event: OrchestratorAgentStartEvent;
+  compact?: boolean;
   isCollapsed?: boolean;
   eventCount?: number;
   onToggleCollapse?: () => void;
@@ -65,6 +70,7 @@ interface OrchestratorAgentStartEventDisplayProps {
 
 export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStartEventDisplayProps> = ({
   event,
+  compact = false,
   isCollapsed,
   eventCount,
   toolCallCount,
@@ -108,7 +114,7 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
     : ''
 
   const getLabel = () => {
-    if (isMessageSequenceItem) return 'Sequence Item'
+    if (isMessageSequenceItem) return 'Step'
     if (isSequenceWork) return 'Sequence Work'
     if (isWorkflowStepExecution) return 'Step'
     if (isEvaluationAgent && agentType === 'evaluation_scoring') return 'Evaluation Scoring'
@@ -130,14 +136,17 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
   }
 
   const getTreeRoleLabel = () => {
+    if (isMessageSequenceItem) return 'Step'
+    if (isSequenceWork) return 'Sequence Work'
     if (agentType === 'todo_task_orchestrator') return 'Orchestrator'
-    if (isWorkflowStepExecution || isWorkshopStepExecution || isEvaluationAgent) return 'Automation step'
+    if (isEvaluationAgent) return 'Evaluation'
+    if (isWorkflowStepExecution || isWorkshopStepExecution) return 'Automation step'
     if (agentType === 'todo_planner_execution' || agentType === 'generic_execution') return 'Sub-agent'
     return getLabel()
   }
 
   const getAgentIcon = () => {
-    if (isMessageSequenceItem) return '👤'
+    if (isMessageSequenceItem) return '▶'
     if (isWorkflowStepExecution) return '▶️'
     if (isEvaluationAgent) return '🧪'
     if (agentType === 'workshop-step-execution') return '▶️'
@@ -256,7 +265,8 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
 
   const colors = getColorClasses(agentColor);
   const hasSystemPrompt = !!(event as OrchestratorAgentStartEvent & { system_prompt?: string }).system_prompt;
-  const hasUserMessage = !!(event as OrchestratorAgentStartEvent & { user_message?: string }).user_message;
+  const userMessage = (event as OrchestratorAgentStartEvent & { user_message?: string }).user_message || '';
+  const hasUserMessage = !!userMessage;
   const hasExpandableContent = event.objective || (event.input_data && event.input_data.context) || hasInputData || hasSystemPrompt || hasUserMessage;
   const modelDisplayName = getModelDisplayName({
     provider: event.provider,
@@ -265,10 +275,14 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
     savedLLMs,
     availableLLMs,
   })
-  const modeLabel = isEvaluationAgent
-    ? (useScriptedMode ? 'Eval Learn Code' : modeFlags.use_code_execution_mode ? 'Eval Code Exec' : 'Eval')
-    : (useScriptedMode ? 'Learn Code' : modeFlags.use_code_execution_mode ? 'Code Exec' : null)
-  const displayName = friendlyAgentName(event)
+  // Code execution is the normal workflow runtime now, not a useful status
+  // distinction for users. Keep only roles that materially change what the
+  // agent is doing.
+  const modeLabel = !isEvaluationAgent && useScriptedMode ? 'Scripted' : null
+  const rawDisplayName = friendlyAgentName(event)
+  const displayName = isMessageSequenceItem
+    ? rawDisplayName.replace(/^Step\s+/i, '').replace(/\s+Step$/i, '') || 'Step'
+    : rawDisplayName
   const treeRoleLabel = getTreeRoleLabel()
 
   return (
@@ -287,19 +301,19 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
                 <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${colors.border} ${colors.textSecondary}`}>
                   {treeRoleLabel}
                 </span>
-                {modeLabel && (
+                {!compact && modeLabel && (
                   <span className={`shrink-0 text-[10px] font-normal ${colors.textSecondary}`}>{modeLabel}</span>
                 )}
                 <span className={`shrink-0 text-[10px] font-normal ${colors.textSecondary}`}>
-                  {workshopMeta || `Model: ${modelDisplayName}`}
+                  {compact ? modelDisplayName : (workshopMeta || `Model: ${modelDisplayName}`)}
                 </span>
-                {event.step_index !== undefined && (
+                {!compact && event.step_index !== undefined && (
                   <span className={`shrink-0 text-[10px] font-normal ${colors.textSecondary}`}>Step {event.step_index}</span>
                 )}
-                {toolCallCount !== undefined && toolCallCount > 0 && (
+                {!compact && toolCallCount !== undefined && toolCallCount > 0 && (
                   <span className={`shrink-0 text-[10px] font-normal ${colors.textSecondary}`}>{toolCallCount} tools</span>
                 )}
-                {latestToolLabel && (
+                {!compact && latestToolLabel && (
                   <span className={`shrink-0 text-[10px] font-normal ${colors.textSecondary}`}>{latestToolLabel}</span>
                 )}
                 {isCollapsed && eventCount !== undefined && (
@@ -325,7 +339,7 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
               className={`p-0.5 ${colors.hover} rounded ${colors.text} transition-colors flex items-center gap-1`}
               title={isInputsExpanded ? "Collapse inputs (Alt+Click for all)" : "Expand inputs (Alt+Click for all)"}
             >
-              <span className="text-[10px] uppercase font-bold">Inputs</span>
+              <span className="text-[10px] uppercase font-bold">{compact ? 'Details' : 'Inputs'}</span>
               {isInputsExpanded ? <Minus className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
             </button>
           )}
@@ -340,10 +354,36 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
         </div>
       )}
 
+      {/* Task — always visible (not gated behind Inputs) so identity and what
+          the agent is doing live in ONE card. This is the same content a
+          separate, adjacent "execution_prompt" user_message event used to show
+          in its own card; buildTranscriptItems now drops that duplicate when
+          it can prove this card already covers it (see terminalEventTranscript.ts). */}
+      {!isCollapsed && hasUserMessage && (
+        <details className="group mt-2 border-t border-black/10 pt-2 dark:border-white/10">
+          <summary className="flex cursor-pointer list-none items-start gap-2 text-xs">
+            <ListTodo className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${colors.textSecondary}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className={`block text-[10px] font-medium uppercase tracking-wide ${colors.textSecondary}`}>Task</span>
+              <span className={`mt-0.5 block truncate font-medium ${colors.text}`}>{firstLine(userMessage)}</span>
+            </span>
+            <ChevronDown
+              className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${colors.textSecondary} transition-transform group-open:rotate-180`}
+              aria-hidden="true"
+            />
+          </summary>
+          <div className={`${colors.bg} mt-2 max-h-72 overflow-y-auto rounded border p-2 text-[11px] leading-5 ${colors.border} ${colors.textSecondary}`}>
+            <ConversationMarkdownRenderer content={userMessage} maxHeight="288px" disablePathLinking />
+          </div>
+        </details>
+      )}
+
       {/* Expandable content - only show when not collapsed AND inputs expanded */}
       {!isCollapsed && isInputsExpanded && (
         <div className="mt-3 space-y-3">
-          {/* Objective is always shown above; only show here if inputs are expanded for full height */}
+          {/* Objective is always shown above; User Message is always shown above
+              via the Task section — only System Prompt and Input Data need the
+              heavier Inputs toggle. */}
 
           {/* System Prompt */}
           {hasSystemPrompt && (
@@ -352,20 +392,6 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
               <div className={`${colors.bg} rounded p-3 text-sm border ${colors.border} max-h-[400px] overflow-y-auto`}>
                 <ConversationMarkdownRenderer
                   content={(event as OrchestratorAgentStartEvent & { system_prompt?: string }).system_prompt || ''}
-                  maxHeight="400px"
-                  disablePathLinking
-                />
-              </div>
-            </div>
-          )}
-
-          {/* User Message */}
-          {hasUserMessage && (
-            <div>
-              <div className={`text-xs font-medium ${colors.textSecondary} mb-2`}>User Message:</div>
-              <div className={`${colors.bg} rounded p-3 text-sm border ${colors.border} max-h-[400px] overflow-y-auto`}>
-                <ConversationMarkdownRenderer
-                  content={(event as OrchestratorAgentStartEvent & { user_message?: string }).user_message || ''}
                   maxHeight="400px"
                   disablePathLinking
                 />

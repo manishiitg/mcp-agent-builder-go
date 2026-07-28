@@ -741,6 +741,22 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 			}
 		} else {
 			tabForCommand := inlineCDPTab
+			// A tab id sent as a bare positional (["--cdp", url, "t1"]) instead
+			// of marked (["--cdp", url, "--tab", "t1"]) is recovered rather than
+			// rejected. open already does exactly this
+			// (stripInlineTabFromOpenArgs); rejecting it here only meant a real
+			// agent burned a turn on a retry that changed nothing but the
+			// spelling. The tab requirement itself stays strict: recovery needs
+			// the unambiguous tN form outside a flag's value slot, so
+			// `type --text t1` is never mistaken for a tab, and a page action
+			// with no tab-shaped argument still fails.
+			if tabForCommand == "" {
+				if recovered, cleaned := unmarkedCDPTabArg(commandArgs); recovered != "" {
+					log.Printf("[BROWSER] CDP: recovered unmarked tab %q from %q args; treat it as --tab %s", recovered, command, recovered)
+					tabForCommand = recovered
+					commandArgs = cleaned
+				}
+			}
 			if tabForCommand == "" && isBrowserOpenCommand(command) {
 				tabForCommand = getCDPTabSelection(cdpPort, cdpOwner)
 			}
@@ -1233,7 +1249,31 @@ func (e *Executor) cdpTabSelectionError(ctx context.Context, session, cdpURL str
 	return fmt.Errorf("failed to select CDP tab %q before %q: %w\n\nThe tab label/id %q is not currently selectable. Do not retry page actions with this label. Select a known tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"<tab-id-or-label>\"]) or create a labeled tab with agent_browser(command=\"tab\", args=[\"--cdp\", %q, \"new\", \"--label\", %q, \"<url>\"]).", tab, command, selectErr, tab, configuredURL, configuredURL, tab)
 }
 
+// unmarkedCDPTabArg looks for a tab id that was passed as a bare positional
+// (["--cdp", url, "t7"]) instead of being marked with tab/--tab. The tab
+// selection is still rejected -- silently guessing which positional is a tab
+// would misread ordinary arguments -- but naming the token lets the error say
+// "you passed t7, mark it" instead of the misleading "no tab was provided",
+// and lets the retry hints drop the stray token instead of repeating it.
+// Only the strict tN id form counts, and only outside a flag's value slot, so
+// e.g. type --text t7 is never mistaken for a tab selection.
+func unmarkedCDPTabArg(args []string) (tab string, rest []string) {
+	for i, arg := range args {
+		if !isCDPTabID(arg) {
+			continue
+		}
+		if i > 0 && strings.HasPrefix(args[i-1], "-") {
+			continue
+		}
+		rest = append(append([]string{}, args[:i]...), args[i+1:]...)
+		return strings.TrimSpace(arg), rest
+	}
+	return "", args
+}
+
 func missingCDPPageActionTabError(port int, command string, commandArgs []string, tabHint string) error {
+	// A tN-shaped positional never reaches here -- the caller recovers it as
+	// the tab selection -- so by this point no tab was supplied in any form.
 	normalizedArgs := normalizeAgentBrowserCommandArgs(command, commandArgs)
 	cdpPrefix := []string{"--cdp", resolveCdpURL(port)}
 	tabRetryArgs := append(append(append([]string{}, cdpPrefix...), "tab", "<tab-id-or-label>"), normalizedArgs...)

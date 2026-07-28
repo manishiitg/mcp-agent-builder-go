@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func TestValidateFilePath(t *testing.T) {

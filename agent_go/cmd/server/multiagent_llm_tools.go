@@ -12,6 +12,7 @@ import (
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
+	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 )
 
 var cursorCLIAuthProbeCache = struct {
@@ -45,7 +46,21 @@ func listProviderModelsJSON(provider string) string {
 
 	if providerModelSelectionMode(provider) == "dynamic" {
 		resp := getDynamicModels(provider, true)
-		return prettyJSON(resp)
+		payload := map[string]interface{}{
+			"provider":              resp.Provider,
+			"model_selection_mode":  resp.ModelSelectionMode,
+			"models":                resp.Models,
+			"groups":                resp.Groups,
+			"supports_custom_model": resp.SupportsCustom,
+			"custom_model_hint":     resp.CustomModelHint,
+			"source":                resp.Source,
+			"cached_at":             resp.CachedAt,
+			"cache_ttl_seconds":     resp.CacheTTLSeconds,
+		}
+		if defaults, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider)); ok {
+			payload["default_tier_models"] = defaults
+		}
+		return prettyJSON(payload)
 	}
 
 	allModels := allProviderModelMetadata()
@@ -59,13 +74,18 @@ func listProviderModelsJSON(provider string) string {
 		}
 		filtered = append(filtered, m)
 	}
-	return prettyJSON(map[string]interface{}{
+	payload := map[string]interface{}{
 		"provider":             provider,
 		"model_selection_mode": "fixed_tier",
 		"count":                len(filtered),
 		"models":               filtered,
 		"source":               "/api/llm-config/models/metadata",
-	})
+		"default_model":        llm.GetDefaultModel(llm.Provider(provider)),
+	}
+	if defaults, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider)); ok {
+		payload["default_tier_models"] = defaults
+	}
+	return prettyJSON(payload)
 }
 
 func prettyJSON(v interface{}) string {

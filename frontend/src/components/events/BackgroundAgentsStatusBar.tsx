@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import type { PollingEvent } from '../../services/api-types'
+import { isEventType, getEventData } from '../../generated/event-types'
 
 interface BackgroundAgent {
   agentId: string
@@ -23,15 +24,10 @@ export const BackgroundAgentsStatusBar: React.FC<BackgroundAgentsStatusBarProps>
     const agentMap = new Map<string, BackgroundAgent>()
 
     for (const event of events) {
-      if (event.type === 'background_agent_started') {
-        const data = event.data as {
-          data?: { agent_id?: string; name?: string; fields?: { agent_id?: string; name?: string } }
-          agent_id?: string
-          name?: string
-        }
-        const fields = data?.data?.fields || data?.data || data
-        const agentId = fields?.agent_id
-        const name = fields?.name || 'Agent'
+      if (isEventType(event, 'background_agent_started')) {
+        const fields = getEventData(event)
+        const agentId = fields.agent_id
+        const name = fields.name || 'Agent'
         if (agentId) {
           agentMap.set(agentId, {
             agentId,
@@ -40,28 +36,17 @@ export const BackgroundAgentsStatusBar: React.FC<BackgroundAgentsStatusBarProps>
             startTime: event.timestamp ? new Date(event.timestamp as string).getTime() : Date.now(),
           })
         }
-      } else if (event.type === 'background_agent_completed') {
-        const data = event.data as {
-          data?: { agent_id?: string; name?: string; status?: string; duration?: string; fields?: { agent_id?: string; name?: string; status?: string; duration?: string } }
-          agent_id?: string
-          name?: string
-          status?: string
-          duration?: string
-        }
-        const fields = data?.data?.fields || data?.data || data
-        const agentId = fields?.agent_id
+      } else if (isEventType(event, 'background_agent_completed')) {
+        const fields = getEventData(event)
+        const agentId = fields.agent_id
         if (agentId && agentMap.has(agentId)) {
           const existing = agentMap.get(agentId)!
-          existing.status = (fields?.status === 'failed' ? 'failed' : 'completed') as 'completed' | 'failed'
-          existing.duration = fields?.duration
+          existing.status = (fields.status === 'failed' ? 'failed' : 'completed') as 'completed' | 'failed'
+          existing.duration = fields.duration
         }
-      } else if (event.type === 'background_agent_terminated') {
-        const data = event.data as {
-          data?: { agent_id?: string; fields?: { agent_id?: string } }
-          agent_id?: string
-        }
-        const fields = data?.data?.fields || data?.data || data
-        const agentId = fields?.agent_id
+      } else if (isEventType(event, 'background_agent_terminated')) {
+        const fields = getEventData(event)
+        const agentId = fields.agent_id
         if (agentId && agentMap.has(agentId)) {
           agentMap.get(agentId)!.status = 'canceled'
         }

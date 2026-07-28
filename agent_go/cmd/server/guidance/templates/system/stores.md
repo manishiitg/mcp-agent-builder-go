@@ -94,6 +94,12 @@ Every non-trivial step has a `context_output` file (e.g. `extracted_data.json`).
 
 **DB schema discipline — declare BEFORE you write.** Every table in `db/db.sqlite` is shared across groups and runs. The PRIMARY KEY plus an explicit `ON CONFLICT` upsert is what keeps a step's write from clobbering rows another group just wrote. Treat the schema (DDL) as a contract, not a convention.
 
+**Backend-owned tables — never write these from a step or the builder shell.** A few tables in `db/db.sqlite` are created and maintained by the backend, not by workflow code. They do not belong in `db/README.md`'s writer list and a step that inserts into them will corrupt state the scheduler depends on:
+
+- `pulse_module_state`, `pulse_module_audit` — Pulse scheduling state and module outcomes.
+- `run_concerns` — the durable record of `CONCERNS:` lines. Rows are written by Go when a step's completion summary is composed; a step raises a concern **only** by emitting its `CONCERNS:` line, never by writing this table. Read-only queries against it are fine.
+- `report_human_inputs` — pending/answered operator questions.
+
 **Where the contract lives: `db/README.md`** (you create and maintain it — FolderGuard allows builder shell-writes). One section per table, in this shape:
 
 ```markdown

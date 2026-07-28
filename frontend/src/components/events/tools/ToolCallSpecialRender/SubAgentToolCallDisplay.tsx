@@ -9,7 +9,7 @@ interface SubAgentToolCallDisplayProps {
 }
 
 export const SubAgentToolCallDisplay: React.FC<SubAgentToolCallDisplayProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
   const isGeneric = event.tool_name === 'call_generic_agent'
 
   let parsedArgs: Record<string, unknown> = {}

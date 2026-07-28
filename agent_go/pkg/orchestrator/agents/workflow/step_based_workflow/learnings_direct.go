@@ -142,13 +142,13 @@ func BuildLearningsContributionTurnWithTargetAndBrowser(stepID, stepDescription,
 
 	var b strings.Builder
 	b.WriteString("## Learnings Contribution (dedicated turn)\n\n")
-	b.WriteString("Your main-step work is complete and pre-validation passed. Now — in this turn only — you have WRITE access to the shared learnings folder. Your job for this turn is to capture HOW to run this task well, so future runs don't have to rediscover what you just worked out.\n\n")
+	b.WriteString("Your main-step work is complete and pre-validation passed. In this turn only, you have WRITE access to the shared learnings folder: capture HOW to run this task so future runs don't rediscover it.\n\n")
 
 	b.WriteString("**Target:** `")
 	b.WriteString(skillPath)
 	b.WriteString("` plus linked files under `")
 	b.WriteString(referencesPath)
-	b.WriteString("/` — the single global runbook shared across every step of this workflow. Use these exact paths; do not rely on your shell working directory. You are appending this step's contribution, not owning the folder.\n\n")
+	b.WriteString("/` — the global runbook shared by every step. Use these exact paths; do not rely on your shell working directory. You are appending your contribution, not owning the folder.\n\n")
 
 	if description != "" {
 		b.WriteString("**Current step description (source of truth for stale-learning cleanup):**\n")
@@ -156,30 +156,26 @@ func BuildLearningsContributionTurnWithTargetAndBrowser(stepID, stepDescription,
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString("**Frontmatter (top of SKILL.md):** preserve existing frontmatter; if creating it fresh, set `name` (this workflow), `description` (summary of the HOW-to-run knowledge), `disable-model-invocation: true`, and `user-invocable: false`.\n\n")
+	b.WriteString("**Frontmatter:** preserve existing; if creating it fresh, set `name`, `description`, `disable-model-invocation: true`, `user-invocable: false`.\n\n")
 
 	b.WriteString("**Write rules (critical — you are writing to a shared file):**\n")
-	b.WriteString("1. **Read first.** Run `cat '")
+	b.WriteString("1. **Read first.** `cat '")
 	b.WriteString(skillPath)
 	b.WriteString("'` and `ls '")
 	b.WriteString(referencesPath)
-	b.WriteString("'` (if it exists). Understand the existing structure — what topic files already cover which areas — before you write anything. Use the exact target paths above; do not write under `runs/`.\n")
+	b.WriteString("'` to see which topics already exist before writing. Use the exact target paths; never write under `runs/`.\n")
 	b.WriteString("2. **Patch surgically, never rewrite.** Use `diff_patch_workspace_file` for every write, including creating a new `")
 	b.WriteString(filepath.Join(referencesPath, "<topic>.md"))
-	b.WriteString("` file. Add your observations to the topic file they belong to (e.g. `")
-	b.WriteString(filepath.Join(referencesPath, "auth-flow.md"))
-	b.WriteString("`, `")
-	b.WriteString(filepath.Join(referencesPath, "selectors.md"))
-	b.WriteString("`) rather than dumping them into SKILL.md. **Do not use shell redirection, heredocs, tee, Python, or built-in file-edit tools to create or edit learning files.** **Never rewrite SKILL.md wholesale** — you'd destroy contributions from other steps.\n")
-	b.WriteString("3. **SKILL.md stays lean (under ~80-100 lines).** It is only the index/overview: frontmatter, a brief scope note, and links to focused reference files. Detailed HOW-to-run content from this step run belongs in `references/<topic>.md`, not in SKILL.md itself.\n")
-	b.WriteString("4. **Reference files hold the details.** Store the specifics (selectors, auth flows, API quirks, timing, retry patterns, format notes) in topic files under `")
+	b.WriteString("` file. **Do not use shell redirection, heredocs, tee, Python, or built-in file-edit tools to create or edit learning files.** **Never rewrite SKILL.md wholesale** — you'd destroy other steps' contributions.\n")
+	b.WriteString("3. **SKILL.md is only the index (~80-100 lines max):** frontmatter, a brief scope note, links to topic files. Every detail from this run — selectors, auth flows, API quirks, timing, retry patterns, format notes — goes in `")
 	b.WriteString(referencesPath)
-	b.WriteString("/`; when you add a new one, link it from SKILL.md.\n")
-	b.WriteString("5. **Reconcile stale guidance.** Compare reference content you touch against the current step description and this run's behavior; if a note describes obsolete behavior or a selector/API path this successful run contradicts, remove or replace it in the same patch. Don't delete unrelated shared guidance this step simply didn't use.\n")
-	b.WriteString("6. **Merge with existing knowledge, don't duplicate.** If the lesson you'd write overlaps with a pattern another step already captured in an existing references file, extend that file (append a new section, refine an existing one) rather than creating a second place for the same knowledge.\n")
-	b.WriteString("7. **No ephemeral refs.** Do not save session-local browser handles (`@e1`, `e68`, etc.) — they are useless across runs.\n")
-	b.WriteString("8. **No fabrication.** Capture only patterns you actually used in this execution. If you're unsure whether a pattern is reliable, say so explicitly in the note.\n")
-	b.WriteString("9. **HOW only — not facts or results.** Capture reusable execution technique (selectors, API/tool call shapes, auth flows, timing, parsing/retry patterns). Do NOT record discovered facts, run results, current values, user preferences, or status — those go to the knowledgebase (`notes/`, `context/`) or `db/db.sqlite`, never in learnings. Never write secret values here.\n\n")
+	b.WriteString("/<topic>.md`; link any new file from SKILL.md.\n")
+	b.WriteString("4. **Reconcile stale guidance.** Where content you touch describes behavior this run contradicts — obsolete selector, changed API path — replace it in the same patch. Don't delete unrelated guidance this step simply didn't use.\n")
+	b.WriteString("5. **Merge, don't duplicate.** If your lesson overlaps a pattern another step already captured, extend that file rather than creating a second home for it.\n")
+	b.WriteString("6. **No ephemeral refs.** Session-local browser handles (`@e1`, `e68`) are useless across runs.\n")
+	b.WriteString("7. **No fabrication.** Capture only patterns you actually used. If unsure a pattern is reliable, say so in the note.\n")
+	b.WriteString("8. **HOW only — not facts or results.** Reusable execution technique; not discovered facts, run results, current values, preferences, or status — those go to the knowledgebase or `db/db.sqlite`, never in learnings. Never write secrets.\n")
+	b.WriteString("9. **Never copy an owner constraint VALUE** (caps, limits, thresholds). They live in `soul/soul.md` and are injected every run; a number copied here goes stale the moment the owner changes it. Name the constraint, never its value — and strip any you find, with a `CONCERNS:` line.\n\n")
 	if hasBrowserAccess {
 		b.WriteString(BuildBrowserLearningRules())
 		b.WriteString("\n")
@@ -189,9 +185,13 @@ func BuildLearningsContributionTurnWithTargetAndBrowser(stepID, stepDescription,
 	b.WriteString(objective)
 	b.WriteString("\n\n")
 
+	b.WriteString("**Raising a concern.** You alone see the execution trail, step description, binding constraints and existing learnings together, and learnings is the only store you can write — so a problem anywhere else is lost unless you report it. Add a line before your summary:\n")
+	b.WriteString("`CONCERNS: <what contradicts what, naming both sources and the evidence path>`\n")
+	b.WriteString("Use it when the step description contradicts the constraints; when existing learnings contradict the description, the constraints, or this run; when learnings/KB/`db/` state the same fact differently; or when a path, table or field the description names does not exist. Never leave a \"this is stale, use X\" caveat beside the wrong content — fix what you own, report the rest, and state both sides rather than guessing. Not for routine progress or for something the workflow simply hasn't learned yet.\n\n")
+
 	b.WriteString("**Important:**\n")
 	b.WriteString("- This is your final learnings turn for this step — there is no second pass.\n")
-	b.WriteString("- If there's genuinely nothing new worth capturing (e.g. the step was trivial and the existing SKILL.md already covers it), do NOT force an edit. Reply briefly that no learning changes were needed and why.\n")
+	b.WriteString("- If there's genuinely nothing new worth capturing (e.g. the step was trivial and the existing SKILL.md already covers it), do NOT force an edit. Reply briefly that no learning changes were needed and why — a `CONCERNS:` line still applies on a no-op turn.\n")
 	b.WriteString("- If you did update files, end with exactly one summary line: `Learnings updated: files changed: <comma-separated file list>`.\n")
 	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`) and `diff_patch_workspace_file` for all writes under `")
 	b.WriteString(targetPath)

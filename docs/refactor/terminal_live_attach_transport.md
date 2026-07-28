@@ -54,6 +54,19 @@ LiveAttachXtermPane`) matches §§1–3 but differs from the §§4–9 plan on t
    seed row 0 twice). **Slow viewers are dropped whole** (WS close → reconnect → fresh
    seed), not fed a holed stream.
 
+7. **One live geometry owner per tmux pane.** A newly seeded viewer supersedes the
+   incumbent and the backend closes the old viewer with WebSocket code `4001`. The old
+   frontend does not reconnect automatically (that would create a resize/ownership
+   ping-pong) and does not fetch the new owner's snapshot (it was captured at a different
+   grid and would corrupt local wrapping). It keeps its existing frame until the user
+   explicitly chooses **Take over**.
+
+8. **List metadata and detail bodies are intentionally asymmetric.** The frontend's
+   terminal-list poll owns lifecycle/process state. Detail and history fetches contribute
+   body content only. Interactive main-agent panes continue streaming after a turn is
+   `completed` while their process remains `live`; conflating turn completion with process
+   closure caused the live WebSocket to close and reopen every polling cycle.
+
 Everything else below is the original design record, kept for rationale.
 
 ---

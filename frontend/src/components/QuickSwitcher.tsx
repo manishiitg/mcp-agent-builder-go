@@ -166,20 +166,6 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
   const recentPresetOrder = useGlobalPresetStore(state => (isOpen ? state.recentPresetOrder : EMPTY_RECENT_PRESET_ORDER))
   const recentPresetAccessedAt = useGlobalPresetStore(state => (isOpen ? state.recentPresetAccessedAt : EMPTY_RECENT_PRESET_ACCESSED_AT))
 
-  // Track Shift key state to show "minimize" hint on selected item
-  const [shiftHeld, setShiftHeld] = useState(false)
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => setShiftHeld(e.shiftKey)
-    window.addEventListener('keydown', onKey)
-    window.addEventListener('keyup', onKey)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      window.removeEventListener('keyup', onKey)
-      setShiftHeld(false)
-    }
-  }, [isOpen])
-
   // Reset state on open.
   useEffect(() => {
     if (isOpen) {
@@ -360,7 +346,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
     }
   }, [selectedIndex])
 
-  const handleSelect = useCallback(async (item: QuickSwitcherItem, minimize = false) => {
+  const handleSelect = useCallback(async (item: QuickSwitcherItem) => {
     if (item.type === 'active') {
       // Shared path with the header activity monitor so opening the same session
       // behaves identically from either surface.
@@ -384,15 +370,6 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
     console.log(`%c[QuickSwitcher] Switching to workflow: ${item.label?.slice(0,30)} (${item.id?.slice(0,8)})`, 'color: #FF9800; font-weight: bold')
     console.time('[QuickSwitcher] workflow-switch-total')
 
-    if (minimize) {
-      const chatStore = useChatStore.getState()
-      Object.values(chatStore.chatTabs).forEach(tab => {
-        if (tab.metadata?.mode === 'workflow' && tab.metadata?.presetQueryId === item.preset.id) {
-          chatStore.setTabViewMode(tab.tabId, 'tree')
-        }
-      })
-    }
-
     await openWorkflowPresetPage(item.preset, {
       activeSession: item.activeSession,
       title: item.label,
@@ -413,7 +390,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (filteredItems.length > 0 && selectedIndex >= 0 && selectedIndex < filteredItems.length) {
-        void handleSelect(filteredItems[selectedIndex], e.shiftKey)
+        void handleSelect(filteredItems[selectedIndex])
       }
     } else if (e.key === 'Escape') {
       e.preventDefault()
@@ -479,7 +456,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
                       : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                   onMouseEnter={() => setSelectedIndex(index)}
-                  onMouseDown={e => { e.preventDefault(); void handleSelect(item, e.shiftKey) }}
+                  onMouseDown={e => { e.preventDefault(); void handleSelect(item) }}
                 >
                   <ItemIcon className={`w-4 h-4 flex-shrink-0 ${item.isActive ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'}`} />
                   <div className="flex-1 min-w-0">
@@ -509,12 +486,6 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
                     </div>
                     <div className="text-xs text-muted-foreground truncate">{item.subtitle}</div>
                   </div>
-                  {/* Show "minimize current" hint when Shift is held on a non-active workflow item */}
-                  {isSelected && shiftHeld && !item.isActive && item.type === 'workflow' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300 font-medium flex-shrink-0 animate-in fade-in duration-150">
-                      minimize current
-                    </span>
-                  )}
                 </div>
               )
             })
@@ -527,9 +498,6 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
             <div className="flex items-center gap-3 min-w-0">
               <span><kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">↑↓</kbd> navigate</span>
               <span><kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">↵</kbd> switch</span>
-              {filteredItems.some(item => item.type === 'workflow') && (
-                <span><kbd className="px-1 py-0.5 bg-amber-200 dark:bg-amber-800 text-amber-700 dark:text-amber-300 rounded text-[10px]">⇧↵</kbd> switch &amp; minimize</span>
-              )}
             </div>
             <span className="hidden sm:inline flex-shrink-0">@active @workflows @chats</span>
             <span className="flex-shrink-0"><kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">esc</kbd> close</span>

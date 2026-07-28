@@ -4,26 +4,29 @@ Use only for the scheduler's Gate stage. Gate is a progressive evidence scan,
 not a full audit and not a fixer. It selects the evidence-backed worklist; deep
 review happens later.
 
-Read `soul/soul.md`, the authoritative current/history state in
-`builder/improve.html`, `get_pulse_module_state`, latest run metadata/summary,
-planning changelog names/review flags, compact plan/eval/report/DB/KB/learning
-freshness metadata, resolved workflow LLM/tier/fallback signature,
-backup/publish/notification readiness, open/answered `report_human_inputs`, and
-pending human decisions. Stay on compact signals; open a full artifact
-(complete reports, broad DB rows, full KB/learnings, conversations, prompts,
-tool logs) only when a compact signal makes one targeted fact necessary.
+Read `soul/soul.md`, `builder/improve.html`, `get_pulse_module_state`, latest run
+metadata/summary, compact plan/eval/report/DB/KB/learning freshness
+metadata, resolved LLM/tier/fallback signature, backup/publish/notification readiness, open/answered
+`report_human_inputs`, and pending human decisions. Stay on compact signals; open
+a full artifact only when one makes a targeted fact necessary.
+
+`get_pulse_module_state` also returns `open_concerns` (with recurrence counts),
+`plan_change_backlog`, and `module_review_history`. Weigh them rather than
+re-deriving them, and justify every skip against that history: a module absent
+from it has not run at all — a reason to run it, not to assume it is fine.
+
+Compare exact pins with `list_provider_models` and `default_tier_models`.
+Provider-profile defaults auto-update; never flag them, infer freshness by name,
+or change config here.
 
 For the supplied run folder, inspect every executed step/item's compact final
-result for literal `CONCERNS:`. Read that result from:
+result for literal `CONCERNS:` — `logs/<step>/execution/execution-final-summary.json`
+for regular and todo_task steps, `execution/<step>/session.json` entry summaries
+for message_sequence, and the latest `execution-attempt-*.json` when no final
+summary exists.
 
-| Step kind / run state | Evidence file |
-| --- | --- |
-| regular, todo_task | `logs/<step>/execution/execution-final-summary.json` |
-| message_sequence | `execution/<step>/session.json` entry summaries |
-| failed, incomplete, or legacy run with no final-summary file | latest applicable final retry `execution-attempt-*.json` |
-
-A completed step does not erase a concern. Deduplicate against durable history
-and preserve step/item plus evidence path. `CONCERNS:` is evidence to classify,
+A completed step does not erase a concern. Deduplicate against durable history,
+keep step/item and evidence path. `CONCERNS:` is evidence to classify,
 not automatic run failure.
 
 Update `builder/improve.html` once with a compact plain-English Gate/Worklist
@@ -40,10 +43,10 @@ module: `bug_review`, `artifact_review`, `report_health`, `eval_health`,
 `llm_ops_review`, and `goal_advisor`. On recovery, if this Pulse run already has
 a complete worklist, repair/verify HTML and handoff only; do not record it twice.
 
-Every skip needs reason, evidence, and at least one concrete next check:
-`next_check_at`, positive `cooldown_runs`, or `next_check_after_run_id`. New
-evidence may override cadence, but name it. Successful execution is evidence for
-a review, never a substitute for a baseline review. Missing baseline means
+Every skip needs reason, evidence, and one concrete next check: `next_check_at`,
+positive `cooldown_runs`, or `next_check_after_run_id`. New evidence may override
+cadence, but name it. Successful execution is evidence for a review,
+never a substitute for a baseline review. Missing baseline means
 `baseline pending`, not healthy. Use bounded adaptive cadence; correctness,
 side-effecting, financial, auth, publishing, and communication paths stay tight.
 
@@ -56,8 +59,9 @@ Select modules agentically:
   dependency drift in that layer.
 - Cost/LLM/Time: missing/unpriced telemetry, material cost/latency/model change,
   or its planned roll-up checkpoint; do not run on every high-frequency Pulse.
-- LLM/Ops: low-frequency coaching after config/readiness change, its checkpoint,
-  or retained efficiency evidence; never silently change models or tiers.
+- LLM/Ops: after config/readiness change, checkpoint, retained
+  efficiency evidence, or a catalog-confirmed exact-pin issue. Catalog changes
+  override cooldown; never silently change models/tiers.
 - Goal Advisor: a trustworthy material goal miss, stalled outcome, measurement
   gap, answered strategy decision, active-experiment checkpoint/problem, or a
   reached healthy headroom/plan-design checkpoint. A clean run or green eval

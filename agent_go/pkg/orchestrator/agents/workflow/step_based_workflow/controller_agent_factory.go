@@ -355,10 +355,9 @@ func isGenericAgentStep(stepID, stepPath string) bool {
 // setupExecutionFolderGuard sets up folder guard paths for execution agents.
 // kbAccess must be one of KBAccessRead / Write / ReadWrite / None — callers resolve it
 // via resolveKnowledgebaseAccess before invoking. learningsAccess must be resolved via
-// resolveLearningsAccess. kbWriteMethod must be one of KBWriteMethodAgent / Direct and
-// is only consulted when kbAccess permits writes; callers resolve it via
-// resolveKnowledgebaseWriteMethod. Returns readPaths and writePaths.
-func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, kbWriteMethod string, dbAccess string) (readPaths, writePaths []string) {
+// resolveLearningsAccess. When kbAccess permits writes the step is the KB writer,
+// so knowledgebase/notes/ is added to writePaths. Returns readPaths and writePaths.
+func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string) (readPaths, writePaths []string) {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
 	// Use run folder if available, otherwise use base workspace (backward compatibility)
 	var runWorkspacePath string
@@ -381,7 +380,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	downloadsPath := fmt.Sprintf("%s/Downloads", executionWorkspacePath)
 	soulPath := fmt.Sprintf("%s/soul", baseWorkspacePath)
 	builderPath := fmt.Sprintf("%s/builder", baseWorkspacePath)
-	readPaths = []string{executionWorkspacePath, soulPath, builderPath}
+	// planning/ is READ-ONLY here and deliberately so. A step previously could not
+	// see the plan at all: it got its own description plus resolved dependencies and
+	// had no way to tell whether it was the first of nine or the last, or what
+	// consumed its output. Read access lets a step judge its own scope. Writes stay
+	// impossible — planning/ is absent from writePaths below, is excluded from
+	// WorkflowWritableSubfolders, and isProtectedPlanningPath is the runtime backstop;
+	// plan.json/step_config.json are only ever mutated through the typed plan-mod tools.
+	planningPath := fmt.Sprintf("%s/%s", baseWorkspacePath, PlanningFolderName)
+	readPaths = []string{executionWorkspacePath, soulPath, builderPath, planningPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write
@@ -420,7 +427,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 		knowledgebasePath := getKnowledgebasePath(baseWorkspacePath)
 		readPaths = append(readPaths, knowledgebasePath)
 	}
-	if kbAccessAllowsWrite(kbAccess) && kbWriteMethod == KBWriteMethodDirect {
+	if kbAccessAllowsWrite(kbAccess) {
 		notesPath := fmt.Sprintf("%s/notes", getKnowledgebasePath(baseWorkspacePath))
 		writePaths = append(writePaths, notesPath)
 	}
@@ -887,66 +894,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(session
 	))
 }
 
-// createKBUpdateAgent builds the post-step KB update agent. Folder guard reads the
-// step's execution output + knowledgebase/, writes knowledgebase/ only. KB agents
-// use the workflow phase LLM so builder/optimizer knowledge work is model-aligned.
-func (hcpo *StepBasedWorkflowOrchestrator) createKBUpdateAgent(ctx context.Context, phase string, agentName string, stepConfig *AgentConfigs, stepID string, stepPath string, stepIndex int) (agents.OrchestratorAgent, error) {
-	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
-	// Dedicated session so the session-level folder guard wins over the parent
-	// step's guard when sandbox-exec enforces writes. See setupSubAgentSessionGuard.
-	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-update", stepID, readPaths, writePaths)
-	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
-	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB update agent - Read: %v, Write: %v", readPaths, writePaths))
-
-	llmConfig := hcpo.selectPhaseLLM("KB update agent")
-	if llmConfig == nil {
-		return nil, fmt.Errorf("no valid LLM configuration found for KB update agent")
-	}
-
-	// Cap below learning's 50 — KB merges should converge quickly.
-	maxTurns := 40
-	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
-	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB update agent")
-	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
-	config.ServerNames = []string{mcpclient.NoServers}
-	config.MCPSessionID = subAgentSessionID
-	config.UseCodeExecutionMode = requiresCodeExecutionForProvider(&AgentLLMConfig{
-		Provider: config.LLMConfig.Primary.Provider,
-		ModelID:  config.LLMConfig.Primary.ModelID,
-	})
-	// No context offloading — output is a short summary line, not a large artifact.
-	disabled := false
-	config.EnableContextOffloading = &disabled
-
-	// 4. Workspace tools only (shell + diff_patch + read/write file). No human tools — this
-	// is a background agent that must not block on prompts.
-	toolsToRegister, executorsToUse := hcpo.prepareWorkspaceToolsOnly()
-
-	// 5. Base factory.
-	createAgentFunc := func(config *agents.OrchestratorAgentConfig, logger loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
-		return NewKBUpdateAgent(config, logger, tracer, eventBridge)
-	}
-	agent, err := hcpo.CreateAndSetupStandardAgentWithConfig(
-		ctx,
-		config,
-		phase,
-		stepIndex,
-		0, // iteration (unused for post-step agents)
-		stepID,
-		createAgentFunc,
-		toolsToRegister,
-		executorsToUse,
-		false,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create KB update agent: %w", err)
-	}
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, false); err != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
-	}
-	return agent, nil
-}
-
 func (hcpo *StepBasedWorkflowOrchestrator) selectPhaseLLM(agentPurpose string) *orchestrator.LLMConfig {
 	if hcpo.presetPhaseLLM == nil || hcpo.presetPhaseLLM.Provider == "" || hcpo.presetPhaseLLM.ModelID == "" {
 		hcpo.GetLogger().Warn(fmt.Sprintf("selectPhaseLLM: no valid phase LLM configured for %s", agentPurpose))
@@ -1161,10 +1108,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 2. Setup folder guard (extracted method). Empty kbAccess defaults to orchestrator-level UseKnowledgebase.
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	kbWriteMethod := resolveKnowledgebaseWriteMethod(stepConfig)
 	learningsAccess := resolveLearningsAccess(stepConfig)
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, evaluationDBWrite)
-	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, kbWriteMethod, dbAccess)
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess)
 	stepEnvOutputPathOverride := ""
 	if override, ok := ctx.Value(messageSequenceFolderGuardOverrideKey{}).(*messageSequenceFolderGuardOverride); ok && override != nil {
 		readPaths = append([]string{}, override.ReadPaths...)

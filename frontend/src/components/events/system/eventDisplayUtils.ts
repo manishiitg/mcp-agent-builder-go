@@ -55,3 +55,18 @@ export function isEvaluationAgentEvent(event: AgentEventLike): boolean {
     inputData.StepExecutionPath,
   ].some(hasEvaluationMarker)
 }
+
+/**
+ * Reviewer completion markers are a backend handshake, not part of the
+ * reviewer result. Keep them in the event payload for protocol validation but
+ * remove them from the human-facing transcript.
+ */
+export function humanReadableAgentResult(result?: string): string {
+  if (!result) return ''
+
+  return result
+    .split(/\r?\n/)
+    .filter(line => !/^\s*PULSE_REVIEW_COMPLETE(?:\s+todo_id=\S+)?\s*$/.test(line))
+    .join('\n')
+    .trim()
+}

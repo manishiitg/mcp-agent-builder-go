@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 
 // Type definitions for conversation structure
-interface ConversationPart {
+export interface ConversationPart {
   Text?: string
   ID?: string
   FunctionCall?: { Name: string; Arguments: string }
@@ -25,7 +25,7 @@ interface ConversationPart {
   Content?: string
 }
 
-interface ConversationMessage {
+export interface ConversationMessage {
   Role: 'system' | 'human' | 'ai' | 'tool'
   Parts: ConversationPart[]
 }
@@ -376,7 +376,7 @@ const CollapsibleContent: React.FC<{
 }
 
 // Tool call display component
-const ToolCallDisplay: React.FC<{
+export const ConversationToolCallDisplay: React.FC<{
   name: string
   arguments: string
   callId?: string
@@ -431,7 +431,7 @@ const ToolCallDisplay: React.FC<{
 }
 
 // Tool response display component
-const ToolResponseDisplay: React.FC<{
+export const ConversationToolResponseDisplay: React.FC<{
   toolName?: string
   toolCallId?: string
   content: string
@@ -487,13 +487,14 @@ const ToolResponseDisplay: React.FC<{
 }
 
 // Message component
-const MessageDisplay: React.FC<{
+export const ConversationMessageDisplay: React.FC<{
   message: ConversationMessage
   index: number
+  showIndex?: boolean
   llmCall?: LLMCallTiming
   toolTimingById: Map<string, ToolCallTiming>
   toolTimingByName: Map<string, ToolCallTiming[]>
-}> = ({ message, index, llmCall, toolTimingById, toolTimingByName }) => {
+}> = ({ message, index, showIndex = true, llmCall, toolTimingById, toolTimingByName }) => {
   const config = roleConfig[message.Role] || roleConfig.system
   const Icon = config.icon
 
@@ -520,7 +521,7 @@ const MessageDisplay: React.FC<{
           ? toolTimingById.get(part.ID)
           : toolTimingByName.get(part.FunctionCall.Name)?.[0]
         return (
-          <ToolCallDisplay
+          <ConversationToolCallDisplay
             key={partIndex}
             name={part.FunctionCall.Name}
             arguments={part.FunctionCall.Arguments}
@@ -538,7 +539,7 @@ const MessageDisplay: React.FC<{
             ? toolTimingByName.get(part.Name)?.[0]
             : undefined
         return (
-          <ToolResponseDisplay
+          <ConversationToolResponseDisplay
             key={partIndex}
             toolName={part.Name}
             toolCallId={part.ToolCallID}
@@ -565,7 +566,7 @@ const MessageDisplay: React.FC<{
         <span className={cn('text-[10px] font-semibold uppercase tracking-wider', config.labelClass)}>
           {config.label}
         </span>
-        <span className="text-[9px] text-muted-foreground">#{index + 1}</span>
+        {showIndex && <span className="text-[9px] text-muted-foreground">#{index + 1}</span>}
         {llmCall && (
           <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
             <TimingChip title="LLM duration">
@@ -698,7 +699,7 @@ export const ConversationViewer: React.FC<ConversationViewerProps> = ({ content,
           {filteredMessages?.map((message) => {
             const originalIndex = messages.indexOf(message)
             return (
-              <MessageDisplay
+              <ConversationMessageDisplay
                 key={originalIndex}
                 message={message}
                 index={originalIndex}

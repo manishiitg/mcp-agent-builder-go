@@ -1822,20 +1822,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)
 
-          if (activeViewMode === 'tree' && chatStore.getTabEvents(running.session_id).length === 0) {
-            try {
-              const eventsResponse = await agentApi.getRecentSessionEvents(running.session_id)
-              if (!cancelled && eventsResponse.events.length > 0) {
-                chatStore.setTabEvents(running.session_id, eventsResponse.events)
-                chatStore.setTabLastEventIndex(
-                  running.session_id,
-                  eventsResponse.last_processed_index ?? eventsResponse.events.length - 1,
-                )
-              }
-            } catch {
-              /* Tree view can keep polling if event hydration misses. */
-            }
-          }
         }
 
         if (shouldSwitch && selectedRunningTabId) {

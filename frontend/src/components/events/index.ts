@@ -1,6 +1,8 @@
 // Event display components
-export { EventDispatcher, EventList } from './EventDispatcher'
-export { EventHierarchy } from './EventHierarchy'
+export { EventDispatcher } from './EventDispatcher'
+// Owner-key helpers live in utils/eventOwnership (pure, React-free) so they
+// stay unit-testable; re-exported here for existing importers.
+export { getOwnedTerminalOwnerKeys, getTerminalOwnerPayload } from '../../utils/eventOwnership'
 // Enhanced tool response display
 export { EnhancedToolResponseDisplay } from './EnhancedToolResponseDisplay'
 

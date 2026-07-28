@@ -152,6 +152,53 @@ type ScriptedFastPathResult struct {
 	ExistingScript  string // old script content (for LLM relearn prompt)
 }
 
+// ScriptedFastPathDecision is what the saved-script attempt means for the rest
+// of the step: either the script did the whole job, or the LLM takes over and
+// needs the script (and any error) as repair context.
+type ScriptedFastPathDecision struct {
+	// FastPathDone means the saved script ran AND validated — the LLM is
+	// skipped entirely for this step (the 0-token path).
+	FastPathDone bool
+	// PriorScript is the saved script handed to the LLM so it repairs/adapts
+	// the existing code instead of rewriting from scratch.
+	PriorScript string
+	// PriorError is the failure the saved script produced. Non-empty ONLY when
+	// a script actually ran and failed — an untried script is a reuse case, not
+	// a failure, and must not be presented to the model as one.
+	PriorError string
+}
+
+// decideScriptedFastPath maps a saved-script attempt onto the step's next move.
+//
+// Extracted as a pure function because the fallback is the feature: when a
+// scripted step's main.py fails, the run must NOT fail — it must fall back to
+// the LLM carrying the broken script and its error so the model can fix it.
+// Inline, that behavior was three easily-transposed branches with no test
+// coverage at all.
+func decideScriptedFastPath(result *ScriptedFastPathResult) ScriptedFastPathDecision {
+	if result == nil {
+		return ScriptedFastPathDecision{}
+	}
+	switch {
+	case result.RanScript && result.Success:
+		// Saved script executed and validated — skip the LLM entirely.
+		return ScriptedFastPathDecision{FastPathDone: true}
+	case result.RanScript:
+		// Ran but failed: hand the LLM the script AND the error to relearn from.
+		return ScriptedFastPathDecision{
+			PriorScript: result.ExistingScript,
+			PriorError:  result.Error,
+		}
+	case result.ExistingScript != "":
+		// A saved script exists but was never executed. Reuse/update path —
+		// deliberately no PriorError, since nothing failed.
+		return ScriptedFastPathDecision{PriorScript: result.ExistingScript}
+	default:
+		// No saved script at all — the LLM writes one from scratch.
+		return ScriptedFastPathDecision{}
+	}
+}
+
 type learnCodeSelfRunInfo struct {
 	Output   string
 	ExitCode int
@@ -632,13 +679,32 @@ func buildScriptedEnvVarNamesForPrompt(isScriptedMode bool, workspaceEnvRef map[
 	if !isScriptedMode {
 		return ""
 	}
-	names := []string{"STEP_OUTPUT_DIR", "MCP_API_URL"}
-	for k := range workspaceEnvRef {
-		if k != "MCP_API_URL" { // avoid duplicate
-			names = append(names, k)
-		}
+	// Every name the runtime actually injects must appear here. execScriptedScript
+	// sets STEP_OUTPUT_DIR, STEP_EXECUTION_DIR and DB_PATH alongside the workspace
+	// env, but this list used to omit the last two — so a script author was told the
+	// database path did not exist while the runtime was handing it over.
+	//
+	// That mismatch is expensive, not cosmetic. An author reading this list finds no
+	// DB_PATH, concludes the db is unreachable, and works around it: one workflow
+	// removed the required-env read and derived the path from STEP_EXECUTION_DIR,
+	// another shelled out to the sqlite3 CLI and wrote that into its permanent
+	// learnings. Both workarounds are explicitly forbidden by the stores contract,
+	// which insists steps use $DB_PATH and report an open failure as a runtime bug
+	// rather than routing around it. The framework was contradicting itself.
+	fixed := []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "MCP_API_URL"}
+	seen := make(map[string]bool, len(fixed)+len(workspaceEnvRef))
+	for _, n := range fixed {
+		seen[n] = true
 	}
-	sort.Strings(names[2:]) // sort the SECRET_*/VAR_* part
+	names := append([]string{}, fixed...)
+	for k := range workspaceEnvRef {
+		if seen[k] {
+			continue // already declared above; never list a name twice
+		}
+		seen[k] = true
+		names = append(names, k)
+	}
+	sort.Strings(names[len(fixed):]) // sort only the SECRET_*/VAR_* tail
 	return strings.Join(names, "\n")
 }
 
@@ -677,10 +743,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveScriptedShellGuard(
 ) *workspace.FolderGuardConfig {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	kbWriteMethod := resolveKnowledgebaseWriteMethod(stepConfig)
 	learningsAccess := resolveLearningsAccess(stepConfig)
 
-	readPaths, writePaths := hcpo.setupExecutionFolderGuard(stepPath, step.GetID(), kbAccess, learningsAccess, kbWriteMethod, resolveDBAccess(stepConfig))
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard(stepPath, step.GetID(), kbAccess, learningsAccess, resolveDBAccess(stepConfig))
 	if includeCodeDir && len(writePaths) > 0 {
 		writePaths = append(writePaths, writePaths[0]+"/code")
 	}

@@ -340,6 +340,30 @@ Goal: builder/improve.html remains a human-readable decision and outcome history
 
 Report how many visible labels or sentences were translated, how many technical evidence fields were removed, how many repeated cards were consolidated or archived, whether the hidden recovery marker and required matching attributes were preserved, and any blocker, then stop.`,
 	},
+	{
+		from:  workflowContractHumanReadablePulseStateVersion,
+		to:    workflowContractKBWriteMethodRetiredVersion,
+		label: "upgrade-1.0.15",
+		query: `WORKFLOW VERSION UPGRADE v1.0.14 -> v1.0.15.
+
+This is a product-managed pre-execution migration. Do ONLY this step-config migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
+
+Goal: the separate post-step "knowledgebase update agent" is retired, mirroring the earlier learnings-agent retirement. Every knowledgebase write now happens inline in the step agent's own post-completion turn. The ` + "`knowledgebase_write_method`" + ` and ` + "`learnings_write_method`" + ` fields no longer exist in the product at all — they are not settable, not clearable, and not read. This migration drops the dead keys from planning/step_config.json and verifies each KB-writing step still has a working write path.
+
+Why this matters: under the retired "agent" mode the step agent had NO write access to knowledgebase/notes/, so a separate agent re-read the run trace from disk and wrote the notes. Now the step agent writes them itself. A step that granted KB write access but never set a contribution performed no KB writes before and still performs none — report that, do not silently "fix" it.
+
+How the keys get dropped: both fields were removed from the step-config struct, so the loader ignores them on read and the writer omits them on save. Any successful update_step_config call rewrites planning/step_config.json in full, which strips the dead keys from EVERY step in one go. Do NOT pass them to clear_fields — they are no longer valid field names and the call will be rejected.
+
+1. Read workflow.json and planning/step_config.json. Treat a missing workflow.json "version" as "1.0.0".
+2. Record which steps currently carry ` + "`knowledgebase_write_method`" + ` or ` + "`learnings_write_method`" + ` and their values (note: an ABSENT knowledgebase_write_method previously meant "agent" mode).
+3. If any step from step 2 exists, trigger one full rewrite of planning/step_config.json: call update_step_config ONCE on any one of those steps, setting only ` + "`review_notes`" + ` to a short note such as "1.0.15: dropped retired write-method fields". Do not modify any other field. That single call rewrites the whole file and removes the dead keys everywhere.
+4. Re-read planning/step_config.json and confirm neither key appears anywhere. If either remains, report it as a blocker rather than hand-editing the file.
+5. Enumerate every step whose ` + "`agent_configs.knowledgebase_access`" + ` is "write" or "read-write" but whose ` + "`knowledgebase_contribution`" + ` is EMPTY. Do NOT invent contributions. Those steps perform no KB writes; report them so the owner can add a contribution or drop the write access.
+6. Do not change knowledgebase_access, knowledgebase_contribution text, learnings settings, step descriptions, schedules, notifications, or any unrelated field.
+7. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.15". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, or publish in this step.
+
+Report: the steps that carried either retired field with their previous values (including "(absent — was agent mode)" where knowledgebase_write_method was missing on a KB-writing step), confirmation that a full rewrite removed the keys, the list of steps with KB write access but no contribution, and confirmation that no other field was modified. If no step carries either field and none grants KB write access, this is a no-op migration — say so explicitly and just bump the version.`,
+	},
 }
 
 func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {

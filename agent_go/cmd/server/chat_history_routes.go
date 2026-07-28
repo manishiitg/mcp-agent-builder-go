@@ -472,10 +472,66 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, "Session not found", http.StatusNotFound)
 			return
 		}
+		// The previous-chats panel renders only the tail of a conversation, so
+		// let it ask for just that. Without this it downloaded the whole file --
+		// 1.3 MB for a real builder session, nearly all of it ui_events -- and
+		// threw away everything but the last handful of messages client-side.
+		if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
+			data = trimChatHistoryConversationForPreview(data, limit)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}
+}
+
+// parsePositiveQueryInt returns a positive integer query parameter, or 0 when
+// absent or malformed (i.e. "no limit requested").
+func parsePositiveQueryInt(r *http.Request, name string) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0
+	}
+	return value
+}
+
+// trimChatHistoryConversationForPreview keeps the last `limit` conversation
+// messages and drops the payloads a preview never reads.
+//
+// ui_events dominates the file (a 1.3 MB builder session was ~90% events) and
+// terminal_snapshots carries a full pane capture; neither is used to render a
+// message list. The document shape is otherwise preserved so the client parses
+// it exactly as it parses an untrimmed one.
+//
+// Any parse failure returns the original bytes: a preview that is too large is
+// a performance problem, but a preview that fails to load is a broken panel.
+func trimChatHistoryConversationForPreview(data []byte, limit int) []byte {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data
+	}
+	delete(doc, "ui_events")
+	delete(doc, "terminal_snapshots")
+
+	if raw, ok := doc["conversation_history"]; ok {
+		var history []json.RawMessage
+		if err := json.Unmarshal(raw, &history); err == nil && len(history) > limit {
+			trimmed, err := json.Marshal(history[len(history)-limit:])
+			if err == nil {
+				doc["conversation_history"] = trimmed
+			}
+		}
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 func deleteChatHistorySessionHandler(api *StreamingAPI) http.HandlerFunc {

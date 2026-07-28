@@ -36,7 +36,7 @@ interface ToolCallEndEventProps {
 }
 
 export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
   const [isRawMode, setIsRawMode] = React.useState(false)
 
   const normalizedToolName = event.tool_name ? normalizeMCPToolName(event.tool_name) : event.tool_name
@@ -230,10 +230,10 @@ export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
             <div className={`text-sm font-medium ${textColor} flex items-center gap-2`}>
               Tool Call End{' '}
               <span className={`text-xs font-normal ${textSecondaryColor}`}>
-                {event.turn && `• Turn: ${event.turn}`}
+                {event.turn != null && `• Turn: ${event.turn}`}
                 {event.tool_name && ` • Tool: ${event.tool_name}`}
                 {event.server_name && ` • Server: ${event.server_name}`}
-                {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
               </span>
               {/* Context completion indicator */}
               {contextUsagePercent !== undefined && contextUsagePercent > 0 && (

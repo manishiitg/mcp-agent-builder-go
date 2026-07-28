@@ -7,9 +7,10 @@ import { getModelDisplayName } from '@/utils/llmDisplay'
 
 interface AgentStartEventProps {
   event: AgentStartEvent
+  compact?: boolean
 }
 
-export function AgentStartEventComponent({ event }: AgentStartEventProps) {
+export function AgentStartEventComponent({ event, compact = false }: AgentStartEventProps) {
   const { isExpanded, toggle } = useExpandable()
   const [isMetaExpanded, setIsMetaExpanded] = useState(false)
   const savedLLMs = useLLMStore(state => state.savedLLMs)
@@ -40,7 +41,7 @@ export function AgentStartEventComponent({ event }: AgentStartEventProps) {
               🤖 Agent Started: {event.agent_type || 'Unknown'}
               {isMetaExpanded && (
                 <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
-                  {event.use_code_execution_mode && ' | Code Exec'}
+                  {!compact && event.use_code_execution_mode && ' | Code Exec'}
                   {' | Model: '}{modelDisplayName}
                   {' | Provider: '}{event.provider || 'Unknown'}
                 </span>

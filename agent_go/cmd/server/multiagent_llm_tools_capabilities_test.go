@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,37 @@ import (
 
 	llm "github.com/manishiitg/multi-llm-provider-go"
 )
+
+func TestListProviderModelsIncludesProviderTierDefaults(t *testing.T) {
+	expected, ok := llm.GetCodingAgentDefaultTierModels(llm.ProviderClaudeCode)
+	if !ok {
+		t.Fatal("Claude Code provider defaults are unavailable")
+	}
+
+	var payload struct {
+		Provider          string                            `json:"provider"`
+		Models            []json.RawMessage                 `json:"models"`
+		DefaultTierModels *llm.CodingAgentDefaultTierModels `json:"default_tier_models"`
+	}
+	if err := json.Unmarshal([]byte(listProviderModelsJSON(string(llm.ProviderClaudeCode))), &payload); err != nil {
+		t.Fatalf("decode provider models: %v", err)
+	}
+	if payload.Provider != string(llm.ProviderClaudeCode) {
+		t.Fatalf("provider = %q, want %q", payload.Provider, llm.ProviderClaudeCode)
+	}
+	if len(payload.Models) == 0 {
+		t.Fatal("provider model catalog is empty")
+	}
+	if payload.DefaultTierModels == nil {
+		t.Fatal("default_tier_models missing from provider model response")
+	}
+	if payload.DefaultTierModels.High.ModelID != expected.High.ModelID {
+		t.Fatalf("high default = %q, want %q", payload.DefaultTierModels.High.ModelID, expected.High.ModelID)
+	}
+	if payload.DefaultTierModels.Pulse.ModelID != expected.Pulse.ModelID {
+		t.Fatalf("pulse default = %q, want %q", payload.DefaultTierModels.Pulse.ModelID, expected.Pulse.ModelID)
+	}
+}
 
 func TestProviderAuthConfiguredTreatsPiProviderKeysAsPiAuth(t *testing.T) {
 	configured, source := providerAuthConfigured("pi-cli", &llm.ProviderAPIKeys{

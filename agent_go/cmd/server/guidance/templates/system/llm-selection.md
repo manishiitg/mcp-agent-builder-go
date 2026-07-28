@@ -44,6 +44,26 @@ Set via `update_step_config(step_id, ...)`:
 
 **Clearing an override:** `update_step_config(step_id, clear=["execution_llm"])` (or `["execution_tier"]`) removes the override so the step inherits tiered/default behavior again.
 
+### Model freshness and upgrades
+
+- Provider-profile mode follows provider-owned role defaults automatically. A
+  default moving from an older model to a newer model is expected and does not
+  require rewriting the workflow.
+- Exact pins do not move automatically. Audit explicit workflow roles and
+  planning/evaluation step overrides with `list_provider_models(provider=...)`.
+  Its catalog and `default_tier_models` are authoritative for availability and
+  the provider's current role/tier recommendations.
+- Classify each pin as unavailable/deprecated, supported but different from the
+  current role/tier default, or current. Do not infer "latest" by sorting model
+  names or version strings.
+- A different default is a candidate for review, not automatic proof of better
+  quality. Compare supported reasoning options, capabilities, cost, fallbacks,
+  and the step's real purpose.
+- Never silently replace an exact pin. Propose clearing the pin to inherit its
+  tier when no model-specific capability is required, or propose one exact
+  replacement. Ask the user to Upgrade, Keep current, or Decide later before
+  changing configuration.
+
 ### Choosing — a short decision framework
 
 1. **Start with a provider profile, not pins.** Let the coding-agent provider supply sensible role defaults. Use explicit mode only when the workflow needs a deliberate cross-provider or model-specific allocation.

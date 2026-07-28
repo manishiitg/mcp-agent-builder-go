@@ -13,18 +13,15 @@ import (
 // graph.json / index.json surface. Writes go through diff_patch_workspace_file.
 //
 // Returns an empty string unless writeMethod is "direct" AND kbAccess allows writes —
-// in every other case (read-only, agent-mode, disabled) the step is not the writer
+// in every other case (read-only or disabled) the step is not the writer
 // and this block must not appear. When returned, the block covers: topic-ID conventions,
 // read-first discipline, append-don't-rewrite rules, _index.json sync requirement,
 // and (if provided) the per-step knowledgebase_contribution as a contract.
-func BuildStepKBGuidance(kbAccess, writeMethod, kbContribution string) string {
-	return BuildStepKBGuidanceWithTarget(kbAccess, writeMethod, kbContribution, "")
+func BuildStepKBGuidance(kbAccess, kbContribution string) string {
+	return BuildStepKBGuidanceWithTarget(kbAccess, kbContribution, "")
 }
 
-func BuildStepKBGuidanceWithTarget(kbAccess, writeMethod, kbContribution, notesTargetPath string) string {
-	if writeMethod != KBWriteMethodDirect {
-		return ""
-	}
+func BuildStepKBGuidanceWithTarget(kbAccess, kbContribution, notesTargetPath string) string {
 	if !kbAccessAllowsWrite(kbAccess) {
 		return ""
 	}
@@ -85,17 +82,14 @@ func BuildStepKBGuidanceWithTarget(kbAccess, writeMethod, kbContribution, notesT
 // after a step's first successful completion in direct-write mode, asking the
 // step agent to verify its KB contributions against the author's contract.
 //
-// Returns an empty string when a review is not warranted (method != direct,
-// kbAccess doesn't permit writes, or contribution is empty). This is the final
+// Returns an empty string when a review is not warranted (kbAccess doesn't
+// permit writes, or contribution is empty). This is the final
 // turn for KB work on the step — no self-nudging loop.
-func BuildKBContributionReviewMessage(kbAccess, writeMethod, contribution string) string {
-	return BuildKBContributionReviewMessageWithTarget(kbAccess, writeMethod, contribution, "")
+func BuildKBContributionReviewMessage(kbAccess, contribution string) string {
+	return BuildKBContributionReviewMessageWithTarget(kbAccess, contribution, "")
 }
 
-func BuildKBContributionReviewMessageWithTarget(kbAccess, writeMethod, contribution, notesTargetPath string) string {
-	if writeMethod != KBWriteMethodDirect {
-		return ""
-	}
+func BuildKBContributionReviewMessageWithTarget(kbAccess, contribution, notesTargetPath string) string {
 	if !kbAccessAllowsWrite(kbAccess) {
 		return ""
 	}
@@ -129,7 +123,11 @@ func BuildKBContributionReviewMessageWithTarget(kbAccess, writeMethod, contribut
 	b.WriteString(trimmed)
 	b.WriteString("\n\n")
 
-	b.WriteString("**Important:** this is your final turn for KB work on this step. After this response, the step will be accepted regardless of any further gaps — there is no second review. Do not invent facts the step did not actually establish; partial coverage is better than fabricated coverage.\n")
+	b.WriteString("**Important:** this is your final turn for KB work on this step. After this response, the step will be accepted regardless of any further gaps — there is no second review. Do not invent facts the step did not actually establish; partial coverage is better than fabricated coverage.\n\n")
+
+	b.WriteString("**Raising a concern.** If, while reconciling your contribution, you find that a KB note contradicts what this run actually observed, that the same fact is recorded differently in the KB versus `db/`, or that a durable note restates an owner constraint value (those live in `soul/soul.md` and must never be copied into the KB), report it with a line in this exact form before your summary:\n")
+	b.WriteString("`CONCERNS: <what contradicts what, naming both sources and the evidence path>`\n")
+	b.WriteString("Fix what you own (the notes you write) and report the rest rather than leaving a \"this is stale\" caveat next to the stale content.\n")
 
 	return b.String()
 }

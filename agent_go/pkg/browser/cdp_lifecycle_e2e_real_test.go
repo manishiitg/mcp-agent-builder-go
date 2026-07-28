@@ -269,6 +269,21 @@ document.querySelector('#upload').addEventListener('change', async (event) => {
 		t.Fatalf("selection response is not context-safe: %q", selection)
 	}
 
+	// A page action that carries the tab as a bare positional ("t1") instead of
+	// marking it ("--tab t1") must WORK, not merely fail with a better message:
+	// a real agent that spells it this way would otherwise burn a turn on a
+	// retry that changes nothing but the syntax. open already recovers the same
+	// shape; this proves a page action does too, against the real CLI.
+	if _, err := managedCall(ctx, "snapshot", workflowTabID); err != nil {
+		t.Fatalf("bare positional tab was not recovered: %v", err)
+	}
+	// The requirement itself stays strict: no tab in any form still fails.
+	if _, err := managedCall(ctx, "snapshot"); err == nil {
+		t.Fatal("a page action with no tab at all was accepted; the tab guard must stay strict")
+	} else if !strings.Contains(err.Error(), "requires every page action to include a tab") {
+		t.Fatalf("unexpected error for a tabless page action: %v", err)
+	}
+
 	// The daemon was launched with access only to workflow A's Downloads. Later
 	// requests grant two disjoint workflow trees. Concurrent uploads must bridge
 	// that stale daemon sandbox without crossing either workflow's FolderGuard.

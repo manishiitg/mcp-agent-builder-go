@@ -19,7 +19,7 @@ const parseMCPToolName = (toolName: string): { server: string; tool: string } =>
 }
 
 export const MCPToolCallDisplay: React.FC<MCPToolCallDisplayProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
 
   const toolName = event.tool_name || ''
   const { server, tool } = parseMCPToolName(toolName)

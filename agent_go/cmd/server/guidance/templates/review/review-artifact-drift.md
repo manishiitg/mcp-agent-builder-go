@@ -1,4 +1,4 @@
-Use this as the read-only audit checklist for artifact drift after plan or configuration changes. It checks whether step config, learnings, saved code, knowledge-base notes, database contracts, reports, evaluation, and recent run evidence still match the current workflow. It also flags missing or stale eval coverage with an `Eval fix` owner label.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
+Use this as the read-only audit checklist for artifact drift after plan or configuration changes. It checks whether step config, the schedules that drive the workflow, learnings, saved code, knowledge-base notes, database contracts, reports, evaluation, and recent run evidence still match the current workflow. It also flags missing or stale eval coverage with an `Eval fix` owner label.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 ## Execution model
 
@@ -22,6 +22,11 @@ Load `get_reference_doc(kind="assumption-audit")`. While tracing changed surface
    - Never advance the proposed cursor past an entry that was not fully inspected or safely cursor-backfilled.
 3. For each affected step, inspect only relevant current artifacts:
    - `planning/plan.json` and `planning/step_config.json`
+   - the workflow's schedules in `workflow.json` — for each schedule, its cron,
+     timezone, and the `messages` queue. The queue is what the scheduler
+     actually sends, so it is a first-class contract with the plan, not
+     configuration noise: read every message and resolve each to the plan step
+     it drives.
    - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance
    - relevant `knowledgebase/notes/` content and KB access/contribution settings; treat `knowledgebase/context/` as read-only user-owned context
    - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers
@@ -44,6 +49,21 @@ Load `get_reference_doc(kind="assumption-audit")`. While tracing changed surface
    - report/eval checks use stale artifacts, fields, thresholds, or run identity
    - a changed success criterion lacks eval coverage, or an eval is orphaned/duplicative
    - deleted steps still have live references, or new steps lack required dependent wiring
+   - a schedule message drives no plan step, or carries the work inline instead
+     of calling one. A message that specifies queries, output contracts,
+     recipients, or commands is a step living outside the plan: it never passes
+     `validate_plan`, has no `validation_schema` or pre-validation gate, and
+     cannot be run or tested with `execute_step`. Report it with the step it
+     should become.
+   - a plan step no schedule message reaches, and no other step invokes — dead
+     work, or a queue that was never updated after the step was added
+   - execution order or grouping that exists only in the message queue while
+     `plan.json` leaves order/groups unset. The plan is then not runnable on its
+     own, and the queue silently owns the sequence
+   - a message queue that only restates steps the plan already orders, which is
+     duplication that will drift the next time either side changes
+   - schedule cron/timezone that contradicts what `soul.md` or the plan claims
+     about cadence or the window the work is valid for
 5. Include clean checks briefly. Do not manufacture drift merely because an artifact exists.
 
 ## Reviewer result
@@ -62,3 +82,5 @@ Return one compact review package containing:
 - any blocked entry that prevented further cursor advancement
 
 The parent Pulse Fixer/workshop agent validates this package, applies only bounded approved fixes, writes one compact **Signals / Kizuki** Artifact Review item to `builder/improve.html` using `data-pulse-section="signals"` and `data-module="artifact_review"`, advances the visible cursor, and calls `mark_changelog_artifact_reviewed` for only the exact verified entries. Do not edit or delete changelog JSON directly and do not create a second cursor or state file.
+
+A finding marked `user_judgment_required` needs the user's call before it is applied (never before). If this command is running as a live chat turn with the user present (a standalone `/review-artifact-drift`), ask directly in this chat and wait for the reply. If this is the unattended scheduled Pulse pass, never ask a direct question -- nobody is watching that chat and it would stall unanswered -- use `create_human_input_request` instead, which surfaces as a Needs your decision card the user answers later.

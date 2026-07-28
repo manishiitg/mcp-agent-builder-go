@@ -28,15 +28,15 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
     <div className={`${
       isSkipped
         ? 'bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-700'
-        : overallPass 
-        ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800' 
+        : overallPass
+        ? 'bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-700'
         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
     } rounded-md ${compact ? 'p-2' : 'p-3'}`}>
       <div className={`${compact ? 'text-xs' : 'text-sm'} ${
         isSkipped
           ? 'text-gray-700 dark:text-gray-300'
-          : overallPass 
-          ? 'text-green-700 dark:text-green-300' 
+          : overallPass
+          ? 'text-gray-700 dark:text-gray-300'
           : 'text-red-700 dark:text-red-300'
       }`}>
         <div className="flex flex-wrap items-center gap-2">
@@ -51,15 +51,15 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
             <>
               <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
                 overallPass 
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' 
+                  ? 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300' 
                   : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
               }`}>
                 {passedChecks}/{totalChecks} checks passed ({passRate}%)
               </span>
-              <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                 {totalChecks} total
               </span>
-              <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                 {passedChecks} passed
               </span>
               {failedChecks > 0 && (
@@ -76,7 +76,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
             isSkipped
               ? 'text-gray-600 dark:text-gray-400'
               : overallPass
-              ? 'text-green-600 dark:text-green-400'
+              ? 'text-gray-600 dark:text-gray-400'
               : 'text-red-600 dark:text-red-400'
           }`}>
             {event.step_title && (
@@ -85,7 +85,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
               </div>
             )}
             {event.step_id && (
-              <div className={isSkipped ? 'text-gray-500 dark:text-gray-500' : overallPass ? 'text-green-500 dark:text-green-500' : 'text-red-500 dark:text-red-500'}>
+              <div className={isSkipped ? 'text-gray-500 dark:text-gray-500' : overallPass ? 'text-gray-500 dark:text-gray-400' : 'text-red-500 dark:text-red-500'}>
                 <span className="font-medium">ID:</span> {event.step_id}
               </div>
             )}
@@ -99,7 +99,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
               onClick={() => setIsExpanded(!isExpanded)}
               className={`${compact ? 'text-[10px]' : 'text-xs'} ${
                 event.overall_pass 
-                  ? 'text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300' 
+                  ? 'text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300' 
                   : 'text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300'
               } font-medium`}
             >
@@ -113,7 +113,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
                     key={idx}
                     className={`${compact ? 'text-[10px]' : 'text-xs'} bg-white dark:bg-gray-800 rounded p-2 border ${
                       fileCheck.exists 
-                        ? 'border-green-200 dark:border-green-800' 
+                        ? 'border-gray-200 dark:border-gray-700' 
                         : 'border-red-200 dark:border-red-800'
                     }`}
                   >
@@ -121,7 +121,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
                       <span>{fileCheck.file_name}</span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] ${
                         fileCheck.exists 
-                          ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' 
+                          ? 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300' 
                           : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
                       }`}>
                         {fileCheck.exists ? 'EXISTS' : 'MISSING'}
@@ -140,7 +140,7 @@ export const PreValidationCompletedEventDisplay: React.FC<PreValidationCompleted
                             key={checkIdx}
                             className={`flex items-center gap-2 ${
                               check.passed 
-                                ? 'text-green-600 dark:text-green-400' 
+                                ? 'text-gray-600 dark:text-gray-400' 
                                 : 'text-red-600 dark:text-red-400'
                             }`}
                           >

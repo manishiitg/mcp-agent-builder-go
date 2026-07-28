@@ -34,6 +34,16 @@ LLM/Ops Review, plan review, and both Goal Advisor reviewers.
   coordinator. Its underlying tool or generic reviewer remains read-only; the
   current turn performs the single bounded log update after the review result is
   complete.
+- Interactive vs unattended: a standalone `/review-*` command runs in a live chat
+  with the user present, so its coordinator turn MAY ask the user a direct question
+  in that same chat and wait for the reply -- this is how a bounded fix gets a quick
+  yes/no. The scheduled Pulse consolidated-review stage runs with nobody watching
+  chat; there, the parent Fixer must NEVER ask a direct question -- a question asked
+  into an unattended chat is never answered and silently stalls the run. It must use
+  `create_human_input_request` instead, which is durable and surfaces to the user
+  later as a Needs your decision card. When in doubt about which context this turn is
+  running in, prefer `create_human_input_request`: it still reaches an attentive user
+  and never goes unanswered forever.
 
 ### One log: `builder/improve.html`
 

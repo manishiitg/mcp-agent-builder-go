@@ -19,7 +19,7 @@ function compactError(error?: string): string | null {
 }
 
 export const ToolCallErrorEventDisplay: React.FC<ToolCallErrorEventDisplayProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(false)
+  const { isExpanded, toggle } = useExpandable(true)
   const errorPreview = compactError(event.error)
 
   return (

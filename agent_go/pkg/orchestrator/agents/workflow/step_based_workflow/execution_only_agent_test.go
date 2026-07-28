@@ -208,7 +208,6 @@ func TestExecutionOnlyCLIPromptUsesProjectedReferencesAndStaysUnderBudget(t *tes
 		"DBPath":                      "/app/workspace-docs/Workflow/test/db/db.sqlite",
 		"KbAccess":                    "read-write",
 		"KbAccessLabel":               "READ/WRITE",
-		"KbWriteMethod":               "direct",
 		"FolderGuardReadPaths":        "/app/workspace-docs/Workflow/test, /app/workspace-docs/Workflow/test/learnings/_global",
 		"FolderGuardWritePaths":       "/app/workspace-docs/Workflow/test/runs/iteration-0/default/execution/step-browser, /app/workspace-docs/Workflow/test/db",
 		"IsEvaluationMode":            "false",

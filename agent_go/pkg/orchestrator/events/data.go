@@ -126,6 +126,97 @@ func (e *OrchestratorAgentErrorEvent) GetEventType() events.EventType {
 	return OrchestratorAgentError
 }
 
+// Background Agent Events
+//
+// These report the lifecycle of a background/delegated agent: a sub-agent
+// call, a todo-task step, or a message-sequence item — anything the main
+// agent dispatches and gets notified about asynchronously. AgentID is the
+// single universal identity field across all four event types below (never
+// "background_agent_id" — that name exists only as a generic fallback
+// candidate elsewhere and is never actually populated for these events).
+//
+// ParentExecutionID links a background agent to the execution node that
+// owns it (e.g. a message-sequence item -> its parent workflow step). It is
+// often not set by the caller and is instead backfilled from the background
+// agent registry at emission time — see emitBackgroundAgentEvent.
+type BackgroundAgentStartedEvent struct {
+	events.BaseEventData
+	AgentID     string `json:"agent_id"`
+	Name        string `json:"name"`
+	Instruction string `json:"instruction,omitempty"`
+	// Kind is what this execution IS (see ExecutionKind). It is declared by
+	// whoever creates the execution and must not be re-inferred downstream
+	// from the AgentID's string prefix — that inference is exactly what let
+	// message-sequence items and full runs be misclassified.
+	Kind              ExecutionKind `json:"execution_kind,omitempty"`
+	ParentExecutionID string        `json:"parent_execution_id,omitempty"`
+}
+
+func (e *BackgroundAgentStartedEvent) GetEventType() events.EventType {
+	return BackgroundAgentStarted
+}
+
+// BackgroundAgentCompletedEvent reports a background agent finishing.
+// Result and Error are mutually exclusive: Result is set for
+// Status == "completed", Error for Status == "failed".
+type BackgroundAgentCompletedEvent struct {
+	events.BaseEventData
+	AgentID           string `json:"agent_id"`
+	Name              string `json:"name"`
+	Status            string `json:"status"` // "completed" | "failed"
+	Result            string `json:"result,omitempty"`
+	Error             string `json:"error,omitempty"`
+	Duration          string `json:"duration,omitempty"`
+	ParentExecutionID string `json:"parent_execution_id,omitempty"`
+}
+
+func (e *BackgroundAgentCompletedEvent) GetEventType() events.EventType {
+	return BackgroundAgentCompleted
+}
+
+// BackgroundAgentTerminatedEvent reports a background agent being canceled
+// or torn down before it produced a normal completion.
+type BackgroundAgentTerminatedEvent struct {
+	events.BaseEventData
+	AgentID           string `json:"agent_id"`
+	Name              string `json:"name"`
+	Status            string `json:"status,omitempty"` // e.g. "canceled"
+	ParentExecutionID string `json:"parent_execution_id,omitempty"`
+}
+
+func (e *BackgroundAgentTerminatedEvent) GetEventType() events.EventType {
+	return BackgroundAgentTerminated
+}
+
+// SyntheticTurnReadyEvent notifies the main agent that background work has
+// started or completed, so a synthetic turn can weave the update in.
+type SyntheticTurnReadyEvent struct {
+	events.BaseEventData
+	Message string `json:"message"`
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name,omitempty"`
+	Status  string `json:"status"`
+}
+
+func (e *SyntheticTurnReadyEvent) GetEventType() events.EventType {
+	return SyntheticTurnReady
+}
+
+// AutoNotificationSteeredEvent reports a background-agent notification being
+// delivered directly into an already-running foreground CLI turn instead of
+// queued for the next turn.
+type AutoNotificationSteeredEvent struct {
+	events.BaseEventData
+	AgentID  string `json:"agent_id"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Provider string `json:"provider"`
+}
+
+func (e *AutoNotificationSteeredEvent) GetEventType() events.EventType {
+	return AutoNotificationSteered
+}
+
 type HumanVerificationResponseEvent struct {
 	events.BaseEventData
 	SessionID        string `json:"session_id"`

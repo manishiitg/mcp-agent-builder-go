@@ -1,23 +1,6 @@
 import React from 'react'
-import { Code2, ChevronDown, ChevronRight } from 'lucide-react'
-import type { PollingEvent, SessionExecutionTreeResponse } from '../../services/api-types'
-import { EventHierarchy } from './EventHierarchy'
+import type { PollingEvent } from '../../services/api-types'
 import { EventWithOrchestratorContext } from './common/EventWithOrchestratorContext'
-
-/**
- * Node structure for hierarchical event rendering
- */
-export interface EventNode {
-  event: PollingEvent;
-  children: EventNode[];
-  level: number;
-  // isExpanded was previously baked in here so every expand/collapse
-  // toggle forced a full eventTree rebuild — even though the tree
-  // structure didn't change. Consumers now read expandedNodes.has(...)
-  // directly at the call site; this stays for legacy SubAgentHierarchy
-  // paths that still set it.
-  isExpanded?: boolean;
-}
 
 // Import the type-safe helpers from the new event-types module
 import {
@@ -42,7 +25,6 @@ import {
 } from './agents'
 
 import {
-  MCPServerSelectionEventDisplay,
   MCPServerDiscoveryEventDisplay,
   MCPServerConnectionEventDisplay
 } from './mcp'
@@ -132,9 +114,13 @@ import { BlockingHumanFeedbackDisplay } from './BlockingHumanFeedbackDisplay'
 import { PlanApprovalDisplay } from './PlanApprovalDisplay'
 import { useChatStore } from '../../stores/useChatStore'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
-import { CircularProgress } from '../ui/CircularProgress'
-import { TooltipProvider } from '../ui/tooltip'
 import { formatLiveStreamingPreview } from '../../utils/streamingStatus'
+import { backgroundAgentCompletionSummary } from '../../utils/backgroundAgentSummary'
+// getTerminalOwnerPayload / getOwnedTerminalOwnerKeys moved to
+// utils/eventOwnership.ts (pure, no React/store imports) so anything that only
+// needs event-ownership logic — the terminal transcript's event scoping, its
+// unit tests — can import it without pulling in this component's runtime
+// dependencies. Re-exported below for existing importers of this module.
 
 // Sub-agent live streaming text display (subscribes to delegation streaming store independently)
 const DelegationStreamingCard: React.FC<{ delegationId: string }> = ({ delegationId }) => {
@@ -154,106 +140,6 @@ const DelegationStreamingCard: React.FC<{ delegationId: string }> = ({ delegatio
       </div>
     </div>
   )
-}
-
-const OwnedTerminalStreamCard: React.FC<{ ownerKey?: string; ownerKeys?: string[]; sessionId?: string; compact?: boolean }> = () => null
-
-// Shared with EventHierarchy; keeping it beside the dispatcher avoids duplicating
-// the event-owner normalization rules.
-// eslint-disable-next-line react-refresh/only-export-components
-export function getOwnedTerminalOwnerKeys(event: PollingEvent, payload?: Record<string, unknown>): string[] {
-  const sessionId = event.session_id?.trim()
-  if (!sessionId) return []
-
-  const normalizeOwnerId = (value: unknown): string | null => {
-    if (typeof value !== 'string') return null
-    const trimmed = value.trim()
-    if (!trimmed || trimmed.startsWith('main:')) return null
-    for (const prefix of ['delegation:', 'workflow:', 'background:', 'agent:', 'batch:']) {
-      if (trimmed.startsWith(prefix)) {
-        const unprefixed = trimmed.slice(prefix.length).trim()
-        return unprefixed && !unprefixed.startsWith('main:') ? unprefixed : null
-      }
-    }
-    return trimmed
-  }
-
-  const addOwnerId = (keys: string[], seen: Set<string>, value: unknown) => {
-    const ownerId = normalizeOwnerId(value)
-    if (!ownerId) return
-    const values = [ownerId]
-    const workflowStepMatch = ownerId.match(/^workflow-step:(.+):([^:]+)$/)
-    if (workflowStepMatch?.[2]) values.push(workflowStepMatch[2])
-    const subExecMatch = ownerId.match(/^sub-exec-(.+)-\d+$/)
-    if (subExecMatch?.[1]) values.push(subExecMatch[1])
-    const todoSubMatch = ownerId.match(/^todo-sub-.+-(.+)$/)
-    if (todoSubMatch?.[1]) values.push(todoSubMatch[1])
-    const stepSubMatch = ownerId.match(/^step-\d+-sub-(.+?)-execution(?:-|$)/)
-    if (stepSubMatch?.[1]) values.push(stepSubMatch[1])
-    for (const id of values) {
-      const key = `${sessionId}:${id}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        keys.push(key)
-      }
-    }
-  }
-
-  const eventRecord = event as unknown as Record<string, unknown>
-  const data = event.data && typeof event.data === 'object'
-    ? event.data as Record<string, unknown>
-    : undefined
-  const innerData = data?.data && typeof data.data === 'object'
-    ? data.data as Record<string, unknown>
-    : undefined
-  const metadata = payload?.metadata && typeof payload.metadata === 'object'
-    ? payload.metadata as Record<string, unknown>
-    : innerData?.metadata && typeof innerData.metadata === 'object'
-      ? innerData.metadata as Record<string, unknown>
-      : data?.metadata && typeof data.metadata === 'object'
-        ? data.metadata as Record<string, unknown>
-        : undefined
-
-  const candidates = [
-    eventRecord.execution_id,
-    metadata?.execution_id,
-    payload?.execution_id,
-    innerData?.execution_id,
-    metadata?.owner_execution_id,
-    metadata?.execution_owner_id,
-    payload?.delegation_id,
-    payload?.background_agent_id,
-    metadata?.background_agent_id,
-    payload?.agent_id,
-    metadata?.agent_id,
-    payload?.agent_name,
-    metadata?.orchestrator_agent_name,
-    payload?.correlation_id,
-    innerData?.delegation_id,
-    innerData?.background_agent_id,
-    innerData?.agent_id,
-    innerData?.correlation_id,
-    data?.delegation_id,
-    data?.background_agent_id,
-    data?.agent_id,
-    data?.execution_id,
-    data?.correlation_id,
-    metadata?.delegation_id,
-    metadata?.execution_id,
-    metadata?.workshop_step_id,
-    metadata?.current_step_id,
-    metadata?.orchestrator_step_id,
-    metadata?.workflow_step_id,
-    metadata?.step_id,
-    eventRecord.correlation_id,
-  ]
-
-  const keys: string[] = []
-  const seen = new Set<string>()
-  for (const candidate of candidates) {
-    addOwnerId(keys, seen, candidate)
-  }
-  return keys
 }
 
 const LiveExecutionStreamingEventCard: React.FC<{ event: PollingEvent; compact?: boolean }> = ({ event, compact }) => {
@@ -281,19 +167,6 @@ const LiveExecutionStreamingEventCard: React.FC<{ event: PollingEvent; compact?:
       </div>
     </div>
   )
-}
-
-export interface DelegationStats {
-  toolCalls: number
-  inputTokens: number
-  outputTokens: number
-  latestToolName?: string
-  latestToolLabel?: string
-  completed?: boolean
-  contextUsagePercent?: number
-  contextWindowUsage?: number
-  modelContextWindow?: number
-  modelId?: string
 }
 
 // Live elapsed timer for running delegation events
@@ -331,165 +204,15 @@ interface EventDispatcherProps {
   onFeedbackSubmitted?: () => void
   onSendMessage?: (msg: string) => void
   isApproving?: boolean
-  isCollapsed?: boolean
-  eventCount?: number
-  onToggleCollapse?: () => void
   compact?: boolean
-  delegationStats?: Map<string, DelegationStats>
-  backgroundAgentStats?: Map<string, DelegationStats>
-  // Hierarchy props for sub-agent log containment
-  summaryNodes?: EventNode[]
-  summaryCount?: number
-  childrenNodes?: EventNode[]
-  childrenCount?: number // Total children count (available even when collapsed)
-  childrenToolCount?: number // Count of tool_call_start events in this owner's subtree (refresh-safe fallback for liveStats.toolCalls)
-  onToggleNode?: (eventId: string) => void
-  ownedLogPanelOpen?: boolean
-  autoExpandedOwnedLogPanel?: boolean
-  onToggleOwnedLogPanel?: (open: boolean) => void
-  showOwnedTerminal?: boolean
-  tabId?: string
-}
-
-/**
- * Internal component to render the hierarchical logs of a sub-agent
- * in a simplified, non-virtualized list within a scrollable area.
- */
-const MAX_SUBAGENT_CHILDREN = 20
-
-// Event types grouped and collapsed inside sub-agent logs (mirrors EventHierarchy's TOOL_CALL_TYPES)
-const SUB_AGENT_TOOL_CALL_TYPES = new Set(['tool_call_start', 'tool_call_end', 'tool_call_error', 'token_usage', 'llm_generation_end'])
-
-const SubAgentHierarchy: React.FC<{
-  nodes: EventNode[]
-  onToggleNode: (eventId: string) => void
-  onApproveWorkflow?: (requestId: string) => void
-  onSubmitFeedback?: (requestId: string, feedback: string) => void
-  onFeedbackSubmitted?: () => void
-  isApproving?: boolean
-  delegationStats?: Map<string, DelegationStats>
-  backgroundAgentStats?: Map<string, DelegationStats>
-  compact?: boolean
-  tabId?: string
-}> = ({ nodes, onToggleNode, ...props }) => {
-  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set())
-  const activeTabId = useChatStore(state => state.activeTabId)
-  const resolvedTabId = props.tabId || activeTabId
-  const setTabViewMode = useChatStore(state => state.setTabViewMode)
-
-  // Read hideToolCalls from the rendering tab. Falling back to the active tab is
-  // only for legacy callers that do not pass tabId.
-  const hideToolCalls = useChatStore(state => {
-    const targetTabId = resolvedTabId || state.activeTabId
-    const tab = targetTabId ? state.chatTabs[targetTabId] : undefined
-    return tab?.hideToolCalls ?? true
-  })
-
-  // Cap to most recent children to prevent unbounded DOM growth
-  const isCapped = nodes.length > MAX_SUBAGENT_CHILDREN
-  const visibleNodes = isCapped ? nodes.slice(-MAX_SUBAGENT_CHILDREN) : nodes
-  const hiddenCount = nodes.length - visibleNodes.length
-  const switchToTerminalView = React.useCallback(() => {
-    if (!resolvedTabId) return
-    setTabViewMode(resolvedTabId, 'terminal')
-  }, [resolvedTabId, setTabViewMode])
-
-  // Build grouped render list when hideToolCalls is on
-  type RenderItem = { type: 'node'; node: EventNode } | { type: 'group'; groupKey: string; count: number; nodes: EventNode[] }
-  const renderItems: RenderItem[] = React.useMemo(() => {
-    if (!hideToolCalls) return visibleNodes.map(n => ({ type: 'node' as const, node: n }))
-
-    const items: RenderItem[] = []
-    let i = 0
-    while (i < visibleNodes.length) {
-      const node = visibleNodes[i]
-      if (SUB_AGENT_TOOL_CALL_TYPES.has(node.event.type || '')) {
-        const groupKey = node.event.id
-        const groupNodes: EventNode[] = []
-        let lastToolIdx = i
-        let j = i
-        while (j < visibleNodes.length) {
-          const t = visibleNodes[j].event.type || ''
-          if (SUB_AGENT_TOOL_CALL_TYPES.has(t)) { groupNodes.push(visibleNodes[j]); lastToolIdx = j; j++ }
-          else break
-        }
-        items.push({ type: 'group', groupKey, count: groupNodes.length, nodes: groupNodes })
-        i = lastToolIdx + 1
-      } else {
-        items.push({ type: 'node', node })
-        i++
-      }
-    }
-    return items
-  }, [visibleNodes, hideToolCalls])
-
-  const renderNode = (node: EventNode) => (
-    <div key={node.event.id} className="relative group/node">
-      <div className="flex items-start gap-1">
-        {node.children.length > 0 ? (
-          <button
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleNode(node.event.id) }}
-            className="mt-1.5 p-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors flex-shrink-0"
-          >
-            {node.isExpanded ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
-          </button>
-        ) : (
-          <div className="w-4 flex-shrink-0" />
-        )}
-        <div className="flex-1 min-w-0">
-          <EventDispatcher
-            event={node.event}
-            compact={true}
-            {...props}
-            onToggleNode={onToggleNode}
-            childrenNodes={node.isExpanded ? node.children : undefined}
-          />
-        </div>
-      </div>
-      {node.isExpanded && node.children.length > 0 && node.event.type !== 'delegation_start' && (
-        <div className="ml-2 pl-3 mt-1">
-          <SubAgentHierarchy nodes={node.children} onToggleNode={onToggleNode} {...props} />
-        </div>
-      )}
-    </div>
-  )
-
-  return (
-    <div className="space-y-2">
-      {isCapped && (
-        <button
-          type="button"
-          onClick={switchToTerminalView}
-          disabled={!resolvedTabId}
-          className="px-2 py-1 text-xs text-muted-foreground/70 hover:text-muted-foreground disabled:cursor-default disabled:hover:text-muted-foreground/70"
-        >
-          {hiddenCount} older event{hiddenCount !== 1 ? 's' : ''} hidden · View full trace in Terminal
-        </button>
-      )}
-      {renderItems.map((item) => {
-        if (item.type === 'node') return renderNode(item.node)
-
-        // Tool call group sentinel
-        const isExpanded = expandedGroups.has(item.groupKey)
-        return (
-          <div key={item.groupKey}>
-            <button
-              onClick={() => setExpandedGroups(prev => {
-                const next = new Set(prev)
-                if (next.has(item.groupKey)) next.delete(item.groupKey)
-                else next.add(item.groupKey)
-                return next
-              })}
-              className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors"
-            >
-              {isExpanded ? `− collapse` : `+ ${item.count} tool${item.count !== 1 ? 's' : ''}`}
-            </button>
-            {isExpanded && item.nodes.map(n => renderNode(n))}
-          </div>
-        )
-      })}
-    </div>
-  )
+  // The orchestrator-phase/agent-name/step badge (OrchestratorContext) exists
+  // to orient a reader who is looking at ONE event pulled out of a deep tree,
+  // far from its owning node's header. A flat, single-terminal transcript has
+  // no such ambiguity — every event in it already shares the same owner,
+  // shown once in the terminal's own header — so the badge would just repeat
+  // identically on every card. Callers that render a whole terminal's worth
+  // of events in one flat list (TerminalEventTranscript) set this to true.
+  hideOrchestratorContext?: boolean
 }
 
 // Stable compact styling wrapper — defined outside EventDispatcher to prevent
@@ -497,75 +220,6 @@ const SubAgentHierarchy: React.FC<{
 const CompactWrapper: React.FC<{ compact?: boolean; children: React.ReactNode }> = ({ compact, children }) => {
   if (!compact) return <>{children}</>
   return <div className="text-xs [&>*]:text-xs [&_h1]:!text-sm [&_h2]:!text-xs [&_h3]:!text-[11px] [&_p]:!text-xs [&_code]:!text-[10px] [&_span]:!text-xs [&_div]:!text-xs">{children}</div>
-}
-
-const OwnerSummaryEvents: React.FC<{
-  nodes?: EventNode[]
-  onToggleNode?: (eventId: string) => void
-  onApproveWorkflow?: (requestId: string) => void
-  onSubmitFeedback?: (requestId: string, feedback: string) => void
-  onFeedbackSubmitted?: () => void
-  isApproving?: boolean
-  delegationStats?: Map<string, DelegationStats>
-  backgroundAgentStats?: Map<string, DelegationStats>
-  tabId?: string
-}> = ({ nodes, onToggleNode, onApproveWorkflow, onSubmitFeedback, onFeedbackSubmitted, isApproving, delegationStats, backgroundAgentStats, tabId }) => {
-  if (!nodes?.length || !onToggleNode) return null
-
-  return (
-    <div className="mt-1 ml-1 space-y-1">
-      <SubAgentHierarchy
-        nodes={nodes}
-        onToggleNode={onToggleNode}
-        onApproveWorkflow={onApproveWorkflow}
-        onSubmitFeedback={onSubmitFeedback}
-        onFeedbackSubmitted={onFeedbackSubmitted}
-        isApproving={isApproving}
-        delegationStats={delegationStats}
-        backgroundAgentStats={backgroundAgentStats}
-        compact={true}
-        tabId={tabId}
-      />
-    </div>
-  )
-}
-
-function inferOwnerStatusFromSummaryNodes(nodes?: EventNode[]): string | undefined {
-  if (!nodes?.length) return undefined
-
-  let completed = false
-  for (const node of nodes) {
-    const type = node.event.type || ''
-    if (
-      type === 'orchestrator_agent_error' ||
-      type === 'background_agent_failed' ||
-      type === 'conversation_error' ||
-      type === 'workflow_error' ||
-      type === 'agent_error'
-    ) {
-      return 'failed'
-    }
-    if (type === 'context_cancelled' || type === 'batch_execution_canceled') {
-      return 'canceled'
-    }
-    if (
-      type === 'orchestrator_agent_end' ||
-      type === 'background_agent_completed' ||
-      type === 'background_agent_terminated' ||
-      type === 'delegation_end' ||
-      type === 'todo_task_step_completed' ||
-      type === 'batch_group_end' ||
-      type === 'batch_execution_end' ||
-      type === 'workflow_end' ||
-      type === 'unified_completion' ||
-      type === 'conversation_end' ||
-      type === 'agent_end'
-    ) {
-      completed = true
-    }
-  }
-
-  return completed ? 'completed' : undefined
 }
 
 function getDelegationDisplayTitle(instruction: string): string {
@@ -681,12 +335,21 @@ function splitExecutionDisplayPath(displayName: string): { parentPath?: string; 
 function WithContext<T extends { metadata?: Record<string, unknown> }>({
   Component,
   data,
-  compact
+  compact,
+  hideContext
 }: {
-  Component: React.ComponentType<{ event: T; compact?: boolean }>
+  Component: React.ComponentType<{ event: T; compact?: boolean; hideContext?: boolean }>
   data: T
   compact?: boolean
+  hideContext?: boolean
 }) {
+  // hideContext is forwarded, not just consumed: a card rendered inside a
+  // terminal that already names the step in its header should not print that
+  // name a second time. Only the card knows which part of itself is the
+  // duplicate.
+  if (hideContext) {
+    return <Component event={data} compact={compact} hideContext />
+  }
   return (
     <EventWithOrchestratorContext metadata={data.metadata}>
       <Component event={data} compact={compact} />
@@ -702,102 +365,9 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   onFeedbackSubmitted,
   onSendMessage,
   isApproving,
-  isCollapsed,
-  eventCount,
-  onToggleCollapse,
   compact = false,
-  delegationStats,
-  backgroundAgentStats,
-  summaryNodes,
-  summaryCount,
-  childrenNodes,
-  childrenCount,
-  childrenToolCount,
-  onToggleNode,
-  ownedLogPanelOpen,
-  autoExpandedOwnedLogPanel,
-  onToggleOwnedLogPanel,
-  showOwnedTerminal = true,
-  tabId
+  hideOrchestratorContext = false
 }) => {
-  // Ref for auto-scrolling sub-agent logs
-  const scrollRef = React.useRef<HTMLDivElement>(null)
-  const isAutoScrollingRef = React.useRef(false)
-  const userScrolledUpRef = React.useRef(false)
-  const prevChildrenLengthRef = React.useRef(0)
-  const [localOwnedLogPanelOpen, setLocalOwnedLogPanelOpen] = React.useState(false)
-  const isOwnedLogPanelOpen = ownedLogPanelOpen ?? localOwnedLogPanelOpen
-  const setIsOwnedLogPanelOpen = React.useCallback((open: boolean) => {
-    if (onToggleOwnedLogPanel) {
-      onToggleOwnedLogPanel(open)
-      return
-    }
-    setLocalOwnedLogPanelOpen(open)
-  }, [onToggleOwnedLogPanel])
-  const hasOwnerSummary = (summaryCount ?? summaryNodes?.length ?? 0) > 0
-  const ownerSummaryEvents = hasOwnerSummary ? (
-    <OwnerSummaryEvents
-      nodes={summaryNodes}
-      onToggleNode={onToggleNode}
-      onApproveWorkflow={onApproveWorkflow}
-      onSubmitFeedback={onSubmitFeedback}
-      onFeedbackSubmitted={onFeedbackSubmitted}
-      isApproving={isApproving}
-      delegationStats={delegationStats}
-      backgroundAgentStats={backgroundAgentStats}
-      tabId={tabId}
-    />
-  ) : null
-
-  // Handle scroll events to detect if user scrolled up manually
-  const handleScroll = React.useCallback(() => {
-    const div = scrollRef.current
-    if (!div || isAutoScrollingRef.current) return
-    
-    const { scrollTop, scrollHeight, clientHeight } = div
-    // User is considered "at bottom" if within 50px of the bottom (increased tolerance)
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
-    userScrolledUpRef.current = !isAtBottom
-  }, [])
-
-  // Auto-scroll to bottom when childrenNodes change (new events added)
-  React.useEffect(() => {
-    if (event.type === 'delegation_start' && childrenNodes && scrollRef.current) {
-      const div = scrollRef.current
-      
-      const isFirstLoad = prevChildrenLengthRef.current === 0
-      
-      // Auto-scroll if it's the first load OR if user hasn't scrolled up away from bottom
-      // This handles both new events AND streaming content updates within existing events
-      if (isFirstLoad || !userScrolledUpRef.current) {
-        isAutoScrollingRef.current = true
-        
-        const scroll = () => {
-          if (div) div.scrollTop = div.scrollHeight
-        }
-        
-        // Scroll immediately and after render frame for robustness
-        scroll()
-        requestAnimationFrame(() => {
-          scroll()
-          // Reset flag after delay to allow scroll event to fire without setting userScrolledUp
-          setTimeout(() => {
-            isAutoScrollingRef.current = false
-          }, 100)
-        })
-      }
-      prevChildrenLengthRef.current = childrenNodes.length
-    }
-  }, [event.type, childrenNodes]) // Re-run when children nodes array changes
-
-  // Attach scroll listener
-  React.useEffect(() => {
-    const div = scrollRef.current
-    if (div) {
-      div.addEventListener('scroll', handleScroll)
-      return () => div.removeEventListener('scroll', handleScroll)
-    }
-  }, [childrenNodes, handleScroll]) // Re-attach if childrenNodes causes re-render of the div
 
   // Invalid event check
   if (!event.type || !event.data) {
@@ -827,37 +397,39 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     const data = getEventData(event) as Record<string, unknown>
     return (
       <CompactWrapper compact={compact}>
-        <WithContext Component={AgentStartEventComponent} data={data} compact={compact} />
+        <WithContext Component={AgentStartEventComponent} data={data} compact={compact} hideContext={hideOrchestratorContext} />
       </CompactWrapper>
     )
   }
   if (isEventType(event, 'agent_end')) {
-    return <CompactWrapper compact={compact}><WithContext Component={AgentEndEventComponent} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={AgentEndEventComponent} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
 
-  // MCP Server Events
+  // mcp_server_selection is an internal per-turn routing decision (which MCP
+  // servers were offered to the model), not something a reader following a
+  // transcript is looking for — never rendered.
   if (isEventType(event, 'mcp_server_selection')) {
-    return <CompactWrapper compact={compact}><WithContext Component={MCPServerSelectionEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return null
   }
   if (isEventType(event, 'mcp_server_discovery')) {
-    return <CompactWrapper compact={compact}><WithContext Component={MCPServerDiscoveryEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={MCPServerDiscoveryEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'mcp_server_connection')) {
-    return <CompactWrapper compact={compact}><WithContext Component={MCPServerConnectionEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={MCPServerConnectionEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'mcp_server_connection_error')) {
-    return <CompactWrapper compact={compact}><WithContext Component={MCPServerConnectionEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={MCPServerConnectionEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
 
   // Conversation Events
   if (isEventType(event, 'conversation_start')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ConversationStartEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ConversationStartEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'conversation_end')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ConversationEndEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ConversationEndEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'conversation_error')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ConversationErrorEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ConversationErrorEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'conversation_turn')) {
     const data = getEventData(event)
@@ -882,7 +454,7 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     )
   }
   if (isEventType(event, 'llm_generation_end')) {
-    return <CompactWrapper compact={compact}><WithContext Component={LLMGenerationEndEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={LLMGenerationEndEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'llm_generation_error')) {
     const data = getEventData(event)
@@ -898,18 +470,18 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   // Tool Events
   // Note: delegate tool events are filtered out at EventHierarchy level
   if (isEventType(event, 'tool_call_start')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ToolCallStartEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ToolCallStartEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'tool_call_end')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ToolCallEndEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ToolCallEndEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (isEventType(event, 'tool_call_error')) {
-    return <CompactWrapper compact={compact}><WithContext Component={ToolCallErrorEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={ToolCallErrorEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
 
   // System Events
   if (isEventType(event, 'system_prompt')) {
-    return <CompactWrapper compact={compact}><WithContext Component={SystemPromptEventDisplay} data={getEventData(event)} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={SystemPromptEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   if (event.type === 'status_line') {
     const agentEvent = event.data as { data?: Record<string, unknown> } | undefined
@@ -934,7 +506,7 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     if (!data.content) {
       console.warn('USERMSG_DEBUG - EventDispatcher - user_message event has no content, but rendering anyway', data)
     }
-    return <CompactWrapper compact={compact}><WithContext Component={UserMessageEventDisplay} data={data} compact={compact} /></CompactWrapper>
+    return <CompactWrapper compact={compact}><WithContext Component={UserMessageEventDisplay} data={data} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
   
   // Fallback: Try to handle user_message events even if type check fails
@@ -946,7 +518,7 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
       const eventData = (agentEvent?.data || event.data) as UserMessageEvent
       if (eventData) {
         console.log('USERMSG_DEBUG - EventDispatcher - Using fallback for user_message event', eventData)
-        return <CompactWrapper compact={compact}><WithContext Component={UserMessageEventDisplay} data={eventData} compact={compact} /></CompactWrapper>
+        return <CompactWrapper compact={compact}><WithContext Component={UserMessageEventDisplay} data={eventData} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
       }
     } catch (error) {
       console.error('USERMSG_DEBUG - EventDispatcher - Error in fallback handler', error, event)
@@ -964,78 +536,24 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     return <CompactWrapper compact={compact}><OrchestratorErrorEventDisplay event={getEventData(event)} /></CompactWrapper>
   }
   if (isEventType(event, 'orchestrator_agent_start')) {
-    const data = getEventData(event)
-    const liveStats = data.correlation_id ? delegationStats?.get(data.correlation_id) : undefined
-    const childCount = childrenCount ?? 0
-    // liveStats is in-memory only and doesn't survive a page refresh.
-    // Fall back to childrenToolCount (counted from the event tree by
-    // EventHierarchy) so the "+N tools" badge stays accurate after reload.
-    const toolCount = liveStats?.toolCalls ?? childrenToolCount ?? 0
-    const hasOwnedLogs = childCount > 0
     return (
       <CompactWrapper compact={compact}>
         <OrchestratorAgentStartEventDisplay
-          event={data}
-          isCollapsed={isCollapsed}
-          eventCount={eventCount}
-          onToggleCollapse={onToggleCollapse}
-          toolCallCount={liveStats?.toolCalls}
+          event={getEventData(event)}
+          compact={compact || hideOrchestratorContext}
         />
-        {ownerSummaryEvents}
-        {showOwnedTerminal && (
-          <OwnedTerminalStreamCard
-            ownerKeys={getOwnedTerminalOwnerKeys(event, data as Record<string, unknown>)}
-            sessionId={event.session_id}
-            compact={compact}
-          />
-        )}
-        {!isOwnedLogPanelOpen && hasOwnedLogs && toolCount > 0 && (
-          <div className="mt-1 ml-1">
-            <button
-              onClick={() => setIsOwnedLogPanelOpen(true)}
-              className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors"
-            >
-              <span className="font-medium">
-                + {toolCount} tool{toolCount !== 1 ? 's' : ''}
-              </span>
-            </button>
-          </div>
-        )}
-        {/* Render children (tool calls) when agent has grouped events via correlation_id */}
-        {isOwnedLogPanelOpen && childrenNodes && childrenNodes.length > 0 && onToggleNode && (
-          <div className="mt-1 ml-1">
-            {!autoExpandedOwnedLogPanel && (
-              <button
-                onClick={() => setIsOwnedLogPanelOpen(false)}
-                className="mb-1 px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors"
-              >
-                <span className="font-medium">− collapse tools</span>
-              </button>
-            )}
-            <div
-              className="overflow-y-auto overflow-x-hidden pl-4 pr-1 py-1 custom-scrollbar break-words overscroll-y-contain"
-              style={{ maxHeight: '50vh' }}
-            >
-              <SubAgentHierarchy
-                nodes={childrenNodes}
-                onToggleNode={onToggleNode}
-                onApproveWorkflow={onApproveWorkflow}
-                onSubmitFeedback={onSubmitFeedback}
-                onFeedbackSubmitted={onFeedbackSubmitted}
-                isApproving={isApproving}
-                delegationStats={delegationStats}
-                backgroundAgentStats={backgroundAgentStats}
-                compact={true}
-                tabId={tabId}
-              />
-            </div>
-          </div>
-        )}
       </CompactWrapper>
     )
   }
   if (isEventType(event, 'orchestrator_agent_end')) {
-    return <CompactWrapper compact={compact}><OrchestratorAgentEndEventDisplay event={getEventData(event)} /></CompactWrapper>
+    return (
+      <CompactWrapper compact={compact}>
+        <OrchestratorAgentEndEventDisplay
+          event={getEventData(event)}
+          compact={compact || hideOrchestratorContext}
+        />
+      </CompactWrapper>
+    )
   }
   if (isEventType(event, 'orchestrator_agent_error')) {
     return <CompactWrapper compact={compact}><OrchestratorAgentErrorEventDisplay event={getEventData(event)} /></CompactWrapper>
@@ -1148,70 +666,42 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
       complete: 'text-green-600 dark:text-green-400',
       continue: 'text-yellow-600 dark:text-yellow-400',
     }
+    const tierClass =
+      data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300'
+      : data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'
+      : 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
+    const routeName = data.selected_route_name || (data.use_generic_agent ? 'Generic Agent' : '')
+    // An orchestrator picks a route per todo, so these arrive in long runs --
+    // eleven in a row on a real Pulse orchestrator. As a full card each one
+    // repeated "Todo Task: Route Selected", the iteration chip and "Action:"
+    // identically, and the only part that differed (which agent, which tier)
+    // was buried three lines down. One dense row per route puts the varying
+    // part first and turns a screenful into a readable list.
     return (
       <CompactWrapper compact={compact}>
-        <div className={`bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg ${compact ? 'p-2' : 'p-3'}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-lg">📋</span>
-            <span className={`font-medium ${compact ? 'text-xs' : 'text-sm'} text-purple-700 dark:text-purple-300`}>
-              Todo Task: Route Selected
+        {/* Semantic tokens rather than a raw purple wash: the accent lives in
+            the left rule, so the route name keeps full foreground contrast in
+            both themes instead of sitting on a tinted band. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border-l-2 border-purple-500/70 bg-muted/20 px-2 py-1 text-xs hover:bg-muted/40">
+          <span aria-hidden>📋</span>
+          {routeName && <span className="font-medium text-foreground">{routeName}</span>}
+          {data.preferred_tier_label && (
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${tierClass}`}>
+              {data.preferred_tier_label}
             </span>
-            {data.iteration && (
-              <span className={`${compact ? 'text-[10px]' : 'text-xs'} bg-purple-200 dark:bg-purple-800 px-1.5 py-0.5 rounded text-purple-700 dark:text-purple-300`}>
-                Iteration {data.iteration}
-              </span>
-            )}
-          </div>
-          <div className={`space-y-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500 dark:text-gray-400">Action:</span>
-              <span className={`font-medium ${actionColors[data.next_action || ''] || 'text-gray-700 dark:text-gray-300'}`}>
-                {data.next_action || 'unknown'}
-              </span>
-            </div>
-            {data.selected_route_name && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Agent:</span>
-                <span className="text-purple-600 dark:text-purple-400">{data.selected_route_name}</span>
-                {data.preferred_tier_label && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300' :
-                    data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' :
-                    'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
-                  }`}>
-                    {data.preferred_tier_label}
-                  </span>
-                )}
-              </div>
-            )}
-            {data.use_generic_agent && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Agent:</span>
-                <span className="text-purple-600 dark:text-purple-400">Generic Agent</span>
-                {data.preferred_tier_label && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    data.preferred_tier === 1 ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300' :
-                    data.preferred_tier === 2 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' :
-                    'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
-                  }`}>
-                    {data.preferred_tier_label}
-                  </span>
-                )}
-              </div>
-            )}
-            {data.todo_title && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Todo:</span>
-                <span className="text-gray-700 dark:text-gray-300">{data.todo_title}</span>
-              </div>
-            )}
-            {data.progress_summary && (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">Progress:</span>
-                <span className="text-gray-700 dark:text-gray-300">{data.progress_summary}</span>
-              </div>
-            )}
-          </div>
+          )}
+          <span className={`font-medium ${actionColors[data.next_action || ''] || 'text-gray-700 dark:text-gray-300'}`}>
+            {data.next_action || 'unknown'}
+          </span>
+          {/* Iteration is deliberately not shown: it is identical for every
+              route in a run, so repeating it per row is the same noise this
+              layout exists to remove. It stays available in the run header. */}
+          {data.todo_title && (
+            <span className="min-w-0 flex-1 truncate text-gray-600 dark:text-gray-400">{data.todo_title}</span>
+          )}
+          {data.progress_summary && (
+            <span className="w-full truncate text-[11px] text-gray-500 dark:text-gray-500">{data.progress_summary}</span>
+          )}
         </div>
       </CompactWrapper>
     )
@@ -1645,11 +1135,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
       low: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
     }
 
-    // Get live stats for this delegation from child events
-    const liveStats = delegationId ? delegationStats?.get(delegationId) : undefined
-    const hasLiveStats = liveStats && (liveStats.toolCalls > 0 || liveStats.inputTokens > 0)
-    const isCompleted = liveStats?.completed
-
     return (
       <CompactWrapper compact={compact}>
         <details className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded px-2 py-1.5 group">
@@ -1661,23 +1146,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
               Delegated task: {displayTitle}
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
-              {hasLiveStats && (
-                <span className={`text-[10px] text-purple-500 dark:text-purple-400${isCompleted ? '' : ' animate-pulse'}`}>
-                  {liveStats.toolCalls ? `${liveStats.toolCalls} tools` : ''}
-                  {liveStats.inputTokens ? ` · ${((liveStats.inputTokens + liveStats.outputTokens) / 1000).toFixed(1)}k tok` : ''}
-                </span>
-              )}
-              {liveStats?.contextUsagePercent !== undefined && liveStats.contextUsagePercent > 0 && (
-                <TooltipProvider>
-                  <CircularProgress percentage={liveStats.contextUsagePercent} size={16} strokeWidth={2.5}
-                    tokenUsage={{ context_usage_percent: liveStats.contextUsagePercent,
-                      model_context_window: liveStats.modelContextWindow,
-                      context_window_usage: liveStats.contextWindowUsage, model_id: liveStats.modelId }} />
-                </TooltipProvider>
-              )}
-              {event.timestamp && !isCompleted && (
-                <ElapsedTimer startTimestamp={event.timestamp} className="text-[10px] text-purple-500 dark:text-purple-400 animate-pulse font-mono" />
-              )}
               {agentTemplate && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300" title={`Agent template: ${agentTemplate}`}>
                   {agentTemplate}
@@ -1688,12 +1156,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
                   {reasoningLevel}
                 </span>
               )}
-              <span className="relative group/mode cursor-default flex items-center">
-                <Code2 className="w-3.5 h-3.5 text-orange-500 dark:text-orange-400" />
-                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 rounded bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-[10px] font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover/mode:opacity-100 transition-opacity z-50">
-                  Code Execution
-                </span>
-              </span>
               {event.timestamp && (
                 <span className="text-[10px] text-purple-500 dark:text-purple-400">
                   {new Date(event.timestamp).toLocaleTimeString()}
@@ -1712,77 +1174,12 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
               {servers && servers.length > 0 && <span>Servers: {servers.join(', ')}</span>}
             </div>
 
-            {hasLiveStats && (
-              <div className="flex items-center gap-3 text-[10px] text-purple-500 dark:text-purple-400">
-                {liveStats.inputTokens > 0 && <span>In: {liveStats.inputTokens.toLocaleString()} tokens</span>}
-                {liveStats.outputTokens > 0 && <span>Out: {liveStats.outputTokens.toLocaleString()} tokens</span>}
-                {liveStats.toolCalls > 0 && <span>Tool calls: {liveStats.toolCalls}</span>}
-                {(liveStats.latestToolLabel || liveStats.latestToolName) && <span>Tool: {liveStats.latestToolLabel || liveStats.latestToolName}</span>}
-                {event.timestamp && !isCompleted && (
-                  <span>Elapsed: <ElapsedTimer startTimestamp={event.timestamp} className="font-mono" /></span>
-                )}
-              </div>
-            )}
-            {delegationId && !isCompleted && (
+            {delegationId && (
               <DelegationStreamingCard delegationId={delegationId} />
             )}
           </div>
         </details>
 
-        {ownerSummaryEvents}
-        {showOwnedTerminal && (
-          <OwnedTerminalStreamCard
-            ownerKeys={[
-              ...(event.session_id && delegationId ? [`${event.session_id}:${delegationId}`] : []),
-              ...getOwnedTerminalOwnerKeys(event, delegationData as Record<string, unknown>),
-            ]}
-            sessionId={event.session_id}
-            compact={compact}
-          />
-        )}
-
-        {/* Tool toggle — show "+ N tools" when collapsed, full list when expanded */}
-        {!isOwnedLogPanelOpen && (childrenCount ?? 0) > 0 && (
-          <div className="mt-1 ml-1">
-            <button
-              onClick={() => setIsOwnedLogPanelOpen(true)}
-              className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors"
-            >
-              + {childrenCount} tool{childrenCount !== 1 ? 's' : ''}
-            </button>
-          </div>
-        )}
-        {/* Hierarchical Execution Logs - Shown when expanded via hierarchy arrow */}
-        {isOwnedLogPanelOpen && childrenNodes && childrenNodes.length > 0 && onToggleNode && (
-          <div className="mt-1 ml-1">
-            {!autoExpandedOwnedLogPanel && (
-              <button
-                onClick={() => setIsOwnedLogPanelOpen(false)}
-                className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors mb-1"
-              >
-                − collapse
-              </button>
-            )}
-            <div
-              ref={scrollRef}
-              className="overflow-y-auto overflow-x-hidden pl-4 pr-1 py-1 custom-scrollbar break-words overscroll-y-contain"
-              style={{ maxHeight: '50vh' }}
-            >
-              <SubAgentHierarchy
-                nodes={childrenNodes}
-                onToggleNode={onToggleNode}
-                onApproveWorkflow={onApproveWorkflow}
-                onSubmitFeedback={onSubmitFeedback}
-                onFeedbackSubmitted={onFeedbackSubmitted}
-                isApproving={isApproving}
-                delegationStats={delegationStats}
-                backgroundAgentStats={backgroundAgentStats}
-                compact={true}
-                tabId={tabId}
-              />
-            </div>
-          </div>
-        )}
       </CompactWrapper>
     )
   }
@@ -1820,9 +1217,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     const outputTokens = delegationData?.output_tokens
     const toolCalls = delegationData?.tool_calls
     const hasStats = inputTokens || outputTokens || toolCalls
-    const delegationId = delegationData?.delegation_id
-    const endStats = delegationId ? delegationStats?.get(delegationId) : undefined
-
     // Format Go duration (e.g. "45.123456789s", "2m34.567s") to concise form
     const formatDuration = (d: string): string => {
       if (!d) return ''
@@ -1859,14 +1253,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
                   {inputTokens ? `${((inputTokens + (outputTokens || 0)) / 1000).toFixed(1)}k tok` : ''}
                   {toolCalls ? ` · ${toolCalls} tools` : ''}
                 </span>
-              )}
-              {endStats?.contextUsagePercent !== undefined && endStats.contextUsagePercent > 0 && (
-                <TooltipProvider>
-                  <CircularProgress percentage={endStats.contextUsagePercent} size={16} strokeWidth={2.5}
-                    tokenUsage={{ context_usage_percent: endStats.contextUsagePercent,
-                      model_context_window: endStats.modelContextWindow,
-                      context_window_usage: endStats.contextWindowUsage, model_id: endStats.modelId }} />
-                </TooltipProvider>
               )}
               {duration && (
                 <span className={colorClasses.muted}>{duration}</span>
@@ -1906,30 +1292,18 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   }
 
   // Background Agent Started Event
-  if (event.type === 'background_agent_started') {
-    const data = event.data as {
-      data?: { agent_id?: string; name?: string; instruction?: string; status?: string; kind?: string; fields?: Record<string, unknown> }
-      agent_id?: string
-      name?: string
-      instruction?: string
-      status?: string
-      kind?: string
-    }
-    const fields = (data?.data?.fields || data?.data || data) as Record<string, unknown>
-    const agentId = typeof fields?.agent_id === 'string' ? fields.agent_id : ''
-    const rawName = typeof fields?.name === 'string' ? fields.name : ''
+  if (isEventType(event, 'background_agent_started')) {
+    const fields = getEventData(event)
+    const rawName = fields.name ?? ''
     const displayName = getBackgroundExecutionDisplayName(rawName)
     const displayPath = splitExecutionDisplayPath(displayName)
-    const status = inferOwnerStatusFromSummaryNodes(summaryNodes) || (typeof fields?.status === 'string' ? fields.status : 'running')
-    const kind = typeof fields?.kind === 'string' ? fields.kind : undefined
-    const kindLabel = getBackgroundExecutionKindLabel(kind)
-    const transportLabel = getExecutionTransportLabel(fields as Record<string, unknown>)
+    // kind/status/transport are typed here as never actually set by the
+    // backend for this event type — see BackgroundAgentStartedEvent.
+    const status = 'running'
+    const kindLabel = getBackgroundExecutionKindLabel(undefined)
+    const transportLabel = getExecutionTransportLabel({})
     const isRunning = status === 'running' || status === 'active' || status === 'in_progress'
 
-    // Look up live stats via background agent ID → delegation stats mapping
-    const liveStats = agentId ? backgroundAgentStats?.get(agentId) : undefined
-    const hasLiveStats = liveStats && (liveStats.toolCalls > 0 || liveStats.inputTokens > 0)
-    const childCount = childrenCount ?? 0
     return (
       <CompactWrapper compact={compact}>
         <div className={`bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md ${compact ? 'p-2' : 'p-3'}`}>
@@ -1957,104 +1331,28 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
                 )}
               </div>
             </div>
-            {hasLiveStats && (
-              <span className="shrink-0 text-[10px] text-blue-500 dark:text-blue-400 animate-pulse">
-                {liveStats.toolCalls ? `${liveStats.toolCalls} tools` : ''}
-              </span>
-            )}
-            {!hasLiveStats && (
-              <span className={`${compact ? 'text-[10px]' : 'text-xs'} shrink-0 text-blue-500 dark:text-blue-400`}>
-                {isRunning ? 'Running' : titleCaseIdentifier(status)}
-              </span>
-            )}
-            {liveStats?.contextUsagePercent !== undefined && liveStats.contextUsagePercent > 0 && (
-              <TooltipProvider>
-                <CircularProgress percentage={liveStats.contextUsagePercent} size={16} strokeWidth={2.5}
-                  tokenUsage={{ context_usage_percent: liveStats.contextUsagePercent,
-                    model_context_window: liveStats.modelContextWindow,
-                    context_window_usage: liveStats.contextWindowUsage, model_id: liveStats.modelId }} />
-              </TooltipProvider>
-            )}
+            <span className={`${compact ? 'text-[10px]' : 'text-xs'} shrink-0 text-blue-500 dark:text-blue-400`}>
+              {isRunning ? 'Running' : titleCaseIdentifier(status)}
+            </span>
             {isRunning && event.timestamp && (
               <ElapsedTimer startTimestamp={event.timestamp} className="text-[10px] text-blue-500 dark:text-blue-400 animate-pulse font-mono" />
             )}
           </div>
         </div>
-        {ownerSummaryEvents}
-        {showOwnedTerminal && (
-          <OwnedTerminalStreamCard
-            ownerKeys={[
-              ...(event.session_id && agentId ? [`${event.session_id}:${agentId}`] : []),
-              ...getOwnedTerminalOwnerKeys(event, fields as Record<string, unknown>),
-            ]}
-            sessionId={event.session_id}
-            compact={compact}
-          />
-        )}
-        {!isOwnedLogPanelOpen && childCount > 0 && ((liveStats?.toolCalls ?? childrenToolCount ?? 0) > 0) && (
-          <div className="mt-1 ml-1">
-            <button
-              onClick={() => setIsOwnedLogPanelOpen(true)}
-              className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors"
-            >
-              {(() => {
-                const n = liveStats?.toolCalls ?? childrenToolCount ?? 0
-                return `+ ${n} tool${n !== 1 ? 's' : ''}`
-              })()}
-            </button>
-          </div>
-        )}
-        {isOwnedLogPanelOpen && childrenNodes && childrenNodes.length > 0 && onToggleNode && (
-          <div className="mt-1 ml-1">
-            {!autoExpandedOwnedLogPanel && (
-              <button
-                onClick={() => setIsOwnedLogPanelOpen(false)}
-                className="px-1.5 py-px text-[10px] leading-tight text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 rounded transition-colors mb-1"
-              >
-                − collapse
-              </button>
-            )}
-            <div
-              className="overflow-y-auto overflow-x-hidden pl-4 pr-1 py-1 custom-scrollbar break-words overscroll-y-contain"
-              style={{ maxHeight: '50vh' }}
-            >
-              <SubAgentHierarchy
-                nodes={childrenNodes}
-                onToggleNode={onToggleNode}
-                onApproveWorkflow={onApproveWorkflow}
-                onSubmitFeedback={onSubmitFeedback}
-                onFeedbackSubmitted={onFeedbackSubmitted}
-                isApproving={isApproving}
-                delegationStats={delegationStats}
-                backgroundAgentStats={backgroundAgentStats}
-                compact={true}
-                tabId={tabId}
-              />
-            </div>
-          </div>
-        )}
       </CompactWrapper>
     )
   }
 
   // Background Agent Completed Event
-  if (event.type === 'background_agent_completed') {
-    const data = event.data as {
-      data?: { agent_id?: string; name?: string; status?: string; result?: string; error?: string; duration?: string; fields?: { agent_id?: string; name?: string; status?: string; result?: string; error?: string; duration?: string } }
-      agent_id?: string
-      name?: string
-      status?: string
-      result?: string
-      error?: string
-      duration?: string
-    }
-    const fields = data?.data?.fields || data?.data || data
-    const rawName = fields?.name || ''
-    const displayName = rawName.replace(/^Planner:\s*/i, '').trim() || 'Task'
-    const status = fields?.status || 'completed'
-    const duration = fields?.duration || ''
-    const result = fields?.result || ''
-    const error = fields?.error || ''
+  if (isEventType(event, 'background_agent_completed')) {
+    const fields = getEventData(event)
+    const rawName = fields.name || ''
+    const displayPath = splitExecutionDisplayPath(getBackgroundExecutionDisplayName(rawName))
+    const displayName = displayPath.title
+    const status = fields.status || 'completed'
+    const duration = fields.duration || ''
+    const result = backgroundAgentCompletionSummary(fields.result)
+    const error = fields.error || ''
     const isSuccess = status === 'completed'
     const isFailed = status === 'failed'
 
@@ -2102,6 +1400,11 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
             <span className={`${compact ? 'text-xs' : 'text-sm'} font-medium ${textColor}`}>
               {displayName}
             </span>
+            {displayPath.parentPath && (
+              <span className={`${compact ? 'text-[10px]' : 'text-xs'} min-w-0 truncate ${textColor} opacity-65`}>
+                inside {displayPath.parentPath}
+              </span>
+            )}
             <span className={`${compact ? 'text-[10px]' : 'text-xs'} ${textColor} opacity-75`}>
               {statusLabel}{duration ? ` (${duration})` : ''}
             </span>
@@ -2122,14 +1425,9 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   }
 
   // Background Agent Terminated Event
-  if (event.type === 'background_agent_terminated') {
-    const data = event.data as {
-      data?: { agent_id?: string; name?: string; fields?: { agent_id?: string; name?: string } }
-      agent_id?: string
-      name?: string
-    }
-    const fields = data?.data?.fields || data?.data || data
-    const rawName = fields?.name || ''
+  if (isEventType(event, 'background_agent_terminated')) {
+    const fields = getEventData(event)
+    const rawName = fields.name || ''
     const displayName = rawName.replace(/^Planner:\s*/i, '').trim() || 'Task'
 
     return (
@@ -2152,6 +1450,29 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   // Synthetic Turn Ready Event (shown when a background task has completed and results are being processed)
   if (event.type === 'synthetic_turn_ready') {
     return null
+  }
+
+  // Auto Notification Steered Event — a background agent's completion was
+  // delivered directly into an already-running foreground CLI turn instead
+  // of queued for the next turn. Small and informational: confirms delivery
+  // happened, doesn't compete visually with the agent's own result card.
+  if (isEventType(event, 'auto_notification_steered')) {
+    const fields = getEventData(event)
+    const rawName = fields.name || ''
+    const displayName = rawName.replace(/^Planner:\s*/i, '').trim() || 'Task'
+    const provider = fields.provider || ''
+
+    return (
+      <CompactWrapper compact={compact}>
+        <div className={`flex items-center gap-2 ${compact ? 'text-[10px]' : 'text-xs'} text-sky-600 dark:text-sky-400`}>
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400" />
+          <span>
+            Steered <span className="font-medium">{displayName}</span> completion into the live turn
+            {provider ? ` (${provider})` : ''}
+          </span>
+        </div>
+      </CompactWrapper>
+    )
   }
 
   // Learn Code Script Execution Event
@@ -2250,69 +1571,17 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     </div>
   )
 }, (prevProps, nextProps) => {
-  if (prevProps.event.id !== nextProps.event.id ||
-      prevProps.mode !== nextProps.mode ||
-      prevProps.isApproving !== nextProps.isApproving ||
-      prevProps.isCollapsed !== nextProps.isCollapsed ||
-      prevProps.eventCount !== nextProps.eventCount ||
-      prevProps.ownedLogPanelOpen !== nextProps.ownedLogPanelOpen ||
-      prevProps.showOwnedTerminal !== nextProps.showOwnedTerminal ||
-      prevProps.tabId !== nextProps.tabId) {
-    return false
-  }
-  if (prevProps.event !== nextProps.event) {
-    return false
-  }
-  // For delegation and background agent events, also compare live stats so they re-render
-  if ((prevProps.event.type === 'delegation_start' || prevProps.event.type === 'delegation_end' ||
-       prevProps.event.type === 'background_agent_started' || prevProps.event.type === 'background_agent_completed' ||
-       prevProps.event.type === 'orchestrator_agent_start') && prevProps.delegationStats !== nextProps.delegationStats) {
-    return false
-  }
-  if ((prevProps.event.type === 'background_agent_started') && prevProps.backgroundAgentStats !== nextProps.backgroundAgentStats) {
-    return false
-  }
-  // Check if visible summaries or collapsed children changed.
-  if (
-    prevProps.summaryNodes !== nextProps.summaryNodes ||
-    prevProps.summaryCount !== nextProps.summaryCount ||
-    prevProps.childrenNodes !== nextProps.childrenNodes ||
-    prevProps.childrenCount !== nextProps.childrenCount
-  ) {
-    return false
-  }
-  return true
+  // An event card is a pure function of its event plus the few display flags
+  // below. The comparator used to also diff the tree view's node/stat props;
+  // those are gone, and with them the reason this needed to be subtle.
+  return prevProps.event === nextProps.event &&
+    prevProps.event.id === nextProps.event.id &&
+    prevProps.mode === nextProps.mode &&
+    prevProps.compact === nextProps.compact &&
+    prevProps.isApproving === nextProps.isApproving &&
+    prevProps.hideOrchestratorContext === nextProps.hideOrchestratorContext
 })
 
 // Event list component for displaying multiple events
 // NOTE: Event filtering is now done on the backend
 // Frontend no longer filters events - backend returns pre-filtered events
-export const EventList: React.FC<{
-  events: PollingEvent[]
-  executionTree?: SessionExecutionTreeResponse
-  onApproveWorkflow?: (requestId: string) => void
-  onSubmitFeedback?: (requestId: string, feedback: string) => void
-  onFeedbackSubmitted?: () => void
-  onSendMessage?: (msg: string) => void
-  isApproving?: boolean
-  compact?: boolean
-  tabId?: string
-}> = React.memo(({ events, executionTree, onApproveWorkflow, onSubmitFeedback, onFeedbackSubmitted, onSendMessage, isApproving, compact = false, tabId }) => {
-  if (events.length === 0) {
-    return <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500 text-center ${compact ? 'py-2' : 'py-4'}`}>No events to display</div>
-  }
-
-  return (
-    <EventHierarchy
-      events={events}
-      executionTree={executionTree}
-      onApproveWorkflow={onApproveWorkflow}
-      onSubmitFeedback={onSubmitFeedback}
-      onFeedbackSubmitted={onFeedbackSubmitted}
-      onSendMessage={onSendMessage}
-      isApproving={isApproving}
-      compact={compact}
-      tabId={tabId}
-    />
-  )
-})

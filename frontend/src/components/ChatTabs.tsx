@@ -1,13 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Plus, ArrowDown, ListTree, Terminal, Globe, DollarSign, CalendarClock, SlidersHorizontal, Square } from 'lucide-react'
-import { normalizeEventViewMode, useChatStore, type ChatTab } from '../stores/useChatStore'
+import { Plus, Globe, DollarSign, CalendarClock, SlidersHorizontal, Square } from 'lucide-react'
+import { useChatStore, type ChatTab } from '../stores/useChatStore'
 import { useAppStore } from '../stores/useAppStore'
 import { OrgPulseControl } from './OrgPulseControl'
 import { OrgBackupPublishControls } from './org/OrgBackupPublishControls'
 import { useModeStore } from '../stores/useModeStore'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
-import { TreeViewAlphaDialog, shouldShowTreeViewAlphaWarning } from './TreeViewAlphaDialog'
 import ServerSelectionDropdown from './ServerSelectionDropdown'
 import SkillSelectionDropdown from './skills/SkillSelectionDropdown'
 import { useMCPStore } from '../stores/useMCPStore'
@@ -37,8 +36,7 @@ function shortModelName(modelId: string): string {
 
 // Chief of Staff exposes two bounded lanes: one interactive chat and one
 // read-only schedule. Workflow mode renders its own tabs (WorkflowChatTabs).
-export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onToggleAutoScroll, onSubmitOrgCommand }) => {
-  const [pendingTreeViewTabId, setPendingTreeViewTabId] = useState<string | null>(null)
+export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgCommand }) => {
   const [showCostDashboard, setShowCostDashboard] = useState(false)
   const [showMultiAgentSchedules, setShowMultiAgentSchedules] = useState(false)
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null)
@@ -52,10 +50,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
     chatTabs,
     activeTabId,
     switchTab,
-    autoScroll: storeAutoScroll,
-    setAutoScroll,
     setTabConfig,
-    setTabViewMode,
     setTabStreaming,
     setTabHasRunningBgAgents,
     activeSessionsCache,
@@ -63,10 +58,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
     chatTabs: state.chatTabs,
     activeTabId: state.activeTabId,
     switchTab: state.switchTab,
-    autoScroll: state.autoScroll,
-    setAutoScroll: state.setAutoScroll,
     setTabConfig: state.setTabConfig,
-    setTabViewMode: state.setTabViewMode,
     setTabStreaming: state.setTabStreaming,
     setTabHasRunningBgAgents: state.setTabHasRunningBgAgents,
     activeSessionsCache: state.activeSessionsCache,
@@ -88,10 +80,6 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
     return lines
   }, [delegationTierConfig])
 
-  const activeViewMode = useMemo(
-    () => normalizeEventViewMode(activeTabId ? chatTabs[activeTabId]?.viewMode : undefined),
-    [activeTabId, chatTabs]
-  )
   const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
   const activeSession = activeTab?.sessionId
     ? activeSessionsCache.find(session => session.session_id === activeTab.sessionId)
@@ -101,7 +89,6 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
     !!activeTab.hasRunningBgAgents ||
     hasActiveSessionWork(activeSession)
   )
-  const showAutoScrollControl = activeViewMode === 'tree'
 
   const stopChiefOfStaffSession = useCallback(async () => {
     if (!activeTabId || !activeTab?.sessionId || stoppingSessionId) return
@@ -202,26 +189,6 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
       : browserMode === 'auto'
         ? 'Browser access: Automatic'
         : 'Browser access: Headless'
-
-  // Use prop if provided, otherwise use store value
-  const effectiveAutoScroll = autoScroll !== undefined ? autoScroll : storeAutoScroll
-  const handleToggleAutoScroll = onToggleAutoScroll || (() => {
-    setAutoScroll(!storeAutoScroll)
-  })
-  const requestViewMode = useCallback((tabId: string, mode: 'tree' | 'terminal') => {
-    if (mode === 'tree' && activeViewMode !== 'tree' && shouldShowTreeViewAlphaWarning()) {
-      setPendingTreeViewTabId(tabId)
-      return
-    }
-    setTabViewMode(tabId, mode)
-  }, [activeViewMode, setTabViewMode])
-
-  const confirmTreeView = useCallback(() => {
-    if (pendingTreeViewTabId) {
-      setTabViewMode(pendingTreeViewTabId, 'tree')
-    }
-    setPendingTreeViewTabId(null)
-  }, [pendingTreeViewTabId, setTabViewMode])
 
   useEffect(() => {
     if (selectedModeCategory !== 'multi-agent' || showWorkflowsOverview) {
@@ -386,65 +353,6 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
         </button>
       )}
 
-      {/* View controls live next to the Chief of Staff title, matching workflow. */}
-      <div className="flex flex-none items-center gap-1 border-l border-gray-200 pl-2 dark:border-gray-700">
-        <div
-          data-tour="event-view-mode"
-          data-testid="tour-event-view-mode"
-          className="inline-flex items-center rounded-full border border-gray-200 bg-gray-100 p-0.5 dark:border-gray-700 dark:bg-gray-800"
-          role="group"
-          aria-label="Event layout mode"
-        >
-          {([
-            { mode: 'tree' as const, Icon: ListTree, label: 'Tree', tip: 'Tree view — group events by agent' },
-            { mode: 'terminal' as const, Icon: Terminal, label: 'Terminal', tip: 'Terminal view — show only the terminal panes, no events' },
-          ]).map(({ mode, Icon, label, tip }) => (
-            <Tooltip key={mode}>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (activeTabId) {
-                      requestViewMode(activeTabId, mode)
-                    }
-                  }}
-                  className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${
-                    activeViewMode === mode
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-500 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100'
-                  }`}
-                  aria-label={label}
-                  aria-pressed={activeViewMode === mode}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{tip}</p>
-              </TooltipContent>
-            </Tooltip>
-          ))}
-        </div>
-        {handleToggleAutoScroll && showAutoScrollControl && (
-          <button
-            onClick={handleToggleAutoScroll}
-            className={`
-              flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
-              ${effectiveAutoScroll
-                ? 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                : 'text-gray-500 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'
-              }
-            `}
-          >
-            <ArrowDown className={`w-3.5 h-3.5 ${effectiveAutoScroll ? 'opacity-70' : 'opacity-40'}`} />
-            <span className="hidden sm:inline">
-              {effectiveAutoScroll ? 'Auto-scroll' : 'Manual'}
-            </span>
-          </button>
-        )}
-      </div>
-
       <div className="ml-auto flex items-center gap-1">
         <OrgPulseControl />
         {/* Delegation tiers (H/M/L) — CoS-specific config, lives next to Org Pulse
@@ -575,11 +483,6 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, autoScroll, onTog
       {showMultiAgentSchedules && (
         <MultiAgentSchedulesPopup onClose={() => setShowMultiAgentSchedules(false)} />
       )}
-      <TreeViewAlphaDialog
-        isOpen={pendingTreeViewTabId !== null}
-        onContinue={confirmTreeView}
-        onCancel={() => setPendingTreeViewTabId(null)}
-      />
     </>
   )
 }

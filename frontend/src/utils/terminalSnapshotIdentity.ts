@@ -44,3 +44,39 @@ export function reconcileTerminalSnapshots(
   if (!changed) return current
   return reconciled
 }
+
+/**
+ * Detail endpoints provide the terminal body, but their lifecycle metadata may
+ * have been captured before the latest metadata poll. Preserve the poll's
+ * authoritative runtime state so loading history cannot briefly downgrade a
+ * live pane to completed and force a WebSocket reconnect.
+ */
+export function mergeTerminalSnapshotBody(
+  base: TerminalSnapshot,
+  detail: TerminalSnapshot,
+): TerminalSnapshot {
+  return {
+    ...base,
+    content: detail.content || base.content || '',
+    content_source: detail.content_source || base.content_source,
+    rows: Array.isArray(detail.rows) && detail.rows.length > 0 ? detail.rows : base.rows,
+  }
+}
+
+export function shouldStreamTerminal(terminal: TerminalSnapshot | null): boolean {
+  if (!terminal || !terminal.tmux_session) return false
+
+  const processState = (terminal.process_state || '').trim().toLowerCase()
+  const snapshotKind = (terminal.snapshot_kind || '').trim().toLowerCase()
+  if (processState === 'closed' || snapshotKind === 'archived') return false
+
+  // Interactive CLIs remain available for follow-up messages after a turn is
+  // marked completed. The live process is the authoritative signal here.
+  if (processState === 'live') return true
+
+  const state = (terminal.state || '').trim().toLowerCase()
+  if (state === 'completed' || state === 'failed' || state === 'closing' || state === 'stale') {
+    return false
+  }
+  return terminal.active || state === 'running' || state === 'idle'
+}

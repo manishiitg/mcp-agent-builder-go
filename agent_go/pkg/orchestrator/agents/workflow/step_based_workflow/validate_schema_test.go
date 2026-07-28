@@ -34,7 +34,7 @@ func TestJSONPathValidationLogic(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			var err error
 			path := strings.TrimSpace(tc.path)
-			
+
 			if path == "" {
 				err = fmt.Errorf("empty path")
 			} else if !strings.HasPrefix(path, "$.") {

@@ -8,7 +8,6 @@ import { agentApi, resetSessionId, getSessionId } from '../services/api'
 import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatusMessage, ExecutionOptions } from '../services/api-types'
 import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
-import { EventDisplay } from './EventDisplay'
 import { TerminalCenter } from './TerminalCenter'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
 import { ToastContainer } from './ui/Toast'
@@ -736,9 +735,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     )
   }, [displayEvents])
 
+  // The removed tree layout used to be the reason this was fetched, but it has a
+  // SECOND consumer: restoredSessionHasExecutionContent (below) needs the node
+  // counts to decide whether a resumed tab still shows execution activity, so
+  // the previous-chats list never replaces a populated terminal pane. Fetch it
+  // for restored conversations only — that is the one surface that reads it.
   const shouldFetchSessionExecutionTree =
-    !!activeSessionId &&
-    activeEventViewMode === 'tree'
+    !!activeSessionId && !!activeTab?.config?.restoredConversationPath
   const { data: sessionExecutionTree } = useSessionExecutionTree(activeSessionId, shouldFetchSessionExecutionTree)
 
   // --- Render tracking (filter by [Render] in console) ---
@@ -2118,18 +2121,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         return false
       }
       
-      // Workflow tabs stay lightweight in terminal mode: historical event/tree
-      // hydration is only needed when Tree is open. Keep live connections for
-      // active terminal turns because some providers build their terminal pane
-      // from streaming events instead of tmux snapshots.
+      // Workflow tabs stay lightweight when idle. Keep live connections for
+      // active turns because some providers build their clean transcript from
+      // streaming events instead of tmux snapshots.
       if (tab.metadata?.mode === 'workflow') {
-        const activeWfPreset = useGlobalPresetStore.getState().activePresetIds.workflow
-        const isActivePreset = tab.metadata?.presetQueryId === activeWfPreset
         const bgTab = chatStore.getTab(tab.tabId)
         const bgStreaming = bgTab?.isStreaming ?? tab.isStreaming
         const bgRunning = bgTab?.hasRunningBgAgents ?? false
-        const viewMode = normalizeEventViewMode(bgTab?.viewMode ?? tab.viewMode)
-        if (isActivePreset && viewMode === 'tree') return true
         return bgStreaming || bgRunning
       }
 
@@ -3297,11 +3295,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
             {/* active — terminal-or-events by the view toggle. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
-              activeEventViewMode === 'terminal' ? (
-                <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
-              ) : (
-                <EventDisplay events={displayEvents} executionTree={sessionExecutionTree} onFeedbackSubmitted={handleFeedbackSubmitted} onSendMessage={submitQueryWithQuery} compact={compact} sessionId={activeTab.sessionId} tabId={targetTabId || undefined} />
-              )
+              <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3340,11 +3334,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
             {/* active — terminal-or-events by the view toggle. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
-              activeEventViewMode === 'terminal' ? (
-                <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
-              ) : (
-                <EventDisplay events={displayEvents} executionTree={sessionExecutionTree} onFeedbackSubmitted={handleFeedbackSubmitted} onSendMessage={submitQueryWithQuery} compact={compact} sessionId={activeTab.sessionId} tabId={targetTabId || undefined} />
-              )
+              <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
             )}
           </>
         )}

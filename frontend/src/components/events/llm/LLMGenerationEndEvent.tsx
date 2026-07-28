@@ -19,31 +19,21 @@ export const LLMGenerationEndEventDisplay: React.FC<LLMGenerationEndEventProps> 
   }) : null
 
   // Extract context usage from metadata
-  const contextUsagePercent = event.metadata?.context_usage_percent as number | undefined
-  const modelContextWindow = event.metadata?.model_context_window as number | undefined
-  const fixedThresholdPercent = event.metadata?.fixed_threshold_percent as number | undefined
-  const fixedThresholdTokens = event.metadata?.fixed_threshold_tokens as number | undefined
 
   // Helper function to format token count (e.g., 1000000 -> "1M", 200000 -> "200k")
-  const formatTokenCount = (tokens: number): string => {
-    if (tokens >= 1_000_000) {
-      return `${(tokens / 1_000_000).toFixed(1)}M`.replace('.0', '')
-    } else if (tokens >= 1_000) {
-      return `${(tokens / 1_000).toFixed(0)}k`
-    }
-    return tokens.toString()
-  }
-
+  // A successful generation is the common case and gets the neutral card the rest
+  // of the UI uses; colour is reserved for failure, so a red card actually stands
+  // out in a long transcript instead of competing with a wall of green.
   const bgColor = isSuccess
-    ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+    ? 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-800'
     : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
 
   const textColor = isSuccess
-    ? 'text-green-700 dark:text-green-300'
+    ? 'text-gray-700 dark:text-gray-300'
     : 'text-red-700 dark:text-red-300'
 
   const iconColor = isSuccess
-    ? 'text-green-600'
+    ? 'text-gray-500 dark:text-gray-400'
     : 'text-red-600'
 
   const Icon = isSuccess ? CheckCircle : AlertCircle
@@ -57,11 +47,11 @@ export const LLMGenerationEndEventDisplay: React.FC<LLMGenerationEndEventProps> 
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <Icon className={`w-4 h-4 ${iconColor} flex-shrink-0`} />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-green-700 dark:text-green-300">
+              <div className="text-sm font-medium text-gray-700 dark:text-gray-200">
                 LLM Generation End{' '}
-                <span className="text-xs font-normal text-green-600 dark:text-green-400">
-                  {event.turn && `• Turn ${event.turn}`}
-                  {event.duration && ` • ${formatDuration(event.duration)}`}
+                <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+                  {event.turn != null && `• Turn ${event.turn}`}
+                  {event.duration != null && ` • ${formatDuration(event.duration)}`}
                   {event.tool_calls !== undefined && ` • ${event.tool_calls} tool calls`}
                   {event.usage_metrics && (
                     <>
@@ -87,32 +77,17 @@ export const LLMGenerationEndEventDisplay: React.FC<LLMGenerationEndEventProps> 
                       )}
                     </>
                   )}
-                  {(contextUsagePercent !== undefined && contextUsagePercent > 0) || (fixedThresholdPercent !== undefined && fixedThresholdPercent > 0) ? (
-                    <>
-                      {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
-                        <span className={contextUsagePercent > 80 ? 'text-red-600 dark:text-red-400' : contextUsagePercent > 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'}>
-                          {' • Context: '}{contextUsagePercent.toFixed(1)}%
-                          {modelContextWindow !== undefined && modelContextWindow > 0 && (
-                            <span className="text-gray-600 dark:text-gray-400">
-                              {' ('}{formatTokenCount(modelContextWindow)}{')'}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      {fixedThresholdPercent !== undefined && fixedThresholdPercent > 0 && fixedThresholdTokens !== undefined && (
-                        <span className="text-blue-600 dark:text-blue-400">
-                          {' • Fixed: '}{fixedThresholdPercent.toFixed(1)}% ({formatTokenCount(fixedThresholdTokens)})
-                        </span>
-                      )}
-                    </>
-                  ) : null}
+                  {/* Context / Fixed-threshold percentages removed: the number
+                      is no longer used for anything, and it was reporting >100%
+                      because cache reads are summed across every internal LLM
+                      call in a turn rather than measuring one context. */}
                 </span>
               </div>
             </div>
           </div>
           {/* Right side: Time */}
           {event.timestamp && (
-            <div className="text-xs text-green-600 dark:text-green-400 flex-shrink-0">
+            <div className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
               {new Date(event.timestamp).toLocaleTimeString()}
             </div>
           )}

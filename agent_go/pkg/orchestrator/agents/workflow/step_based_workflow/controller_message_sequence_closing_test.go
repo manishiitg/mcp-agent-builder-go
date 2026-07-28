@@ -73,7 +73,6 @@ func TestMessageSequenceClosingItems(t *testing.T) {
 			LearningObjective:         "Capture how to extract MyCAMS portfolio data reliably",
 			KnowledgebaseAccess:       KBAccessReadWrite,
 			KnowledgebaseContribution: "Record portal-specific selectors and quirks",
-			KnowledgebaseWriteMethod:  KBWriteMethodDirect,
 		},
 	}
 	items := hcpo.messageSequenceClosingItems(context.Background(), both, 0)
@@ -113,20 +112,36 @@ func TestMessageSequenceClosingItems(t *testing.T) {
 		t.Errorf("expected no KB item when access is read-only, got %d", len(got))
 	}
 
-	// KB write-capable but write_method=agent (the default when unset) -> NO KB
-	// closing item: notes/ is not writable by the step agent under agent mode, so
-	// the turn would be a guaranteed-denied write. The post-step KB update agent
-	// (maybeEnqueueKBUpdate, called from the message-sequence dispatch path) owns
-	// the contribution instead.
-	kbAgentMethod := &MessageSequencePlanStep{
+	// KB write-capable with knowledgebase_write_method UNSET -> a KB closing item.
+	// This used to be the opposite: unset defaulted to "agent" mode, notes/ was not
+	// writable by the step agent, and the separate post-step KB update agent owned
+	// the contribution. That agent is retired,
+	// so an unset field now resolves to direct and the step agent writes notes/
+	// itself in this closing turn. A step carrying a contribution must never end up
+	// with no writer at all, which is what a stale "expect zero items" assertion
+	// here would silently allow.
+	kbUnsetMethod := &MessageSequencePlanStep{
 		CommonStepFields: CommonStepFields{ID: "w", Description: "d"},
 		AgentConfigs: &AgentConfigs{
 			KnowledgebaseAccess:       KBAccessReadWrite,
 			KnowledgebaseContribution: "note something",
 		},
 	}
-	if got := hcpo.messageSequenceClosingItems(context.Background(), kbAgentMethod, 0); len(got) != 0 {
-		t.Errorf("expected no KB closing item under write_method=agent (default), got %d", len(got))
+	if got := hcpo.messageSequenceClosingItems(context.Background(), kbUnsetMethod, 0); len(got) != 1 {
+		t.Errorf("expected 1 KB closing item when write method is unset (now resolves to direct), got %d", len(got))
+	}
+
+	// An explicit legacy "agent" value must behave identically — old plans are
+	// coerced to direct rather than silently losing their KB contribution.
+	kbLegacyAgent := &MessageSequencePlanStep{
+		CommonStepFields: CommonStepFields{ID: "w2", Description: "d"},
+		AgentConfigs: &AgentConfigs{
+			KnowledgebaseAccess:       KBAccessReadWrite,
+			KnowledgebaseContribution: "note something",
+		},
+	}
+	if got := hcpo.messageSequenceClosingItems(context.Background(), kbLegacyAgent, 0); len(got) != 1 {
+		t.Errorf("expected legacy write_method=agent to be coerced to direct and yield 1 KB closing item, got %d", len(got))
 	}
 }
 

@@ -8,6 +8,10 @@
 export interface UnifiedEventsComplete {
   agent_end?: AgentEndEvent;
   agent_start?: AgentStartEvent;
+  auto_notification_steered?: AutoNotificationSteeredEvent;
+  background_agent_completed?: BackgroundAgentCompletedEvent;
+  background_agent_started?: BackgroundAgentStartedEvent;
+  background_agent_terminated?: BackgroundAgentTerminatedEvent;
   cache_event?: CacheEvent;
   comprehensive_cache_event?: ComprehensiveCacheEvent;
   context_cancelled?: ContextCancelledEvent;
@@ -51,6 +55,7 @@ export interface UnifiedEventsComplete {
   structured_output_end?: StructuredOutputEndEvent;
   structured_output_error?: StructuredOutputErrorEvent;
   structured_output_start?: StructuredOutputStartEvent;
+  synthetic_turn_ready?: SyntheticTurnReadyEvent;
   system_prompt?: SystemPromptEvent;
   throttling_detected?: ThrottlingDetectedEvent;
   todo_step?: TodoStep;
@@ -111,6 +116,86 @@ export interface AgentStartEvent {
   trace_id?: string;
   use_code_execution_mode?: boolean;
   use_tool_search_mode?: boolean;
+}
+export interface AutoNotificationSteeredEvent {
+  agent_id?: string;
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  name?: string;
+  parent_id?: string;
+  provider?: string;
+  session_id?: string;
+  span_id?: string;
+  status?: string;
+  timestamp?: string;
+  trace_id?: string;
+}
+export interface BackgroundAgentCompletedEvent {
+  agent_id?: string;
+  component?: string;
+  correlation_id?: string;
+  duration?: string;
+  error?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  name?: string;
+  parent_execution_id?: string;
+  parent_id?: string;
+  result?: string;
+  session_id?: string;
+  span_id?: string;
+  status?: string;
+  timestamp?: string;
+  trace_id?: string;
+}
+export interface BackgroundAgentStartedEvent {
+  agent_id?: string;
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  execution_kind?: string;
+  hierarchy_level?: number;
+  instruction?: string;
+  is_end_event?: boolean;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  name?: string;
+  parent_execution_id?: string;
+  parent_id?: string;
+  session_id?: string;
+  span_id?: string;
+  timestamp?: string;
+  trace_id?: string;
+}
+export interface BackgroundAgentTerminatedEvent {
+  agent_id?: string;
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  name?: string;
+  parent_execution_id?: string;
+  parent_id?: string;
+  session_id?: string;
+  span_id?: string;
+  status?: string;
+  timestamp?: string;
+  trace_id?: string;
 }
 export interface CacheEvent {
   age?: string;
@@ -1149,6 +1234,25 @@ export interface StructuredOutputStartEvent {
   session_id?: string;
   span_id?: string;
   target_type?: string;
+  timestamp?: string;
+  trace_id?: string;
+}
+export interface SyntheticTurnReadyEvent {
+  agent_id?: string;
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  message?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  name?: string;
+  parent_id?: string;
+  session_id?: string;
+  span_id?: string;
+  status?: string;
   timestamp?: string;
   trace_id?: string;
 }

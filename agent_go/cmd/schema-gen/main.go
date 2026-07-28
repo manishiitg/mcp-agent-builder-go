@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manishiitg/mcpagent/events"
-	"github.com/manishiitg/mcpagent/mcpcache"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	"github.com/manishiitg/mcpagent/events"
+	"github.com/manishiitg/mcpagent/mcpcache"
 
 	"github.com/invopop/jsonschema"
 )
@@ -135,6 +134,13 @@ type EventDataUnion struct {
 	OrchestratorAgentEnd   *orchestrator_events.OrchestratorAgentEndEvent   `json:"orchestrator_agent_end,omitempty"`
 	OrchestratorAgentError *orchestrator_events.OrchestratorAgentErrorEvent `json:"orchestrator_agent_error,omitempty"`
 
+	// Background Agent Events
+	BackgroundAgentStarted    *orchestrator_events.BackgroundAgentStartedEvent    `json:"background_agent_started,omitempty"`
+	BackgroundAgentCompleted  *orchestrator_events.BackgroundAgentCompletedEvent  `json:"background_agent_completed,omitempty"`
+	BackgroundAgentTerminated *orchestrator_events.BackgroundAgentTerminatedEvent `json:"background_agent_terminated,omitempty"`
+	SyntheticTurnReady        *orchestrator_events.SyntheticTurnReadyEvent        `json:"synthetic_turn_ready,omitempty"`
+	AutoNotificationSteered   *orchestrator_events.AutoNotificationSteeredEvent   `json:"auto_notification_steered,omitempty"`
+
 	// Step Execution Events
 	StepTokenUsage         *todo_creation_human.StepTokenUsageEvent         `json:"step_token_usage,omitempty"`
 	StepProgressUpdated    *todo_creation_human.StepProgressUpdatedEvent    `json:"step_progress_updated,omitempty"`
@@ -203,9 +209,10 @@ type EventDataUnion struct {
 // SECTION 3: Discriminated Union Schema Generation
 // =============================================================================
 
-// EventTypeMapping maps event types to their corresponding data struct field names
-// This is used to generate the discriminated union schema
-var EventTypeMapping = map[events.EventType]string{
+// EventRegistry is the canonical list of event types exposed on the wire. Its
+// value names the matching EventDataUnion JSON property. validateEventRegistry
+// makes a missing or duplicate registration a generation failure.
+var EventRegistry = map[events.EventType]string{
 	// Core Agent Events
 	events.AgentStart: "agent_start",
 	events.AgentEnd:   "agent_end",
@@ -283,6 +290,13 @@ var EventTypeMapping = map[events.EventType]string{
 	orchestrator_events.OrchestratorAgentEnd:   "orchestrator_agent_end",
 	orchestrator_events.OrchestratorAgentError: "orchestrator_agent_error",
 
+	// Background Agent Events
+	orchestrator_events.BackgroundAgentStarted:    "background_agent_started",
+	orchestrator_events.BackgroundAgentCompleted:  "background_agent_completed",
+	orchestrator_events.BackgroundAgentTerminated: "background_agent_terminated",
+	orchestrator_events.SyntheticTurnReady:        "synthetic_turn_ready",
+	orchestrator_events.AutoNotificationSteered:   "auto_notification_steered",
+
 	// Step Execution Events
 	orchestrator_events.StepTokenUsage:         "step_token_usage",
 	orchestrator_events.StepProgressUpdated:    "step_progress_updated",
@@ -351,6 +365,77 @@ var EventTypeMapping = map[events.EventType]string{
 // SECTION 4: Schema Generation Functions
 // =============================================================================
 
+// schemaOnlyPayloadKeys are represented in the legacy schema but deliberately
+// have no standalone wire event discriminator.
+var schemaOnlyPayloadKeys = map[string]struct{}{
+	"cache_event": {},
+}
+
+func eventPayloadKeys() (map[string]struct{}, error) {
+	keys := make(map[string]struct{})
+	typeOfUnion := reflect.TypeOf(EventDataUnion{})
+	for i := 0; i < typeOfUnion.NumField(); i++ {
+		field := typeOfUnion.Field(i)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			return nil, fmt.Errorf("EventDataUnion.%s has no JSON payload key", field.Name)
+		}
+		if _, exists := keys[name]; exists {
+			return nil, fmt.Errorf("EventDataUnion contains duplicate payload key %q", name)
+		}
+		keys[name] = struct{}{}
+	}
+	return keys, nil
+}
+
+func validateEventRegistry() error {
+	payloadKeys, err := eventPayloadKeys()
+	if err != nil {
+		return err
+	}
+
+	registeredPayloads := make(map[string]events.EventType, len(EventRegistry))
+	for eventType, payloadKey := range EventRegistry {
+		if eventType == "" {
+			return fmt.Errorf("event registry contains an empty event type")
+		}
+		if _, exists := payloadKeys[payloadKey]; !exists {
+			return fmt.Errorf("event registry %q points to missing EventDataUnion payload %q", eventType, payloadKey)
+		}
+		if previous, exists := registeredPayloads[payloadKey]; exists {
+			return fmt.Errorf("EventDataUnion payload %q is registered twice: %q and %q", payloadKey, previous, eventType)
+		}
+		registeredPayloads[payloadKey] = eventType
+	}
+	for payloadKey := range schemaOnlyPayloadKeys {
+		if _, exists := payloadKeys[payloadKey]; !exists {
+			return fmt.Errorf("schema-only payload %q does not exist in EventDataUnion", payloadKey)
+		}
+		if eventType, registered := registeredPayloads[payloadKey]; registered {
+			return fmt.Errorf("schema-only payload %q is also registered as %q", payloadKey, eventType)
+		}
+	}
+
+	for payloadKey := range payloadKeys {
+		if _, schemaOnly := schemaOnlyPayloadKeys[payloadKey]; schemaOnly {
+			continue
+		}
+		if _, registered := registeredPayloads[payloadKey]; !registered {
+			return fmt.Errorf("EventDataUnion payload %q is not registered; add it to EventRegistry or schemaOnlyPayloadKeys", payloadKey)
+		}
+	}
+	return nil
+}
+
+func registeredEventTypes() []string {
+	eventTypes := make([]string, 0, len(EventRegistry))
+	for eventType := range EventRegistry {
+		eventTypes = append(eventTypes, string(eventType))
+	}
+	sort.Strings(eventTypes)
+	return eventTypes
+}
+
 func writeSchema(filename string, v any) error {
 	r := new(jsonschema.Reflector)
 	r.ExpandedStruct = true
@@ -359,218 +444,30 @@ func writeSchema(filename string, v any) error {
 
 	schema := r.Reflect(v)
 
-	// Debug: Check what fields were reflected
-	if props := schema.Properties; props != nil {
-		// Use reflection to check the struct type
-		vt := reflect.TypeOf(v)
-		if vt.Kind() == reflect.Struct || (vt.Kind() == reflect.Ptr && vt.Elem().Kind() == reflect.Struct) {
-			if vt.Kind() == reflect.Ptr {
-				vt = vt.Elem()
-			}
-			fmt.Printf("🔍 Debug: Struct %s has %d fields\n", vt.Name(), vt.NumField())
-
-			// Check for context_editing fields in the struct
-			hasContextEditing := false
-			for i := 0; i < vt.NumField(); i++ {
-				f := vt.Field(i)
-				if f.Name == "ContextEditingCompletedEvent" || f.Name == "ContextEditingErrorEvent" {
-					hasContextEditing = true
-					fmt.Printf("✅ Found field in struct: %s (JSON: %s)\n", f.Name, f.Tag.Get("json"))
-				}
-			}
-			if !hasContextEditing {
-				fmt.Printf("❌ ContextEditing fields NOT found in struct definition\n")
-			}
-		}
-
-		// Check if they're in the schema properties
-		propsJSON, _ := json.Marshal(schema)
-		var propsMap map[string]interface{}
-		json.Unmarshal(propsJSON, &propsMap)
-		if propsData, ok := propsMap["properties"].(map[string]interface{}); ok {
-			hasInSchema := false
-			for k := range propsData {
-				if k == "context_editing_completed" || k == "context_editing_error" {
-					hasInSchema = true
-					fmt.Printf("✅ Found in schema properties: %s\n", k)
-				}
-			}
-			if !hasInSchema {
-				fmt.Printf("❌ ContextEditing events NOT found in schema properties\n")
-				fmt.Printf("   Total properties in schema: %d\n", len(propsData))
-			}
-		}
-	}
-
 	// Ensure the output directory exists
 	dir := filepath.Dir(filename)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	//nolint:gosec // G304: filename comes from command-line/config, not user input
-	f, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", filename, err)
-	}
-	defer f.Close()
-
-	// Debug: Check OrderedMap directly before encoding
-	if props := schema.Properties; props != nil {
-		// Try to access the OrderedMap's internal data
-		propsBytes, _ := json.Marshal(props)
-		var propsMap map[string]interface{}
-		json.Unmarshal(propsBytes, &propsMap)
-		hasBeforeEncode := false
-		for k := range propsMap {
-			if k == "context_editing_completed" || k == "context_editing_error" {
-				hasBeforeEncode = true
-				fmt.Printf("✅ Found in OrderedMap before encode: %s\n", k)
-			}
-		}
-		if !hasBeforeEncode {
-			fmt.Printf("❌ NOT in OrderedMap before encode! Total: %d\n", len(propsMap))
-		}
-	}
-
-	// Convert OrderedMap to regular map via JSON round-trip to ensure proper serialization
+	// Keep generated output deterministic even though jsonschema uses ordered
+	// maps internally.
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
-		return fmt.Errorf("failed to marshal schema: %w", err)
+		return fmt.Errorf("marshal schema: %w", err)
 	}
-
-	var schemaMap map[string]interface{}
+	var schemaMap map[string]any
 	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
-		return fmt.Errorf("failed to unmarshal schema: %w", err)
+		return fmt.Errorf("normalize schema: %w", err)
 	}
-
-	// Debug: Verify the converted map has the events
-	if propsData, ok := schemaMap["properties"].(map[string]interface{}); ok {
-		hasInConvertedMap := false
-		allKeys := make([]string, 0, len(propsData))
-		for k := range propsData {
-			allKeys = append(allKeys, k)
-			if k == "context_editing_completed" || k == "context_editing_error" {
-				hasInConvertedMap = true
-				fmt.Printf("✅ Found in converted map: %s\n", k)
-			}
-		}
-		if !hasInConvertedMap {
-			fmt.Printf("❌ NOT in converted map! Total: %d\n", len(propsData))
-			// Show context keys that ARE in the map
-			ctxKeys := make([]string, 0)
-			for _, k := range allKeys {
-				if strings.Contains(k, "context") {
-					ctxKeys = append(ctxKeys, k)
-				}
-			}
-			fmt.Printf("   Context keys in converted map: %v\n", ctxKeys)
-		} else {
-			fmt.Printf("   Total keys in converted map: %d\n", len(propsData))
-		}
-	}
-
-	// Write the converted map with proper indentation using MarshalIndent
 	finalBytes, err := json.MarshalIndent(schemaMap, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal schema map: %w", err)
+		return fmt.Errorf("format schema: %w", err)
 	}
-
-	// Verify what we're about to write
-	var writeCheck map[string]interface{}
-	json.Unmarshal(finalBytes, &writeCheck)
-	if writeProps, ok := writeCheck["properties"].(map[string]interface{}); ok {
-		hasBeforeWrite := false
-		for k := range writeProps {
-			if k == "context_editing_completed" || k == "context_editing_error" {
-				hasBeforeWrite = true
-				fmt.Printf("✅ Found in bytes to write: %s\n", k)
-			}
-		}
-		if !hasBeforeWrite {
-			fmt.Printf("❌ NOT in bytes to write! Total: %d\n", len(writeProps))
-		}
+	//nolint:gosec // G304: filename is fixed by the generator entrypoint.
+	if err := os.WriteFile(filename, append(finalBytes, '\n'), 0644); err != nil {
+		return fmt.Errorf("write schema %s: %w", filename, err)
 	}
-
-	// Write bytes directly
-	bytesWritten, err := f.Write(finalBytes)
-	if err != nil {
-		return fmt.Errorf("failed to write schema: %w", err)
-	}
-	fmt.Printf("📝 Wrote %d bytes to file\n", bytesWritten)
-
-	// Add newline
-	if _, err := f.WriteString("\n"); err != nil {
-		return fmt.Errorf("failed to write newline: %w", err)
-	}
-
-	// Sync to ensure data is written to disk
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
-	// Close file before verification
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("failed to close file: %w", err)
-	}
-
-	// Immediately verify what's on disk
-	if verifyBytes, readErr := os.ReadFile(filename); readErr == nil {
-		fmt.Printf("📄 Read %d bytes from file for verification\n", len(verifyBytes))
-		// Check raw bytes first
-		if bytes.Contains(verifyBytes, []byte("context_editing_completed")) {
-			fmt.Printf("✅ Found 'context_editing_completed' in raw file bytes\n")
-		} else {
-			fmt.Printf("❌ 'context_editing_completed' NOT in raw file bytes\n")
-		}
-
-		var immediateCheck map[string]interface{}
-		if json.Unmarshal(verifyBytes, &immediateCheck) == nil {
-			if immediateProps, ok := immediateCheck["properties"].(map[string]interface{}); ok {
-				hasImmediate := false
-				for k := range immediateProps {
-					if k == "context_editing_completed" || k == "context_editing_error" {
-						hasImmediate = true
-						fmt.Printf("✅ Verified in parsed JSON: %s\n", k)
-					}
-				}
-				if !hasImmediate {
-					fmt.Printf("❌ NOT in parsed JSON! Total: %d\n", len(immediateProps))
-				}
-			}
-		}
-	}
-
-	// Verify what was actually written (after file is closed)
-	if writtenBytes, readErr := os.ReadFile(filename); readErr == nil {
-		var verifyMap map[string]interface{}
-		if json.Unmarshal(writtenBytes, &verifyMap) == nil {
-			if verifyProps, ok := verifyMap["properties"].(map[string]interface{}); ok {
-				hasInFile := false
-				allKeys := make([]string, 0, len(verifyProps))
-				for k := range verifyProps {
-					allKeys = append(allKeys, k)
-					if k == "context_editing_completed" || k == "context_editing_error" {
-						hasInFile = true
-						fmt.Printf("✅ Verified in written file: %s\n", k)
-					}
-				}
-				if !hasInFile {
-					fmt.Printf("❌ ERROR: ContextEditing events NOT in written file!\n")
-					fmt.Printf("   Total properties in file: %d\n", len(verifyProps))
-					// Show context-related keys that ARE in the file
-					ctxKeys := make([]string, 0)
-					for _, k := range allKeys {
-						if strings.Contains(k, "context") {
-							ctxKeys = append(ctxKeys, k)
-						}
-					}
-					fmt.Printf("   Context keys in file: %v\n", ctxKeys)
-				}
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -587,12 +484,8 @@ func generateDiscriminatedUnionSchema(filename string) error {
 	// Generate all event type enum values. Go map iteration order is
 	// non-deterministic, so sort the output to keep the generated schema
 	// stable across runs (required by the drift-check pre-commit hook).
-	eventTypes := make([]interface{}, 0, len(EventTypeMapping))
-	eventTypeStrings := make([]string, 0, len(EventTypeMapping))
-	for eventType := range EventTypeMapping {
-		eventTypeStrings = append(eventTypeStrings, string(eventType))
-	}
-	sort.Strings(eventTypeStrings)
+	eventTypeStrings := registeredEventTypes()
+	eventTypes := make([]interface{}, 0, len(eventTypeStrings))
 	for _, s := range eventTypeStrings {
 		eventTypes = append(eventTypes, s)
 	}
@@ -691,6 +584,13 @@ type UnifiedEvent struct {
 	OrchestratorAgentEndEvent   orchestrator_events.OrchestratorAgentEndEvent   `json:"orchestrator_agent_end"`
 	OrchestratorAgentErrorEvent orchestrator_events.OrchestratorAgentErrorEvent `json:"orchestrator_agent_error"`
 
+	// Background Agent Events
+	BackgroundAgentStartedEvent    orchestrator_events.BackgroundAgentStartedEvent    `json:"background_agent_started"`
+	BackgroundAgentCompletedEvent  orchestrator_events.BackgroundAgentCompletedEvent  `json:"background_agent_completed"`
+	BackgroundAgentTerminatedEvent orchestrator_events.BackgroundAgentTerminatedEvent `json:"background_agent_terminated"`
+	SyntheticTurnReadyEvent        orchestrator_events.SyntheticTurnReadyEvent        `json:"synthetic_turn_ready"`
+	AutoNotificationSteeredEvent   orchestrator_events.AutoNotificationSteeredEvent   `json:"auto_notification_steered"`
+
 	// Human Verification Events
 	RequestHumanFeedbackEvent orchestrator_events.RequestHumanFeedbackEvent `json:"request_human_feedback"`
 
@@ -771,6 +671,10 @@ func writeReportPlanSchema(filename string) error {
 
 func main() {
 	fmt.Println("Generating JSON schemas for event types...")
+	if err := validateEventRegistry(); err != nil {
+		fmt.Printf("Invalid event schema registry: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Generate unified events schema. When run from agent_go/, schemas/ is
 	// the frontend-consumed path.

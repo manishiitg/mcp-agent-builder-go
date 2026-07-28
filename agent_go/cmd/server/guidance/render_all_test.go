@@ -580,6 +580,55 @@ func TestTierGuidanceProtectsQualityWhileGoalsAreBelowTarget(t *testing.T) {
 	}
 }
 
+func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
+	cases := map[string][]string{
+		"pulse-gate": {
+			"Compare exact pins",
+			"list_provider_models",
+			"default_tier_models",
+			"Provider-profile defaults auto-update",
+			"infer freshness by name",
+		},
+		"post-run-monitor": {
+			"Inventory every exact model pin",
+			"list_provider_models",
+			"Provider-profile workflows inherit current defaults",
+			"Upgrade, Keep current, or Decide later",
+			"newer catalog model is a review candidate",
+		},
+		"llm-selection": {
+			"Exact pins do not move automatically",
+			"list_provider_models",
+			"default_tier_models",
+			"Never silently replace an exact pin",
+			"Upgrade, Keep current, or Decide later",
+		},
+		"llm-ops-review": {
+			"Inventory exact model",
+			"list_provider_models",
+			"default_tier_models",
+			"Provider-profile defaults update automatically",
+			"user approval required",
+		},
+	}
+
+	for kind, wants := range cases {
+		registry := referenceKinds
+		if kind == "llm-ops-review" {
+			registry = allKinds
+		}
+		rendered, err := renderFromRegistry(kind, tmplData{}, registry)
+		if err != nil {
+			t.Fatalf("render %s: %v", kind, err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%s missing exact-pin freshness contract %q:\n%s", kind, want, rendered)
+			}
+		}
+	}
+}
+
 func TestGoalAdvisorPrioritizesStrategyOverHTMLFormatting(t *testing.T) {
 	advisor, err := renderFromRegistry("goal-advisor", tmplData{}, allKinds)
 	if err != nil {
@@ -726,6 +775,11 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"call_generic_agent",
 			"Pulse Fixer",
 			"recommended_fix",
+			// Structure review is skipped unless the output contract forces it:
+			// consecutive real reviews returned detailed content findings while
+			// SKILL.md grew to 272 lines, never once mentioning its shape.
+			"`index_shape`",
+			"do not estimate",
 		},
 		"improve-knowledge": {
 			"READ-ONLY KNOWLEDGEBASE HEALTH REVIEW",
@@ -734,6 +788,10 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"call_generic_agent",
 			"Pulse Fixer",
 			"recommended_fix",
+			// Same reason as improve-learnings: a topic note reached ~100 KB of
+			// near-duplicate sections before anyone looked at its shape.
+			"`note_shape`",
+			"do not estimate",
 		},
 		"improve-database": {
 			"READ-ONLY DATABASE HEALTH REVIEW",

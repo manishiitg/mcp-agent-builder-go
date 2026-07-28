@@ -83,7 +83,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	skillStepConfig := getAgentConfigs(step)
 	dbAccessForGuard := resolveDBAccess(skillStepConfig)
 	kbAccessForGuard := resolveKnowledgebaseAccess(skillStepConfig, hcpo.UseKnowledgebase())
-	kbWriteMethodForGuard := resolveKnowledgebaseWriteMethod(skillStepConfig)
 	learningsAccessForGuard := resolveLearningsAccess(skillStepConfig)
 
 	// READ: current group's execution folder + db, plus KB/learnings only when
@@ -111,7 +110,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	if kbAccessAllowsRead(kbAccessForGuard) {
 		readPaths = append(readPaths, getKnowledgebasePath(baseWorkspacePath))
 	}
-	if kbAccessAllowsWrite(kbAccessForGuard) && kbWriteMethodForGuard == KBWriteMethodDirect {
+	if kbAccessAllowsWrite(kbAccessForGuard) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
 
@@ -775,7 +774,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 
 	// Resolve KB access mode for this step (explicit step config > preset default).
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	kbWriteMethod := resolveKnowledgebaseWriteMethod(stepConfig)
 	learningsAccess := resolveLearningsAccess(stepConfig)
 	useKnowledgebase := kbAccess != KBAccessNone
 
@@ -799,7 +797,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	if kbAccessAllowsRead(kbAccess) {
 		fgReadPaths = append(fgReadPaths, fgKnowledgebasePath)
 	}
-	if kbAccessAllowsWrite(kbAccess) && kbWriteMethod == KBWriteMethodDirect {
+	if kbAccessAllowsWrite(kbAccess) {
 		fgWritePaths = append(fgWritePaths, filepath.Join(fgKnowledgebasePath, "notes"))
 	}
 
@@ -834,10 +832,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 		"UseKnowledgebase":          fmt.Sprintf("%v", useKnowledgebase), // deprecated, retained for back-compat in template
 		"KbAccess":                  kbAccess,
 		"KbAccessLabel":             kbAccessLabel(kbAccess),
-		"KbWriteMethod":             kbWriteMethod,
 		"LearningsAccess":           learningsAccess,
 		"KnowledgebaseContribution": kbContributionForPrompt(stepConfig),
-		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, kbWriteMethod, kbContributionForPrompt(stepConfig), filepath.Join(docsRoot, fgKnowledgebasePath, KBNotesFolderName)),
+		"KBGuidanceBlock":           BuildStepKBGuidanceWithTarget(kbAccess, kbContributionForPrompt(stepConfig), filepath.Join(docsRoot, fgKnowledgebasePath, KBNotesFolderName)),
 		// Workspace paths and folder guard (consistent with execution agent)
 		"FolderGuardReadPaths":  strings.Join(toAbsPaths(docsRoot, fgReadPaths), ", "),
 		"FolderGuardWritePaths": strings.Join(toAbsPaths(docsRoot, fgWritePaths), ", "),
@@ -1204,7 +1201,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeGenericAgent(
 		genericStep.GetTitle(),
 		orchestrator.RichStepContext{
 			StepName:     genericStep.GetTitle(),
-			StepType:     string(genericStep.StepType()),
+			StepType:     effectiveRuntimeStepType(genericStep),
 			StepIndex:    stepIndex + 1,
 			ParentStepID: step.GetID(),
 			TriggeredBy:  "todo_task",
@@ -1356,8 +1353,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 	if isMessageSequenceStep(sequenceExecutionStep) {
 		reentryMessage := strings.TrimSpace(sequenceExecutionStep.GetDescription())
 		messageSequenceRestart, _ := ctx.Value(virtualtools.SubAgentMessageSequenceRestartKey).(bool)
+		// See the matching comment in controller_execution.go: mint this step
+		// its own "exec-<step>-<timestamp>" id so message-sequence item
+		// notifications and this step's own tool-call events agree on the
+		// same owner, instead of both falling back to whatever ambient
+		// full-run id was set once at the top of the run.
+		stepExecID := fmt.Sprintf("exec-%s-%d", sequenceExecutionStep.GetID(), time.Now().UnixNano())
+		stepScopedCtx := virtualtools.WithBackgroundAgentID(ctx, stepExecID)
+		stepScopedCtx = context.WithValue(stepScopedCtx, events.ParentExecutionIDKey, stepExecID)
 		executionResult, capturedHistory, err := hcpo.executeMessageSequenceStep(
-			ctx,
+			stepScopedCtx,
 			sequenceExecutionStep,
 			stepIndex,
 			subAgentStepPath,
@@ -1506,7 +1511,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 		stepToExecute.GetTitle(),
 		orchestrator.RichStepContext{
 			StepName:     stepToExecute.GetTitle(),
-			StepType:     string(stepToExecute.StepType()),
+			StepType:     effectiveRuntimeStepType(stepToExecute),
 			StepIndex:    stepIndex + 1,
 			ParentStepID: step.GetID(),
 			TriggeredBy:  "todo_task_route",

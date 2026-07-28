@@ -64,7 +64,7 @@ const formatDuration = (durationNs: number) => {
 }
 
 export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndDisplayProps> = ({ event }) => {
-  const { isExpanded: isOutputExpanded, toggle } = useExpandable(false)
+  const { isExpanded: isOutputExpanded, toggle } = useExpandable(true)
   const [isRawMode, setIsRawMode] = React.useState(false)
 
   // Extract context usage information for CircularProgress
@@ -159,7 +159,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                   {event.turn !== undefined && `• Turn: ${event.turn}`}
                   {(serverName || event.server_name) && ` • Server: ${serverName || event.server_name}`}
                   {endpointCount > 0 && ` • ${endpointCount} endpoint${endpointCount !== 1 ? 's' : ''}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
                   <TooltipProvider>
@@ -256,7 +256,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                 {statusIcon} {statusText}{' '}
                 <span className={`text-xs font-normal ${secondaryTextColor}`}>
                   {event.turn !== undefined && `• Turn: ${event.turn}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
                   <TooltipProvider>
@@ -349,7 +349,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
               ❌ Discovery Error{' '}
               <span className="text-xs font-normal text-red-600 dark:text-red-400">
                 {event.turn !== undefined && `• Turn: ${event.turn}`}
-                {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
               </span>
             </div>
             {renderHeaderRight()}
@@ -380,7 +380,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                   ✅ Code Structure Discovered{' '}
                   <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
                     {event.turn !== undefined && `• Turn: ${event.turn}`}
-                    {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                    {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                   </span>
                   {/* Context completion indicator */}
                   {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -530,7 +530,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                   <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
                     {event.turn !== undefined && `• Turn: ${event.turn}`}
                     {event.tool_name && ` • Tool: ${event.tool_name}`}
-                    {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                    {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                   </span>
                   {/* Context completion indicator */}
                   {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -657,7 +657,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                   ✅ Go Code Retrieved{' '}
                   <span className="text-xs font-normal text-blue-600 dark:text-blue-400">
                     {event.turn !== undefined && `• Turn: ${event.turn}`}
-                    {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                    {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                   </span>
                   {/* Context completion indicator */}
                   {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
@@ -741,7 +741,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                 {statusIcon} {statusText}{' '}
                 <span className={`text-xs font-normal ${secondaryTextColor}`}>
                   {event.turn !== undefined && `• Turn: ${event.turn}`}
-                  {event.duration && ` • Duration: ${formatDuration(event.duration)}`}
+                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
                 </span>
                 {/* Context completion indicator */}
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (

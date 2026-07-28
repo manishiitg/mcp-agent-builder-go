@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
-	llmproviders "github.com/manishiitg/multi-llm-provider-go"
-	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
+	llmproviders "github.com/manishiitg/multi-llm-provider-go"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 // ChatHistorySession is the metadata returned by the list endpoint.
@@ -551,7 +551,50 @@ func chatHistoryMessagesEqual(a, b llmtypes.MessageContent) bool {
 	return aErr == nil && bErr == nil && string(aJSON) == string(bJSON)
 }
 
+// collapseChatHistoryStreamingChunks drops every streaming_chunk in a
+// consecutive run except the last one for that execution.
+//
+// A streaming_chunk is not a text delta -- it is a full render of the pane at
+// that instant, roughly a kilobyte apiece, and the UI consumes it by calling
+// setOwnedStreamingTerminalSnapshot(key, chunkIndex, content), i.e. last
+// writer wins. Nothing replays the intermediate frames, so persisting all of
+// them stores the same screen dozens of times: one real two-turn conversation
+// spent 74.5 KB across 75 chunks, 58% of its events, to preserve a single
+// final pane that the last chunk already carries.
+//
+// Runs are keyed by execution so two terminals streaming concurrently do not
+// collapse into each other, and the final chunk of each run is kept because
+// structured (non-tmux) providers rebuild their synthetic terminal from it.
+// This runs before the event cap, so the cap now spends its budget on real
+// conversation events instead of discarding them to make room for duplicate
+// screens.
+func collapseChatHistoryStreamingChunks(uiEvents []internalevents.Event) []internalevents.Event {
+	const streamingChunk = "streaming_chunk"
+	collapsed := make([]internalevents.Event, 0, len(uiEvents))
+	for i := 0; i < len(uiEvents); i++ {
+		event := uiEvents[i]
+		if event.Type != streamingChunk {
+			collapsed = append(collapsed, event)
+			continue
+		}
+		// Advance to the last chunk of this run for this execution. A chunk
+		// belonging to a different execution ends the run so its own frames
+		// are not silently dropped.
+		last := i
+		for j := i + 1; j < len(uiEvents); j++ {
+			if uiEvents[j].Type != streamingChunk || uiEvents[j].ExecutionID != event.ExecutionID {
+				break
+			}
+			last = j
+		}
+		collapsed = append(collapsed, uiEvents[last])
+		i = last
+	}
+	return collapsed
+}
+
 func trimChatHistoryUIEvents(uiEvents []internalevents.Event) []internalevents.Event {
+	uiEvents = collapseChatHistoryStreamingChunks(uiEvents)
 	if len(uiEvents) <= maxPersistedChatHistoryUIEvents {
 		return uiEvents
 	}
@@ -906,32 +949,23 @@ func workflowBuilderHistoryDisplayKey(sessionID string, scheduleIDBySessionID ma
 	return chatHistoryDisplayKey(sessionID, scheduleIDBySessionID)
 }
 
-func chatHistoryDisplayKey(sessionID string, scheduleIDBySessionID map[string]string) string {
-	if scheduleKey, ok := chatHistoryScheduleDisplayKey(sessionID, scheduleIDBySessionID); ok {
-		return scheduleKey
-	}
+// chatHistoryDisplayKey identifies ONE row in the history list.
+//
+// Schedule sessions used to collapse to "schedule:<id>", one row per schedule,
+// on the reasoning that repeated runs "already have detailed history in
+// schedule-runs.json". They do not: a run entry carries only status,
+// duration_ms, started_at and session_id -- no error text, and no route into
+// the conversation. So every run after the newest was discarded along with the
+// only record of what it did. One workflow here had four runs of one schedule
+// in a day (312 / 21 / 355 / 309 messages, one of them a failure) and the list
+// showed a single row, hiding both the failure and the entire previous day.
+//
+// Each run is its own session with its own file and its own outcome, so each
+// gets its own row. Keying by session id still collapses the case the dedupe
+// was really protecting against -- several files written for one session when
+// a run resumes the same CLI thread underneath.
+func chatHistoryDisplayKey(sessionID string, _ map[string]string) string {
 	return "session:" + sessionID
-}
-
-func chatHistoryScheduleDisplayKey(sessionID string, scheduleIDBySessionID map[string]string) (string, bool) {
-	if !chatHistoryIsScheduleSessionID(sessionID) {
-		return "", false
-	}
-	if scheduleID := strings.TrimSpace(scheduleIDBySessionID[sessionID]); scheduleID != "" {
-		return "schedule:" + scheduleID, true
-	}
-	prefix := chatHistoryScheduleSessionPrefix(sessionID)
-	if prefix == "" {
-		return "schedule-session:" + sessionID, true
-	}
-	if scheduleID := strings.TrimSpace(scheduleIDBySessionID["prefix:"+prefix]); scheduleID != "" {
-		return "schedule:" + scheduleID, true
-	}
-	return "schedule-prefix:" + prefix, true
-}
-
-func chatHistoryIsScheduleSessionID(sessionID string) bool {
-	return strings.HasPrefix(sessionID, "schedule-") || strings.HasPrefix(sessionID, "sched_")
 }
 
 func chatHistoryScheduleSessionPrefix(sessionID string) string {
