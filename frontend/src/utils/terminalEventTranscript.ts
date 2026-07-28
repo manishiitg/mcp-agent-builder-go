@@ -212,7 +212,35 @@ export function collapseCompletedLifecycleStarts(events: PollingEvent[]): Pollin
     }
   }
 
-  return events.filter(event => !hiddenStarts.has(event))
+  // Only ONE completion card per execution. Starts were already collapsed
+  // above, but terminal events never were, and they arrive in bulk: the server
+  // reports the background execution finishing, the delegated agent reports its
+  // own agent_end, and a retried step can emit several orchestrator_agent_end
+  // events for the same work. Measured over stored history, 585 of 1562
+  // executions emit more than one -- which is why a finished reviewer showed
+  // "Agent Completed" and "Pulse Reviewer: ... completed (2m46s)" stacked.
+  //
+  // The last one wins rather than the first: a failure reported after an end
+  // is the outcome that actually held, and the newest card carries the final
+  // duration.
+  const lastTerminalByKey = new Map<string, PollingEvent>()
+  for (const event of events) {
+    const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
+    if (!descriptor?.terminal) continue
+    const key = lifecycleKey(event, aliasExecutions)
+    if (!key) continue
+    lastTerminalByKey.set(key, event)
+  }
+  const supersededTerminals = new Set<PollingEvent>()
+  for (const event of events) {
+    const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
+    if (!descriptor?.terminal) continue
+    const key = lifecycleKey(event, aliasExecutions)
+    if (!key) continue
+    if (lastTerminalByKey.get(key) !== event) supersededTerminals.add(event)
+  }
+
+  return events.filter(event => !hiddenStarts.has(event) && !supersededTerminals.has(event))
 }
 
 // The lifecycle-start event type that can carry the SAME content a following

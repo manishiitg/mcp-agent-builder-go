@@ -637,3 +637,53 @@ describe('lifecycle alias dedupe', () => {
     expect(ids).toHaveLength(2)
   })
 })
+
+describe('one completion card per execution', () => {
+  const ev = (id: string, type: string, name: string, execution_id = 'pulse-review-eval-health'): any => ({
+    id, type, execution_id, data: { data: { name, result: 'done' } },
+  })
+
+  // A finished reviewer reported "Agent Completed" and "Pulse Reviewer: …
+  // completed (2m46s)" as separate cards for one agent.
+  it('keeps only the last completion when several families report the same execution', () => {
+    const items = buildTranscriptItems([
+      ev('start', 'background_agent_started', 'Pulse reviewer: pulse 2026 07 27 eval health'),
+      ev('agentEnd', 'agent_end', 'Pulse reviewer: pulse 2026 07 27 eval health'),
+      ev('bgDone', 'background_agent_completed', 'Pulse reviewer: pulse 2026 07 27 eval health'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['bgDone'])
+  })
+
+  // A retried step emits several orchestrator_agent_end events for one piece of
+  // work; rendering each is noise, not information.
+  it('collapses repeated completions from the same family', () => {
+    const items = buildTranscriptItems([
+      ev('e1', 'orchestrator_agent_end', 'verification', 'workflow-step:verification'),
+      ev('e2', 'orchestrator_agent_end', 'verification', 'workflow-step:verification'),
+      ev('e3', 'orchestrator_agent_end', 'verification', 'workflow-step:verification'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['e3'])
+  })
+
+  // A failure reported after an end is the outcome that actually held.
+  it('lets a later failure supersede an earlier completion', () => {
+    const items = buildTranscriptItems([
+      ev('ok', 'orchestrator_agent_end', 'verification', 'workflow-step:verification'),
+      ev('failed', 'orchestrator_agent_error', 'verification', 'workflow-step:verification'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['failed'])
+  })
+
+  // Distinct executions each keep their own completion.
+  it('never merges completions across executions', () => {
+    const items = buildTranscriptItems([
+      ev('a', 'background_agent_completed', 'Reviewer A', 'exec-a'),
+      ev('b', 'background_agent_completed', 'Reviewer B', 'exec-b'),
+    ])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toHaveLength(2)
+  })
+})

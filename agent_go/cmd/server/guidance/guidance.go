@@ -66,7 +66,7 @@ var allKinds = map[string]kindMeta{
 	"review-speed":          {Group: "review", Description: "Latency analysis with safe-speedup recommendations", Modes: []string{"workshop"}},
 	"review-cost":           {Group: "review", Description: "Cost analysis with safe-reduction recommendations", Modes: []string{"workshop"}},
 	"review-code":           {Group: "review", Description: "Saved main.py vs current step descriptions drift check", Modes: []string{"workshop"}},
-	"review-artifact-drift": {Group: "review", Description: "Audit plan changelog entries against dependent artifacts: learnings, main.py, KB, db, reports, and eval wiring", Modes: []string{"workshop"}},
+	"review-artifact-drift": {Group: "review", Description: "Audit plan changelog entries against dependent artifacts: the schedules that drive the workflow, learnings, main.py, KB, db, reports, and eval wiring", Modes: []string{"workshop"}},
 	"bug-review":            {Group: "review", Description: "One-off read-only Pulse QA review for runtime, logic, evidence-chain, and suspicious-success defects", Modes: []string{"workshop"}},
 	"llm-ops-review":        {Group: "review", Description: "One-off read-only review of model tiers, cost, latency, fallbacks, backup, publish, notify, and version readiness", Modes: []string{"workshop"}},
 

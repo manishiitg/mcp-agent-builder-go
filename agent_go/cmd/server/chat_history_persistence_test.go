@@ -670,7 +670,10 @@ func TestListChatHistorySessionsFromDiskReadsDateBucketLayout(t *testing.T) {
 	}
 }
 
-func TestListChatHistorySessionsFromDiskCollapsesMultiAgentScheduleRunsBySchedule(t *testing.T) {
+// Renamed from ...CollapsesMultiAgentScheduleRunsBySchedule, for the same
+// reason as the workflow variant: hiding every run but the newest also hid
+// failures, and the run index it deferred to carries no error text.
+func TestListChatHistorySessionsFromDiskKeepsEveryMultiAgentScheduleRun(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 
@@ -731,22 +734,25 @@ func TestListChatHistorySessionsFromDiskCollapsesMultiAgentScheduleRunsBySchedul
 	for _, session := range sessions {
 		ids[session.SessionID] = true
 	}
-	if len(sessions) != 3 {
-		t.Fatalf("session count = %d, want 3: %#v", len(sessions), sessions)
+	if len(sessions) != 5 {
+		t.Fatalf("session count = %d, want 5: %#v", len(sessions), sessions)
 	}
-	for _, want := range []string{normalSession, latestManualSession, otherScheduleSession} {
+	for _, want := range []string{
+		normalSession, latestManualSession, otherScheduleSession,
+		oldCronSession, legacySession,
+	} {
 		if !ids[want] {
 			t.Fatalf("missing session %q in %#v", want, sessions)
 		}
 	}
-	for _, collapsed := range []string{oldCronSession, legacySession} {
-		if ids[collapsed] {
-			t.Fatalf("collapsed schedule session %q should not be listed: %#v", collapsed, sessions)
-		}
-	}
 }
 
-func TestListWorkflowChatHistorySessionsCollapsesScheduleRunsBySchedule(t *testing.T) {
+// Renamed from ...CollapsesScheduleRunsBySchedule. That test asserted every run
+// of a schedule but the newest was hidden, on the reasoning that schedule-runs.json
+// held the detail instead -- it does not (status and duration only, no error text,
+// no route into the conversation). The assertion pinned the behaviour that hid a
+// failed run and a whole day of history, so it is inverted here rather than kept.
+func TestListWorkflowChatHistorySessionsKeepsEveryScheduleRun(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 
@@ -803,19 +809,19 @@ func TestListWorkflowChatHistorySessionsCollapsesScheduleRunsBySchedule(t *testi
 	for _, session := range sessions {
 		ids[session.SessionID] = true
 	}
-	if len(sessions) != 3 {
-		t.Fatalf("session count = %d, want 3: %#v", len(sessions), sessions)
+	// Each run is its own session, its own file and its own outcome, so each
+	// gets a row -- including runs of the same schedule and ones absent from
+	// schedule-runs.json.
+	if len(sessions) != 5 {
+		t.Fatalf("session count = %d, want 5: %#v", len(sessions), sessions)
 	}
-	for _, want := range []string{manualSession, latestScheduleSession, otherScheduleSession} {
+	for _, want := range []string{
+		manualSession, latestScheduleSession, otherScheduleSession,
+		oldScheduleSession, unindexedScheduleSession,
+	} {
 		if !ids[want] {
 			t.Fatalf("missing session %q in %#v", want, sessions)
 		}
-	}
-	if ids[oldScheduleSession] {
-		t.Fatalf("old schedule session %q should be collapsed out: %#v", oldScheduleSession, sessions)
-	}
-	if ids[unindexedScheduleSession] {
-		t.Fatalf("unindexed schedule session %q should still collapse by schedule prefix: %#v", unindexedScheduleSession, sessions)
 	}
 }
 
