@@ -1423,7 +1423,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 
 		// Owner-approved constraints from soul.md are injected as binding context so a
 		// step never has to discover them by reading soul.md itself — and so a stale
-		// literal in a step description can be recognised as stale. Resolved per step
+		// literal in a step description can be recognized as stale. Resolved per step
 		// rather than cached: soul.md is small, and a mid-run builder edit should take
 		// effect on the next step rather than be pinned for the whole run.
 		workflowConstraintsBlock := BuildWorkflowConstraintsBlock(hcpo.ResolveWorkflowConstraints(ctx))

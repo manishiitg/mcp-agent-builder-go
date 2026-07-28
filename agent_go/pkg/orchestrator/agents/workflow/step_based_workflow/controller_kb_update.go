@@ -129,12 +129,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) RunKBReorganize(ctx context.Context, 
 	}
 }
 
-func logKBAgentSummary(hcpo *StepBasedWorkflowOrchestrator, emoji, result string) {
-	if summary := lastNonEmptyLine(result); summary != "" {
-		hcpo.GetLogger().Info(fmt.Sprintf("%s %s", emoji, summary))
-	}
-}
-
 func lastNonEmptyLine(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
