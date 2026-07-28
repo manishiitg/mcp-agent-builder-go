@@ -23,7 +23,7 @@ export function MicButton({
   /** Only the visible composer should own the global shortcut. */
   shortcutEnabled?: boolean
 }) {
-  const { state, level, liveText, error, toggle, clearError } = useMicDictation(onText)
+  const { state, level, liveText, warmingUp, error, toggle, clearError } = useMicDictation(onText)
 
   // Cmd/Ctrl+Shift+M — deliberately not a bare key: a child typing an answer
   // must never trigger recording by accident.
@@ -76,7 +76,7 @@ export function MicButton({
           <span className="fl-mic-live-dot" aria-hidden="true" />
           <span className="fl-mic-live-label">Listening</span>
           <span className={`fl-mic-live-text${liveText ? '' : ' is-waiting'}`}>
-            {liveText || 'Go ahead — start talking'}
+            {liveText || (warmingUp ? 'Still warming up voice recognition…' : 'Go ahead — start talking')}
           </span>
         </span>
       )}

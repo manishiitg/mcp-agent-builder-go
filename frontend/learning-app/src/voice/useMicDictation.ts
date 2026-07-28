@@ -37,6 +37,17 @@ const SILENCE_LEVEL_THRESHOLD = 0.08 // below this, "quiet" — lower than the
 // flicker between the two states tick to tick.
 const PAUSE_DETECT_MS = 450 // brief quiet, AFTER real speech, counts as "paused" — short enough to feel immediate, long enough to not fire mid-word
 
+// How many consecutive live-preview attempts (after she's actually said
+// something) may come back empty before we say so. The worker unloads after
+// 15 minutes idle (see voiceWorkerIdleTimeout in voice_worker.go) and only
+// re-warms once at server startup — so the first recording after any gap
+// pays a real, multi-second model-load cost that used to be totally
+// invisible: the preview just kept silently coming back empty, and "Go ahead
+// — start talking" never changed, indistinguishable from a broken mic. Two
+// misses (a little over 2 seconds of real talking with nothing back) is
+// enough real signal without flickering on one merely-quiet preview tick.
+const WARMING_UP_AFTER_MISSES = 2
+
 /**
  * Mic dictation for a composer: record → transcribe on-device → hand back text.
  *
@@ -63,6 +74,9 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const [level, setLevel] = useState(0)
   const [liveText, setLiveText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // True once a few consecutive live-preview attempts have come back empty
+  // DESPITE real speech being detected — see WARMING_UP_AFTER_MISSES above.
+  const [warmingUp, setWarmingUp] = useState(false)
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -84,13 +98,23 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   // trailing audio before clicking stop) falls through to a full re-transcribe.
   const lastPreviewChunkCountRef = useRef(-1)
   const lastPreviewTextRef = useRef('')
+  // Consecutive live-preview attempts, AFTER real speech was detected, that
+  // came back with no text (empty response OR a failed request) — see
+  // WARMING_UP_AFTER_MISSES.
+  const previewMissStreakRef = useRef(0)
+  // True for exactly as long as a recording is active — guards the
+  // self-rescheduling preview chain below against re-arming itself after
+  // stop() has already torn everything down (its in-flight call can still
+  // resolve after teardown clears the pending timer).
+  const recordingActiveRef = useRef(false)
 
   // Everything the browser handed us has to be torn down explicitly: leaving
   // the MediaStream open keeps the OS mic indicator lit, which reads as "this
   // app is still listening to me" long after it stopped.
   const teardown = () => {
+    recordingActiveRef.current = false
     if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
-    if (previewTimerRef.current !== null) { window.clearInterval(previewTimerRef.current); previewTimerRef.current = null }
+    if (previewTimerRef.current !== null) { window.clearTimeout(previewTimerRef.current); previewTimerRef.current = null }
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     audioCtxRef.current?.close().catch(() => {})
@@ -99,6 +123,8 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
     hasSpokenRef.current = false
     silenceStartRef.current = null
     pauseFiredRef.current = false
+    previewMissStreakRef.current = 0
+    setWarmingUp(false)
   }
 
   const runLivePreview = async (rec: MediaRecorder) => {
@@ -114,21 +140,35 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       const form = new FormData()
       form.append('audio', blob, `preview.${ext}`)
       const res = await fetch(`${FAMILY_API}/api/voice/transcribe`, { method: 'POST', body: form })
-      if (!res.ok) return // A transient decode hiccup on a short clip resolves
-      // itself once more audio accumulates — skip this tick rather than show
-      // an error for what is only a preview.
+      if (!res.ok) { registerPreviewMiss(); return } // A transient decode
+      // hiccup on a short clip resolves itself once more audio accumulates —
+      // skip this tick rather than show an error for what is only a preview.
       const data = await res.json()
       if (data.text?.trim()) {
         setLiveText(data.text.trim())
         lastPreviewChunkCountRef.current = chunkCountForThisBlob
         lastPreviewTextRef.current = data.text.trim()
+        previewMissStreakRef.current = 0
+        setWarmingUp(false)
+      } else {
+        registerPreviewMiss()
       }
     } catch {
       // Same reasoning: a preview tick failing silently is fine; the next
       // tick tries again with more audio.
+      registerPreviewMiss()
     } finally {
       previewBusyRef.current = false
     }
+  }
+
+  // A miss only counts once she's actually said something — the very first
+  // tick or two of a recording legitimately has too little audio yet, which
+  // is "hasn't spoken" not "stuck warming up," and must not flip this on.
+  const registerPreviewMiss = () => {
+    if (!hasSpokenRef.current) return
+    previewMissStreakRef.current += 1
+    if (previewMissStreakRef.current >= WARMING_UP_AFTER_MISSES) setWarmingUp(true)
   }
 
   const stop = () => {
@@ -140,8 +180,16 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   const start = async () => {
     setError(null)
     setLiveText('')
+    setWarmingUp(false)
     lastPreviewChunkCountRef.current = -1
     lastPreviewTextRef.current = ''
+    previewMissStreakRef.current = 0
+
+    // Fire-and-forget: if the worker unloaded from 15 minutes idle (see
+    // voice_worker.go), this overlaps its cold-start model-load with the
+    // parent already talking, instead of that cost landing invisibly on
+    // whichever live-preview tick happens to be first.
+    fetch(`${FAMILY_API}/api/voice/warm`, { method: 'POST' }).catch(() => {})
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -232,7 +280,24 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
       // concatenated into one playable clip for the live preview below.
       rec.start(1000)
       runPreviewRef.current = () => runLivePreview(rec)
-      previewTimerRef.current = window.setInterval(() => runLivePreview(rec), LIVE_PREVIEW_INTERVAL_MS)
+      // Self-rescheduling, NOT a fixed setInterval: a real transcription call
+      // measured at ~2.2-2.4s warm (more when cold) — longer than this
+      // interval — so a plain setInterval would fire its NEXT tick while the
+      // previous call was still in flight, and previewBusyRef would silently
+      // drop it. During continuous speech with no natural pause to trigger
+      // an extra refresh, that meant updates arrived every ~2.4s instead of
+      // ~1.2s, invisibly. Waiting for each call to actually finish before
+      // scheduling the next removes the silent drops — cadence becomes
+      // "as fast as transcription genuinely allows," never faster, but never
+      // silently slower either.
+      const scheduleNextPreview = () => {
+        previewTimerRef.current = window.setTimeout(async () => {
+          await runLivePreview(rec)
+          if (recordingActiveRef.current) scheduleNextPreview()
+        }, LIVE_PREVIEW_INTERVAL_MS)
+      }
+      recordingActiveRef.current = true
+      scheduleNextPreview()
       setState('recording')
     } catch {
       // Nearly always a denied mic permission — worth saying plainly, since
@@ -245,5 +310,5 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
 
   const toggle = () => { if (state === 'recording') stop(); else if (state === 'idle') start() }
 
-  return { state, level, liveText, error, toggle, clearError: () => setError(null) }
+  return { state, level, liveText, warmingUp, error, toggle, clearError: () => setError(null) }
 }

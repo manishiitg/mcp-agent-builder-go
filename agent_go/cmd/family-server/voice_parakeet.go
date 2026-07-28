@@ -39,7 +39,15 @@ func transcribeWithParakeet(_ context.Context, audioPath string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("parakeet failed: %w", err)
 	}
-	text, _ := resp["text"].(string)
+	// A real (even silent) clip always gets back a "text" key, even if it's
+	// an empty string — a MISSING key means the worker sent something we
+	// didn't expect, which must surface as an error rather than silently
+	// read as "she said nothing," or a genuine bug in the worker becomes
+	// invisible all the way up to the composer.
+	text, ok := resp["text"].(string)
+	if !ok {
+		return "", fmt.Errorf("parakeet worker returned no transcript field")
+	}
 	return text, nil
 }
 
