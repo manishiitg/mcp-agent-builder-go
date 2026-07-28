@@ -564,17 +564,15 @@ Mark due when workflow behavior changed or learning state may be stale:
   learnings with **no** `_freshness.json` means there is no freshness baseline
   yet; mark due to establish one. When fresh (recently confirmed this run or
   last), record the confirmation cadence and skip with a next-check.
-- **contradiction (stale relative to a decision) — treat as higher severity than
-  the recency case above:** items in `_freshness.json` carrying `stale_since` and
-  `stale_reason` were last confirmed BEFORE an owner-side edit (a plan-mod call or
-  a soul.md change) and may now describe retired behavior. This is not the same as
-  neglect: a merely unconfirmed item is unverified, while a contradicted one is
-  actively wrong and is still being served to every run and advertised in the
-  skill index. The backend stamps these at run end and files a matching
-  `store-freshness:*` concern visible in `get_pulse_module_state`. Mark due
-  whenever such items exist, and prefer them over recency-only candidates. The fix
-  is to reconcile each item against the current plan/soul and update or retract
-  it — a re-confirmation clears the mark, so do not clear it by hand.
+- **unreviewed owner edits — prefer this over the recency case above:**
+  `get_pulse_module_state` returns `store_edit_evidence` listing plan-mod calls and
+  soul.md changes that landed AFTER the learnings store was last confirmed, with
+  each edit's reason and changed fields. This is evidence, not a verdict — most
+  edits invalidate nothing, and only reading the diffs against the actual files can
+  tell a cosmetic description tweak from one that retires a documented flow. When
+  the list is non-empty, mark due and let the improve-learnings reviewer make that
+  call. Nothing is lost by deferring: the evidence keeps being reported until a run
+  re-confirms the store.
 
 The read-only reviewer identifies stale learning content and lock/unlock changes.
 The Pulse Fixer applies bounded learning and step-config edits directly. Use
@@ -593,13 +591,12 @@ long business interval behind the current run, so notes may have silently gone s
 without any run contradicting them. A missing `_freshness.json` beside existing notes
 means no freshness baseline yet — mark due to establish one.
 
-Mark due at **higher priority** on a **contradiction** signal: notes carrying
-`stale_since` / `stale_reason` in `_freshness.json` were last confirmed before an
-owner-side plan or soul.md edit, so they may describe retired behavior while still
-being served. The backend stamps these at run end and files a matching
-`store-freshness:knowledgebase` concern in `get_pulse_module_state`. Reconcile each
-against the current plan/soul and update or retract it; a re-confirmation clears the
-mark, so never clear it by hand.
+Mark due at **higher priority** when `get_pulse_module_state` returns
+`store_edit_evidence` for the knowledgebase: plan-mod calls or soul.md changes
+landed after these notes were last confirmed, so some may describe retired
+behavior. Treat it as evidence rather than a verdict — most edits invalidate
+nothing — and let the reviewer read the diffs against the notes to decide. The
+evidence keeps being reported until a run re-confirms the store.
 
 `knowledgebase/context` is user-owned runtime business context. Read it for
 evidence, but do not rewrite it. The read-only reviewer proposes precise note or

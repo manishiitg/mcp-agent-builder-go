@@ -923,10 +923,17 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if concernsErr != nil {
 				log.Printf("[PULSE] get_pulse_module_state: open concerns unavailable for %s: %v", workspacePath, concernsErr)
 			}
+			// Knowledge stores measured against later plan/soul edits. This is
+			// evidence for learning_health / knowledgebase_health to judge, not a
+			// staleness verdict: only reading the diffs against the actual files
+			// can tell a cosmetic edit from one that invalidates a learning.
+			storeEvidence := step_based_workflow.CollectStoreEditEvidence(workspacePath)
 			payload, _ := json.Marshal(map[string]interface{}{
-				"modules":       states,
-				"open_concerns": concerns,
-				"concerns_note": "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
+				"modules":             states,
+				"open_concerns":       concerns,
+				"concerns_note":       "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
+				"store_edit_evidence": storeEvidence,
+				"store_evidence_note": "Owner-side plan/soul edits that landed AFTER a knowledge store was last confirmed by a run. Evidence only — most edits invalidate nothing. When present, consider marking learning_health / knowledgebase_health due so the improve-learnings reviewer can read the diffs against the actual files and decide. It stays reported until a run re-confirms the store, so nothing is lost by deferring it.",
 			})
 			return string(payload), nil
 		},

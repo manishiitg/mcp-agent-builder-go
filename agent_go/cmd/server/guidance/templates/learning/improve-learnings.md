@@ -37,6 +37,32 @@ the consolidated log update.
 
 Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing or qualifying stale assumptions and surface consequential unresolved ones for Pulse's Assumptions challenged.
 
+## Reconcile against owner edits since the last confirmation
+
+The parent may pass `store_edit_evidence` from `get_pulse_module_state`: plan-mod
+calls and soul.md changes that landed AFTER `learnings/_global/_freshness.json`
+last recorded a confirmation, each with its reason and changed field names.
+
+Treat that list as evidence, never as a verdict. Most edits invalidate nothing —
+a `review_notes` touch or a typo fix moves the same timestamps as a rewritten step
+description, and only reading the diff against the actual learning tells you which
+happened. Do not report an item as stale merely because it predates an edit.
+
+For each edit that plausibly changes how a step runs, open the learnings it could
+affect and check the specific claim:
+
+- the learning describes a flow, selector, path, or rule the edit changed → report
+  it with the exact contradicting text and the edit that supersedes it
+- the learning restates a value the owner has since changed (a cap, limit, or
+  threshold) → report it; constraint values belong in `soul.md` and must never be
+  copied into a learning, so the fix is to remove the number, not update it
+- the learning still holds → say so explicitly, so the reviewer's silence is not
+  mistaken for "not checked"
+
+If a plan edit removed or renamed a step, its learnings are orphaned: recommend
+retiring them rather than leaving them to be matched by a step that no longer
+exists.
+
 This command maintains reusable HOW-to-run knowledge such as selectors, tool/API patterns, auth quirks, timing/wait strategies, file-format pitfalls, reusable recovery steps, and common failure signatures.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 BOUNDARIES

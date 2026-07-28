@@ -1,7 +1,6 @@
 package step_based_workflow
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,48 +12,72 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 )
 
-// Detects knowledge that a newer owner decision has contradicted.
+// Evidence that knowledge may have been overtaken by a newer decision.
 //
-// The failure this addresses, observed in a live workflow: soul.md was edited on
-// 2026-07-22 to retire a rule; a learnings reference asserting that rule had been
-// last confirmed on 2026-07-19 and was never revisited. It kept being advertised
-// in the skill index and served to every run for a week. Nothing was broken —
-// there was simply no mechanism that ever compared the two dates.
+// The failure this addresses: soul.md was edited to retire a rule, a learnings
+// reference asserting that rule had last been confirmed three days earlier, and
+// it kept being served for a week. learning_health's first documented trigger is
+// already "plan or prompt changes affected step behavior" — the module was
+// correctly scoped and simply had no fact to fire on.
 //
-// The freshness ledger already stores each item's last_confirmed_at, and the plan
-// changelog already stores every plan edit with a timestamp and a mandatory
-// reason. Neither was ever compared to the other. That comparison is all this is.
+// So this computes the fact and nothing else: "learnings were last confirmed at
+// T; here are the plan and soul edits since T." It deliberately does NOT decide
+// which learnings are stale. Only reading the diffs against the actual files can
+// tell a cosmetic description edit from one that invalidates an auth flow, and
+// that judgement belongs to the improve-learnings reviewer, which already reads
+// those files and already returns findings for the Pulse Fixer to apply.
 //
-// It deliberately does not try to judge whether an item is genuinely wrong — only
-// that it predates a decision and therefore needs review. The judgement belongs to
-// learning_health, which now has an evidence-backed trigger instead of having to
-// notice on its own.
+// An earlier version marked every item older than the newest edit. That was Go
+// making a judgement it cannot make: routine bookkeeping (a review_notes touch)
+// looked identical to a rewritten step description, so it would have flagged
+// almost everything almost always, and taught everyone to ignore the flag.
+//
+// Computed on read, not on a schedule: it is a few small file reads, it needs no
+// state of its own, and it stays true until someone actually reviews — so the
+// signal re-appears on its own rather than depending on anything being recorded.
 
-// authorityEdit is the most recent owner-side change to what the workflow is
-// supposed to do: a plan-mod tool call, or a soul.md edit.
-type authorityEdit struct {
-	At          time.Time
-	Description string
+// StoreEditEvidence is one knowledge store measured against later owner edits.
+type StoreEditEvidence struct {
+	Store            string   `json:"store"`
+	LastConfirmedAt  string   `json:"last_confirmed_at,omitempty"`
+	LastConfirmedRun string   `json:"last_confirmed_run,omitempty"`
+	ItemCount        int      `json:"item_count"`
+	EditsSince       []string `json:"edits_since,omitempty"`
+	Note             string   `json:"note,omitempty"`
 }
 
-// newestPlanChangelogEdit scans planning/changelog/ for the most recent entry.
+// maxListedEdits caps the evidence handed to the Gate. The full record is in
+// planning/changelog/; this is a prompt for a decision, not an archive.
+const maxListedEdits = 10
+
+func workflowAbsPath(workspacePath string, parts ...string) string {
+	all := append([]string{fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/"))}, parts...)
+	return filepath.Join(all...)
+}
+
+// planEditsSince returns human-readable descriptions of plan-mod calls made after
+// the given time, newest first.
 //
-// Entries carry a mandatory `reason` supplied at plan-mod time, which is far more
-// useful in a staleness report than the tool name alone — it is the human
-// rationale for the change that invalidated the knowledge.
-func newestPlanChangelogEdit(workspacePath string) (authorityEdit, bool) {
-	dir := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(workspacePath), PlanningFolderName, "changelog")
-	entries, err := os.ReadDir(dir)
+// Each entry carries the mandatory `reason` the editor supplied, plus any
+// recorded field-level old/new values. That detail is the point: the reviewer
+// needs to see WHAT changed to judge whether any learning is affected, and a
+// tool name alone cannot support that judgement.
+func planEditsSince(workspacePath string, since time.Time) []string {
+	dir := workflowAbsPath(workspacePath, PlanningFolderName, "changelog")
+	files, err := os.ReadDir(dir)
 	if err != nil {
-		return authorityEdit{}, false
+		return nil
 	}
-	var newest authorityEdit
-	found := false
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+	type dated struct {
+		at   time.Time
+		desc string
+	}
+	var found []dated
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		raw, err := os.ReadFile(filepath.Join(dir, f.Name()))
 		if err != nil {
 			continue
 		}
@@ -62,187 +85,116 @@ func newestPlanChangelogEdit(workspacePath string) (authorityEdit, bool) {
 		if json.Unmarshal(raw, &file) != nil {
 			continue
 		}
-		for _, entry := range file.Entries {
-			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(entry.Timestamp))
-			if err != nil {
+		for _, e := range file.Entries {
+			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(e.Timestamp))
+			if err != nil || !ts.After(since) {
 				continue
 			}
-			if found && !ts.After(newest.At) {
-				continue
-			}
-			desc := strings.TrimSpace(entry.Reason)
-			if desc == "" {
-				desc = strings.TrimSpace(entry.Tool)
-			}
-			if desc == "" {
-				desc = "plan edit"
-			}
-			if len(entry.StepIDs) > 0 {
-				desc = fmt.Sprintf("%s (steps: %s)", desc, strings.Join(entry.StepIDs, ", "))
-			}
-			newest = authorityEdit{At: ts.UTC(), Description: "plan edit — " + desc}
-			found = true
+			found = append(found, dated{at: ts.UTC(), desc: describePlanEdit(e, ts.UTC())})
 		}
 	}
-	return newest, found
+	sort.Slice(found, func(i, j int) bool { return found[i].at.After(found[j].at) })
+	out := make([]string, 0, len(found))
+	for _, d := range found {
+		out = append(out, d.desc)
+	}
+	return out
 }
 
-// newestSoulEdit uses soul.md's mtime. soul.md is written by shell rather than
-// through a typed tool, so there is no changelog entry to read — the file's own
-// timestamp is the only record that the objective or a constraint changed.
-func newestSoulEdit(workspacePath string) (authorityEdit, bool) {
-	path := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(workspacePath), SoulFolderName, SoulFileName)
-	info, err := os.Stat(path)
+func describePlanEdit(e PlanChangelogEntry, at time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s — %s", at.Format(time.RFC3339), strings.TrimSpace(e.Tool))
+	if len(e.StepIDs) > 0 {
+		fmt.Fprintf(&b, " on %s", strings.Join(e.StepIDs, ", "))
+	}
+	if reason := strings.TrimSpace(e.Reason); reason != "" {
+		fmt.Fprintf(&b, ": %s", reason)
+	}
+	var fields []string
+	for _, c := range e.Changes {
+		if f := strings.TrimSpace(c.Field); f != "" {
+			fields = append(fields, f)
+		}
+	}
+	if len(fields) > 0 {
+		fmt.Fprintf(&b, " [fields changed: %s]", strings.Join(fields, ", "))
+	}
+	return b.String()
+}
+
+// soulEditSince reports a soul.md change after the given time.
+//
+// soul.md is shell-written and has no changelog entry, so its mtime is the only
+// record. mtime is blunt — it moves on any save, including a typo fix — which is
+// exactly why this is reported as evidence for a reviewer to weigh rather than
+// treated as proof that anything is stale.
+func soulEditSince(workspacePath string, since time.Time) (string, bool) {
+	info, err := os.Stat(workflowAbsPath(workspacePath, SoulFolderName, SoulFileName))
 	if err != nil {
-		return authorityEdit{}, false
+		return "", false
 	}
-	return authorityEdit{At: info.ModTime().UTC(), Description: "soul.md edit (objective, success criteria, or constraints)"}, true
+	at := info.ModTime().UTC()
+	if !at.After(since) {
+		return "", false
+	}
+	return fmt.Sprintf("%s — soul.md modified (objective, success criteria, or constraints may have changed; mtime moves on any save, so confirm what actually changed)", at.Format(time.RFC3339)), true
 }
 
-// newestAuthorityEdit returns whichever owner-side change landed most recently.
-func newestAuthorityEdit(workspacePath string) (authorityEdit, bool) {
-	planEdit, hasPlan := newestPlanChangelogEdit(workspacePath)
-	soulEdit, hasSoul := newestSoulEdit(workspacePath)
-	switch {
-	case hasPlan && hasSoul:
-		if soulEdit.At.After(planEdit.At) {
-			return soulEdit, true
-		}
-		return planEdit, true
-	case hasPlan:
-		return planEdit, true
-	case hasSoul:
-		return soulEdit, true
+func readFreshnessLedgerFile(workspacePath, relPath string) (FreshnessLedger, bool) {
+	raw, err := os.ReadFile(workflowAbsPath(workspacePath, filepath.FromSlash(relPath)))
+	if err != nil || strings.TrimSpace(string(raw)) == "" {
+		return FreshnessLedger{}, false
 	}
-	return authorityEdit{}, false
+	return parseFreshnessLedger(string(raw), ""), true
 }
 
-// staleStoreReport is what one store looked like against the newest edit.
-type staleStoreReport struct {
-	Store      string
-	StaleItems []string
-	Edit       authorityEdit
-}
-
-// markStaleItems stamps items confirmed before the edit and returns their names.
-// Items already carrying the same StaleSince are still counted — they remain
-// stale — but re-stamping them is a no-op, so the ledger only changes when the
-// set actually changes.
-func markStaleItems(ledger *FreshnessLedger, edit authorityEdit) ([]string, bool) {
-	var stale []string
-	changed := false
-	stamp := edit.At.Format(time.RFC3339)
-	for name, item := range ledger.Items {
-		confirmedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(item.LastConfirmedAt))
-		// An item with no confirmation date has never been reviewed by a run at
-		// all. That is a gap for learning_health to chase, not evidence that this
-		// particular edit invalidated it — claiming so would be a fabricated link.
-		if err != nil {
-			continue
-		}
-		if !confirmedAt.Before(edit.At) {
-			// Confirmed after the edit: a run has already seen it in the new world.
-			// Clear any earlier stale mark rather than leaving a permanent scar.
-			if item.StaleSince != "" {
-				item.StaleSince = ""
-				item.StaleReason = ""
-				ledger.Items[name] = item
-				changed = true
-			}
-			continue
-		}
-		stale = append(stale, name)
-		if item.StaleSince != stamp || item.StaleReason != edit.Description {
-			item.StaleSince = stamp
-			item.StaleReason = edit.Description
-			ledger.Items[name] = item
-			changed = true
-		}
-	}
-	sort.Strings(stale)
-	return stale, changed
-}
-
-// markStoreStaleness evaluates one store's ledger against the newest owner edit.
-func (hcpo *StepBasedWorkflowOrchestrator) markStoreStaleness(ctx context.Context, store, ledgerPath string, edit authorityEdit) (staleStoreReport, error) {
-	report := staleStoreReport{Store: store, Edit: edit}
-
-	freshnessLedgerMu.Lock()
-	defer freshnessLedgerMu.Unlock()
-
-	existing, err := hcpo.BaseOrchestrator.ReadWorkspaceFile(ctx, ledgerPath)
-	if err != nil || strings.TrimSpace(existing) == "" {
-		// No ledger means the store has never been confirmed by a run; there is
-		// nothing to call stale.
-		return report, nil
-	}
-	ledger := parseFreshnessLedger(existing, store)
-	if len(ledger.Items) == 0 {
-		return report, nil
-	}
-
-	stale, changed := markStaleItems(&ledger, edit)
-	report.StaleItems = stale
-	if !changed {
-		return report, nil
-	}
-	updated, marshalErr := marshalFreshnessLedger(ledger)
-	if marshalErr != nil {
-		return report, marshalErr
-	}
-	if writeErr := hcpo.BaseOrchestrator.WriteWorkspaceFile(ctx, ledgerPath, updated); writeErr != nil {
-		return report, fmt.Errorf("write freshness ledger %s: %w", ledgerPath, writeErr)
-	}
-	return report, nil
-}
-
-// MarkStaleStoresAfterRun compares both knowledge stores against the newest
-// owner-side edit, stamps the items that predate it, and files one concern per
-// affected store.
-//
-// One concern per store, not per item: twelve items invalidated by a single plan
-// edit are one problem with one fix, and twelve rows would drown the concern list
-// that Pulse ranks by recurrence.
-//
-// Best-effort — a completed run is never failed by this bookkeeping.
-func (hcpo *StepBasedWorkflowOrchestrator) MarkStaleStoresAfterRun(ctx context.Context, runFolder string) {
-	workspacePath := strings.Trim(strings.TrimSpace(hcpo.GetWorkspacePath()), "/")
+// CollectStoreEditEvidence measures both knowledge stores against later owner
+// edits. Returns only stores that have content AND unreviewed edits — a store
+// nobody has changed since it was last confirmed contributes nothing.
+func CollectStoreEditEvidence(workspacePath string) []StoreEditEvidence {
+	workspacePath = strings.Trim(strings.TrimSpace(workspacePath), "/")
 	if workspacePath == "" {
-		return
+		return nil
 	}
-	edit, ok := newestAuthorityEdit(workspacePath)
-	if !ok {
-		return
-	}
-
+	var out []StoreEditEvidence
 	for _, target := range []struct{ store, ledgerPath string }{
 		{"learnings", learningsFreshnessLedgerPath()},
 		{KnowledgebaseFolderName, knowledgebaseFreshnessLedgerPath()},
 	} {
-		report, err := hcpo.markStoreStaleness(ctx, target.store, target.ledgerPath, edit)
+		ledger, ok := readFreshnessLedgerFile(workspacePath, target.ledgerPath)
+		if !ok || len(ledger.Items) == 0 {
+			continue
+		}
+		confirmedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(ledger.LastConfirmedAt))
 		if err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to evaluate %s staleness: %v", target.store, err))
+			// Content with no confirmation baseline at all. Say so rather than
+			// silently skipping: "never confirmed" is itself worth reviewing.
+			out = append(out, StoreEditEvidence{
+				Store:     target.store,
+				ItemCount: len(ledger.Items),
+				Note:      "store has content but no confirmation baseline yet — no run has recorded reviewing it",
+			})
 			continue
 		}
-		if len(report.StaleItems) == 0 {
+		edits := planEditsSince(workspacePath, confirmedAt)
+		if soulEdit, has := soulEditSince(workspacePath, confirmedAt); has {
+			edits = append([]string{soulEdit}, edits...)
+		}
+		if len(edits) == 0 {
 			continue
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("🕰️ %d %s item(s) predate the newest owner edit (%s)", len(report.StaleItems), target.store, edit.Description))
-		concern := fmt.Sprintf("CONCERNS: %d %s item(s) were last confirmed before %s — %s. Affected: %s. Review them against the current plan/soul and update or retract; a run has not seen them since the change.",
-			len(report.StaleItems), target.store, edit.At.Format(time.RFC3339), edit.Description,
-			strings.Join(truncateItemList(report.StaleItems, 8), ", "))
-		if _, err := RecordRunConcerns(ctx, workspacePath, runFolder, hcpo.currentGroupName, "store-freshness:"+target.store, ConcernPhaseExecution, concern); err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record %s staleness concern: %v", target.store, err))
+		total := len(edits)
+		if len(edits) > maxListedEdits {
+			edits = append(edits[:maxListedEdits], fmt.Sprintf("…and %d earlier edit(s) — see planning/changelog/", total-maxListedEdits))
 		}
+		out = append(out, StoreEditEvidence{
+			Store:            target.store,
+			LastConfirmedAt:  ledger.LastConfirmedAt,
+			LastConfirmedRun: ledger.LastConfirmedRun,
+			ItemCount:        len(ledger.Items),
+			EditsSince:       edits,
+			Note:             fmt.Sprintf("%d owner-side edit(s) landed after this store was last confirmed. This is evidence, NOT a verdict: most edits invalidate nothing. Read the diffs against the actual files before concluding anything is stale.", total),
+		})
 	}
-}
-
-// truncateItemList keeps the concern text readable when a single edit invalidates
-// a large store. The full set stays in the ledger's stale_since stamps.
-func truncateItemList(items []string, max int) []string {
-	if len(items) <= max {
-		return items
-	}
-	out := append([]string{}, items[:max]...)
-	return append(out, fmt.Sprintf("and %d more", len(items)-max))
+	return out
 }

@@ -599,12 +599,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) finalizeRunMetadata(ctx context.Conte
 		}
 		meta["status"] = status
 	})
-
-	// Run boundary is the right moment to compare knowledge against owner
-	// decisions: every step that was going to confirm a store has done so, and
-	// Pulse has not yet decided what to review. Doing it here means the Gate is
-	// told about contradicted knowledge instead of having to notice unprompted.
-	hcpo.MarkStaleStoresAfterRun(ctx, runFolder)
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) recordRunPersistenceError(ctx context.Context, stepID string, persistenceErr error) {
