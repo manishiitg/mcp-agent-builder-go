@@ -817,3 +817,40 @@ func TestSelectExecutionLLM_WorkshopTierOverrideBeatsFixedExecutionTier(t *testi
 		t.Fatalf("expected workshop override to win with tier-3 model, got %q", llm.Primary.ModelID)
 	}
 }
+
+// Steps can now READ planning/ but must never write it. Before this, a step had
+// no way to see the plan at all — only its own description and resolved
+// dependencies — so it could not tell whether it was the first of nine or the
+// last. Write access stays impossible: plan.json and step_config.json are only
+// mutated through the typed plan-mod tools, which validate schemas and emit
+// events; a raw shell write would corrupt them silently.
+func TestExecutionFolderGuardGrantsPlanningReadNeverWrite(t *testing.T) {
+	docsRoot := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", docsRoot)
+
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/testing")
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "iteration-0/default-group",
+	}
+
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard(
+		"step-1", "some-step", KBAccessNone, LearningsAccessNone, DBAccessReadWrite,
+	)
+	planningPath := "Workflow/testing/planning"
+	if !slices.Contains(readPaths, planningPath) {
+		t.Fatalf("step must be able to read %q, got %v", planningPath, readPaths)
+	}
+	for _, w := range writePaths {
+		if strings.Contains(w, "/planning") {
+			t.Fatalf("planning/ must never be writable by a step, got write path %q in %v", w, writePaths)
+		}
+	}
+}

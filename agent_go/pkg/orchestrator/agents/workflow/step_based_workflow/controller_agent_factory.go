@@ -380,7 +380,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	downloadsPath := fmt.Sprintf("%s/Downloads", executionWorkspacePath)
 	soulPath := fmt.Sprintf("%s/soul", baseWorkspacePath)
 	builderPath := fmt.Sprintf("%s/builder", baseWorkspacePath)
-	readPaths = []string{executionWorkspacePath, soulPath, builderPath}
+	// planning/ is READ-ONLY here and deliberately so. A step previously could not
+	// see the plan at all: it got its own description plus resolved dependencies and
+	// had no way to tell whether it was the first of nine or the last, or what
+	// consumed its output. Read access lets a step judge its own scope. Writes stay
+	// impossible — planning/ is absent from writePaths below, is excluded from
+	// WorkflowWritableSubfolders, and isProtectedPlanningPath is the runtime backstop;
+	// plan.json/step_config.json are only ever mutated through the typed plan-mod tools.
+	planningPath := fmt.Sprintf("%s/%s", baseWorkspacePath, PlanningFolderName)
+	readPaths = []string{executionWorkspacePath, soulPath, builderPath, planningPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write

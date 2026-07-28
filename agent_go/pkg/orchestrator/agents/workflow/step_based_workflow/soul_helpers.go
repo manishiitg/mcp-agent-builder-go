@@ -163,44 +163,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) ResolveWorkflowObjective(ctx context.
 	return objective, successCriteria
 }
 
-// ResolveWorkflowConstraints is the canonical accessor for the workflow's
-// owner-approved constraints (`## Constraints` in soul/soul.md).
-//
-// Why this exists: constraint VALUES (risk limits, capacity caps, policy rules)
-// were previously restated as literals in step descriptions, learnings files, and
-// step code, and the copies drifted from the owner's decision. soul.md is the
-// single author-side source; every agent reads it from here instead of holding a
-// copy. Returns "" when the section is absent — most workflows won't have one.
-func (hcpo *StepBasedWorkflowOrchestrator) ResolveWorkflowConstraints(ctx context.Context) string {
-	_, _, constraints, err := ReadWorkflowSoulSections(ctx, hcpo.GetWorkspacePath(), hcpo.ReadWorkspaceFile)
-	if err != nil {
-		return ""
-	}
-	return stripSoulTodoPlaceholder(constraints)
-}
-
-// BuildWorkflowConstraintsBlock renders the constraints section as a binding
-// prompt block, or "" when there are none (so templates can `{{if}}` on it).
-//
-// The read-only wording is deliberate and matches the folder guard: steps and
-// post-step agents have soul/ on their read paths and never on their write paths.
-// An agent that believes a constraint is wrong must surface it, not edit it —
-// the CONCERNS channel is the supported route.
-func BuildWorkflowConstraintsBlock(constraints string) string {
-	trimmed := strings.TrimSpace(constraints)
-	if trimmed == "" {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("## BINDING CONSTRAINTS (owner-approved, from soul/soul.md)\n")
-	b.WriteString(trimmed)
-	b.WriteString("\n\nThese are explicit owner decisions and they bind this run. Rules:\n")
-	b.WriteString("- Use these values as authoritative. If a step description, learnings file, or saved script states a DIFFERENT value for the same constraint, the constraint above wins — that other copy is stale.\n")
-	b.WriteString("- Do NOT restate a constraint value as a literal in anything durable you write (learnings, knowledgebase, saved scripts). Read it from the constraint at run time so it cannot drift.\n")
-	b.WriteString("- soul/soul.md is READ-ONLY to you. Never edit it. If a constraint looks wrong, contradicts your instructions, or blocks the task, report it with a `CONCERNS:` line — do not silently work around it or substitute your own value.\n")
-	return b.String()
-}
-
 // stripSoulTodoPlaceholder treats scaffolded `<TODO: ...>` single-line placeholders
 // as empty. Multi-line content that happens to mention TODO is preserved.
 func stripSoulTodoPlaceholder(v string) string {

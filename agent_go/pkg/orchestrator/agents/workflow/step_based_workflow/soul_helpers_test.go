@@ -67,40 +67,6 @@ func TestReadWorkflowSoulSectionsExtractsConstraints(t *testing.T) {
 	}
 }
 
-// A workflow with no `## Constraints` section is the common case; it must yield
-// an empty block so templates render nothing rather than an empty header.
-func TestBuildWorkflowConstraintsBlockEmptyWhenAbsent(t *testing.T) {
-	_, _, constraints, err := ReadWorkflowSoulSections(context.Background(), "Workflow/x", readerFor("# X\n\n## Objective\nDo a thing.\n"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := BuildWorkflowConstraintsBlock(constraints); got != "" {
-		t.Fatalf("expected empty block when no Constraints section, got:\n%s", got)
-	}
-	if got := BuildWorkflowConstraintsBlock("   \n  "); got != "" {
-		t.Fatalf("expected empty block for whitespace-only constraints, got:\n%s", got)
-	}
-}
-
-// The rendered block carries the three rules that make a single source of truth
-// actually work: the constraint wins over a stale copy, don't make new copies,
-// and report rather than edit (steps have soul/ on read paths, never write).
-func TestBuildWorkflowConstraintsBlockCarriesBindingRules(t *testing.T) {
-	block := BuildWorkflowConstraintsBlock("max 1.5% risk per trade, up to 7 concurrent positions")
-	for _, want := range []string{
-		"BINDING CONSTRAINTS",
-		"max 1.5% risk per trade",
-		"the constraint above wins",
-		"Do NOT restate a constraint value",
-		"READ-ONLY",
-		"CONCERNS:",
-	} {
-		if !strings.Contains(block, want) {
-			t.Fatalf("constraints block missing %q:\n%s", want, block)
-		}
-	}
-}
-
 // A missing soul.md is a valid intermediate state (workflow not yet scaffolded)
 // and must not surface as an error, or every step would log a spurious failure.
 func TestReadWorkflowSoulSectionsTolerantOfMissingFile(t *testing.T) {

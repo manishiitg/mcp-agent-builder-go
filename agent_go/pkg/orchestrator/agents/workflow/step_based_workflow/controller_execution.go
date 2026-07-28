@@ -1038,6 +1038,68 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadExecutionResultsFromLogs(ctx cont
 	return executionResults
 }
 
+// buildPlanPositionSummary tells the step where it sits in the plan.
+//
+// Steps cannot read planning/plan.json — it is not on their folder-guard read
+// paths — so without this a step has no idea whether it is the first of nine or
+// the last, or what runs next. It only ever saw backward context via
+// buildPreviousStepsSummary. Knowing the shape of the run is what lets a step
+// judge how much to do here versus leave for a later step, and recognise when
+// its own output is the thing another step is waiting on.
+//
+// Consumers are listed ONLY when a later step actually declares a dependency on
+// this step's context_output. Most plans leave context_dependencies empty, and
+// inventing a consumer would be worse than saying nothing.
+func buildPlanPositionSummary(allSteps []PlanStepInterface, currentStepIndex int) string {
+	total := len(allSteps)
+	if total == 0 || currentStepIndex < 0 || currentStepIndex >= total {
+		return ""
+	}
+	current := allSteps[currentStepIndex]
+	if current == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are step %d of %d in this workflow's plan.\n", currentStepIndex+1, total)
+
+	if currentStepIndex+1 < total {
+		if next := allSteps[currentStepIndex+1]; next != nil {
+			if title := strings.TrimSpace(next.GetTitle()); title != "" {
+				fmt.Fprintf(&b, "- Runs after you: %s\n", title)
+			}
+		}
+	} else {
+		b.WriteString("- You are the final step.\n")
+	}
+
+	output := strings.TrimSpace(current.GetContextOutput().String())
+	if output != "" {
+		var consumers []string
+		for i := currentStepIndex + 1; i < total; i++ {
+			later := allSteps[i]
+			if later == nil {
+				continue
+			}
+			for _, dep := range later.GetContextDependencies() {
+				if strings.Contains(dep, output) {
+					title := strings.TrimSpace(later.GetTitle())
+					if title == "" {
+						title = later.GetID()
+					}
+					consumers = append(consumers, title)
+					break
+				}
+			}
+		}
+		if len(consumers) > 0 {
+			fmt.Fprintf(&b, "- Your output `%s` is consumed by: %s\n", output, strings.Join(consumers, ", "))
+		}
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
 // buildPreviousStepsSummary builds a formatted summary of previous completed steps
 // This provides context to the execution agent about what steps have already been executed
 // previousExecutionResults: array of execution outputs from previous steps (indexed by step index)
@@ -1421,13 +1483,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 		kbNotesPathForPrompt := toAbsPath(filepath.Join(getKnowledgebasePath(hcpo.GetWorkspacePath()), KBNotesFolderName))
 
-		// Owner-approved constraints from soul.md are injected as binding context so a
-		// step never has to discover them by reading soul.md itself — and so a stale
-		// literal in a step description can be recognized as stale. Resolved per step
-		// rather than cached: soul.md is small, and a mid-run builder edit should take
-		// effect on the next step rather than be pinned for the whole run.
-		workflowConstraintsBlock := BuildWorkflowConstraintsBlock(hcpo.ResolveWorkflowConstraints(ctx))
-
 		templateVars := map[string]string{
 			"StepTitle":                 stepTitleForPrompt,
 			"StepDescription":           stepDescriptionForPrompt,
@@ -1448,7 +1503,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			"FolderGuardReadPaths":      strings.Join(toAbsPathSlice(folderGuardReadPaths), ", "),                                             // Absolute folder guard read paths
 			"FolderGuardWritePaths":     strings.Join(toAbsPathSlice(folderGuardWritePaths), ", "),                                            // Absolute folder guard write paths
 			"IsEvaluationMode":          fmt.Sprintf("%v", hcpo.isEvaluationMode),                                                             // Evaluation mode flag for eval-specific prompt guidance
-			"WorkflowConstraints":       workflowConstraintsBlock,                                                                             // Binding owner-approved constraints from soul.md (empty when the section is absent)
 			"WorkflowRoot":              toAbsPath(workflowRoot),                                                                              // Absolute workflow root path (e.g., "/app/workspace-docs/Workflow/HRMS")
 			"IsScriptedMode":            fmt.Sprintf("%v", isScriptedMode),
 			"IsScriptedLocked":          fmt.Sprintf("%v", isScriptedMode && getAgentConfigs(step) != nil && getAgentConfigs(step).LockCode != nil && *getAgentConfigs(step).LockCode),
@@ -1513,6 +1567,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		previousStepsSummary := hcpo.buildPreviousStepsSummary(allSteps, stepIndex, previousContextFiles, previousExecutionResults)
 
 		templateVars["PreviousStepsSummary"] = previousStepsSummary
+		templateVars["PlanPosition"] = buildPlanPositionSummary(allSteps, stepIndex)
 		if execCtx != nil && execCtx.WorkshopHumanInput != "" {
 			templateVars["WorkshopHumanInput"] = execCtx.WorkshopHumanInput
 			hcpo.GetLogger().Info(fmt.Sprintf("[WORKSHOP] Injecting human_input into step %q prompt (%d chars)", step.GetID(), len(execCtx.WorkshopHumanInput)))

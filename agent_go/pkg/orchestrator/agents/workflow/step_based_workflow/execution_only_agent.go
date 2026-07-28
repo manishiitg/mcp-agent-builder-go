@@ -72,16 +72,13 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 {{end}}
 
 **Three persistent stores — do not confuse them. Only access a store when it appears in Allowed READ/WRITE or a dedicated prompt section grants access:**
-- **soul/soul.md** — workflow north star: objective, success criteria, and owner-approved constraints. At step start, read it if present and use it to resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the workflow goal. Treat it as READ-ONLY during step execution. Any `+"`"+`## Constraints`+"`"+` are already injected below — you do not need to re-read the file for them.
+- **soul/soul.md** — workflow north star, and the ONLY place the overall goal is written down. Holds `+"`"+`## Objective`+"`"+` (what the workflow is for), `+"`"+`## Success Criteria`+"`"+` (what "done right" means for the whole workflow, not just your step), and sometimes `+"`"+`## Constraints`+"`"+` (owner-approved boundaries — limits, caps, budgets). Read it at step start: it is what lets you resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the point of the workflow. Treat it as READ-ONLY. **If a value in your step description contradicts a `+"`"+`## Constraints`+"`"+` entry, the constraint wins — it is the owner's decision and your description may be stale. Do not silently pick one: use the constraint and report the conflict with a `+"`"+`CONCERNS:`+"`"+` line.**
 {{if eq .IsEvaluationMode "true"}}- **db/db.sqlite** — **READ-ONLY workflow evidence**. Use the absolute `+"`"+`$DB_PATH`+"`"+` env var for `+"`SELECT`"+` queries when the rubric needs durable workflow facts. Never INSERT, UPDATE, DELETE, migrate, or otherwise modify the workflow DB from an evaluation. Evaluation findings belong only in `+"`"+`$STEP_OUTPUT_DIR/{{.StepContextOutput}}`+"`"+`. Never use a relative `+"`"+`db/db.sqlite`+"`"+` path.
 {{else}}- **db/db.sqlite** — **workflow state and results**. A SQLite database with one table per entity that this step produces/consumes (processed records, cursors, cumulative output). Owned by your step. Always use the absolute `+"`"+`$DB_PATH`+"`"+` env var: read with `+"`sqlite3 \"$DB_PATH\" \"SELECT ...\"`"+` and write with `+"`INSERT ... ON CONFLICT(<pk>) DO UPDATE SET ...`"+` (upsert on the table's primary key). NEVER use relative `+"`"+`db/db.sqlite`+"`"+` from step code or shell, and NEVER DROP/recreate a table or delete-then-insert the whole table — that destroys rows from other groups/runs. Schema/contract per table is in `+"`db/README.md`"+`. (Single-quote SQL in the shell; JSON paths like `+"`'$.field'`"+` need quoting.)
 {{end}}
 - **knowledgebase/** — durable business/domain context. `+"`knowledgebase/context/context.md`"+` is user-supplied runtime context: rules, preferences, constraints, assumptions, and examples that steps must respect. When this file exists and KB read access is granted, READ it once at step start and apply every relevant item. Per-topic narrative markdown under `+"`"+`notes/`+"`"+` is what the workflow discovered over time, one file per topic (entity-scoped like `+"`"+`company-acme.md`+"`"+` or cross-cutting like `+"`"+`pattern-*`+"`"+`), plus `+"`"+`notes/_index.json`+"`"+` as the registry. When you need discovered KB notes, ALWAYS `+"`"+`cat knowledgebase/notes/_index.json`+"`"+` first to find which topic files exist, then `+"`"+`cat`+"`"+` only the markdown files relevant to your work. NEVER `+"`"+`cat knowledgebase/notes/*.md`+"`"+` — file count grows unboundedly and loading all of them blows context. `+"`knowledgebase/context/`"+` is user content; the optimizer is forbidden from rewriting it so captured context remains stable across improvement passes. When your step has write access, you are the writer: use `+"`"+`diff_patch_workspace_file`+"`"+` for every KB content write, including new topic files and `+"`"+`_index.json`+"`"+` updates — see the **Knowledgebase contribution** block below. **Do NOT write to `+"`"+`knowledgebase/context/`+"`"+`** — that store is user-owned via the `+"`"+`capture_context`+"`"+` tool only.
 - **learnings/** — **HOW to run the task** (selectors, auth flows, tool patterns). Use it only when relevant learnings are injected under `+"`"+`## Skill`+"`"+` or the folder is listed in Allowed READ. Treat learnings/skill content as advisory guidance from previous runs: the current step description, orchestrator instructions, and human input are the source of truth. Use relevant guidance when it helps; ignore stale or conflicting guidance.
 - **builder/** — prior review/improvement context. At step start, read `+"`builder/improve.html`"+` if it exists. Use unresolved findings, prior failed approaches, active/deferred improvement ideas, and resolved markers as context so you do not repeat known mistakes. Treat this log as READ-ONLY during step execution.
-{{if .WorkflowConstraints}}
-{{.WorkflowConstraints}}
-{{end}}
 {{if ne .KbAccess "none"}}Knowledgebase access for this step: **{{.KbAccessLabel}}**.{{if eq .KbAccess "read"}} READ-only: you may `+"`"+`cat`+"`"+` / `+"`"+`jq`+"`"+` the KB files but must not modify them. Selective read recipes:
 `+"```"+`bash
 # list all topics
@@ -107,6 +104,14 @@ cat knowledgebase/notes/company-acme.md
 {{.PreviousStepsSummary}}
 {{end}}
 */}}
+{{if .PlanPosition}}
+## Where You Fit
+{{.PlanPosition}}
+
+Use this to judge scope: do the work this step owns. **Do not absorb a later step's job, and do not leave your own half-done assuming something downstream will finish it.**
+
+`+"`"+`{{.WorkflowRoot}}/planning/plan.json`+"`"+` is readable if you need more of the plan's shape — it is READ-ONLY and you must never write to it. It is large (100KB+), so never `+"`"+`cat`+"`"+` it: query the slice you need, e.g. `+"`"+`jq -r '.steps[] | "\(.id): \(.title)"' '{{.WorkflowRoot}}/planning/plan.json'`+"`"+`. Reading another step's description is for understanding boundaries, not for taking on its work.
+{{end}}
 
 {{if eq .HasLearnings "true"}}
 ## Skill
@@ -386,6 +391,7 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 		"StepNumber":                stepNumber,
 		"StepExecutionPath":         stepExecutionPath,
 		"PreviousStepsSummary":      previousStepsSummary,
+		"PlanPosition":              templateVars["PlanPosition"],              // Where this step sits in the plan — steps cannot read planning/plan.json
 		"ValidationSchema":          validationSchema,                          // Validation schema JSON string
 		"KnowledgebasePath":         knowledgebasePath,                         // Knowledgebase folder path
 		"DBPath":                    dbPath,                                    // DB folder path (always enabled)
@@ -396,7 +402,6 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 		"FolderGuardReadPaths":      folderGuardReadPaths,                      // Folder guard read paths for agent guidance
 		"FolderGuardWritePaths":     folderGuardWritePaths,                     // Folder guard write paths for agent guidance
 		"MessageSequenceAccessNote": templateVars["MessageSequenceAccessNote"], // Effective inherited/narrowed access for message_sequence turns
-		"WorkflowConstraints":       templateVars["WorkflowConstraints"],       // Pre-rendered binding-constraints block from soul.md `## Constraints` (empty when absent)
 		"IsEvaluationMode":          templateVars["IsEvaluationMode"],          // Evaluation mode flag
 		"IsScriptedMode":            templateVars["IsScriptedMode"],            // Learn code mode flag (validation schema shown in scripted section instead)
 		"WorkflowRoot":              templateVars["WorkflowRoot"],              // Workflow root path for absolute cwd display
