@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	htmlpkg "golang.org/x/net/html"
 )
@@ -836,7 +838,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_pulse_module_state",
-			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run. Use this before record_pulse_worklist.",
+			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus any open step-raised concerns (most-recurring first). Use this before record_pulse_worklist. A concern with a high seen_count has been reported on that many runs and should weigh heavily on which module you mark due; resolve or reject it with resolve_run_concern once a module has acted on it.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -912,7 +914,20 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if err != nil {
 				return "", err
 			}
-			payload, _ := json.Marshal(map[string]interface{}{"modules": states})
+			// Open step concerns ride along with module state rather than needing
+			// their own tool: the Gate already calls this immediately before
+			// deciding what is due, which is exactly when a recurring concern
+			// should influence that decision. Best-effort — a concerns read
+			// failure must not block the Gate from scheduling modules.
+			concerns, concernsErr := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, 25)
+			if concernsErr != nil {
+				log.Printf("[PULSE] get_pulse_module_state: open concerns unavailable for %s: %v", workspacePath, concernsErr)
+			}
+			payload, _ := json.Marshal(map[string]interface{}{
+				"modules":       states,
+				"open_concerns": concerns,
+				"concerns_note": "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
+			})
 			return string(payload), nil
 		},
 		"mark_pulse_module_result": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -968,7 +983,35 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"mark_pulse_module_result":        "workflow",
 		"mark_pulse_final_command_result": "workflow",
 	}
-	return []llmtypes.Tool{recordTool, stateTool, resultTool, finalCommandTool}, executors, categories
+	resolveConcernTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "resolve_run_concern",
+			Description: "Record a terminal judgement on a step-raised concern returned by get_pulse_module_state. Use 'resolved' only when the underlying problem was actually fixed — if it recurs afterwards the concern reopens automatically, because a fix that did not hold matters more than the original report. Use 'rejected' when it is genuinely not a problem; rejected concerns stay closed even if reported again. Use 'acknowledged' when it is real but deliberately deferred. Never leave a concern open simply because it stopped appearing: absence is not evidence of a fix.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+					"fingerprint":    map[string]interface{}{"type": "string", "description": "The concern's fingerprint from get_pulse_module_state."},
+					"status":         map[string]interface{}{"type": "string", "enum": []string{"acknowledged", "resolved", "rejected"}},
+					"note":           map[string]interface{}{"type": "string", "description": "Short justification recorded with the judgement."},
+				},
+				"required": []string{"workspace_path", "fingerprint", "status"},
+			}),
+		},
+	}
+	executors["resolve_run_concern"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
+		workspacePath, _ := args["workspace_path"].(string)
+		fingerprint, _ := args["fingerprint"].(string)
+		status, _ := args["status"].(string)
+		note, _ := args["note"].(string)
+		if err := step_based_workflow.ResolveRunConcern(ctx, workspacePath, fingerprint, status, "pulse", note); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Concern %s marked %s.", fingerprint, status), nil
+	}
+
+	return []llmtypes.Tool{recordTool, stateTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
 }
 
 func pulseWorklistDecisionsFromArgs(raw interface{}) ([]PulseWorklistDecision, error) {

@@ -50,8 +50,8 @@ func TestNormalizeExecutionTierPreference(t *testing.T) {
 		{"  high  ", executionTierPreferenceHigh},
 		{"medium", executionTierPreferenceMedium},
 		{"MEDIUM", executionTierPreferenceMedium},
-		{"low", executionTierPreferenceHigh},  // low is never an adaptive choice
-		{"", executionTierPreferenceHigh},     // missing → high
+		{"low", executionTierPreferenceHigh},   // low is never an adaptive choice
+		{"", executionTierPreferenceHigh},      // missing → high
 		{"agent", executionTierPreferenceHigh}, // garbage → high
 	} {
 		if got := normalizeExecutionTierPreference(tc.in); got != tc.want {

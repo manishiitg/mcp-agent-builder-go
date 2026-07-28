@@ -127,7 +127,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep the complete response under 6000 characters and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact findings body that the backend will persist at %s. Write it as a durable Markdown review artifact, not as a conversational message to the parent or user. Do not add greetings, progress narration, notification prose, or a second summary. Do not attempt to write the file yourself: this reviewer is read-only and the trusted backend persists the validated response atomically. The parent receives only the artifact path and must read that file.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact findings body that the backend will persist at %s. Write it as a durable Markdown review artifact, not as a conversational message to the parent or user. Do not add greetings, progress narration, notification prose, or a second summary. Do not attempt to write the file yourself: this reviewer is read-only and the trusted backend persists the validated response atomically. The parent receives only the artifact path and must read that file.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the artifact body as usual — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\n", resultPath)
 	}
 	completionFooter := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker in the review brief. Only after the complete review is written, emit this exact final line and nothing after it:\n%s", marker)
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + completionFooter
@@ -3554,6 +3554,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					if writeErr := iwm.controller.WriteWorkspaceFile(ctx, resultPath, body); writeErr != nil {
 						return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
 					}
+					// A reviewer artifact is a per-run file that nothing diffs across
+					// runs, so a finding repeated every cycle reads as new every cycle.
+					// File its CONCERNS: lines through the same Go-side path steps use,
+					// keyed by module, so recurrence becomes visible. The artifact stays
+					// the full evidence; this is only the trackable index into it.
+					iwm.controller.recordStepConcerns(ctx, module, map[string]string{
+						ConcernPhaseReview: completed,
+					})
 					return fmt.Sprintf("Pulse reviewer completed and was persisted.\nmodule: %s\nreview_result_path: %s\nRead that file before applying or recording fixes.", module, resultPath), nil
 				}
 				incompleteErr = completionErr

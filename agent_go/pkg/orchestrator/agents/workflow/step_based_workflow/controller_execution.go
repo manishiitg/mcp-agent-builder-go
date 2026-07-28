@@ -2505,6 +2505,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 							}
 						}
 					}
+					// File any CONCERNS: lines durably BEFORE the three summaries are
+					// joined. Phase attribution is free here and nowhere else — once
+					// they are concatenated there is no way to tell a contradiction
+					// found by the learnings turn from one raised by the task itself.
+					hcpo.recordStepConcerns(ctx, step.GetID(), map[string]string{
+						ConcernPhaseExecution: mainExecutionSummary,
+						ConcernPhaseKBReview:  directKBReviewSummary,
+						ConcernPhaseLearnings: directLearningsSummary,
+					})
+
 					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, directKBReviewSummary, directLearningsSummary); combinedSummary != "" {
 						executionResult = combinedSummary
 					}

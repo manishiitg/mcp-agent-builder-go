@@ -420,6 +420,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 	_ = hcpo.saveMessageSequenceSession(ctx, sessionRelPath, session)
 	finalSummary := hcpo.summarizeMessageSequenceSession(session)
+	// The aggregated summary carries each item's CONCERNS: line prefixed with its
+	// item ID. File them durably here — this is the message-sequence equivalent of
+	// the regular step's composition point.
+	hcpo.recordStepConcerns(ctx, sequenceStep.GetID(), map[string]string{
+		ConcernPhaseMessageSequence: finalSummary,
+	})
 	if err := hcpo.saveFinalExecutionSummary(sequenceStep.GetID(), stepPath, finalSummary); err != nil {
 		hcpo.recordRunPersistenceError(context.Background(), sequenceStep.GetID(), err)
 	}
