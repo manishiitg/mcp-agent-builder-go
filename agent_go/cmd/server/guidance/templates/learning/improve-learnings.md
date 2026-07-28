@@ -37,11 +37,11 @@ the consolidated log update.
 
 Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing or qualifying stale assumptions and surface consequential unresolved ones for Pulse's Assumptions challenged.
 
-## Reconcile against owner edits since the last confirmation
+## Reconcile against unreviewed plan changes
 
-The parent may pass `store_edit_evidence` from `get_pulse_module_state`: plan-mod
-calls and soul.md changes that landed AFTER `learnings/_global/_freshness.json`
-last recorded a confirmation, each with its reason and changed field names.
+The parent may pass `plan_change_backlog` from `get_pulse_module_state`: plan-mod
+calls whose knock-on effects nobody has traced yet, each with its reason,
+affected step ids and changed field names.
 
 Treat that list as evidence, never as a verdict. Most edits invalidate nothing —
 a `review_notes` touch or a typo fix moves the same timestamps as a rewritten step

@@ -494,7 +494,14 @@ whether bug_review is due from the triggers above.
 
 ### artifact_review
 
-Mark due when `planning/changelog/` has unreviewed material entries or when plan/config changes may have drifted dependent artifacts:
+`get_pulse_module_state` returns `plan_change_backlog`: the exact count of
+changelog entries not yet stamped `artifact_review.done`, newest first, with each
+entry's reason, affected step ids and changed field names. Use it instead of
+deriving the backlog from the changelog files yourself. It is evidence, not a
+verdict — many changes have no blast radius — and entries stay listed until
+`mark_changelog_artifact_reviewed` stamps them, so deferring loses nothing.
+
+Mark due when that backlog is non-empty, or when plan/config changes may have drifted dependent artifacts:
 
 - reports
 - evals
@@ -564,15 +571,12 @@ Mark due when workflow behavior changed or learning state may be stale:
   learnings with **no** `_freshness.json` means there is no freshness baseline
   yet; mark due to establish one. When fresh (recently confirmed this run or
   last), record the confirmation cadence and skip with a next-check.
-- **unreviewed owner edits — prefer this over the recency case above:**
-  `get_pulse_module_state` returns `store_edit_evidence` listing plan-mod calls and
-  soul.md changes that landed AFTER the learnings store was last confirmed, with
-  each edit's reason and changed fields. This is evidence, not a verdict — most
-  edits invalidate nothing, and only reading the diffs against the actual files can
-  tell a cosmetic description tweak from one that retires a documented flow. When
-  the list is non-empty, mark due and let the improve-learnings reviewer make that
-  call. Nothing is lost by deferring: the evidence keeps being reported until a run
-  re-confirms the store.
+- **unreviewed plan changes:** `get_pulse_module_state` returns
+  `plan_change_backlog` — plan-mod calls whose knock-on effects nobody has traced
+  yet. Learnings are one of the six dimensions those changes can rot. When entries
+  touch steps whose learnings exist, either mark this module due or leave it to
+  `artifact_review`, which covers the same ground across all six; do not mark both
+  due for the same entries.
 
 The read-only reviewer identifies stale learning content and lock/unlock changes.
 The Pulse Fixer applies bounded learning and step-config edits directly. Use
@@ -591,12 +595,11 @@ long business interval behind the current run, so notes may have silently gone s
 without any run contradicting them. A missing `_freshness.json` beside existing notes
 means no freshness baseline yet — mark due to establish one.
 
-Mark due at **higher priority** when `get_pulse_module_state` returns
-`store_edit_evidence` for the knowledgebase: plan-mod calls or soul.md changes
-landed after these notes were last confirmed, so some may describe retired
-behavior. Treat it as evidence rather than a verdict — most edits invalidate
-nothing — and let the reviewer read the diffs against the notes to decide. The
-evidence keeps being reported until a run re-confirms the store.
+Also weigh `plan_change_backlog` from `get_pulse_module_state`: plan changes whose
+knock-on effects have not been traced. KB notes are one of the six dimensions
+those changes can rot. Either mark this module due or leave it to
+`artifact_review`, which covers the same ground across all six; do not mark both
+due for the same entries.
 
 `knowledgebase/context` is user-owned runtime business context. Read it for
 evidence, but do not rewrite it. The read-only reviewer proposes precise note or
