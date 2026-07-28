@@ -690,11 +690,13 @@ func (w *waBot) connectedAccounts() []*waAccount {
 }
 
 // sendWhatsAppFileTool lets the parent-mode agent hand over a test or study
-// guide as a real PDF attachment on WhatsApp, instead of only describing it
-// in text — e.g. "send me the fractions test as a PDF on WhatsApp". Scoped to
-// files inside an activity folder only (not an answer key elsewhere, not any
-// arbitrary file) — those stay off WhatsApp — and only sends to linked
-// accounts' own self-chats (SendDocumentToAllSelf) — never a third party.
+// guide — or the academic map / progress report — as a real PDF attachment
+// on WhatsApp, instead of only describing it in text — e.g. "send me the
+// fractions test as a PDF on WhatsApp", or Pulse attaching the progress
+// report to its own automated check-in. Scoped to files inside an activity
+// folder OR reports/ only (not an answer key elsewhere, not any arbitrary
+// file) — those stay off WhatsApp — and only sends to linked accounts' own
+// self-chats (SendDocumentToAllSelf) — never a third party.
 // onSent, when non-nil, is called with the workspace-relative path of each
 // file successfully sent — so the caller (a web-chat or WhatsApp turn) can
 // append a real, clickable reference to the persisted reply afterward. The
@@ -704,11 +706,13 @@ func (w *waBot) connectedAccounts() []*waAccount {
 func sendWhatsAppFileTool(onSent func(path string)) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "send_whatsapp_file",
-		Description: "Send a test or study material file to the parent as a real PDF attachment on their own WhatsApp " +
-			"(their linked \"message yourself\" chat) — only call this when the parent explicitly asks for a file/PDF over " +
-			"WhatsApp. The file must already exist as a PDF (use agent_browser: open the file, then run its \"pdf\" command " +
-			"to export a PDF into the same folder, e.g. <Subject>/<Topic>/<activity>/<name>.pdf, before calling this). " +
-			"Requires WhatsApp to be linked (Connectors → WhatsApp) — if it's not, tell the parent to link it there first.",
+		Description: "Send a test, study material file, academic map, or progress report to the parent as a real PDF " +
+			"attachment on their own WhatsApp (their linked \"message yourself\" chat) — only call this when the parent " +
+			"explicitly asks for a file/PDF over WhatsApp, or (Pulse only) as part of an automated check-in that has " +
+			"genuinely new progress to show. The file must already exist as a PDF (use agent_browser: open the file, then " +
+			"run its \"pdf\" command to export a PDF into the same folder — e.g. <Subject>/<Topic>/<activity>/<name>.pdf for " +
+			"an activity, or reports/<name>.pdf for the academic map or progress report — before calling this). Requires " +
+			"WhatsApp to be linked (Connectors → WhatsApp) — if it's not, tell the parent to link it there first.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -727,8 +731,12 @@ func sendWhatsAppFileTool(onSent func(path string)) agentsession.Tool {
 			if !strings.HasSuffix(strings.ToLower(rel), ".pdf") {
 				return "", fmt.Errorf("path must be a .pdf file")
 			}
-			if findActivityForPath(rel) == "" {
-				return "", fmt.Errorf("send_whatsapp_file only sends files inside an activity folder")
+			// reports/ (the academic map, the progress report) is parent-facing
+			// summary content, same as any activity's own files — deliberately
+			// distinct from an answer key or anything else that stays off
+			// WhatsApp, which live elsewhere and are NOT covered by this rule.
+			if findActivityForPath(rel) == "" && !strings.HasPrefix(strings.Trim(rel, "/"), "reports/") {
+				return "", fmt.Errorf("send_whatsapp_file only sends files inside an activity folder or reports/")
 			}
 			abs, ok := resolveWorkspacePath(rel)
 			if !ok {

@@ -250,7 +250,13 @@ func runPulseOnce(ctx context.Context, force bool) error {
 			"it) so the email reads as organized sections, not one dense paragraph. If truly nothing meaningful happened " +
 			"across every check this cycle, still call notify_user with one short, honest line saying so — never skip the " +
 			"call itself; it's the parent's only signal this cycle ran at all. Afterward, report the outcome honestly in " +
-			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't.",
+			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't. " +
+			"If (and only if) the progress report actually gained genuinely new content THIS cycle — not just a re-save of " +
+			"the same picture — a WhatsApp-only parent still can't just click it open the way a parent using the app can, " +
+			"so also hand them the real document: export reports/progress.html to a PDF via agent_browser's \"pdf\" command " +
+			"(into reports/progress.pdf) and send it with send_whatsapp_file, a short caption naming what's new and what " +
+			"she should prepare for next. Skip this entirely on a cycle where nothing genuinely changed — a PDF resent every " +
+			"five minutes with no new content is noise, not help.",
 	}
 	reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, notifyCheck)
 	if err != nil {
