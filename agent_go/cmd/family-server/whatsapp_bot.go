@@ -940,6 +940,70 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 		return
 	}
 
+	// A genuinely typed message (not a voice transcript — those always stay
+	// on the parent path, see above) sent while in child mode goes to the
+	// CHILD's own conversation and runs a real turn there via runChildTurn —
+	// otherwise a follow-up like "can you review these answers" would reach
+	// the parent conversation instead, which has no idea a photo was just
+	// added to the child's activity (confirmed live: exactly this happened
+	// before this branch existed).
+	if inChildMode && strings.TrimSpace(text) != "" && voiceText == "" {
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		if s.Engine == "" || s.Child == nil {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "Setup isn't complete yet, so I can't run this in child mode.", 2, 15*time.Second, "child mode setup incomplete")
+			}
+			return
+		}
+		dir := currentActivityDir()
+		if dir == "" {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "There's no activity open right now, so I can't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity text")
+			}
+			return
+		}
+
+		// Same live-steer-first pattern as the parent path above: if a child
+		// turn is already running for this exact activity, inject this
+		// message into it rather than only ever queuing behind agentTurnMu.
+		if trySteer(context.Background(), dir, text) {
+			appendUserMessageToConversation("child", dir, text)
+			acct.react(info.Chat, info.Sender, info.ID, "↩️")
+			return
+		}
+
+		acct.react(info.Chat, info.Sender, info.ID, "👀")
+		longRunDone := make(chan struct{})
+		go func() {
+			select {
+			case <-longRunDone:
+			case <-time.After(12 * time.Second):
+				acct.react(info.Chat, info.Sender, info.ID, "⏳")
+			}
+		}()
+
+		existing, _ := loadStoredConversation("child", dir)
+		history := append(append([]enginedetect.ChatMessage(nil), existing.Messages...), enginedetect.ChatMessage{Role: "user", Text: text})
+		resp := runChildTurn(context.Background(), s, dir, history)
+		close(longRunDone)
+		if resp.Error != "" {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			log.Printf("[whatsapp] child-mode turn failed: %s", resp.Error)
+			return
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "") // clear the ack — the reply is the completion signal
+		if acct.client != nil {
+			if err := acct.sendTextWithRetry(info.Chat, resp.Reply, 3, 30*time.Second, "child mode reply"); err != nil {
+				acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			}
+		}
+		return
+	}
+
 	if strings.TrimSpace(text) == "" && voiceText != "" {
 		text = "🎙️ " + voiceText
 		// Confirm what was actually heard right away, decoupled from the real

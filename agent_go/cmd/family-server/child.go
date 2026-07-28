@@ -49,6 +49,33 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resp := runChildTurn(r.Context(), s, activityDir, req.Messages)
+	// Every in-turn failure (session construction, the Ask call itself, the
+	// no-tools fallback) already reports 200 with the JSON Error field set —
+	// same as the parent handler, and what the frontend already expects.
+	// workDirPrepFailed is the one exception, needing its original 500.
+	status := http.StatusOK
+	if resp.Error == errWorkDirPrepFailed {
+		status = http.StatusInternalServerError
+	}
+	writeJSON(w, status, resp)
+}
+
+// errWorkDirPrepFailed is the Error value ONLY runChildTurn's workDir-mkdir
+// failure sets — doubles as both the sentinel handleChildMessage checks for
+// and the actual human-readable message sent to the client, the one
+// internal-error case that gets a real 500 instead of the 200-with-Error
+// every other turn failure uses.
+const errWorkDirPrepFailed = "could not prepare the activity folder"
+
+// runChildTurn runs one turn of Child Mode tutoring for the activity dir
+// already resolved by the caller — the full tool set, sandbox, prompt, and
+// persistence, identical regardless of what triggered it. Shared by the
+// HTTP handler above and the WhatsApp "@child mode" text path (see
+// whatsapp_bot.go) so a message typed on the phone gets EXACTLY the same
+// child experience as one typed in the app, not a separate, drifting copy of
+// the sandbox.
+func runChildTurn(ctx context.Context, s familyState, activityDir string, messages []enginedetect.ChatMessage) parentMessageResponse {
 	// The coding-agent CLI's own launch directory — where IT (not our tools)
 	// discovers its project config and drops its own session-scoped files
 	// (Cursor's .cursor/hooks.json + hooks/mlp-deny-builtin.sh, a git marker,
@@ -66,8 +93,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	// the collision at its root for child-vs-child too).
 	workDir := filepath.Join(familyDataDir(), "workspace", activityDir)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		writeJSON(w, http.StatusInternalServerError, parentMessageResponse{Error: "could not prepare the activity folder"})
-		return
+		return parentMessageResponse{Error: errWorkDirPrepFailed}
 	}
 
 	// Persist the message(s) that kick off this turn right away, mirroring the
@@ -79,18 +105,16 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	// scene shown or a star earned in an EARLIER turn the moment the child
 	// sent her next message — persistConversationReplyWithExtras reloads disk
 	// as the base instead, so only this turn's own new messages are added.
-	persistNewMessages("child", activityDir, req.Messages)
+	persistNewMessages("child", activityDir, messages)
 
 	provider, ok := engineToProvider(s.Engine)
 	if !ok {
 		// Plain-completion fallback (no tools) for engines not yet mapped.
-		reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, childSystemPrompt(s.Child, s.ParentLabel, activityDir), req.Messages)
+		reply, err := enginedetect.Chat(ctx, s.Engine, "", workDir, childSystemPrompt(s.Child, s.ParentLabel, activityDir), messages)
 		if err != nil {
-			writeJSON(w, http.StatusOK, parentMessageResponse{Error: friendlyTurnError(err)})
-			return
+			return parentMessageResponse{Error: friendlyTurnError(err)}
 		}
-		writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply})
-		return
+		return parentMessageResponse{Reply: reply}
 	}
 
 	// Recorder captures open_file invocations so the child UI can show the file
@@ -191,7 +215,7 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
+	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 
 	trace := newTurnTrace("child", s.Engine)
@@ -247,15 +271,14 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		trace.finish("", err)
 		msg := friendlyTurnError(err)
-		persistConversationReply("child", activityDir, req.Messages, msg)
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
-		return
+		persistConversationReply("child", activityDir, messages, msg)
+		return parentMessageResponse{Error: msg}
 	}
 	trace.sessionReady(sess.Resumed())
 	defer sess.Close()
 
-	history := make([]agentsession.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
+	history := make([]agentsession.Message, 0, len(messages))
+	for _, m := range messages {
 		history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
 	}
 	if suffix := pendingChildUploadSuffix(); suffix != "" && len(history) > 0 {
@@ -273,12 +296,11 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Persist the turn even on failure — see chat.go's parent handler for why.
 		msg := friendlyTurnError(err)
-		persistConversationReply("child", activityDir, req.Messages, msg)
+		persistConversationReply("child", activityDir, messages, msg)
 		debugMu.Lock()
 		debugOut := append([]debugToolCall(nil), debugCalls...)
 		debugMu.Unlock()
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg, DebugCalls: debugOut})
-		return
+		return parentMessageResponse{Error: msg, DebugCalls: debugOut}
 	}
 	saveSessionHandle("child", activityDir, sess.Handle())
 	evMu.Lock()
@@ -305,9 +327,9 @@ func handleChildMessage(w http.ResponseWriter, r *http.Request) {
 		// it exactly where it was shown, not just the reply text.
 		extra = append(extra, enginedetect.ChatMessage{Role: "tool", Tool: "scene", HTML: sceneOut})
 	}
-	persistConversationReplyWithExtras("child", activityDir, req.Messages, reply, extra...)
+	persistConversationReplyWithExtras("child", activityDir, messages, reply, extra...)
 
-	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut})
+	return parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut}
 }
 
 func findCelebrateEvent(evs []toolEvent) *toolEvent {
