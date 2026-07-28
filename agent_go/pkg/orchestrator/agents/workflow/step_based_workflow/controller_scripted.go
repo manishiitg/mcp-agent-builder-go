@@ -1,14 +1,10 @@
 package step_based_workflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -898,78 +894,45 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		ExtraEnv:         extraEnv,
 	}
 
-	jsonBody, err := json.Marshal(reqParams)
-	if err != nil {
-		return "", -1, fmt.Errorf("marshal shell request: %w", err)
-	}
-
-	apiURL := getWorkspaceAPIURL() + "/api/execute"
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "", -1, fmt.Errorf("create shell request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// /api/execute is the workspace service's one token-protected route. This path
-	// builds its own request instead of going through workspace.Client.doRequest,
-	// which is where the token is normally attached — so without this every scripted
-	// fast-path run failed with "workspace execution authorization required" at
-	// exit_code=-1 and 0ms, before the script ran at all.
+	// Dispatch through the same client the agent's own execute_shell_command uses.
 	//
-	// That failure was extremely misleading. The step agent sees only the error text
-	// and its own script, so it blames the script: one workflow concluded DB_PATH was
-	// missing and removed the required-env read, another concluded Python's sqlite3
-	// could not open the database and switched to the sqlite3 CLI, writing that into
-	// its permanent learnings. Neither had run a single line of Python.
-	if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
-		req.Header.Set("X-Workspace-Token", token)
+	// This used to build and send its own request, which is how the two diverged:
+	// workspace.Client attaches X-Workspace-Token and X-User-ID, and this path
+	// attached neither, so /api/execute — the one token-protected route — rejected
+	// every scripted run. The agent could not see it. Its self-test went through
+	// the client and passed; only the controller's run failed, so the agent was
+	// told its working script was broken and duly "fixed" it.
+	//
+	// Keeping one door means a test run and a real run cannot disagree again.
+	if hcpo.WorkspaceClient == nil {
+		return "", -1, fmt.Errorf("%w: no workspace client configured", ErrScriptedHarnessRejection)
 	}
-
-	resp, err := http.DefaultClient.Do(req)
+	result, err := hcpo.WorkspaceClient.ExecuteShellCommand(ctx, reqParams)
 	if err != nil {
-		return "", -1, fmt.Errorf("workspace shell execute: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", -1, fmt.Errorf("read shell response: %w", err)
+		// Transport failure or a non-2xx status: the request never became a
+		// process, so this is the harness failing, not the script.
+		return "", -1, fmt.Errorf("%w: %v", ErrScriptedHarnessRejection, err)
 	}
 
-	// Parse raw API response: {"success":..., "data":{"stdout":...,"stderr":...,"exit_code":...}, "error":...}
-	var apiResp struct {
-		Success bool   `json:"success"`
-		Error   string `json:"error"`
-		Data    struct {
-			Stdout   string `json:"stdout"`
-			Stderr   string `json:"stderr"`
-			ExitCode int    `json:"exit_code"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return "", -1, fmt.Errorf("parse shell response: %w (body: %s)", err, string(body))
-	}
-
-	combined := apiResp.Data.Stdout
-	if apiResp.Data.Stderr != "" {
+	combined := result.Stdout
+	if result.Stderr != "" {
 		if combined != "" {
 			combined += "\n"
 		}
-		combined += apiResp.Data.Stderr
+		combined += result.Stderr
 	}
-	exitCode = apiResp.Data.ExitCode
+	exitCode = result.ExitCode
 	hcpo.GetLogger().Info(fmt.Sprintf(
-		"🐍 [scripted_code] Direct script shell result | success=%t | exit_code=%d | api_error=%q | script=%s",
-		apiResp.Success,
+		"🐍 [scripted_code] Direct script shell result | exit_code=%d | api_error=%q | script=%s",
 		exitCode,
-		apiResp.Error,
+		result.Error,
 		mainPyAbsPath,
 	))
-	if !apiResp.Success && exitCode == 0 {
-		// The workspace API rejected the request itself, so no interpreter was
-		// ever started. That is not a script failure and must not be reported as
-		// one — see ErrScriptedHarnessRejection.
+	if result.Error != "" && exitCode == 0 {
+		// The API reported a failure but no process ever ran (exit 0 with an
+		// error is the shape of a rejected request, not a failed script).
 		exitCode = -1
-		execErr = fmt.Errorf("%w: %s", ErrScriptedHarnessRejection, apiResp.Error)
+		execErr = fmt.Errorf("%w: %s", ErrScriptedHarnessRejection, result.Error)
 	}
 	return combined, exitCode, execErr
 }

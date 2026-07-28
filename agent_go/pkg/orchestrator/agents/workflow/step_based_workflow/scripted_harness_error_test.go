@@ -5,27 +5,60 @@ import (
 	"testing"
 )
 
-// The scripted fast path builds its own HTTP request rather than going through
-// workspace.Client, so it must attach the workspace token itself. Without it,
-// every scripted run failed before the interpreter started.
-func TestScriptedFastPathAttachesWorkspaceToken(t *testing.T) {
+// The controller must run a saved script through the same client the agent's own
+// execute_shell_command uses. When it hand-rolled its own request it silently
+// dropped X-Workspace-Token and X-User-ID, so the agent's self-test passed and
+// only the real run failed — leaving the agent to "fix" a script that worked.
+func TestScriptedRunGoesThroughTheSharedWorkspaceClient(t *testing.T) {
 	src := readSourceFile(t, "controller_scripted.go")
-	idx := strings.Index(src, `apiURL := getWorkspaceAPIURL() + "/api/execute"`)
-	if idx < 0 {
-		t.Fatal("could not locate the scripted execute request")
+	fn := scriptedExecFunc(t, src)
+
+	if !strings.Contains(fn, "hcpo.WorkspaceClient.ExecuteShellCommand(ctx, reqParams)") {
+		t.Fatal("the saved script must be dispatched via workspace.Client.ExecuteShellCommand")
 	}
-	// Look at the request construction that follows, up to the Do() call.
-	end := strings.Index(src[idx:], "http.DefaultClient.Do(req)")
-	if end < 0 {
-		t.Fatal("could not locate the request dispatch")
+	for _, banned := range []string{"http.DefaultClient", "http.NewRequestWithContext", "X-Workspace-Token"} {
+		if strings.Contains(fn, banned) {
+			t.Fatalf("execScriptedScript must not build its own request (%q) — that is how the two paths diverged", banned)
+		}
 	}
-	block := src[idx : idx+end]
-	if !strings.Contains(block, "X-Workspace-Token") {
-		t.Fatal("scripted /api/execute request must set X-Workspace-Token; /api/execute is token-protected and this path bypasses workspace.Client.doRequest")
+}
+
+// A request that never became a process must be reported as a harness rejection,
+// whatever shape the failure arrives in.
+func TestTransportAndAPIFailuresBothReadAsHarnessRejection(t *testing.T) {
+	src := readSourceFile(t, "controller_scripted.go")
+	fn := scriptedExecFunc(t, src)
+	if strings.Count(fn, "ErrScriptedHarnessRejection") < 3 {
+		t.Fatalf("missing client, transport/non-2xx, and API-error cases must all map to ErrScriptedHarnessRejection:\n%s", fn)
 	}
-	if !strings.Contains(block, "WORKSPACE_API_TOKEN") {
-		t.Fatal("the token must come from WORKSPACE_API_TOKEN, matching workspace.Client")
+	if !strings.Contains(fn, "if hcpo.WorkspaceClient == nil") {
+		t.Fatal("a missing client is infrastructure, not a script fault")
 	}
+}
+
+// scriptedExecFunc returns the body of execScriptedScript. These properties are
+// about which code path is taken, which cannot be observed without a live
+// workspace service.
+func scriptedExecFunc(t *testing.T, src string) string {
+	t.Helper()
+	start := strings.Index(src, "func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(")
+	if start < 0 {
+		t.Fatal("execScriptedScript not found")
+	}
+	rel := strings.Index(src[start:], "\n}\n")
+	if rel < 0 {
+		t.Fatal("could not find the end of execScriptedScript")
+	}
+	// Strip comments: the prose legitimately names the headers and the old
+	// dispatch, and matching those would defeat the point of the check.
+	var code []string
+	for _, line := range strings.Split(src[start:start+rel], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		code = append(code, line)
+	}
+	return strings.Join(code, "\n")
 }
 
 // A rejected request means the script never ran, so it must not reach the
