@@ -338,13 +338,17 @@ function WithContext<T extends { metadata?: Record<string, unknown> }>({
   compact,
   hideContext
 }: {
-  Component: React.ComponentType<{ event: T; compact?: boolean }>
+  Component: React.ComponentType<{ event: T; compact?: boolean; hideContext?: boolean }>
   data: T
   compact?: boolean
   hideContext?: boolean
 }) {
+  // hideContext is forwarded, not just consumed: a card rendered inside a
+  // terminal that already names the step in its header should not print that
+  // name a second time. Only the card knows which part of itself is the
+  // duplicate.
   if (hideContext) {
-    return <Component event={data} compact={compact} />
+    return <Component event={data} compact={compact} hideContext />
   }
   return (
     <EventWithOrchestratorContext metadata={data.metadata}>

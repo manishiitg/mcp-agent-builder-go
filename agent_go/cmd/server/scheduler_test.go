@@ -1088,6 +1088,20 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"must not edit files",
 		"parent Pulse Fixer updates",
 		"mark_pulse_module_result",
+		// Efficiency review, not just cost accounting. Added after a real
+		// production step's *-timing.json read tool_duration_ms=0 across 4
+		// successful shell calls (an instrumentation gap, since fixed) and a
+		// 10-minute turn spent ~38KB of its ~57KB of generated shell
+		// re-emitting a near-identical script to patch two lines -- exactly
+		// the shape only THIS module's evidence (the timing file) can catch,
+		// and which the accounting-only brief never asked it to look for.
+		"UNMEASURED evidence, not proof the call was instant",
+		"generation-bound",
+		"writing far more than it reads",
+		"near-duplicate tool call arguments",
+		"write-once-then-invoke",
+		"approaches the step's own stated kill/timeout threshold",
+		"efficiency buckets",
 	} {
 		if !strings.Contains(cost, want) {
 			t.Fatalf("cost step missing %q:\n%s", want, cost)

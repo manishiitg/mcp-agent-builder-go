@@ -687,3 +687,47 @@ describe('one completion card per execution', () => {
     expect(ids).toHaveLength(2)
   })
 })
+
+describe('formatted view for a tmux terminal', () => {
+  // The formatted-view toggle on a raw tmux pane rests on one assumption: the
+  // same run is ALSO available as structured events. Event selection must not
+  // care about transport, or the toggle would open an empty transcript on
+  // exactly the terminals it exists for.
+  const tmuxMainAgent: any = {
+    terminal_id: 'main:sess-1',
+    session_id: 'sess-1',
+    execution_kind: 'main_agent',
+    step_transport: 'tmux',
+    tmux_session: 'mcp-agent-20260728',
+  }
+
+  const ev = (id: string, type: string, data: Record<string, unknown>): any => ({
+    id, type, session_id: 'sess-1', execution_id: 'main:sess-1',
+    execution_kind: 'main_agent', data: { data },
+  })
+
+  it('selects the run’s events for a tmux main agent, not just structured ones', () => {
+    const selected = selectTerminalEvents(
+      [
+        ev('t1', 'tool_call_start', { tool_name: 'execute_shell_command', tool_params: { arguments: '{"command":"ls"}' } }),
+        ev('t2', 'tool_call_end', { tool_name: 'execute_shell_command', result: 'a.txt' }),
+        ev('answer', 'llm_generation_end', { content: 'Listed the directory: one file.' }),
+      ],
+      tmuxMainAgent,
+      [tmuxMainAgent],
+    )
+    expect(selected).toHaveLength(3)
+  })
+
+  it('builds a transcript carrying the tool call and the reply the pane wraps badly', () => {
+    const items = buildTranscriptItems([
+      ev('t1', 'tool_call_start', { tool_name: 'execute_shell_command', tool_params: { arguments: '{"command":"ls"}' } }),
+      ev('t2', 'tool_call_end', { tool_name: 'execute_shell_command', result: 'a.txt' }),
+      ev('answer', 'llm_generation_end', { content: 'Listed the directory: one file.' }),
+    ])
+
+    expect(items.some(i => i.kind === 'tools')).toBe(true)
+    const answer = items.find(i => i.kind === 'event' && (i as any).event.id === 'answer')
+    expect(answer).toBeDefined()
+  })
+})
