@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,6 +19,21 @@ const (
 )
 
 const trackedExecutionRetention = 24 * time.Hour
+
+// trackedExecutionRunningMaxAge caps how long an entry may sit in "running".
+//
+// The registry is in-memory and an entry only leaves "running" when a completion
+// path fires. If one is ever missed — a dropped notifier call, a killed agent
+// process, a context torn down before finalize — the entry is immortal: it keeps
+// the global monitor showing a live spinner and makes every new workflow-builder
+// chat fail with 409 workflow_busy, until the server is restarted. That has bitten
+// this workflow repeatedly.
+//
+// The cap is deliberately far above any legitimate run. The scheduler's own
+// inactivity timeouts are 10 minutes for a normal Pulse step and 30 for Goal
+// Advisor, and observed full runs are ~1.5 hours, so 12 hours cannot reap live
+// work — it only clears entries that are certainly dead.
+const trackedExecutionRunningMaxAge = 12 * time.Hour
 
 // TrackedWorkflowExecution is the backend's unified execution record.
 // It keeps top-level workflow runs and workflow-builder background work in one place.
@@ -183,6 +199,15 @@ func (api *StreamingAPI) pruneTrackedExecutionsLocked(now time.Time) {
 			continue
 		}
 		if exec.Status == trackedExecutionStatusRunning {
+			// A running entry used to be skipped unconditionally, so a missed
+			// completion left it running forever. Reap only the certainly-dead
+			// ones, and say so: a silently vanished "running" execution would be
+			// just as confusing as an immortal one.
+			if !exec.StartedAt.IsZero() && now.Sub(exec.StartedAt) > trackedExecutionRunningMaxAge {
+				log.Printf("[EXEC_TRACKER] Reaping stale running execution %s (workspace=%s, session=%s, started %s, age %s) — it never reported completion; this would otherwise block new workflow-builder chats with workflow_busy",
+					executionID, exec.WorkspacePath, exec.SessionID, exec.StartedAt.Format(time.RFC3339), now.Sub(exec.StartedAt).Truncate(time.Minute))
+				delete(api.trackedWorkflowExecutions, executionID)
+			}
 			continue
 		}
 		referenceTime := exec.StartedAt
