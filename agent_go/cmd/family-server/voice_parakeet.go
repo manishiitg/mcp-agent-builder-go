@@ -27,11 +27,11 @@ const parakeetModel = "mlx-community/parakeet-tdt-0.6b-v2"
 // measured directly at ~1.9s of pure import overhead per cold process,
 // before any real work happens. Unlike whisper.cpp, Parakeet reads compressed
 // audio directly (webm/opus, mp4, etc.), with no separate ffmpeg conversion.
-func transcribeWithParakeet(_ context.Context, audioPath string) (string, error) {
+func transcribeWithParakeet(ctx context.Context, audioPath string) (string, error) {
 	if !mlxVoiceInstalled() {
 		return "", fmt.Errorf("speech recognition isn't set up yet")
 	}
-	resp, err := sharedVoiceWorker.call(map[string]any{
+	resp, err := sharedVoiceWorker.call(ctx, map[string]any{
 		"cmd":        "transcribe",
 		"model":      parakeetModel,
 		"audio_path": audioPath,
@@ -54,8 +54,8 @@ func transcribeWithParakeet(_ context.Context, audioPath string) (string, error)
 // warmParakeet triggers the model's own one-time ~2.36GB download during
 // install (see installMlxVoiceEnv) AND loads it into the worker's memory,
 // rather than leaving either for a parent's first real recording to hang on.
-func warmParakeet(_ context.Context) error {
-	_, err := sharedVoiceWorker.call(map[string]any{
+func warmParakeet(ctx context.Context) error {
+	_, err := sharedVoiceWorker.call(ctx, map[string]any{
 		"cmd":   "load_stt",
 		"model": parakeetModel,
 	})

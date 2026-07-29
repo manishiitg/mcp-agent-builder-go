@@ -187,7 +187,7 @@ func main() {
 			if err := warmParakeet(context.Background()); err != nil {
 				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
 			}
-			if _, err := sharedVoiceWorker.call(map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
+			if _, err := sharedVoiceWorker.call(context.Background(), map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
 				log.Printf("[voice] background warm-up (read-aloud voice) failed: %v", err)
 			}
 		}()

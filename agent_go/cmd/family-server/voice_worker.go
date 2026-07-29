@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -51,27 +52,47 @@ type voiceWorker struct {
 
 var sharedVoiceWorker = &voiceWorker{}
 
-// call sends one request and waits for its matching response. Starts the
-// worker if it isn't already running (first use, previously idle-shut-down,
-// or crashed), and restarts+retries ONCE transparently if the pipe is
+// voiceWorkerCallTimeout bounds how long ANY single request may block waiting
+// on the worker's response. Without this, a genuinely stuck worker (observed
+// live: the Python process sitting at ~0% CPU, never responding, after a
+// transcribe request) held w.mu FOREVER — every later call, even a totally
+// unrelated one from a different conversation minutes later, piled up behind
+// the same dead read with no error, no log line, nothing. Generous enough for
+// a real cold start (measured worst case ~7s) plus margin, short enough that
+// a genuinely wedged worker gets NOTICED and replaced within one request
+// instead of taking the whole voice feature down silently for good.
+const voiceWorkerCallTimeout = 30 * time.Second
+
+// call sends one request and waits for its matching response, bounded by
+// ctx AND voiceWorkerCallTimeout (whichever is shorter). Starts the worker if
+// it isn't already running (first use, previously idle-shut-down, or
+// crashed), and restarts+retries ONCE transparently if the pipe is
 // unexpectedly broken — a stale/crashed process should be invisible to the
-// caller, not a hard failure on their very next click.
-func (w *voiceWorker) call(req map[string]any) (map[string]any, error) {
+// caller, not a hard failure on their very next click. A timeout counts as
+// broken too: the worker is killed so its stuck goroutine unblocks and the
+// NEXT call (this retry, or a future one) starts a fresh process rather than
+// queuing behind the same dead one forever.
+func (w *voiceWorker) call(ctx context.Context, req map[string]any) (map[string]any, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	resp, err := w.callLocked(req)
+	callCtx, cancel := context.WithTimeout(ctx, voiceWorkerCallTimeout)
+	defer cancel()
+	resp, err := w.callLocked(callCtx, req)
 	if err != nil {
 		// One retry against a freshly (re)started process — covers the
-		// common case of the worker having crashed or been idle-killed
-		// between calls, without making every transient hiccup visible.
+		// common case of the worker having crashed, been idle-killed, or
+		// timed out between calls, without making every transient hiccup
+		// visible.
 		w.stopLocked()
-		resp, err = w.callLocked(req)
+		retryCtx, retryCancel := context.WithTimeout(ctx, voiceWorkerCallTimeout)
+		defer retryCancel()
+		resp, err = w.callLocked(retryCtx, req)
 	}
 	return resp, err
 }
 
-func (w *voiceWorker) callLocked(req map[string]any) (map[string]any, error) {
+func (w *voiceWorker) callLocked(ctx context.Context, req map[string]any) (map[string]any, error) {
 	if err := w.ensureStartedLocked(); err != nil {
 		return nil, err
 	}
@@ -82,9 +103,30 @@ func (w *voiceWorker) callLocked(req map[string]any) (map[string]any, error) {
 	if _, err := w.stdin.Write(append(line, '\n')); err != nil {
 		return nil, fmt.Errorf("voice worker pipe broken: %w", err)
 	}
-	respLine, err := w.reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("voice worker did not respond: %w", err)
+	// ReadString blocks on the pipe with no deadline of its own — run it in a
+	// goroutine and race it against ctx so a wedged worker can't hold this
+	// call (and w.mu, and every call after it) forever. The goroutine itself
+	// may still be blocked in ReadString after we give up on it; killing the
+	// process below (via the caller's stopLocked on error) is what actually
+	// unblocks it, not this select.
+	type readResult struct {
+		line string
+		err  error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		respLine, err := w.reader.ReadString('\n')
+		resultCh <- readResult{respLine, err}
+	}()
+	var respLine string
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return nil, fmt.Errorf("voice worker did not respond: %w", res.err)
+		}
+		respLine = res.line
+	case <-ctx.Done():
+		return nil, fmt.Errorf("voice worker timed out: %w", ctx.Err())
 	}
 	var resp map[string]any
 	if err := json.Unmarshal([]byte(respLine), &resp); err != nil {

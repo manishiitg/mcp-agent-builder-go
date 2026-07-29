@@ -82,11 +82,11 @@ func handleVoiceSpeak(w http.ResponseWriter, r *http.Request) {
 	case req.Tier == "builtin":
 		audio, err = synthesizeSpeech(text, voice)
 	case req.Tier == "kokoro":
-		audio, err = speakWithKokoro(text, voice)
+		audio, err = speakWithKokoro(r.Context(), text, voice)
 	// No tier given: the best installed voice wins automatically — installing
 	// the upgrade IS choosing it, with no separate "make it active" step.
 	case mlxVoiceInstalled():
-		audio, err = speakWithKokoro(text, voice)
+		audio, err = speakWithKokoro(r.Context(), text, voice)
 		if err != nil {
 			// Never leave the parent with silence because an optional upgrade
 			// broke — fall back to the always-present system voice.

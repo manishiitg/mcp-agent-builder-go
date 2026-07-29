@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -25,7 +26,7 @@ const kokoroVoice = "af_heart"
 // speakWithKokoro renders text to WAV via the persistent voice worker (see
 // voice_worker.go), which keeps the Kokoro model loaded in memory rather than
 // re-importing mlx_audio and reloading it fresh on every single reply.
-func speakWithKokoro(text, voice string) ([]byte, error) {
+func speakWithKokoro(ctx context.Context, text, voice string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "sq-kokoro-*")
 	if err != nil {
 		return nil, err
@@ -41,7 +42,7 @@ func speakWithKokoro(text, voice string) ([]byte, error) {
 	// of sync with a separately-stored field.
 	langCode := voice[:1]
 
-	resp, err := sharedVoiceWorker.call(map[string]any{
+	resp, err := sharedVoiceWorker.call(ctx, map[string]any{
 		"cmd":       "speak",
 		"model":     kokoroModel,
 		"text":      text,
