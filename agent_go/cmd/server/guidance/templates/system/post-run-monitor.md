@@ -228,6 +228,13 @@ sections below as domain and evidence guidance.
    `data-pulse-run`, with every due module, finding ids, resolved conflict-map
    disposition, and status `pending`.
    No reviewer may mutate the workflow.
+   Before touching `builder/improve.html` at all — every pass, not only when creating
+   the file or hitting an obviously old-format one — call
+   `get_reference_doc(kind="review-improve-log")`. Knowing the general shape from a
+   prior pass or training is not a substitute: the format-compliance and structural-
+   drift rules live in that document and cannot take effect on a pass that never
+   fetches it, and the existing file's current structure is not proof the loaded
+   contract still matches it.
 7. Apply bounded fixes sequentially. Do not launch nested mutating maintenance
    agents such as `run_goal_advisor_review`; those would create multiple
    fixers. Load the read-only artifact and `improve-*` guidance as

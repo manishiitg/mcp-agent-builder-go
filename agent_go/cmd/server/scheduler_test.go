@@ -3537,3 +3537,118 @@ func writeUserChatRuntime(t *testing.T, root, userID, sessionID, provider string
 		t.Fatal(err)
 	}
 }
+
+// TestReconcileWorkshopRunOutcomeDetectsNewFailedRun reproduces BUG-20260729-10
+// (social-media, 2026-07-29): the scheduler recorded "success" for a scheduled
+// run whose triggered workflow run fully failed at its first posting step,
+// because the orchestrating workshop chat session itself completed its turns
+// without an infrastructure-level error. reconcileWorkshopRunOutcome closes
+// that gap by checking the real run_metadata.json of any NEW run folder.
+func TestReconcileWorkshopRunOutcomeDetectsNewFailedRun(t *testing.T) {
+	before := map[string]bool{"iteration-231": true}
+	after := []RunFolderInfo{
+		{Name: "iteration-231", Metadata: &RunMetadata{Status: "completed"}},
+		{Name: "iteration-232", Metadata: &RunMetadata{Status: "failed"}},
+	}
+	failedFolder, found := reconcileWorkshopRunOutcome(before, after)
+	if !found {
+		t.Fatal("expected the new failed run to be found")
+	}
+	if failedFolder != "iteration-232" {
+		t.Fatalf("failedFolder = %q, want iteration-232", failedFolder)
+	}
+}
+
+// TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure proves an older
+// run's failure — already present before this invocation started — must never
+// flip THIS invocation's own result. Only a run created during this call
+// counts.
+func TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure(t *testing.T) {
+	before := map[string]bool{"iteration-231": true}
+	after := []RunFolderInfo{
+		{Name: "iteration-231", Metadata: &RunMetadata{Status: "failed"}},
+	}
+	if _, found := reconcileWorkshopRunOutcome(before, after); found {
+		t.Fatal("a pre-existing run's failure must not be attributed to this invocation")
+	}
+}
+
+// TestReconcileWorkshopRunOutcomeIgnoresAmbiguousStates proves that anything
+// other than an explicit "failed" — no metadata, "running", "completed" — is
+// left alone rather than treated as a failure. A transient listing hiccup or
+// an in-flight run must fail open toward "cannot verify", never toward a
+// false failure that would mislabel a genuinely successful run.
+func TestReconcileWorkshopRunOutcomeIgnoresAmbiguousStates(t *testing.T) {
+	before := map[string]bool{}
+	after := []RunFolderInfo{
+		{Name: "iteration-1", Metadata: nil},
+		{Name: "iteration-2", Metadata: &RunMetadata{Status: "running"}},
+		{Name: "iteration-3", Metadata: &RunMetadata{Status: "completed"}},
+	}
+	if _, found := reconcileWorkshopRunOutcome(before, after); found {
+		t.Fatal("no folder here is explicitly \"failed\"; none should be flagged")
+	}
+}
+
+// TestReconcileWorkshopRunOutcomeHandlesGroupNestedFolders proves a group-run
+// folder name like "iteration-232/default" is diffed correctly, matching the
+// naming convention extractIterationFoldersFromTypedChildren produces for
+// group-nested runs.
+func TestReconcileWorkshopRunOutcomeHandlesGroupNestedFolders(t *testing.T) {
+	before := map[string]bool{"iteration-232/production": true}
+	after := []RunFolderInfo{
+		{Name: "iteration-232/production", Metadata: &RunMetadata{Status: "failed"}},
+		{Name: "iteration-232/staging", Metadata: &RunMetadata{Status: "failed"}},
+	}
+	failedFolder, found := reconcileWorkshopRunOutcome(before, after)
+	if !found {
+		t.Fatal("expected the new group folder's failure to be found")
+	}
+	if failedFolder != "iteration-232/staging" {
+		t.Fatalf("failedFolder = %q, want iteration-232/staging (not the pre-existing production group)", failedFolder)
+	}
+}
+
+func TestRunFolderNameSetSkipsEmptyNames(t *testing.T) {
+	set := runFolderNameSet([]RunFolderInfo{
+		{Name: "iteration-1"},
+		{Name: ""},
+		{Name: "iteration-2"},
+	})
+	if len(set) != 2 || !set["iteration-1"] || !set["iteration-2"] {
+		t.Fatalf("unexpected set: %#v", set)
+	}
+}
+
+// TestPostRunMonitorModuleStepsRemindToLoadReviewImproveLog reproduces a real
+// production gap (build-in-public, 2026-07-29): the Pulse Fixer wrote
+// builder/improve.html in the pre-redesign format because it never called
+// get_reference_doc(kind="review-improve-log") during that session at all —
+// confirmed by grepping the real session transcript (zero matches across 462
+// messages). The scheduler's own intro tells the agent to "load only the
+// focused reference named by that stage", so a rule that lives only in
+// post-run-monitor.md (never itself loaded live) is not reliably fetched.
+// Every one of the 8 per-module messages is a literal, guaranteed-seen
+// string — this is the only surface where a load instruction actually
+// reaches the agent every time, so each one must carry it.
+func TestPostRunMonitorModuleStepsRemindToLoadReviewImproveLog(t *testing.T) {
+	steps := postRunMonitorSteps()
+	moduleLabels := map[string]bool{
+		"bug-review": true, "artifact": true, "report-health": true,
+		"eval-health": true, "stores-health": true, "cost-llm-time": true,
+		"llm-ops-review": true, "goal-advisor": true,
+	}
+	checked := 0
+	for _, step := range steps {
+		if !moduleLabels[step.label] {
+			continue
+		}
+		checked++
+		if !strings.Contains(step.query, `get_reference_doc(kind="review-improve-log")`) {
+			t.Fatalf("module step %q has no instruction to load review-improve-log before its builder/improve.html update:\n%s", step.label, step.query)
+		}
+	}
+	if checked != len(moduleLabels) {
+		t.Fatalf("checked %d module steps, want %d — module label set is out of sync with postRunMonitorSteps()", checked, len(moduleLabels))
+	}
+}
