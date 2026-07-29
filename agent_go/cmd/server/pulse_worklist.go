@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	htmlpkg "golang.org/x/net/html"
 )
@@ -41,27 +42,18 @@ const (
 	pulseModuleGoalAdvisor  = "goal_advisor"
 )
 
-var pulseModuleOrder = []string{
-	pulseModuleBugReview,
-	pulseModuleArtifactReview,
-	pulseModuleReportHealth,
-	pulseModuleEvalHealth,
-	pulseModuleStoresHealth,
-	pulseModuleCostLLMTime,
-	pulseModuleLLMOpsReview,
-	pulseModuleGoalAdvisor,
-}
+// Derived from the canonical registry — see pkg/pulsemodules. Do not restate
+// the module set here; a hand-maintained second copy is exactly what caused
+// the 2026-07-29 desync.
+var pulseModuleOrder = pulsemodules.IDs()
 
-var validPulseModules = map[string]bool{
-	pulseModuleBugReview:      true,
-	pulseModuleArtifactReview: true,
-	pulseModuleReportHealth:   true,
-	pulseModuleEvalHealth:     true,
-	pulseModuleStoresHealth:   true,
-	pulseModuleCostLLMTime:    true,
-	pulseModuleLLMOpsReview:   true,
-	pulseModuleGoalAdvisor:    true,
-}
+var validPulseModules = func() map[string]bool {
+	m := make(map[string]bool, len(pulsemodules.All))
+	for _, id := range pulsemodules.IDs() {
+		m[id] = true
+	}
+	return m
+}()
 
 const pulseModuleStateSchema = `CREATE TABLE IF NOT EXISTS pulse_module_state (
 	workspace_path TEXT NOT NULL,
@@ -1174,28 +1166,7 @@ func stringSliceFromToolArg(raw interface{}) []string {
 }
 
 func normalizePulseModule(module string) string {
-	module = strings.ToLower(strings.TrimSpace(module))
-	module = strings.ReplaceAll(module, "-", "_")
-	switch module {
-	case "artifact", "artifact_drift":
-		return pulseModuleArtifactReview
-	case "report", "reporting", "report_repair":
-		return pulseModuleReportHealth
-	case "eval", "evaluation", "evaluation_health", "eval_repair":
-		return pulseModuleEvalHealth
-	case "learnings", "learning", "learning_policy", "learning_health":
-		return pulseModuleStoresHealth
-	case "kb", "knowledgebase", "knowledgebase_health":
-		return pulseModuleStoresHealth
-	case "db", "database", "db_health":
-		return pulseModuleStoresHealth
-	case "cost", "llm_cost", "cost_time":
-		return pulseModuleCostLLMTime
-	case "advisor":
-		return pulseModuleGoalAdvisor
-	default:
-		return module
-	}
+	return pulsemodules.Normalize(module)
 }
 
 func normalizePulseEvidence(evidence []string) []string {

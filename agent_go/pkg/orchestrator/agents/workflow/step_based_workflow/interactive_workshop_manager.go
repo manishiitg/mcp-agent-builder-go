@@ -27,6 +27,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
@@ -160,18 +161,19 @@ func validatePulseReviewIdentity(reviewRunID, module string) error {
 			return fmt.Errorf("review_run_id contains unsupported path characters")
 		}
 	}
-	// stores_health replaced learning_health/knowledgebase_health/db_health.
-	// The retired three stay accepted so historical pulse/reviews/<run>/<module>.md
-	// paths remain readable; only stores_health is written by current runs.
-	// Omitting stores_health here made every current stores_health reviewer fail
-	// to persist its result — this whitelist gates pulseReviewResultPath.
-	validModules := map[string]bool{
-		"bug_review": true, "artifact_review": true, "report_health": true,
-		"eval_health": true, "stores_health": true, "cost_llm_time": true,
-		"llm_ops_review": true, "goal_advisor": true,
-		"learning_health": true, "knowledgebase_health": true, "db_health": true,
+	// Derived from the canonical registry — see pkg/pulsemodules. Current
+	// modules plus retired ones, so historical pulse/reviews/<run>/<module>.md
+	// paths stay readable while only current modules are written. Omitting a
+	// current module here silently breaks that module's result persistence:
+	// that was the 2026-07-29 stores_health defect.
+	valid := false
+	for _, accepted := range pulsemodules.AcceptedForReviewArtifacts() {
+		if accepted == module {
+			valid = true
+			break
+		}
 	}
-	if !validModules[module] {
+	if !valid {
 		return fmt.Errorf("module %q is not a valid Pulse review module", module)
 	}
 	return nil

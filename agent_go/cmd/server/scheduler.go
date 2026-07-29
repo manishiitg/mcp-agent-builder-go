@@ -17,6 +17,7 @@ import (
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	stepbasedworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/robfig/cron/v3"
@@ -2298,27 +2299,10 @@ func postRunMonitorIntro(contextSummary, workspacePath, pulseRunID, runStatus, r
 		contextSummary, workspacePath, pulseRunID, runStatus, runFolder)
 }
 
+// Derived from the canonical registry — see pkg/pulsemodules. Returns "" for
+// non-module stages such as "gate" and "finalize".
 func pulseModuleForPostRunMonitorStep(label string) string {
-	switch label {
-	case "bug-review":
-		return pulseModuleBugReview
-	case "artifact":
-		return pulseModuleArtifactReview
-	case "report-health":
-		return pulseModuleReportHealth
-	case "eval-health":
-		return pulseModuleEvalHealth
-	case "stores-health":
-		return pulseModuleStoresHealth
-	case "cost-llm-time":
-		return pulseModuleCostLLMTime
-	case "llm-ops-review":
-		return pulseModuleLLMOpsReview
-	case "goal-advisor":
-		return pulseModuleGoalAdvisor
-	default:
-		return ""
-	}
+	return pulsemodules.ForStepLabel(label)
 }
 
 func isPostRunMonitorFinalStep(label string) bool {
