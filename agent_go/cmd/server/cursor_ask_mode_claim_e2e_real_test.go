@@ -146,7 +146,7 @@ func cursorBridgeBinaryPath() (string, error) {
 // startProofWritingBridge serves one tool, execute_shell_command, matching what
 // workflow steps actually use.
 //
-// The name matters. Without --force, cursor honours the operator's approvalMode
+// The name matters. Without --force, cursor honors the operator's approvalMode
 // and per-tool allowlist in ~/.cursor/cli-config.json, so a tool absent from it
 // comes back "Tool rejected: User rejected MCP: ...". execute_shell_command is
 // on that list precisely because production depends on it, which makes this the
