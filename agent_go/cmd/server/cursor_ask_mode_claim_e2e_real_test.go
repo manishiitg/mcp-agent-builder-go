@@ -1,0 +1,317 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
+	cursorcliadapter "github.com/manishiitg/multi-llm-provider-go/pkg/adapters/cursorcli"
+)
+
+// A workflow step reported STATUS: FAILED with "Ask mode blocks browser
+// automation and all required writes under $STEP_OUTPUT_DIR; switch to Agent
+// mode and re-execute", and the run was abandoned on that basis.
+//
+// The mode claim is false on its face: `cursor-agent --mode` accepts only the
+// read-only "plan" and "ask", omitting it IS agent mode, and nothing in this
+// codebase passes it. But "the model made it up" and "the bridge never attached,
+// so the agent really could not act" produce the same visible outcome — a step
+// that burns a minute and writes nothing — and blaming the wrong one sends you
+// to the wrong fix.
+//
+// These two cases separate them. Same model, same deny-builtin hooks, same
+// absence of --force and --mode; the only difference is whether the api-bridge
+// MCP server is reachable.
+//
+//   - bridge healthy → agent mode must complete the write.
+//   - bridge unreachable → the run must fail, and must say the bridge is
+//     missing rather than blaming a mode it is not in.
+//
+// Neither case may produce the ask-mode claim. An earlier version of this test
+// omitted the bridge config entirely and so only ever exercised the second case,
+// which made a broken environment look like a misbehaving model.
+//
+// Gated on RUN_CURSOR_CLI_REAL_E2E=1: real tokens on a real account.
+func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
+	requireCursorAskModeE2E(t)
+
+	model := strings.TrimSpace(os.Getenv("CURSOR_CLI_REAL_E2E_MODEL"))
+	if model == "" {
+		// The model the failing step actually used.
+		model = "grok-4.5"
+	}
+
+	t.Run("bridge healthy writes the file", func(t *testing.T) {
+		workDir := t.TempDir()
+		proof := filepath.Join(workDir, "proof.txt")
+		bridgeURL, token := startProofWritingBridge(t)
+
+		said := runCursorProbe(t, model, workDir, mcpBridgeConfigJSON(t, bridgeURL, token, true))
+
+		assertNoAskModeClaim(t, model, said)
+		if _, err := os.Stat(proof); err != nil {
+			t.Fatalf("bridge was reachable and its write_proof_file tool was advertised, "+
+				"but no file was written (%v).\nResponse:\n%s", err, said)
+		}
+	})
+
+	t.Run("bridge unreachable reports the bridge not the mode", func(t *testing.T) {
+		workDir := t.TempDir()
+		// A config pointing at a port nothing is listening on: the bridge process
+		// starts, fails to reach its API, and advertises no tools.
+		said := runCursorProbe(t, model, workDir, mcpBridgeConfigJSON(t, "http://127.0.0.1:1", "dead-token", false))
+
+		assertNoAskModeClaim(t, model, said)
+		if _, err := os.Stat(filepath.Join(workDir, "proof.txt")); err == nil {
+			t.Fatal("a file was written with no working bridge and built-ins denied — " +
+				"the deny hook is not holding")
+		}
+		// It must name the real constraint. Anything else and the operator is
+		// handed a wrong lead, which is how this investigation started.
+		if !mentionsBridgeOrDenial(said) {
+			t.Fatalf("run failed without naming the bridge or the built-in denial, "+
+				"so the transcript gives no usable cause.\nResponse:\n%s", said)
+		}
+	})
+}
+
+func requireCursorAskModeE2E(t *testing.T) {
+	t.Helper()
+	if os.Getenv("RUN_CURSOR_CLI_REAL_E2E") == "" {
+		t.Skip("set RUN_CURSOR_CLI_REAL_E2E=1 to run this real cursor-cli e2e")
+	}
+	if _, err := exec.LookPath("cursor-agent"); err != nil {
+		t.Skipf("cursor-agent binary not found: %v", err)
+	}
+	if _, err := cursorBridgeBinaryPath(); err != nil {
+		t.Skipf("%v (run `go install ./cmd/mcpbridge` in mcpagent)", err)
+	}
+}
+
+func cursorBridgeBinaryPath() (string, error) {
+	if p, err := exec.LookPath("mcpbridge"); err == nil {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		candidate := filepath.Join(home, "go", "bin", "mcpbridge")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("mcpbridge binary not found")
+}
+
+// startProofWritingBridge serves one tool, write_proof_file, which writes a
+// caller-supplied path. One tool is enough: the question is whether the agent
+// can act at all through the bridge, not what it can do.
+func startProofWritingBridge(t *testing.T) (url, token string) {
+	t.Helper()
+	token = fmt.Sprintf("cursor-ask-mode-e2e-%d", time.Now().UnixNano())
+
+	writeProof := func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.TrimSpace(body.Path) == "" {
+			http.Error(w, `{"error":"path required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := os.WriteFile(body.Path, []byte(body.Content), 0o600); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":"written"}`))
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	// The bridge addresses tools by several shapes depending on how it was
+	// launched; accept any path ending in the tool name rather than guessing one.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if auth := r.Header.Get("Authorization"); token != "" && auth != "" &&
+			!strings.Contains(auth, token) {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/write_proof_file") {
+			writeProof(w, r)
+			return
+		}
+		http.Error(w, `{"error":"unknown tool"}`, http.StatusNotFound)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL, token
+}
+
+// mcpBridgeConfigJSON builds the same .cursor/mcp.json shape production builds:
+// an "api-bridge" server run from the mcpbridge binary, with its tool list and
+// API endpoint supplied through the environment.
+func mcpBridgeConfigJSON(t *testing.T, apiURL, token string, advertiseTool bool) string {
+	t.Helper()
+	bridgePath, err := cursorBridgeBinaryPath()
+	if err != nil {
+		t.Fatalf("bridge binary: %v", err)
+	}
+
+	tools := []map[string]interface{}{}
+	if advertiseTool {
+		// Field names and "type" follow mcpbridge's ToolDef exactly: it reads
+		// `input_schema` (snake_case) and routes a "custom" tool to
+		// {apiURL}/tools/custom/{name}. An earlier version used `inputSchema`
+		// and omitted the type, and cursor reported "Schema lists no
+		// parameters" then called the tool with no arguments.
+		schema, marshalErr := json.Marshal(map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":    map[string]interface{}{"type": "string", "description": "absolute file path"},
+				"content": map[string]interface{}{"type": "string", "description": "exact file contents"},
+			},
+			"required": []string{"path", "content"},
+		})
+		if marshalErr != nil {
+			t.Fatalf("marshal input schema: %v", marshalErr)
+		}
+		tools = append(tools, map[string]interface{}{
+			"name":         "write_proof_file",
+			"description":  "Write text to an absolute file path. The ONLY way to write files in this session.",
+			"input_schema": json.RawMessage(schema),
+			"type":         "custom",
+		})
+	}
+	toolsJSON, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+
+	config := map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"api-bridge": map[string]interface{}{
+				"command": bridgePath,
+				"args":    []string{},
+				"env": map[string]string{
+					"MCP_API_URL":    apiURL,
+					"MCP_API_TOKEN":  token,
+					"MCP_TOOLS":      string(toolsJSON),
+					"MCP_BRIDGE_LOG": filepath.Join(t.TempDir(), "mcpbridge.log"),
+				},
+				"trust": true,
+			},
+		},
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal mcp config: %v", err)
+	}
+	return string(configJSON)
+}
+
+// runCursorProbe runs one turn in the production configuration and returns
+// everything the model said.
+func runCursorProbe(t *testing.T, model, workDir, mcpConfig string) string {
+	t.Helper()
+
+	streamChan := make(chan llmtypes.StreamChunk, 512)
+	var streamed strings.Builder
+	streamDone := make(chan struct{})
+	go func() {
+		for chunk := range streamChan {
+			streamed.WriteString(chunk.Content)
+		}
+		close(streamDone)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	adapter := cursorcliadapter.NewCursorCLIAdapter("", model, &e2eMockLogger{})
+	resp, callErr := adapter.GenerateContent(ctx,
+		[]llmtypes.MessageContent{{
+			Role: llmtypes.ChatMessageTypeHuman,
+			Parts: []llmtypes.ContentPart{llmtypes.TextContent{
+				Text: "Write the exact text CURSOR_AGENT_MODE_WROTE_THIS to the file " +
+					filepath.Join(workDir, "proof.txt") + ", then reply DONE. " +
+					"If something prevents the write, quote the exact error verbatim and name the tool that failed.",
+			}},
+		}},
+		cursorcliadapter.WithInteractiveSessionID(fmt.Sprintf("cursor-ask-mode-%d", time.Now().UnixNano())),
+		cursorcliadapter.WithPersistentInteractiveSession(true),
+		cursorcliadapter.WithWorkingDir(workDir),
+		// Production configuration: bridge wired in and auto-approved, built-ins
+		// denied at the hook layer, and deliberately no WithForce (which bypasses
+		// the hooks) and no WithMode (whose only values are read-only).
+		cursorcliadapter.WithMCPConfig(mcpConfig),
+		cursorcliadapter.WithApproveMCPs(),
+		cursorcliadapter.WithDenyBuiltinTools(true),
+		llmtypes.WithStreamingChan(streamChan),
+	)
+	<-streamDone
+
+	if err := cursorcliadapter.CleanupCursorCLIInteractiveSessions(context.Background()); err != nil {
+		t.Logf("cursor session cleanup: %v", err)
+	}
+
+	said := streamed.String()
+	if resp != nil && len(resp.Choices) > 0 {
+		said += "\n" + resp.Choices[0].Content
+	}
+	if callErr != nil {
+		// A transport error is still evidence; the assertions read what was said.
+		t.Logf("GenerateContent returned error (transcript still checked): %v", callErr)
+	}
+	return said
+}
+
+// assertNoAskModeClaim fails if the run blamed a mode it was not in. Matched on
+// the distinctive phrasing rather than the bare word "ask", which occurs in
+// ordinary prose.
+func assertNoAskModeClaim(t *testing.T, model, said string) {
+	t.Helper()
+	for _, claim := range []string{
+		"Ask mode blocks",
+		"switch to Agent mode",
+		"Switch to Agent mode",
+		"in Ask mode",
+	} {
+		if strings.Contains(said, claim) {
+			t.Fatalf("model %q claimed %q while running in agent mode — --mode was never "+
+				"passed and its only values are the read-only plan|ask.\nResponse:\n%s",
+				model, claim, said)
+		}
+	}
+}
+
+func mentionsBridgeOrDenial(said string) bool {
+	for _, anchor := range []string{
+		"api-bridge", "api_bridge", "bridge",
+		"Built-in filesystem/shell/edit/search/delegation tools are disabled",
+		"disabled in this session",
+		"no tools", "No api-bridge",
+	} {
+		if strings.Contains(said, anchor) {
+			return true
+		}
+	}
+	return false
+}
