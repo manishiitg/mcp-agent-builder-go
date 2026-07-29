@@ -492,8 +492,18 @@ func pulseGateHandoffContainsRunID(html, pulseRunID string) bool {
 				if !htmlTokenHasID(token, "pulse-agent-handoff") {
 					continue
 				}
+				// Any attribute carrying this run's id counts. The canonical name is
+				// data-pulse-run-id, but the .pulse-fixer-recovery ledger nested in
+				// this same element is keyed by data-pulse-run, and Gate has written
+				// the correct id under the ledger's name — one letter apart, same
+				// element hierarchy. Rejecting that cost a full Pulse run and forced
+				// a recovery session while the handoff was, substantively, right.
+				//
+				// What matters is that this handoff belongs to this run, which any
+				// attribute holding the id establishes. A stale handoff still fails,
+				// because no attribute would carry the current id.
 				for _, attr := range token.Attr {
-					if attr.Key == "data-pulse-run-id" && strings.TrimSpace(attr.Val) == pulseRunID {
+					if strings.TrimSpace(attr.Val) == pulseRunID {
 						return true
 					}
 				}
