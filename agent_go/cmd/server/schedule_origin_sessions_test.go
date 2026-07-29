@@ -85,7 +85,7 @@ func TestScheduledSessionCannotBeAnOrigin(t *testing.T) {
 	}
 }
 
-// An unknown chat scopes to itself, which is the pre-existing behaviour and the
+// An unknown chat scopes to itself, which is the pre-existing behavior and the
 // path every non-triggering chat takes.
 func TestUnknownChatScopesToItself(t *testing.T) {
 	resetScheduleOrigins(t)
