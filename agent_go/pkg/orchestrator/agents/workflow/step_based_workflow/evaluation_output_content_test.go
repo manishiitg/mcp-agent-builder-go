@@ -238,6 +238,39 @@ func TestExtractEvalVerdictFromOutputContentIgnoresNonJSONOutput(t *testing.T) {
 	}
 }
 
+// TestEvaluationStepScoreSerializesGenuineZeroScore reproduces a real
+// production report bug (EVAL-20260729-1, social-media): a step whose real,
+// legitimate verdict is a confirmed total failure — score 0 — had its "score"
+// key vanish entirely from evaluation_report.json because the field carried
+// `omitempty`, and Go's omitempty drops an int at its zero value. Once the
+// key is gone, a genuine "confirmed failing" is indistinguishable from "no
+// score captured", which is exactly the ambiguity extraction is meant to
+// remove. A real score of 0 must always serialize.
+func TestEvaluationStepScoreSerializesGenuineZeroScore(t *testing.T) {
+	score := &EvaluationStepScore{
+		StepID:    "eval-workflow-success",
+		Score:     0,
+		MaxScore:  10,
+		Reasoning: "Score 0.0/10. Confirmed failing on real evidence.",
+		Evidence:  "see output_content.json",
+	}
+	raw, err := json.Marshal(score)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode marshaled score: %v", err)
+	}
+	got, ok := decoded["score"]
+	if !ok {
+		t.Fatalf("expected \"score\" key to survive marshaling for a genuine 0, got %s", raw)
+	}
+	if got != float64(0) {
+		t.Fatalf("expected score 0, got %v", got)
+	}
+}
+
 func TestEvaluationStepMarshalsCanonicalValidationSchema(t *testing.T) {
 	step := &EvaluationStep{
 		ID:            "eval-result",

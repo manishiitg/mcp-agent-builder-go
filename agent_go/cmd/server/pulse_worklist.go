@@ -1016,6 +1016,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"get_pulse_module_state":          "workflow",
 		"mark_pulse_module_result":        "workflow",
 		"mark_pulse_final_command_result": "workflow",
+		"resolve_run_concern":             "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",

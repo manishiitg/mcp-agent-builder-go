@@ -157,8 +157,12 @@ type StepOutputContent struct {
 // look them up by step_id from evaluation_plan.json (the plan is loaded next
 // to the report by the same API endpoint).
 type EvaluationStepScore struct {
-	StepID        string             `json:"step_id"`
-	Score         int                `json:"score,omitempty"`
+	StepID string `json:"step_id"`
+	// Score has no omitempty: a genuine score of exactly 0 (a confirmed total
+	// failure — a real, legitimate value) must serialize as "score": 0, not
+	// silently vanish and become indistinguishable from "no score captured".
+	// MaxScore keeps omitempty: a legitimate max_score is never actually 0.
+	Score         int                `json:"score"`
 	MaxScore      int                `json:"max_score,omitempty"`
 	Reasoning     string             `json:"reasoning"`
 	Evidence      string             `json:"evidence"`

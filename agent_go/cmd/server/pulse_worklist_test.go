@@ -579,6 +579,31 @@ func TestFinalizeAllUnresolvedPulseCommandsAfterRestart(t *testing.T) {
 	}
 }
 
+// TestCreatePulseWorklistToolsEveryToolHasACategory reproduces a real production
+// failure: resolve_run_concern was added to the returned tool list without a
+// matching entry in the categories map, so any orchestrator whose tool set
+// included it failed at agent-creation time with "tool resolve_run_concern not
+// found in ToolCategories map - category is REQUIRED" — before the orchestrator
+// could even start (social-media's "[Route] Execution" todo_task, 2026-07-29).
+// The categories map is hand-maintained separately from the tool slice, so
+// nothing else catches a new tool silently missing its entry.
+func TestCreatePulseWorklistToolsEveryToolHasACategory(t *testing.T) {
+	tools, _, categories := createPulseWorklistTools()
+	for _, tool := range tools {
+		if tool.Function == nil {
+			t.Fatalf("tool with nil Function: %+v", tool)
+		}
+		name := tool.Function.Name
+		category, ok := categories[name]
+		if !ok {
+			t.Fatalf("tool %q has no entry in the categories map returned by createPulseWorklistTools", name)
+		}
+		if category == "" {
+			t.Fatalf("tool %q has an empty category", name)
+		}
+	}
+}
+
 func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) []PulseWorklistDecision {
 	out := make([]PulseWorklistDecision, 0, len(pulseModuleOrder))
 	for _, module := range pulseModuleOrder {
