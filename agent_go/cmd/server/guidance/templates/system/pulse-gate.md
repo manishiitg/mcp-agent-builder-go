@@ -1,40 +1,42 @@
 ## Pulse Gate / Worklist
 
 Use only for the scheduler's Gate stage — a progressive evidence scan, not a
-full audit or fixer. It selects the evidence-backed worklist; deep review
-happens later.
+full audit or fixer. It selects the worklist; deep review happens later.
 
 Read `soul/soul.md`, `builder/improve.html`, `get_pulse_module_state`, latest run
 metadata/summary, compact plan/eval/report/store freshness metadata, resolved
-LLM/tier/fallback signature, backup/publish/notification readiness, open/answered
-`report_human_inputs`, and pending human decisions. Stay on compact signals; open
-a full artifact only when one makes a targeted fact necessary.
+LLM/tier/fallback signature, backup/publish/notification readiness, and
+open/answered `report_human_inputs`. Stay on compact signals; open a full
+artifact only when a targeted fact needs it.
 
-`get_pulse_module_state` also returns `open_concerns` (with recurrence counts),
-`plan_change_backlog`, and `module_review_history`. Weigh them rather than
-re-deriving them, and justify every skip against that history: a module absent
-from it has not run at all — a reason to run it, not to assume it is fine.
+`get_pulse_module_state` also returns `open_concerns` (recurrence counts),
+`plan_change_backlog`, `stalled_loops`, and `module_review_history`. Weigh them
+rather than re-deriving them; justify every skip against that history. A module
+absent from it has not run at all — a reason to run it.
+
+**Clear `stalled_loops` first** — deterministic, not judgements; do not
+re-evaluate. `answer_not_applied` means the user answered and a later pass did
+not apply it: it outranks any new finding and the 3-cap never defers one.
 
 Compare exact pins with `list_provider_models` and `default_tier_models`.
-Provider-profile defaults auto-update; never flag them, infer freshness by name,
-or change config here.
+Provider-profile defaults auto-update; never flag them or
+infer freshness by name.
 
 For the supplied run folder, inspect every executed step/item's compact final
 result for literal `CONCERNS:` — `execution-final-summary.json` for
 regular/todo_task, `session.json` entry summaries for message_sequence, latest
 `execution-attempt-*.json` when no final summary exists.
 
-A completed step does not erase a concern. Dedupe against durable history,
-keep step/item and evidence path. `CONCERNS:` is evidence to classify,
+A completed step does not erase a concern. Dedupe against durable history, keep
+step/item and evidence path. `CONCERNS:` is evidence to classify,
 not automatic run failure.
 
 Update `builder/improve.html` once with a compact plain-English Gate/Worklist
-entry and refresh Today's outcome without duplicating the latest-run row.
-Preserve pending decisions. Keep at most three consequential active Assumptions
-challenged. Refresh `#pulse-agent-handoff` in place with current Pulse/run IDs,
-one row per module decision and next check, open/pending IDs, and evidence
-pointers. Keep Bug/Goal verdicts and important metrics truthfully labelled with
-their run/date freshness. Do not put detailed Gate mechanics on the first screen.
+entry and refresh Today's outcome without repeating the latest-run row.
+Preserve pending decisions. Keep at most three active Assumptions challenged.
+Refresh `#pulse-agent-handoff` in place with current Pulse/run IDs, one row per
+module decision and next check, open/pending IDs, and evidence pointers. Label
+Bug/Goal verdicts and metrics with their run/date freshness.
 
 Call `record_pulse_worklist` exactly once with one decision for every canonical
 module: `bug_review`, `artifact_review`, `report_health`, `eval_health`,
@@ -51,25 +53,25 @@ side-effecting, financial, auth, publishing, and communication paths stay tight.
 
 **Cap 3 per pass.** If >3 due, run the 3 strongest (new failure/concern beats
 cadence). Skip rest with `next_check_after_run_id`=this run (guarantees next
-pass), reason "deferred by 3-cap" not "clean".
+pass), reason "deferred by 3-cap", not "clean".
 
 Select modules agentically:
 
 - Bug Review: failures, suspicious success, stale/current-run contamination,
   wrong tool/source/route/decision evidence, broken runtime/evidence contracts,
-  or an off-track material goal lacking a recent exploratory QA checkpoint.
+  or an off-track material goal lacking a recent QA checkpoint.
 - Artifact/Report/Eval/Stores: relevant contract, freshness, or drift.
 - Cost/LLM/Time: missing/unpriced telemetry, material cost/latency/model
   change, or its roll-up checkpoint; not every high-frequency Pulse.
-- LLM/Ops: after config/readiness change, checkpoint, retained
-  efficiency evidence, or a catalog-confirmed exact-pin issue. Catalog changes
-  override cooldown; never silently change models/tiers.
+- LLM/Ops: after config/readiness change, checkpoint, retained efficiency
+  evidence, or a catalog-confirmed exact-pin issue. Catalog changes override
+  cooldown; never silently change models/tiers.
 - Goal Advisor: a trustworthy material goal miss, stalled outcome, measurement
-  gap, answered strategy decision, active-experiment checkpoint/problem, or a
-  reached healthy headroom/plan-design checkpoint. A clean run or green eval
+  gap, answered strategy decision, active-experiment checkpoint, or a reached
+  headroom/plan-design checkpoint. A clean run or green eval
   cannot suppress a measured miss. Operational correctness stays Bug/Eval work.
 
-Mark both Bug Review and Goal Advisor when correctness and strategy both require
+Mark both Bug Review and Goal Advisor when correctness and strategy both need
 judgment. Gate must not launch reviewers, mutate plan/config/artifacts, create
-the human-input request itself, publish, back up, or notify. Stop after recording
-the complete worklist.
+the human-input request, publish, back up, or notify. Stop after recording the
+complete worklist.
