@@ -64,6 +64,38 @@ func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
 		}
 	})
 
+	// The transport production actually uses. Everything above runs the tmux
+	// path, where WithDenyBuiltinTools installs a .cursor/hooks.json and the
+	// agent keeps full agent-mode capability. Structured mode has no hook
+	// mechanism before a one-shot --print launch, so the adapter substitutes
+	// cursor's own containment and resolves deny-builtins to "--mode ask"
+	// (cursorcli_structured_adapter.go: `if mode == "" { ... mode = "ask" }`).
+	//
+	// That makes the step read-only. Every workflow step that writes to
+	// $STEP_OUTPUT_DIR or drives a browser is launched exactly this way, so the
+	// containment costs the step the capability it exists to use — and the
+	// resulting "Ask mode blocks browser automation" report is accurate, not a
+	// model excusing itself.
+	//
+	// This asserts the behaviour we want: the same bridge, the same denial of
+	// built-ins, and a completed write. It fails until structured mode is
+	// contained by something other than a read-only mode.
+	t.Run("structured transport must not degrade to ask mode", func(t *testing.T) {
+		workDir := t.TempDir()
+		proof := filepath.Join(workDir, "proof.txt")
+		bridgeURL, token := startProofWritingBridge(t)
+
+		said := runCursorProbe(t, model, workDir, mcpBridgeConfigJSON(t, bridgeURL, token, true),
+			cursorcliadapter.WithCursorStructuredTransport(true))
+
+		assertNoAskModeClaim(t, model, said)
+		if _, err := os.Stat(proof); err != nil {
+			t.Fatalf("structured transport wrote nothing (%v). deny-builtins resolved to "+
+				"--mode ask, which is read-only, so the bridge's write tool could not be "+
+				"used.\nResponse:\n%s", err, said)
+		}
+	})
+
 	t.Run("bridge unreachable reports the bridge not the mode", func(t *testing.T) {
 		workDir := t.TempDir()
 		// A config pointing at a port nothing is listening on: the bridge process
@@ -229,7 +261,7 @@ func mcpBridgeConfigJSON(t *testing.T, apiURL, token string, advertiseTool bool)
 
 // runCursorProbe runs one turn in the production configuration and returns
 // everything the model said.
-func runCursorProbe(t *testing.T, model, workDir, mcpConfig string) string {
+func runCursorProbe(t *testing.T, model, workDir, mcpConfig string, extra ...llmtypes.CallOption) string {
 	t.Helper()
 
 	streamChan := make(chan llmtypes.StreamChunk, 512)
@@ -246,26 +278,30 @@ func runCursorProbe(t *testing.T, model, workDir, mcpConfig string) string {
 	defer cancel()
 
 	adapter := cursorcliadapter.NewCursorCLIAdapter("", model, &e2eMockLogger{})
-	resp, callErr := adapter.GenerateContent(ctx,
-		[]llmtypes.MessageContent{{
-			Role: llmtypes.ChatMessageTypeHuman,
-			Parts: []llmtypes.ContentPart{llmtypes.TextContent{
-				Text: "Write the exact text CURSOR_AGENT_MODE_WROTE_THIS to the file " +
-					filepath.Join(workDir, "proof.txt") + ", then reply DONE. " +
-					"If something prevents the write, quote the exact error verbatim and name the tool that failed.",
-			}},
+	messages := []llmtypes.MessageContent{{
+		Role: llmtypes.ChatMessageTypeHuman,
+		Parts: []llmtypes.ContentPart{llmtypes.TextContent{
+			Text: "Write the exact text CURSOR_AGENT_MODE_WROTE_THIS to the file " +
+				filepath.Join(workDir, "proof.txt") + ", then reply DONE. " +
+				"If something prevents the write, quote the exact error verbatim and name the tool that failed.",
 		}},
+	}}
+	opts := []llmtypes.CallOption{
 		cursorcliadapter.WithInteractiveSessionID(fmt.Sprintf("cursor-ask-mode-%d", time.Now().UnixNano())),
 		cursorcliadapter.WithPersistentInteractiveSession(true),
 		cursorcliadapter.WithWorkingDir(workDir),
-		// Production configuration: bridge wired in and auto-approved, built-ins
-		// denied at the hook layer, and deliberately no WithForce (which bypasses
-		// the hooks) and no WithMode (whose only values are read-only).
+		// Production configuration: bridge wired in and auto-approved, and
+		// built-ins denied. No WithForce and no explicit WithMode — the callers
+		// choose the transport, which is what decides how "deny built-ins" is
+		// actually enforced.
 		cursorcliadapter.WithMCPConfig(mcpConfig),
 		cursorcliadapter.WithApproveMCPs(),
 		cursorcliadapter.WithDenyBuiltinTools(true),
 		llmtypes.WithStreamingChan(streamChan),
-	)
+	}
+	opts = append(opts, extra...)
+
+	resp, callErr := adapter.GenerateContent(ctx, messages, opts...)
 	<-streamDone
 
 	if err := cursorcliadapter.CleanupCursorCLIInteractiveSessions(context.Background()); err != nil {
@@ -283,9 +319,14 @@ func runCursorProbe(t *testing.T, model, workDir, mcpConfig string) string {
 	return said
 }
 
-// assertNoAskModeClaim fails if the run blamed a mode it was not in. Matched on
-// the distinctive phrasing rather than the bare word "ask", which occurs in
-// ordinary prose.
+// assertNoAskModeClaim fails if the run reports being read-only. Matched on the
+// distinctive phrasing rather than the bare word "ask", which occurs in ordinary
+// prose.
+//
+// The report is accurate when it appears — nothing here is accusing the model of
+// inventing it. Under structured transport the adapter passes --mode ask on the
+// caller's behalf, so the step really is read-only and says so. What this
+// assertion pins is that a step given a write tool must end up able to use it.
 func assertNoAskModeClaim(t *testing.T, model, said string) {
 	t.Helper()
 	for _, claim := range []string{
@@ -293,10 +334,13 @@ func assertNoAskModeClaim(t *testing.T, model, said string) {
 		"switch to Agent mode",
 		"Switch to Agent mode",
 		"in Ask mode",
+		"Ask mode is active",
 	} {
 		if strings.Contains(said, claim) {
-			t.Fatalf("model %q claimed %q while running in agent mode — --mode was never "+
-				"passed and its only values are the read-only plan|ask.\nResponse:\n%s",
+			t.Fatalf("model %q reported %q. The step was launched with a write tool it is "+
+				"expected to use; a read-only mode makes that impossible. Under structured "+
+				"transport deny-builtins resolves to --mode ask "+
+				"(cursorcli_structured_adapter.go), which is the likely source.\nResponse:\n%s",
 				model, claim, said)
 		}
 	}
