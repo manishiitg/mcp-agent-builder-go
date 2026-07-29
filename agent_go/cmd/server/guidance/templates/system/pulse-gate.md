@@ -1,12 +1,12 @@
 ## Pulse Gate / Worklist
 
-Use only for the scheduler's Gate stage. Gate is a progressive evidence scan,
-not a full audit and not a fixer. It selects the evidence-backed worklist; deep
-review happens later.
+Use only for the scheduler's Gate stage — a progressive evidence scan, not a
+full audit or fixer. It selects the evidence-backed worklist; deep review
+happens later.
 
 Read `soul/soul.md`, `builder/improve.html`, `get_pulse_module_state`, latest run
-metadata/summary, compact plan/eval/report/DB/KB/learning freshness
-metadata, resolved LLM/tier/fallback signature, backup/publish/notification readiness, open/answered
+metadata/summary, compact plan/eval/report/store freshness metadata, resolved
+LLM/tier/fallback signature, backup/publish/notification readiness, open/answered
 `report_human_inputs`, and pending human decisions. Stay on compact signals; open
 a full artifact only when one makes a targeted fact necessary.
 
@@ -20,12 +20,11 @@ Provider-profile defaults auto-update; never flag them, infer freshness by name,
 or change config here.
 
 For the supplied run folder, inspect every executed step/item's compact final
-result for literal `CONCERNS:` — `logs/<step>/execution/execution-final-summary.json`
-for regular and todo_task steps, `execution/<step>/session.json` entry summaries
-for message_sequence, and the latest `execution-attempt-*.json` when no final
-summary exists.
+result for literal `CONCERNS:` — `execution-final-summary.json` for
+regular/todo_task, `session.json` entry summaries for message_sequence, latest
+`execution-attempt-*.json` when no final summary exists.
 
-A completed step does not erase a concern. Deduplicate against durable history,
+A completed step does not erase a concern. Dedupe against durable history,
 keep step/item and evidence path. `CONCERNS:` is evidence to classify,
 not automatic run failure.
 
@@ -39,9 +38,9 @@ their run/date freshness. Do not put detailed Gate mechanics on the first screen
 
 Call `record_pulse_worklist` exactly once with one decision for every canonical
 module: `bug_review`, `artifact_review`, `report_health`, `eval_health`,
-`stores_health` (learnings+knowledgebase+DB), `cost_llm_time`,
-`llm_ops_review`, and `goal_advisor`. On recovery, if this Pulse run already has
-a complete worklist, repair/verify HTML and handoff only; do not record it twice.
+`stores_health`, `cost_llm_time`, `llm_ops_review`, `goal_advisor`. On recovery,
+if this Pulse run already has a complete worklist, repair/verify HTML and
+handoff only; do not record it twice.
 
 Every skip needs reason, evidence, and one concrete next check: `next_check_at`,
 positive `cooldown_runs`, or `next_check_after_run_id`. New evidence may override
@@ -50,15 +49,18 @@ never a substitute for a baseline review. Missing baseline means
 `baseline pending`, not healthy. Use bounded adaptive cadence; correctness,
 side-effecting, financial, auth, publishing, and communication paths stay tight.
 
+**Cap 3 per pass.** If >3 due, run the 3 strongest (new failure/concern beats
+cadence). Skip rest with `next_check_after_run_id`=this run (guarantees next
+pass), reason "deferred by 3-cap" not "clean".
+
 Select modules agentically:
 
 - Bug Review: failures, suspicious success, stale/current-run contamination,
   wrong tool/source/route/decision evidence, broken runtime/evidence contracts,
   or an off-track material goal lacking a recent exploratory QA checkpoint.
-- Artifact/Report/Eval/Learning/KB/DB health: relevant contract, freshness, or
-  dependency drift in that layer.
-- Cost/LLM/Time: missing/unpriced telemetry, material cost/latency/model change,
-  or its planned roll-up checkpoint; do not run on every high-frequency Pulse.
+- Artifact/Report/Eval/Stores: relevant contract, freshness, or drift.
+- Cost/LLM/Time: missing/unpriced telemetry, material cost/latency/model
+  change, or its roll-up checkpoint; not every high-frequency Pulse.
 - LLM/Ops: after config/readiness change, checkpoint, retained
   efficiency evidence, or a catalog-confirmed exact-pin issue. Catalog changes
   override cooldown; never silently change models/tiers.

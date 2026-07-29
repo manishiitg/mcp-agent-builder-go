@@ -140,3 +140,39 @@ func TestOptimizerPromptDocumentsMessageSequenceRoutePatterns(t *testing.T) {
 		}
 	}
 }
+
+// TestPulseReviewResultPathAcceptsEveryCanonicalModule reproduces a real
+// launch blocker introduced by the stores_health merge: validatePulseReviewIdentity's
+// whitelist still listed only the three retired store modules, so every
+// current stores_health reviewer failed to persist its result file with
+// "module \"stores_health\" is not a valid Pulse review module". The whitelist
+// is hand-maintained separately from pulseModuleOrder, so nothing else catches
+// a canonical module missing from it.
+func TestPulseReviewResultPathAcceptsEveryCanonicalModule(t *testing.T) {
+	const reviewRunID = "2026-07-29T10-00-00.000Z_pulse-run-1"
+	// Mirrors cmd/server's pulseModuleOrder. Kept literal here because that
+	// package is not importable from this one.
+	for _, module := range []string{
+		"bug_review", "artifact_review", "report_health", "eval_health",
+		"stores_health", "cost_llm_time", "llm_ops_review", "goal_advisor",
+	} {
+		path, err := pulseReviewResultPath(reviewRunID, module)
+		if err != nil {
+			t.Fatalf("canonical module %q rejected by the reviewer whitelist: %v", module, err)
+		}
+		if path == "" {
+			t.Fatalf("canonical module %q produced an empty result path", module)
+		}
+	}
+}
+
+// The retired store module names stay accepted so historical reviewer
+// artifacts written before the merge remain readable.
+func TestPulseReviewResultPathStillAcceptsRetiredStoreModules(t *testing.T) {
+	const reviewRunID = "2026-07-29T10-00-00.000Z_pulse-run-1"
+	for _, module := range []string{"learning_health", "knowledgebase_health", "db_health"} {
+		if _, err := pulseReviewResultPath(reviewRunID, module); err != nil {
+			t.Fatalf("historical module %q must stay readable: %v", module, err)
+		}
+	}
+}

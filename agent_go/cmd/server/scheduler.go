@@ -2391,7 +2391,7 @@ func postRunMonitorSteps() []postRunMonitorStep {
 func postRunMonitorGateStep(pulseRunID, runFolder, runStatus string) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "gate",
-		query: fmt.Sprintf("PULSE GATE / WORKLIST. pulse_run_id=%q, run_folder=%q, run_status=%q. Load get_reference_doc(kind=\"pulse-gate\") and follow it exactly. Perform only the progressive Gate scan, update the compact durable handoff, call record_pulse_worklist exactly once with all ten module decisions, and stop. Do not launch reviewers, fix artifacts, back up, publish, or notify.",
+		query: fmt.Sprintf("PULSE GATE / WORKLIST. pulse_run_id=%q, run_folder=%q, run_status=%q. Load get_reference_doc(kind=\"pulse-gate\") and follow it exactly. Perform only the progressive Gate scan, update the compact durable handoff, call record_pulse_worklist exactly once with all eight module decisions, and stop. Do not launch reviewers, fix artifacts, back up, publish, or notify.",
 			pulseRunID, runFolder, runStatus),
 	}
 }

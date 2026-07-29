@@ -160,11 +160,16 @@ func validatePulseReviewIdentity(reviewRunID, module string) error {
 			return fmt.Errorf("review_run_id contains unsupported path characters")
 		}
 	}
+	// stores_health replaced learning_health/knowledgebase_health/db_health.
+	// The retired three stay accepted so historical pulse/reviews/<run>/<module>.md
+	// paths remain readable; only stores_health is written by current runs.
+	// Omitting stores_health here made every current stores_health reviewer fail
+	// to persist its result — this whitelist gates pulseReviewResultPath.
 	validModules := map[string]bool{
 		"bug_review": true, "artifact_review": true, "report_health": true,
-		"eval_health": true, "learning_health": true, "knowledgebase_health": true,
-		"db_health": true, "cost_llm_time": true, "llm_ops_review": true,
-		"goal_advisor": true,
+		"eval_health": true, "stores_health": true, "cost_llm_time": true,
+		"llm_ops_review": true, "goal_advisor": true,
+		"learning_health": true, "knowledgebase_health": true, "db_health": true,
 	}
 	if !validModules[module] {
 		return fmt.Errorf("module %q is not a valid Pulse review module", module)

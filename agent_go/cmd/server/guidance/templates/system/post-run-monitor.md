@@ -148,8 +148,9 @@ sections below as domain and evidence guidance.
    modules into consecutive parallel batches of at most two reviewers, and
    issue each current batch's independent `call_generic_agent` calls in the
    same tool-call batch. Never rank the due worklist and run only a "top 3" or
-   other subset: `due` means the review must receive a terminal result in this
-   Pulse run. Run every batch without dropping a module. Use the cheapest tier
+   other subset: Gate already applied the per-pass cap when it built the
+   worklist, so anything still marked `due` must receive a terminal result in
+   this Pulse run. Run every batch without dropping a module. Use the cheapest tier
    that can judge each module reliably. Do not use `run_in_background`:
    the parent Pulse turn must remain
    active until reviewer calls return, so the fixed sequence cannot reach the
@@ -175,8 +176,10 @@ sections below as domain and evidence guidance.
    with compact finding ids and evidence pointers when more findings exist.
    A clean review must explicitly return an empty finding-id manifest. Never omit a
    correctness finding merely to satisfy the cap. Call `call_generic_agent`
-   directly as a tool. Never wrap it in `execute_shell_command`, curl, a
-   temporary script, a background process, or a polling loop. Pass the exact
+   directly where exposed as a tool; in coding-agent code-execution mode it is
+   not native, so its documented API bridge shell call is the supported
+   transport there. Either way never wrap it in a temporary script, background
+   process, or polling loop. Pass the exact
    scheduler-provided `pulse_run_id`, dated `review_run_id`, and module name on
    every call. Do not add a reviewer-specific
    completion marker to the instructions:
@@ -228,13 +231,11 @@ sections below as domain and evidence guidance.
    `data-pulse-run`, with every due module, finding ids, resolved conflict-map
    disposition, and status `pending`.
    No reviewer may mutate the workflow.
-   Before touching `builder/improve.html` at all — every pass, not only when creating
-   the file or hitting an obviously old-format one — call
-   `get_reference_doc(kind="review-improve-log")`. Knowing the general shape from a
-   prior pass or training is not a substitute: the format-compliance and structural-
-   drift rules live in that document and cannot take effect on a pass that never
-   fetches it, and the existing file's current structure is not proof the loaded
-   contract still matches it.
+   Before touching `builder/improve.html`, call
+   `get_reference_doc(kind="review-improve-log")` — every pass, not only when
+   creating the file. Its format rules cannot take effect on a pass that never
+   fetches them, and the file's current structure is not proof the contract
+   still matches it.
 7. Apply bounded fixes sequentially. Do not launch nested mutating maintenance
    agents such as `run_goal_advisor_review`; those would create multiple
    fixers. Load the read-only artifact and `improve-*` guidance as
