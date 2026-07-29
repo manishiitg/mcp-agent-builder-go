@@ -2,11 +2,16 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('bot and notification settings separation', () => {
-  it('keeps Gmail and workflow webhooks out of the interactive Bots modal', () => {
+  // Gmail is account-level configuration (auth, default recipient, denylist) and
+  // the Bots modal is the only global surface that can edit it — the workflow
+  // Notify popup is per-workflow and read-only about the account channel, and it
+  // even points users at a settings page that must therefore exist. Workflow
+  // webhooks stay out: those are per-workflow and belong to Notifications.
+  it('keeps workflow webhooks out of the Bots modal but allows account-level Gmail', () => {
     const bots = readFileSync('src/components/settings/BotConnectorModal.tsx', 'utf8')
-    expect(bots).not.toContain('Gmail')
     expect(bots).not.toContain('Slack Incoming Webhook')
     expect(bots).toContain('Interactive channels')
+    expect(bots).toContain('Gmail')
   })
 
   it('exposes Notifications at workflow level and keeps it out of the global header', () => {

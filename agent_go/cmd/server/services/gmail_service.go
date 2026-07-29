@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Gmail is a single-user notification channel backed by the Google Workspace
@@ -76,7 +77,21 @@ type GmailService struct {
 	enabled   bool
 	defaultTo string
 	gwsPath   string
+
+	// Cached `gws auth status` result. That command spawns a Node CLI and takes
+	// ~5.5s, and it is on the path of every notification-settings read — so
+	// opening the Notify popup sat on a spinner for the whole call. Auth changes
+	// only on an operator running `gws auth login`/logout or a refresh token
+	// expiring, none of which are sub-minute events.
+	authCache    *GmailAuthStatus
+	authCachedAt time.Time
+	authRefresh  bool // a background refresh is already in flight
 }
+
+// gmailAuthCacheTTL bounds how stale a cached auth status may be. Short enough
+// that re-authenticating shows up almost immediately, long enough that opening
+// a popup twice does not pay for two subprocesses.
+const gmailAuthCacheTTL = 60 * time.Second
 
 var (
 	globalGmailService *GmailService
@@ -153,6 +168,9 @@ func (g *GmailService) ReloadConfig(ctx context.Context) error {
 
 	g.gwsPath = gwsPath
 	g.defaultTo = strings.TrimSpace(cfg.DefaultTo)
+	// Config changes can point at a different account (ConfigHome, Token,
+	// CredentialsFile), so a cached status may describe the previous one.
+	g.authCache, g.authCachedAt = nil, time.Time{}
 	g.enabled = cfg.Enabled && g.defaultTo != "" && binaryOK
 
 	if cfg.Enabled && !g.enabled {
@@ -203,6 +221,11 @@ type GmailAuthStatus struct {
 	HasGmailScope bool     `json:"has_gmail_scope"`
 	Scopes        []string `json:"scopes,omitempty"`
 	Detail        string   `json:"detail,omitempty"`
+
+	// Checking reports that no fresh result is known yet and a refresh is
+	// running in the background. Callers that must not block (the notification
+	// settings UI) render a pending state and re-read shortly after.
+	Checking bool `json:"checking,omitempty"`
 }
 
 // AuthStatus shells out to `gws auth status` and interprets the result. It is
@@ -212,7 +235,23 @@ func (g *GmailService) AuthStatus(ctx context.Context) GmailAuthStatus {
 	g.mu.RLock()
 	gwsPath := g.gwsPath
 	cfg := g.config
+	cached, cachedAt := g.authCache, g.authCachedAt
 	g.mu.RUnlock()
+
+	if cached != nil && time.Since(cachedAt) < gmailAuthCacheTTL {
+		return *cached
+	}
+
+	st := g.computeAuthStatus(ctx, gwsPath, cfg)
+	g.mu.Lock()
+	g.authCache, g.authCachedAt = &st, time.Now()
+	g.mu.Unlock()
+	return st
+}
+
+// computeAuthStatus runs `gws auth status` and interprets it. Split out so the
+// caching wrapper stores exactly one result regardless of which branch returns.
+func (g *GmailService) computeAuthStatus(ctx context.Context, gwsPath string, cfg *GmailConfig) GmailAuthStatus {
 	if gwsPath == "" {
 		gwsPath = "gws"
 	}
@@ -785,4 +824,46 @@ func parseGwsMessageID(out []byte) string {
 		}
 	}
 	return "sent"
+}
+
+// AuthStatusCached returns the last known auth status without ever spawning a
+// subprocess. On a miss it kicks off a background refresh and reports Checking.
+//
+// `gws auth status` takes ~5.5s — it is a Node CLI, not a network call — and it
+// sat on the synchronous path of every notification-settings read, so opening
+// the Notify popup showed a spinner for that entire time. The popup needs the
+// recipient and channel configuration, all of which is already in memory; only
+// the Gmail auth badge depends on gws, so only that badge should wait for it.
+func (g *GmailService) AuthStatusCached() GmailAuthStatus {
+	g.mu.RLock()
+	cached, cachedAt, refreshing := g.authCache, g.authCachedAt, g.authRefresh
+	gwsPath, cfg := g.gwsPath, g.config
+	g.mu.RUnlock()
+
+	if cached != nil && time.Since(cachedAt) < gmailAuthCacheTTL {
+		return *cached
+	}
+
+	if !refreshing {
+		g.mu.Lock()
+		if !g.authRefresh {
+			g.authRefresh = true
+			go func() {
+				// Detached from the request: the caller has already returned.
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				st := g.computeAuthStatus(ctx, gwsPath, cfg)
+				g.mu.Lock()
+				g.authCache, g.authCachedAt, g.authRefresh = &st, time.Now(), false
+				g.mu.Unlock()
+			}()
+		}
+		g.mu.Unlock()
+	}
+
+	if cached != nil {
+		// Stale but real: better than a pending badge while the refresh lands.
+		return *cached
+	}
+	return GmailAuthStatus{Checking: true, Detail: "checking Gmail authorization…"}
 }

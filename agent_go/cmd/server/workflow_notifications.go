@@ -31,6 +31,13 @@ type WorkflowNotificationAccountChannelInfo struct {
 	State            string `json:"state"`
 	DefaultRecipient string `json:"default_recipient,omitempty"`
 	Summary          string `json:"summary,omitempty"`
+	// BlockedRecipients is the account-wide email denylist. Shown alongside the
+	// default recipient so the settings UI can state where mail will and will
+	// not go without the reader opening a config file.
+	BlockedRecipients []string `json:"blocked_recipients,omitempty"`
+	// Checking reports that Gmail authorization is still being resolved in the
+	// background; the row renders immediately and settles when it lands.
+	Checking bool `json:"checking,omitempty"`
 }
 
 type WorkflowNotificationInfoResponse struct {
@@ -99,19 +106,28 @@ func notificationAccountChannels(ctx context.Context) []WorkflowNotificationAcco
 	accountChannels := []WorkflowNotificationAccountChannelInfo{}
 	if gmail, gmailErr := ensureGmailService(); gmailErr == nil {
 		config := gmail.GetConfig()
-		auth := gmail.AuthStatus(ctx)
+		// Never block this handler on `gws auth status` (~5.5s, a Node CLI). The
+		// popup needs the recipients and channel config, all already in memory;
+		// only the auth badge depends on gws, so only it waits.
+		auth := gmail.AuthStatusCached()
 		gmailState := "not_ready"
 		gmailSummary := "Gmail is not ready at account level."
-		if config.Enabled && strings.TrimSpace(config.DefaultTo) != "" && auth.Authenticated && auth.HasGmailScope {
+		switch {
+		case auth.Checking:
+			gmailState = "checking"
+			gmailSummary = "Checking Gmail authorization…"
+		case config.Enabled && strings.TrimSpace(config.DefaultTo) != "" && auth.Authenticated && auth.HasGmailScope:
 			gmailState = "ready"
 			gmailSummary = "Available as an inherited account-level channel."
 		}
 		accountChannels = append(accountChannels, WorkflowNotificationAccountChannelInfo{
-			ID:               "gmail",
-			Label:            "Gmail account channel",
-			State:            gmailState,
-			DefaultRecipient: config.DefaultTo,
-			Summary:          gmailSummary,
+			ID:                "gmail",
+			Label:             "Gmail account channel",
+			State:             gmailState,
+			DefaultRecipient:  config.DefaultTo,
+			BlockedRecipients: config.BlockedRecipients,
+			Summary:           gmailSummary,
+			Checking:          auth.Checking,
 		})
 	}
 	return accountChannels

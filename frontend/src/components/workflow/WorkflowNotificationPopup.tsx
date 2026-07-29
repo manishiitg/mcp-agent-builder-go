@@ -109,11 +109,26 @@ export default function WorkflowNotificationPopup({
     if (isOpen) void load()
   }, [isOpen, load])
 
+  // Gmail auth resolves in a background subprocess on the server (~5s), so the
+  // first read returns state="checking" rather than making the popup wait. Poll
+  // until it settles; this is the only field that arrives late.
+  useEffect(() => {
+    if (!isOpen || info?.gmail?.state !== 'checking') return
+    const timer = setTimeout(() => { void load() }, 1500)
+    return () => clearTimeout(timer)
+  }, [isOpen, info?.gmail?.state, load])
+
   if (!isOpen) return null
 
   const state = info?.effectiveState || 'not_configured'
   const StateIcon = state === 'ready' ? CheckCircle2 : state === 'missing_secret' || state === 'invalid_secret' ? AlertCircle : BellRing
   const gmailReady = info?.gmail?.state === 'ready'
+  const gmailChecking = info?.gmail?.state === 'checking'
+  // Where mail actually lands. The agent may name its own recipients per send,
+  // so the default is the floor, not the whole story — and the denylist applies
+  // either way, which is the part worth stating outright.
+  const gmailDefault = info?.gmail?.default_recipient?.trim() || ''
+  const gmailBlocked = info?.gmail?.blocked_recipients || []
   const scopeName = info?.scopeLabel || workspacePath?.split('/').filter(Boolean).pop() || (scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'Workflow')
   const scopeLabel = scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'workflow'
   const instructionsDirty = runInstructions.trim() !== (info?.runSummaryInstructions || '').trim()
@@ -261,12 +276,28 @@ export default function WorkflowNotificationPopup({
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {gmailReady
-                            ? `Available to ${scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'this workflow'}${info.gmail?.default_recipient ? ` · default ${info.gmail.default_recipient}` : ''}. The agent may supply specific recipients when explicitly configured.`
+                            ? `Available to ${scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'this workflow'}. The agent may supply specific recipients when explicitly configured.`
                             : info.gmail?.summary || 'Not ready at account level. Configure and test Gmail from Notification channels.'}
                         </p>
+                        {(gmailDefault || gmailBlocked.length > 0) && (
+                          <dl className="mt-2 space-y-1 text-xs">
+                            {gmailDefault && (
+                              <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                <dt className="text-muted-foreground">Sends to</dt>
+                                <dd className="font-mono text-foreground">{gmailDefault}</dd>
+                              </div>
+                            )}
+                            {gmailBlocked.length > 0 && (
+                              <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                <dt className="text-muted-foreground">Never sends to</dt>
+                                <dd className="font-mono text-foreground">{gmailBlocked.join(', ')}</dd>
+                              </div>
+                            )}
+                          </dl>
+                        )}
                       </div>
                       <span className={`w-fit rounded-full border px-2 py-0.5 text-xs ${gmailReady ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border bg-background text-muted-foreground'}`}>
-                        {gmailReady ? 'Available' : 'Not ready'}
+                        {gmailChecking ? 'Checking…' : gmailReady ? 'Available' : 'Not ready'}
                       </span>
                     </div>
                   </div>

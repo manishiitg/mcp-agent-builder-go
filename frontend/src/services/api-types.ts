@@ -2365,9 +2365,12 @@ export interface WorkflowNotificationDestinationInfo {
 export interface WorkflowNotificationAccountChannelInfo {
   id: string
   label: string
-  state: 'ready' | 'not_ready' | string
+  state: 'ready' | 'not_ready' | 'checking' | string
   default_recipient?: string
   summary?: string
+  blocked_recipients?: string[]
+  /** Gmail authorization is still resolving in the background. */
+  checking?: boolean
 }
 
 export interface WorkflowNotificationInfoResponse {
