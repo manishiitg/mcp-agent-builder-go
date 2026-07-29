@@ -53,13 +53,13 @@ func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
 	t.Run("bridge healthy writes the file", func(t *testing.T) {
 		workDir := t.TempDir()
 		proof := filepath.Join(workDir, "proof.txt")
-		bridgeURL, token := startProofWritingBridge(t)
+		bridgeURL, token := startProofWritingBridge(t, workDir)
 
 		said := runCursorProbe(t, model, workDir, mcpBridgeConfigJSON(t, bridgeURL, token, true))
 
 		assertNoAskModeClaim(t, model, said)
 		if _, err := os.Stat(proof); err != nil {
-			t.Fatalf("bridge was reachable and its write_proof_file tool was advertised, "+
+			t.Fatalf("bridge was reachable and its execute_shell_command tool was advertised, "+
 				"but no file was written (%v).\nResponse:\n%s", err, said)
 		}
 	})
@@ -83,7 +83,7 @@ func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
 	t.Run("structured transport must not degrade to ask mode", func(t *testing.T) {
 		workDir := t.TempDir()
 		proof := filepath.Join(workDir, "proof.txt")
-		bridgeURL, token := startProofWritingBridge(t)
+		bridgeURL, token := startProofWritingBridge(t, workDir)
 
 		said := runCursorProbe(t, model, workDir, mcpBridgeConfigJSON(t, bridgeURL, token, true),
 			cursorcliadapter.WithCursorStructuredTransport(true))
@@ -143,29 +143,45 @@ func cursorBridgeBinaryPath() (string, error) {
 	return "", fmt.Errorf("mcpbridge binary not found")
 }
 
-// startProofWritingBridge serves one tool, write_proof_file, which writes a
-// caller-supplied path. One tool is enough: the question is whether the agent
-// can act at all through the bridge, not what it can do.
-func startProofWritingBridge(t *testing.T) (url, token string) {
+// startProofWritingBridge serves one tool, execute_shell_command, matching what
+// workflow steps actually use.
+//
+// The name matters. Without --force, cursor honours the operator's approvalMode
+// and per-tool allowlist in ~/.cursor/cli-config.json, so a tool absent from it
+// comes back "Tool rejected: User rejected MCP: ...". execute_shell_command is
+// on that list precisely because production depends on it, which makes this the
+// faithful choice as well as the working one.
+func startProofWritingBridge(t *testing.T, shellDir string) (url, token string) {
 	t.Helper()
 	token = fmt.Sprintf("cursor-ask-mode-e2e-%d", time.Now().UnixNano())
 
-	writeProof := func(w http.ResponseWriter, r *http.Request) {
+	runShell := func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
+			Command string `json:"command"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if strings.TrimSpace(body.Path) == "" {
-			http.Error(w, `{"error":"path required"}`, http.StatusBadRequest)
+		command := strings.TrimSpace(body.Command)
+		if command == "" {
+			http.Error(w, `{"error":"command required"}`, http.StatusBadRequest)
 			return
 		}
-		if err := os.WriteFile(body.Path, []byte(body.Content), 0o600); err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
-			return
+		// Same contract as the real tool: run it, hand back stdout/stderr/exit.
+		cmd := exec.Command("sh", "-c", command)
+		cmd.Dir = shellDir
+		out, runErr := cmd.CombinedOutput()
+		exitCode := 0
+		if runErr != nil {
+			exitCode = 1
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"result":"written"}`))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": runErr == nil,
+			"data": map[string]interface{}{
+				"stdout":    string(out),
+				"stderr":    "",
+				"exit_code": exitCode,
+			},
+		})
 	}
 
 	mux := http.NewServeMux()
@@ -185,8 +201,8 @@ func startProofWritingBridge(t *testing.T) (url, token string) {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/write_proof_file") {
-			writeProof(w, r)
+		if strings.HasSuffix(r.URL.Path, "/execute_shell_command") {
+			runShell(w, r)
 			return
 		}
 		http.Error(w, `{"error":"unknown tool"}`, http.StatusNotFound)
@@ -217,17 +233,16 @@ func mcpBridgeConfigJSON(t *testing.T, apiURL, token string, advertiseTool bool)
 		schema, marshalErr := json.Marshal(map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":    map[string]interface{}{"type": "string", "description": "absolute file path"},
-				"content": map[string]interface{}{"type": "string", "description": "exact file contents"},
+				"command": map[string]interface{}{"type": "string", "description": "shell command to run"},
 			},
-			"required": []string{"path", "content"},
+			"required": []string{"command"},
 		})
 		if marshalErr != nil {
 			t.Fatalf("marshal input schema: %v", marshalErr)
 		}
 		tools = append(tools, map[string]interface{}{
-			"name":         "write_proof_file",
-			"description":  "Write text to an absolute file path. The ONLY way to write files in this session.",
+			"name":         "execute_shell_command",
+			"description":  "Run a shell command. The ONLY way to touch the filesystem in this session.",
 			"input_schema": json.RawMessage(schema),
 			"type":         "custom",
 		})
