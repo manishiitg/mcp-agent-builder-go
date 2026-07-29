@@ -8438,7 +8438,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				workspacePath = wp
 			}
-			_, err := api.scheduler.TriggerNow(workspacePath, jobID)
+			// Pass the chat that asked, so the run's terminals show up in its rail
+			// instead of only under the schedule's own session.
+			_, err := api.scheduler.TriggerNowFromSession(workspacePath, jobID, chatSessionIDFromContext(ctx))
 			if err != nil {
 				return "", err
 			}

@@ -34,6 +34,10 @@ type ScheduleContext struct {
 	UserID        string // Set for multi-agent schedules (derived from _users/{userID}/ path)
 	SourceType    string // "workflow" or "multi-agent"
 	TriggerSource string // "cron" (default) or "manual"; encoded into the session ID
+	// OriginSessionID is the chat session that triggered this run, when one did.
+	// A scheduled run mints its own session, so without this link its terminals
+	// are invisible to the tab that asked for the run. Empty for cron.
+	OriginSessionID string
 	// ForcePostRunMonitor is used by the toolbar's one-off Pulse action. It
 	// reuses the scheduled-run pipeline without enabling recurring Pulse.
 	ForcePostRunMonitor bool
@@ -103,7 +107,11 @@ func (s *SchedulerService) newScheduleSessionID(sctx *ScheduleContext) string {
 	if len(idPrefix) > 8 {
 		idPrefix = idPrefix[:8]
 	}
-	return fmt.Sprintf("schedule-%s--%s_%d", trigger, idPrefix, time.Now().UnixNano())
+	sessionID := fmt.Sprintf("schedule-%s--%s_%d", trigger, idPrefix, time.Now().UnixNano())
+	// Link it back to the chat that asked, so that chat's terminal rail can show
+	// the run it started. No-op for cron, which has no originating chat.
+	rememberScheduleOrigin(sessionID, sctx.OriginSessionID)
+	return sessionID
 }
 
 // ScheduleRuntimeState holds in-memory runtime state for a schedule (not persisted in manifest).
@@ -1047,6 +1055,12 @@ func (s *SchedulerService) GetUserForSchedule(scheduleID string) string {
 
 // TriggerNow triggers a schedule immediately (for manual trigger API).
 func (s *SchedulerService) TriggerNow(workspacePath string, scheduleID string) (string, error) {
+	return s.TriggerNowFromSession(workspacePath, scheduleID, "")
+}
+
+// TriggerNowFromSession is TriggerNow with the chat session that asked for the
+// run, so the run's terminals can be surfaced in that chat.
+func (s *SchedulerService) TriggerNowFromSession(workspacePath, scheduleID, originSessionID string) (string, error) {
 	ctx := context.Background()
 
 	manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
@@ -1066,6 +1080,7 @@ func (s *SchedulerService) TriggerNow(workspacePath string, scheduleID string) (
 	}
 	sctx := buildScheduleContext(workspacePath, manifest, *sched)
 	sctx.TriggerSource = "manual"
+	sctx.OriginSessionID = originSessionID
 	startTime := time.Now().UTC()
 
 	// A workflow may have one interactive builder chat and one schedule at the

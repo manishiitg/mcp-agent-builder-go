@@ -145,11 +145,31 @@ func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Requ
 	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 	contentMode := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("content")))
 	activeOnly := parseTerminalActiveOnly(r.URL.Query().Get("active_only"))
+	// A run triggered from this chat mints its own scheduled session, so its
+	// step and sub-agent terminals are filed there rather than here. Listing the
+	// chat alone showed only the chat's own agent while the work it asked for sat
+	// under a session the tab never queries. Include those runs, and nothing else:
+	// scopes stay per-chat, and cron runs (no originating chat) are unaffected.
+	scopes := sessionsTriggeredFrom(sessionID)
+	if len(scopes) == 0 {
+		scopes = []string{sessionID}
+	}
 	var snapshots []terminals.Snapshot
-	if isMetadataOnlyTerminalList(contentMode) {
-		snapshots = api.terminalStore.ListMetadata(sessionID)
-	} else {
-		snapshots = api.terminalStore.List(sessionID)
+	seenTerminalIDs := make(map[string]struct{})
+	for _, scope := range scopes {
+		var scoped []terminals.Snapshot
+		if isMetadataOnlyTerminalList(contentMode) {
+			scoped = api.terminalStore.ListMetadata(scope)
+		} else {
+			scoped = api.terminalStore.List(scope)
+		}
+		for _, snapshot := range scoped {
+			if _, seen := seenTerminalIDs[snapshot.TerminalID]; seen {
+				continue
+			}
+			seenTerminalIDs[snapshot.TerminalID] = struct{}{}
+			snapshots = append(snapshots, snapshot)
+		}
 	}
 	planTypes := newTerminalPlanTypeResolver(r.Context())
 	filtered := make([]terminals.Snapshot, 0, len(snapshots))
