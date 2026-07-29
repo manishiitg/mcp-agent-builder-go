@@ -77,7 +77,7 @@ func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
 	// resulting "Ask mode blocks browser automation" report is accurate, not a
 	// model excusing itself.
 	//
-	// This asserts the behaviour we want: the same bridge, the same denial of
+	// This asserts the behavior we want: the same bridge, the same denial of
 	// built-ins, and a completed write. It fails until structured mode is
 	// contained by something other than a read-only mode.
 	t.Run("structured transport must not degrade to ask mode", func(t *testing.T) {
