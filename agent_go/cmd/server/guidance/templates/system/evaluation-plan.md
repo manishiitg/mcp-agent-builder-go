@@ -80,3 +80,15 @@ A good eval catches a bad run — including one that *looks* successful. Design 
 - Plan: `evaluation/evaluation_plan.json`
 - Step config: `evaluation/step_config.json`
 - Eval runs + reports: `evaluation/runs/iteration-0[/group]/`
+
+### Where verdicts end up
+
+Each step's own `score`/`max_score`/`reasoning` (or `pass_fail_reason`) written into its
+output is the source of truth — there is no separate scoring agent. After the run, Go
+extracts that verdict into `evaluation_report.json` (published under the target run's
+`evaluation/runs/<run_folder>/`) and mirrors the same rows into `db/db.sqlite`'s
+framework-owned `eval_results` table (`run_folder`, `step_id`, `score`, `max_score`,
+`reasoning`, `evidence`), read-only, so `report_health` can surface verdicts via
+`window.report.query` without a separate measurement step. Never insert into
+`eval_results` from an eval step — it is written by the framework, the same way
+`run_concerns` is.

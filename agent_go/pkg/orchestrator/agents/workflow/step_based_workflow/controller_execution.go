@@ -2352,7 +2352,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Persist pre-validation results for Pulse Bug Review and diagnostics.
 				if hcpo.selectedRunFolder != "" {
 					preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema)
+					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 				}
 
 				// Build validation response based on pre-validation results

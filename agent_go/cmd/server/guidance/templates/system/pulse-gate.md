@@ -39,7 +39,7 @@ their run/date freshness. Do not put detailed Gate mechanics on the first screen
 
 Call `record_pulse_worklist` exactly once with one decision for every canonical
 module: `bug_review`, `artifact_review`, `report_health`, `eval_health`,
-`learning_health`, `knowledgebase_health`, `db_health`, `cost_llm_time`,
+`stores_health` (learnings+knowledgebase+DB), `cost_llm_time`,
 `llm_ops_review`, and `goal_advisor`. On recovery, if this Pulse run already has
 a complete worklist, repair/verify HTML and handoff only; do not record it twice.
 

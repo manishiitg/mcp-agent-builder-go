@@ -142,7 +142,18 @@ type PreValidationLogEntry struct {
 }
 
 // SavePreValidationLog writes pre-validation results to the step's log folder.
-// Path: logs/{stepID}/pre_validation.json
+// Path: logs/{stepID}/pre_validation.json. This file is overwritten on every
+// attempt (see saveMessageSequencePreValidationLog's doc comment), so it is
+// never where a chronic gate problem becomes visible on its own -- a step that
+// fails and then passes on repair looks identical to one that always passes.
+// A failing result is therefore also filed as a durable, cross-run,
+// deduplicated concern via RecordRunConcerns (db/db.sqlite, not this file):
+// unlike the log file, that record survives past this run, aggregates
+// (seen_count) across every run where the same field keeps failing, and
+// automatically routes bug_review due on Pulse's next Gate pass. workspaceRoot,
+// runFolder, and groupName address that db row; validationWorkspacePath
+// addresses this run's own log file and is typically workspaceRoot +
+// "/runs/" + runFolder.
 func SavePreValidationLog(
 	ctx context.Context,
 	bo *orchestrator.BaseOrchestrator,
@@ -151,6 +162,9 @@ func SavePreValidationLog(
 	stepPath string,
 	results *WorkspaceVerificationResult,
 	schema *ValidationSchema,
+	workspaceRoot string,
+	runFolder string,
+	groupName string,
 ) {
 	if results == nil {
 		return
@@ -177,6 +191,37 @@ func SavePreValidationLog(
 	logFolder := getArtifactFolderName(stepID, stepPath)
 	logPath := fmt.Sprintf("%s/logs/%s/pre_validation.json", validationWorkspacePath, logFolder)
 	_ = bo.WriteWorkspaceFile(ctx, logPath, string(data))
+
+	if !results.OverallPass && strings.TrimSpace(workspaceRoot) != "" {
+		if summary := buildPreValidationConcernSummary(results); summary != "" {
+			_, _ = RecordRunConcerns(ctx, workspaceRoot, runFolder, groupName, stepID, ConcernPhasePreValidation, summary)
+		}
+	}
+}
+
+// buildPreValidationConcernSummary renders one CONCERNS: line per failing
+// check, the shape RecordRunConcerns/ParseConcernLines expects. One line per
+// check (not one blob for the whole failure) is deliberate: each check has
+// its own concernFingerprint, so a field that keeps failing across many runs
+// accumulates its own seen_count instead of being invisible inside a summary
+// that changes shape every time a different check also happens to fail.
+func buildPreValidationConcernSummary(results *WorkspaceVerificationResult) string {
+	if results == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range results.Summary.Errors {
+		location := strings.TrimSpace(strings.TrimSpace(e.File) + " " + strings.TrimSpace(e.Path))
+		message := strings.TrimSpace(e.Message)
+		if message == "" {
+			message = strings.TrimSpace(e.CheckType)
+		}
+		if location == "" && message == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s prevalidation gate failed at %s: %s\n", concernLinePrefix, location, message)
+	}
+	return b.String()
 }
 
 // validateSchemaLimits checks if the schema exceeds resource limits

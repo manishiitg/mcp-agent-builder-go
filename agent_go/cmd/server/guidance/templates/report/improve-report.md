@@ -41,6 +41,7 @@ The report dashboard should help the user measure and track whether the workflow
 GOAL TRACKING CONTRACT
 Before proposing visual/layout work, translate `soul.md` success criteria into the dashboard's tracked signals using existing evidence:
 - For each important success criterion, show the best available signal from `db/db.sqlite`, `evaluation/`, `costs/`, `workflow.json`, `builder/improve.html`, or durable report-facing files.
+- If `evaluation_plan.json` has an eval step scoring this criterion, its verdict is already a `db/db.sqlite` row — see EVALUATION VERDICTS below — no separate measurement step is needed for that criterion.
 - Prefer a compact goal band: status, current value/state, target/baseline, trend/delta vs prior run/window, last updated, and a short plain-language interpretation.
 - If a success criterion cannot be measured from existing persisted evidence, show an honest "not measured yet" or "missing evidence" state and log the missing data requirement. Do not hardcode guesses and do not create a separate metrics system.
 - Keep detailed tables/charts below the goal band; the user should know progress and issues before inspecting raw rows.
@@ -63,6 +64,19 @@ GOAL ADVISOR MEASUREMENT HANDOFF
 - If a Goal Advisor proposal identifies a useful metric but no approved
   collection step/data exists, log the missing-data handoff for Goal Advisor or
   plan work. Report Health must not create workflow steps itself.
+
+EVALUATION VERDICTS
+- Each eval step in `evaluation_plan.json` already writes its own score/reasoning into
+  `db/db.sqlite`'s framework-owned `eval_results` table (one row per `run_folder` +
+  `step_id`: `score`, `max_score`, `reasoning`, `evidence`) — no extra step or measurement
+  contract needed. Query it directly via `window.report.query`, same as any other table.
+- Never blend `eval_results` rows into one combined pass/fail number. Per soul.md's "no
+  blob score" rule, each row is its own criterion; show them as separate signals (one per
+  row, or grouped under the success criterion each step scores) with a worst-case rollup
+  at most, not an average.
+- A criterion with no matching `eval_results` row for the current `run_folder` has not
+  been evaluated yet for this run — show "not evaluated" or the last available run's
+  verdict with its run/date, never zero or "passing" by default.
 
 MODE
 - **Interactive/user-initiated mode:** show proposed changes concretely, but do not edit or ask from the reviewer.

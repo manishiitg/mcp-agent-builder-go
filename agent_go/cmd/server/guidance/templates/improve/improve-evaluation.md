@@ -47,6 +47,12 @@ PASS 1 - STRUCTURAL VALIDATION REVIEW
    after any edit.
 2. For each error, explain what is wrong in plain language, show the eval step/widget/field it refers to, and propose the exact fix.
 3. For warnings, separate correctness-risk warnings from lower-priority quality issues.
+4. Mirror check: `evaluation_report.json`'s `step_scores` should have a matching row
+   per step in `db/db.sqlite`'s `eval_results` table for the same `run_folder` (Go
+   writes both after every eval run — see `evaluation-plan.md`). A report with no
+   matching `eval_results` rows means the db.sqlite mirror silently failed for that
+   run; the report file itself is still authoritative, but `report_health` cannot
+   see it via `window.report.query` until the mirror is fixed — flag as OPERATIONAL.
 
 PASS 2 - OUTPUT-FIRST ALIGNMENT
 1. Read the latest meaningful run outputs under `runs/`, then read the matching eval reports.{{if .RunFolder}} Use the selected run folder "{{.RunFolder}}" as the primary evidence set.{{end}}

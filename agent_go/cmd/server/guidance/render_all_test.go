@@ -734,7 +734,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 
 func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 	cases := map[string][]string{
-		"design-plan":           {`data-pulse-section="signals"`, `data-module="goal_advisor"`, "never discard findings"},
+		"design-plan":           {`data-pulse-section="signals"`, "data-module` set per the attribution rule above", "never discard findings"},
 		"review-code":           {`data-pulse-section="signals"`, `data-module="bug_review"`, "every finding"},
 		"review-cost":           {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
 		"review-speed":          {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
@@ -1268,7 +1268,7 @@ func TestWorkflowPatternsUseCurrentRuntimeAndStoreContracts(t *testing.T) {
 }
 
 // The store freshness mechanism: Gate reads the code-owned _freshness ledgers and
-// marks learning_health / knowledgebase_health due on a confirmation-recency
+// marks stores_health due (for its learnings/KB dimensions) on a confirmation-recency
 // signal; the reviewer docs gain a re-verify -> demote pass and protect the
 // code-owned ledger from edits.
 func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {

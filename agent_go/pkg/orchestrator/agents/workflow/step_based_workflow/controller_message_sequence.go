@@ -702,7 +702,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequencePreValidationLog(
 		return
 	}
 	preValidationLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema)
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 }
 
 // summarizeMessageSequencePrevalidationErrors renders a one-line, comma-joined

@@ -16,16 +16,29 @@ import (
 )
 
 const (
-	pulseModuleBugReview           = "bug_review"
-	pulseModuleArtifactReview      = "artifact_review"
-	pulseModuleReportHealth        = "report_health"
-	pulseModuleEvalHealth          = "eval_health"
-	pulseModuleLearningHealth      = "learning_health"
-	pulseModuleKnowledgebaseHealth = "knowledgebase_health"
-	pulseModuleDBHealth            = "db_health"
-	pulseModuleCostLLMTime         = "cost_llm_time"
-	pulseModuleLLMOpsReview        = "llm_ops_review"
-	pulseModuleGoalAdvisor         = "goal_advisor"
+	pulseModuleBugReview      = "bug_review"
+	pulseModuleArtifactReview = "artifact_review"
+	pulseModuleReportHealth   = "report_health"
+	pulseModuleEvalHealth     = "eval_health"
+	// pulseModuleStoresHealth replaces the former separate learning_health,
+	// knowledgebase_health, and db_health modules. All three shared the same
+	// due-cadence mechanism (Reviewed-baseline rule, no special throttling),
+	// the same freshness-recency check pattern, the same plan_change_backlog
+	// trigger, and the same bounded-fix authority — mechanically identical,
+	// only the content domain (learnings HOW / KB facts / DB schema) differed.
+	// One due-decision and one Fixer pass now covers all three, each with its
+	// own small checklist inside.
+	pulseModuleStoresHealth = "stores_health"
+	pulseModuleCostLLMTime  = "cost_llm_time"
+	// pulseModuleLLMOpsReview also owns plan-design hygiene (step-type
+	// fitness, prevalidation fitness, schema/description drift) alongside its
+	// original model/tier/catalog scope — see its due-trigger section in
+	// post-run-monitor.md. This was previously unowned: Goal Advisor's own
+	// contract explicitly excludes plan-cleanup content, so a plan-design
+	// change trigger inside Goal Advisor was never actually consistent with
+	// what Goal Advisor is for.
+	pulseModuleLLMOpsReview = "llm_ops_review"
+	pulseModuleGoalAdvisor  = "goal_advisor"
 )
 
 var pulseModuleOrder = []string{
@@ -33,25 +46,21 @@ var pulseModuleOrder = []string{
 	pulseModuleArtifactReview,
 	pulseModuleReportHealth,
 	pulseModuleEvalHealth,
-	pulseModuleLearningHealth,
-	pulseModuleKnowledgebaseHealth,
-	pulseModuleDBHealth,
+	pulseModuleStoresHealth,
 	pulseModuleCostLLMTime,
 	pulseModuleLLMOpsReview,
 	pulseModuleGoalAdvisor,
 }
 
 var validPulseModules = map[string]bool{
-	pulseModuleBugReview:           true,
-	pulseModuleArtifactReview:      true,
-	pulseModuleReportHealth:        true,
-	pulseModuleEvalHealth:          true,
-	pulseModuleLearningHealth:      true,
-	pulseModuleKnowledgebaseHealth: true,
-	pulseModuleDBHealth:            true,
-	pulseModuleCostLLMTime:         true,
-	pulseModuleLLMOpsReview:        true,
-	pulseModuleGoalAdvisor:         true,
+	pulseModuleBugReview:      true,
+	pulseModuleArtifactReview: true,
+	pulseModuleReportHealth:   true,
+	pulseModuleEvalHealth:     true,
+	pulseModuleStoresHealth:   true,
+	pulseModuleCostLLMTime:    true,
+	pulseModuleLLMOpsReview:   true,
+	pulseModuleGoalAdvisor:    true,
 }
 
 const pulseModuleStateSchema = `CREATE TABLE IF NOT EXISTS pulse_module_state (
@@ -815,7 +824,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: "Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each Pulse module: bug_review, artifact_review, learning_health, knowledgebase_health, db_health, eval_health, report_health, cost_llm_time, llm_ops_review, and goal_advisor. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.",
+			Description: "Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each Pulse module: bug_review, artifact_review, report_health, eval_health, stores_health, cost_llm_time, llm_ops_review, and goal_advisor. stores_health covers learnings, knowledgebase, and database freshness/quality — do not pass the old learning_health/knowledgebase_health/db_health names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1173,12 +1182,12 @@ func normalizePulseModule(module string) string {
 		return pulseModuleReportHealth
 	case "eval", "evaluation", "evaluation_health", "eval_repair":
 		return pulseModuleEvalHealth
-	case "learnings", "learning", "learning_policy":
-		return pulseModuleLearningHealth
-	case "kb", "knowledgebase":
-		return pulseModuleKnowledgebaseHealth
-	case "db", "database":
-		return pulseModuleDBHealth
+	case "learnings", "learning", "learning_policy", "learning_health":
+		return pulseModuleStoresHealth
+	case "kb", "knowledgebase", "knowledgebase_health":
+		return pulseModuleStoresHealth
+	case "db", "database", "db_health":
+		return pulseModuleStoresHealth
 	case "cost", "llm_cost", "cost_time":
 		return pulseModuleCostLLMTime
 	case "advisor":

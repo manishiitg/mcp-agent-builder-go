@@ -66,7 +66,27 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
    deliverable really is a file and whose gate already checks meaningful proof is
    correct — not every step has a db; recommend the check that fits the step's
    real output. Record `no_issue` when the gate already proves the effect.
-8. Return `QA coverage`, `expected versus observed`, exact evidence, confidence,
+8. Check `get_pulse_module_state`'s `open_concerns` for `phase="prevalidation"`
+   entries — these are filed by Go itself the moment a step's `validation_schema`
+   check fails, so they exist even for a step that eventually passed after
+   repair and left no other trace. A `seen_count` > 1 means the same field keeps
+   failing across separate runs, not just within one. For each, read the exact
+   failing check and the step's own description, then decide which side is
+   wrong before proposing a fix:
+   - the description never told the agent to produce that field → `correctness_bug`
+     (schema/description drift); bounded fix = add the field to the description
+   - the schema demands a non-null value for a field the step's own branching
+     logic can legitimately leave absent → `correctness_bug` (schema forces
+     fabrication); bounded fix = make the field nullable/optional or
+     outcome-conditional, not push the step to keep inventing a placeholder
+   - the schema caught a genuine defect in what the step produced →
+     `correctness_bug` in the step's own logic, not the gate; fix the step
+   A step eventually passing does not make this `no_issue`: a guaranteed extra
+   retry every run is real cost, and a schema-forced fabricated value is a real
+   integrity defect even when the run "succeeds." Resolve the concern via
+   `resolve_run_concern` only after the fix holds on a later run — recurrence
+   reopens it automatically, which is deliberate.
+9. Return `QA coverage`, `expected versus observed`, exact evidence, confidence,
    and `untested risk` alongside the normal ordered findings. Coverage is not a
    percentage unless a real denominator exists.
 

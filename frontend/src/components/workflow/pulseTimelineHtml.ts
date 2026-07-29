@@ -14,17 +14,17 @@ export function buildPulseTimelineHtml(content: string): string {
     if (explicit) return explicit;
     var value = text(el);
     var kind = el.getAttribute('data-kind') || '';
-    if (kind === 'run' || kind === 'maintenance') return 'run_summary';
+    if (kind === 'run' || kind === 'maintenance' || kind === 'gate') return 'run_summary';
     if (value.indexOf('goal advisor') !== -1 || kind === 'advisor') return 'goal_advisor';
     if (kind === 'decision') return 'pulse_fixer';
     if (value.indexOf('artifact') !== -1 || value.indexOf('changelog') !== -1) return 'artifact_review';
-    if (value.indexOf('learning') !== -1 || value.indexOf('skill.md') !== -1) return 'learning_health';
-    if (value.indexOf('database') !== -1 || value.indexOf('db.sqlite') !== -1 || value.indexOf('db health') !== -1) return 'db_health';
+    if (value.indexOf('learning') !== -1 || value.indexOf('skill.md') !== -1) return 'stores_health';
+    if (value.indexOf('database') !== -1 || value.indexOf('db.sqlite') !== -1 || value.indexOf('db health') !== -1) return 'stores_health';
+    if (value.indexOf('knowledge') !== -1) return 'stores_health';
     if (value.indexOf('cost') !== -1 || value.indexOf('token') !== -1 || value.indexOf('spend') !== -1) return 'cost_llm_time';
     if (value.indexOf('model') !== -1 || value.indexOf('llm') !== -1) return 'llm_ops_review';
     if (value.indexOf('evaluation') !== -1 || value.indexOf('eval ') !== -1) return 'eval_health';
     if (value.indexOf('report') !== -1 || value.indexOf('dashboard') !== -1) return 'report_health';
-    if (value.indexOf('knowledge') !== -1) return 'knowledgebase_health';
     return '';
   }
   function removeVisibleRuntimeIds(root){

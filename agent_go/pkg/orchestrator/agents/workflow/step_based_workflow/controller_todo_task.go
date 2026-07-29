@@ -1918,7 +1918,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
 	// Persist pre-validation results for Pulse Bug Review and diagnostics.
 	if hcpo.selectedRunFolder != "" {
 		preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema)
+		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 	}
 
 	// Format results for feedback

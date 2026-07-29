@@ -16,9 +16,14 @@ waits for its synchronous result. The parent then validates and applies any
 bounded safe edit. Do not create a dedicated learning-maintenance agent or use
 `run_in_background` for this review.
 
+This checklist is one of three (learnings, knowledgebase, DB) the parent may
+load together in a single `stores_health` pass — see `post-run-monitor`. If so,
+this reviewer's output is one part of that combined packet, not a standalone
+result.
+
 Return only this compact contract:
 
-- `module`: learning_health
+- `module`: stores_health
 - `verdict`: clean | needs_fix | blocked
 - `index_shape`: **required, measure it — do not estimate.** Report
   `SKILL.md` line count, how many of those lines are links to `references/`

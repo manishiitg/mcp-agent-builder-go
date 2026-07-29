@@ -39,8 +39,8 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 			Evidence:     []string{"runs/iteration-0/logs/step-a"},
 			CooldownRuns: 0,
 		},
-		pulseModuleLearningHealth: {
-			Module:       pulseModuleLearningHealth,
+		pulseModuleStoresHealth: {
+			Module:       pulseModuleStoresHealth,
 			Due:          false,
 			Reason:       "No plan or selector change since the last reviewed run.",
 			Evidence:     []string{"planning/changelog"},
@@ -67,8 +67,8 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	if got := worklist[pulseModuleBugReview].LastDecision; got != "due" {
 		t.Fatalf("bug review decision = %q, want due", got)
 	}
-	if got := worklist[pulseModuleLearningHealth].LastDecision; got != "skipped" {
-		t.Fatalf("learning decision = %q, want skipped", got)
+	if got := worklist[pulseModuleStoresHealth].LastDecision; got != "skipped" {
+		t.Fatalf("stores health decision = %q, want skipped", got)
 	}
 
 	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleBugReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
