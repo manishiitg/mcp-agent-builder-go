@@ -2885,7 +2885,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// against races.
 	if req.AgentMode == "workflow_phase" &&
 		req.PhaseID == workflowtypes.WorkflowStatusWorkflowBuilder &&
-		strings.TrimSpace(req.SelectedFolder) != "" {
+		strings.TrimSpace(req.SelectedFolder) != "" &&
+		!scheduledRequestBypassesWorkflowBusy(sessionID, req.TriggeredBy) {
 		if running := api.findRunningTrackedExecutionForWorkspaceWhere(req.SelectedFolder, func(exec *TrackedWorkflowExecution) bool {
 			return trackedExecutionBlocksNewWorkflowBuilderChat(exec)
 		}); running != nil && running.SessionID != sessionID {
@@ -6096,6 +6097,24 @@ func createLLMLogger() loggerv2.Logger {
 
 // --- ACTIVE SESSION MANAGEMENT ---
 
+// scheduledRequestBypassesWorkflowBusy reports whether an incoming
+// workflow-builder request is scheduled work that must not be refused because a
+// user has a builder chat open.
+//
+// trackedExecutionBlocksNewWorkflowBuilderChat already encodes the same rule in
+// the other direction: a running scheduled execution does not block a user from
+// opening a chat. Only that half was applied, so the pairing worked one way —
+// a user could always start a chat, but a schedule fired while a chat was open
+// was rejected outright (in ~5ms, before any work began) with "Stop the running
+// chat before starting a new one", which is not something a cron job can do.
+//
+// The rule is symmetric by intent: scheduled work uses the workflow-builder
+// phase as an implementation detail, not as a real interactive chat, so it
+// neither blocks nor is blocked by one.
+func scheduledRequestBypassesWorkflowBusy(sessionID, triggeredBy string) bool {
+	return isScheduledSessionIdentity(sessionID, triggeredBy)
+}
+
 func isScheduledSessionIdentity(sessionID, triggeredBy string) bool {
 	trigger := strings.ToLower(strings.TrimSpace(triggeredBy))
 	id := strings.ToLower(strings.TrimSpace(sessionID))
@@ -7543,7 +7562,8 @@ func (api *StreamingAPI) startNextTurnFromLiveInput(w http.ResponseWriter, r *ht
 
 	if baseReq.AgentMode == "workflow_phase" &&
 		baseReq.PhaseID == workflowtypes.WorkflowStatusWorkflowBuilder &&
-		strings.TrimSpace(baseReq.SelectedFolder) != "" {
+		strings.TrimSpace(baseReq.SelectedFolder) != "" &&
+		!scheduledRequestBypassesWorkflowBusy(sessionID, baseReq.TriggeredBy) {
 		if running := api.findRunningTrackedExecutionForWorkspaceWhere(baseReq.SelectedFolder, func(exec *TrackedWorkflowExecution) bool {
 			return trackedExecutionBlocksNewWorkflowBuilderChat(exec)
 		}); running != nil && running.SessionID != sessionID {
