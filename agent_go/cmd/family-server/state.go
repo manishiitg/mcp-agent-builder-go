@@ -88,6 +88,14 @@ type PulseConfig struct {
 	// SchoolPortalURL is the legacy single-portal field, kept so older saved
 	// state still parses; folded into the effective site list (see Sites()).
 	SchoolPortalURL string `json:"school_portal_url,omitempty"`
+	// PreferredHour (0-23, LOCAL time) anchors runs to roughly this hour of
+	// day instead of whatever wall-clock moment the cadence happens to land
+	// on — "every 24h" alone can drift to any time depending on when Pulse
+	// last happened to fire (a restart, a deferred run, etc.). Only applied
+	// when PreferredHourSet is true: 0 is a valid hour (midnight), so a bare
+	// int can't tell "midnight" from "never configured."
+	PreferredHour    int  `json:"preferred_hour,omitempty"`
+	PreferredHourSet bool `json:"preferred_hour_set,omitempty"`
 }
 
 // Sites returns the effective de-duplicated list of websites to check —

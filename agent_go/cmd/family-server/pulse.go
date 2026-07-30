@@ -349,6 +349,14 @@ func startPulseTicker(ctx context.Context) {
 					due = time.Since(last) >= s.Pulse.cadence()
 				}
 			}
+			// The cadence alone says "enough time has passed"; PreferredHour
+			// additionally holds off until the local clock has actually
+			// reached that hour, so a daily cadence lands around the same
+			// time each day instead of drifting to whenever the cadence
+			// window happens to elapse (a restart, a deferred run, etc.).
+			if due && s.Pulse.PreferredHourSet {
+				due = time.Now().Hour() >= s.Pulse.PreferredHour
+			}
 			if !due {
 				continue
 			}
@@ -364,10 +372,12 @@ func startPulseTicker(ctx context.Context) {
 // --- HTTP routes ---------------------------------------------------------
 
 type pulseConfigResponse struct {
-	Enabled      bool     `json:"enabled"`
-	CadenceHours int      `json:"cadence_hours"`
-	LastRunAt    string   `json:"last_run_at,omitempty"`
-	WatchSites   []string `json:"watch_sites,omitempty"`
+	Enabled          bool     `json:"enabled"`
+	CadenceHours     int      `json:"cadence_hours"`
+	LastRunAt        string   `json:"last_run_at,omitempty"`
+	WatchSites       []string `json:"watch_sites,omitempty"`
+	PreferredHour    int      `json:"preferred_hour"`
+	PreferredHourSet bool     `json:"preferred_hour_set"`
 }
 
 func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
@@ -375,7 +385,14 @@ func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
 	if hours <= 0 {
 		hours = 24
 	}
-	return pulseConfigResponse{Enabled: p.Enabled, CadenceHours: hours, LastRunAt: p.LastRunAt, WatchSites: p.Sites()}
+	return pulseConfigResponse{
+		Enabled:          p.Enabled,
+		CadenceHours:     hours,
+		LastRunAt:        p.LastRunAt,
+		WatchSites:       p.Sites(),
+		PreferredHour:    p.PreferredHour,
+		PreferredHourSet: p.PreferredHourSet,
+	}
 }
 
 // pulseRunMu prevents two manual "run now" triggers overlapping — a real
@@ -435,6 +452,11 @@ type setPulseConfigRequest struct {
 	Enabled      *bool     `json:"enabled,omitempty"`
 	CadenceHours *int      `json:"cadence_hours,omitempty"`
 	WatchSites   *[]string `json:"watch_sites,omitempty"`
+	// PreferredHour (0-23) and PreferredHourSet are independent so the
+	// frontend can toggle "use a specific time" off without losing the hour
+	// value the parent had picked, and back on without them re-entering it.
+	PreferredHour    *int  `json:"preferred_hour,omitempty"`
+	PreferredHourSet *bool `json:"preferred_hour_set,omitempty"`
 }
 
 // POST /api/pulse/config — partial update; only provided fields change.
@@ -465,6 +487,12 @@ func handleSetPulseConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Pulse.WatchSites = cleaned
 		s.Pulse.SchoolPortalURL = "" // fully replaced by the generic list; drop the legacy single value
+	}
+	if req.PreferredHour != nil && *req.PreferredHour >= 0 && *req.PreferredHour <= 23 {
+		s.Pulse.PreferredHour = *req.PreferredHour
+	}
+	if req.PreferredHourSet != nil {
+		s.Pulse.PreferredHourSet = *req.PreferredHourSet
 	}
 	err := saveState(s)
 	stateMu.Unlock()

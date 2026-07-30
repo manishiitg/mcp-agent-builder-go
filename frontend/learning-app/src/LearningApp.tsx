@@ -1151,7 +1151,7 @@ export default function LearningApp() {
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
   const [browserStatus, setBrowserStatus] = useState<{ cli_installed: boolean } | null>(null)
   const [browserCopied, setBrowserCopied] = useState(false)
-  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[] } | null>(null)
+  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
@@ -1562,7 +1562,7 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/pulse/config`)
       .then((r) => r.json())
-      .then((d: { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[] }) => {
+      .then((d: { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean }) => {
         if (cancelled) return
         setPulseConfig(d)
         setWatchSitesDraft((d.watch_sites || []).join('\n'))
@@ -1750,7 +1750,7 @@ export default function LearningApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [childSending, childQueue])
 
-  const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; watch_sites?: string[] }) => {
+  const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; watch_sites?: string[]; preferred_hour?: number; preferred_hour_set?: boolean }) => {
     setSavingPulse(true)
     fetch(`${FAMILY_API}/api/pulse/config`, {
       method: 'POST',
@@ -2691,6 +2691,26 @@ export default function LearningApp() {
                               <option value={168}>weekly</option>
                             </select>
                           </label>
+                          <label className="fl-pulse-config-row">
+                            <input
+                              type="checkbox"
+                              checked={pulseConfig?.preferred_hour_set ?? false}
+                              disabled={savingPulse || !pulseConfig}
+                              onChange={(e) => savePulseConfig({ preferred_hour_set: e.target.checked })}
+                            />
+                            <span>Around a specific time</span>
+                            <select
+                              value={pulseConfig?.preferred_hour ?? 8}
+                              disabled={savingPulse || !pulseConfig || !pulseConfig?.preferred_hour_set}
+                              onChange={(e) => savePulseConfig({ preferred_hour: Number(e.target.value), preferred_hour_set: true })}
+                            >
+                              {Array.from({ length: 24 }, (_, h) => (
+                                <option key={h} value={h}>
+                                  {h === 0 ? '12:00 AM' : h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h - 12}:00 PM`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                           <div className="fl-pulse-popover-meta">
                             <span>Last check-in</span>
                             <span>{pulseConfig?.last_run_at ? new Date(pulseConfig.last_run_at).toLocaleString() : 'Not yet'}</span>
@@ -2700,7 +2720,19 @@ export default function LearningApp() {
                               <span>Next check-in</span>
                               <span>
                                 {pulseConfig.last_run_at
-                                  ? new Date(new Date(pulseConfig.last_run_at).getTime() + pulseConfig.cadence_hours * 3600_000).toLocaleString()
+                                  ? (() => {
+                                      // Mirrors the backend's own due-check (pulse.go
+                                      // startPulseTicker): the cadence window alone can
+                                      // land at any hour, so PreferredHour only ever
+                                      // pushes it LATER, same day, never earlier — a
+                                      // cadence that elapses at 2pm with a preferred
+                                      // hour of 8am still fires right away.
+                                      const next = new Date(new Date(pulseConfig.last_run_at).getTime() + pulseConfig.cadence_hours * 3600_000)
+                                      if (pulseConfig.preferred_hour_set && next.getHours() < pulseConfig.preferred_hour) {
+                                        next.setHours(pulseConfig.preferred_hour, 0, 0, 0)
+                                      }
+                                      return next.toLocaleString()
+                                    })()
                                   : `within ${pulseConfig.cadence_hours}h`}
                               </span>
                             </div>
