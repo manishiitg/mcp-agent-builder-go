@@ -1200,8 +1200,13 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-week-deadline-subject { color: var(--muted, #6b7690); font-size: var(--text-caption); }
 .fl-week-deadline-date { flex: 0 0 auto; color: var(--muted, #6b7690); font-size: var(--text-caption); font-weight: 700; }
 
-.fl-week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-@media (max-width: 900px) { .fl-week-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
+/* auto-fill (not a fixed 7-column grid, and not a VIEWPORT media query —
+   this is a fixed-width side drawer, independent of window width, so a
+   max-width breakpoint never fires no matter how narrow the drawer itself
+   renders) wraps to fewer, wider columns and more rows whenever the drawer
+   is its normal ~560-590px width, favoring vertical space over cramming all
+   7 days into one unreadably narrow row. */
+.fl-week-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .fl-week-day { border: 1px solid var(--line); border-radius: 12px; padding: 8px; min-height: 120px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; }
 .fl-week-day.is-today { border-color: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 201, 27, .3); }
 .fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 2px; }
