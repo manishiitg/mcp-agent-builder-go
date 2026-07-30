@@ -1206,14 +1206,14 @@ audio.fl-viewer-media { background: var(--surface); }
    renders) wraps to fewer, wider columns and more rows whenever the drawer
    is its normal ~560-590px width, favoring vertical space over cramming all
    7 days into one unreadably narrow row. */
-.fl-week-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.fl-week-day { border: 1px solid var(--line); border-radius: 12px; padding: 8px; min-height: 120px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; }
+.fl-week-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.fl-week-day { border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-height: 180px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .fl-week-day.is-today { border-color: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 201, 27, .3); }
-.fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 2px; }
-.fl-week-day-head strong { font-size: var(--text-caption); text-transform: uppercase; letter-spacing: .04em; }
-.fl-week-day-head span { font-size: var(--text-secondary); font-weight: 800; }
-.fl-week-day-free { margin: 4px 0 0; color: var(--muted, #93a0b8); font-size: var(--text-caption); font-style: italic; }
-.fl-week-block { font-size: var(--text-caption); line-height: 1.35; padding: 5px 7px; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 4px; }
+.fl-week-day-head strong { font-size: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+.fl-week-day-head span { font-size: var(--text-subheading); font-weight: 800; }
+.fl-week-day-free { margin: 4px 0 0; color: var(--muted, #93a0b8); font-size: var(--text-secondary); font-style: italic; }
+.fl-week-block { font-size: var(--text-secondary); line-height: 1.4; padding: 8px 10px; border-radius: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-week-block.is-busy { background: var(--surface-2); color: var(--muted, #6b7690); border: 1px dashed var(--line); }
 .fl-week-block.is-activity { background: var(--mint-soft); color: #1f7a52; font-weight: 700; }
 .fl-week-block.is-deadline { background: var(--blue-soft); color: #2b5a8a; font-weight: 700; }
