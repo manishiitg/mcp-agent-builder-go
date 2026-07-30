@@ -129,6 +129,17 @@ func pulseChecks(s familyState) []pulseCheck {
 			"Tell the parent in one short line what (if anything) you noted." + pulseReplyRules,
 	})
 
+	checks = append(checks, pulseCheck{
+		trigger: "Automated check-in — backing up the workspace",
+		instruction: "This is an automated Pulse check-in, focused ONLY on backup. Read skills/backup/SKILL.md and follow it exactly, " +
+			"including its rule that the FIRST (repo-creating) backup must be attended — this is an automated cycle with no parent " +
+			"present, so if it isn't set up yet (or backup/status.json has never shown a verified success), just note ONCE that " +
+			"it isn't set up, don't repeat that note if you already said it recently, and stop. If it IS already set up and " +
+			"verified, run a real backup per the skill (check the token, skip-if-unchanged, upload excluding archive/, write " +
+			"status.json). Tell the parent in one short line what happened, or say nothing new-worthy if it was skipped as " +
+			"unchanged." + pulseReplyRules,
+	})
+
 	_ = engine
 	return checks
 }

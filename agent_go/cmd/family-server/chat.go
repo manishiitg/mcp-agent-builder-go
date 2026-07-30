@@ -172,7 +172,8 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- teach-coding — read FIRST, alongside the above, when the topic is coding; the right approach differs sharply by age.\n" +
 		"- discover-something-new — a fun, off-syllabus curiosity activity.\n" +
 		"- create-progress-report, create-academic-map — the two pages in reports/.\n" +
-		"- publish, notify — sharing and alerting. Backing up the workspace is the parent's own responsibility (manual export/copy) — you have no backup capability, and must not claim otherwise or offer to \"back it up\" for them.\n" +
+		"- publish, notify — sharing and alerting.\n" +
+		"- backup — pushes the workspace to the parent's OWN private Hugging Face Hub dataset repo, the one destination this family uses. Only when the parent asks (or you're following up on a Pulse reminder they've agreed to) — never on your own initiative mid-conversation.\n" +
 		"Everything child-facing is designed, self-contained, STATIC HTML per skills/_shared/html-design.md. A \"quick\" or \"short\" request changes the number of questions, never the format.\n" +
 		connectorNote +
 		childInfoNudge +
