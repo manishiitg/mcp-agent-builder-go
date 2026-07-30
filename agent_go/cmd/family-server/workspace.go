@@ -169,3 +169,20 @@ func seedWorkspace(child *Child) {
 		_ = os.WriteFile(progressPath, []byte(html), 0o600)
 	}
 }
+
+// mirrorChildSchedule keeps memory/child-schedule.json (agent-readable) in
+// sync with familyState.Schedule (the authoritative copy, saved via
+// saveState) — same MarshalIndent/MkdirAll/WriteFile pattern seedWorkspace
+// uses for memory/child-profile.json, just called explicitly at the specific
+// spots the schedule actually changes (the set_child_schedule tool, the
+// POST /api/child-schedule handler) plus once at startup, rather than
+// threaded through seedWorkspace's existing Child-only signature.
+func mirrorChildSchedule(sched ChildSchedule) {
+	b, err := json.MarshalIndent(sched, "", "  ")
+	if err != nil {
+		return
+	}
+	base := filepath.Join(familyDataDir(), "workspace")
+	_ = os.MkdirAll(filepath.Join(base, "memory"), 0o700)
+	_ = os.WriteFile(filepath.Join(base, "memory", "child-schedule.json"), b, 0o600)
+}

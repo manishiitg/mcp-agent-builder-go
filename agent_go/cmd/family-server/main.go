@@ -92,7 +92,8 @@ func main() {
 	// real migrated reports/academic-map.html or progress.html always lands
 	// before seedWorkspace's own "only if missing" placeholder check runs.
 	runWorkspaceMigrationIfNeeded()
-	seedWorkspace(loadState().Child) // idempotent: only fills in files that don't exist yet
+	seedWorkspace(loadState().Child)          // idempotent: only fills in files that don't exist yet
+	mirrorChildSchedule(loadState().Schedule) // keep memory/child-schedule.json in sync, same reasoning as the profile mirror above
 	if err := initWhatsAppBot(context.Background()); err != nil {
 		log.Printf("whatsapp: failed to initialize (real WhatsApp connection disabled): %v", err)
 	} else {
@@ -148,6 +149,14 @@ func main() {
 		handleGetPulseConfig(w, r)
 	})
 	mux.HandleFunc("/api/pulse/run", handlePulseRunNow)
+	mux.HandleFunc("/api/child-schedule", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handleSetChildSchedule(w, r)
+			return
+		}
+		handleGetChildSchedule(w, r)
+	})
+	mux.HandleFunc("/api/week", handleGetWeek)
 	mux.HandleFunc("/api/workspace/tree", handleWorkspaceTree)
 	mux.HandleFunc("/api/workspace/file", handleWorkspaceFile)
 	mux.HandleFunc("/api/workspace/raw", handleWorkspaceRaw)

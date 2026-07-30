@@ -1182,4 +1182,46 @@ audio.fl-viewer-media { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) { .fl-mic-live-dot { animation: none; } }
 .fl-mic-live-label { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #ffd479; }
 .fl-mic-live-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-secondary); line-height: 1.4; }
+
+/* "This Week" tab — recurring schedule + real activity log + Veracross deadlines, see week.go */
+.fl-week { display: flex; flex-direction: column; gap: 14px; }
+.fl-week-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fl-week-nav-btn { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 6px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-nav-btn:hover { background: var(--surface-2); }
+.fl-week-range { display: flex; align-items: center; gap: 8px; font-weight: 800; color: var(--heading); font-size: var(--text-secondary); }
+.fl-week-badge { background: var(--yellow); color: #5a4200; font-size: var(--text-caption); font-weight: 800; padding: 2px 9px; border-radius: 999px; }
+
+.fl-week-deadlines { border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px 14px; background: var(--surface-2); }
+.fl-week-deadline-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--text-secondary); color: var(--ink); border-top: 1px dashed var(--line); }
+.fl-week-deadline-row:first-of-type { border-top: 0; }
+.fl-week-deadline-kind { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: #2b5a8a; }
+.fl-week-deadline-kind.is-test { background: #ffe3df; color: #a2372a; }
+.fl-week-deadline-title { flex: 1 1 auto; font-weight: 700; }
+.fl-week-deadline-subject { color: var(--muted, #6b7690); font-size: var(--text-caption); }
+.fl-week-deadline-date { flex: 0 0 auto; color: var(--muted, #6b7690); font-size: var(--text-caption); font-weight: 700; }
+
+.fl-week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 900px) { .fl-week-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
+.fl-week-day { border: 1px solid var(--line); border-radius: 12px; padding: 8px; min-height: 120px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; }
+.fl-week-day.is-today { border-color: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 201, 27, .3); }
+.fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 2px; }
+.fl-week-day-head strong { font-size: var(--text-caption); text-transform: uppercase; letter-spacing: .04em; }
+.fl-week-day-head span { font-size: var(--text-secondary); font-weight: 800; }
+.fl-week-day-free { margin: 4px 0 0; color: var(--muted, #93a0b8); font-size: var(--text-caption); font-style: italic; }
+.fl-week-block { font-size: var(--text-caption); line-height: 1.35; padding: 5px 7px; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-week-block.is-busy { background: var(--surface-2); color: var(--muted, #6b7690); border: 1px dashed var(--line); }
+.fl-week-block.is-activity { background: var(--mint-soft); color: #1f7a52; font-weight: 700; }
+.fl-week-block.is-deadline { background: var(--blue-soft); color: #2b5a8a; font-weight: 700; }
+.fl-week-block.is-deadline.is-test { background: #ffe3df; color: #a2372a; }
+
+.fl-week-edit-schedule { align-self: flex-start; border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 16px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-edit-schedule:hover { background: var(--surface-2); }
+.fl-week-editor { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; }
+.fl-week-editor-row { display: grid; grid-template-columns: 1fr 100px 100px 1.4fr auto; gap: 8px; align-items: center; }
+@media (max-width: 640px) { .fl-week-editor-row { grid-template-columns: 1fr 1fr; } }
+.fl-week-editor-row select, .fl-week-editor-row input { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: var(--text-secondary); background: var(--surface); color: var(--ink); }
+.fl-week-editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.fl-week-editor-spacer { flex: 1 1 auto; }
+.fl-week-editor-actions button { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-editor-save { background: var(--yellow) !important; color: #5a4200 !important; border-color: var(--yellow) !important; }
 .fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }

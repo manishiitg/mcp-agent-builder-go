@@ -14,8 +14,8 @@ import (
 // whatsappSystemPrompt is the parent persona adapted for the WhatsApp channel:
 // short, plain-text replies suitable for a phone — no markdown, no HTML, no
 // opening files on a screen.
-func whatsappSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) string {
-	return parentSystemPrompt(child, parentLabel, pulse) +
+func whatsappSystemPrompt(child *Child, parentLabel string, pulse PulseConfig, schedule ChildSchedule) string {
+	return parentSystemPrompt(child, parentLabel, pulse, schedule) +
 		"\n\nCHANNEL — WHATSAPP: You are replying to the parent over WhatsApp on their phone. Keep replies SHORT and in plain text: no markdown, no headings, no HTML, and do not talk about opening files on a screen. If the message ends with a parenthetical \"(I sent it to <path>)\", that names the EXACT real path of a file they just sent — never guess a different filename or folder, this path is always correct. If it's an image, call read_image on that exact path directly; if it's a document or PDF, read it with your shell tools (follow the process-file skill) to pull out its content. Then answer in a few lines, warmly and to the point, and never mention files or paths."
 }
 
@@ -48,7 +48,7 @@ func handleWhatsAppMessage(w http.ResponseWriter, r *http.Request) {
 
 	provider, ok := engineToProvider(s.Engine)
 	if !ok {
-		reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, whatsappSystemPrompt(s.Child, s.ParentLabel, s.Pulse), req.Messages)
+		reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, whatsappSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule), req.Messages)
 		if err != nil {
 			writeJSON(w, http.StatusOK, parentMessageResponse{Error: friendlyTurnError(err)})
 			return
@@ -71,7 +71,7 @@ func handleWhatsAppMessage(w http.ResponseWriter, r *http.Request) {
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:     provider,
 		WorkingDir:   workDir,
-		SystemPrompt: whatsappSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt: whatsappSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle
 		// restores the coding agent's `--resume` state across restarts.
 		SessionID:                 cid,

@@ -263,6 +263,14 @@ function persistChildChatZoom(z: number) {
 // No in-app toggle for now; kept read-only.
 type Theme = 'light' | 'dark'
 const THEME_KEY = 'sparkquill.theme'
+
+// "This Week" tab types — mirror week.go's ScheduleEntry/ActivityLogEntry/
+// SchoolDeadline/weekResponse Go structs exactly (JSON field names match).
+type ScheduleEntry = { day: string; start: string; end: string; label: string }
+type WeekActivityEntry = { date: string; activity_dir: string; title: string }
+type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
+type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
+type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
 function readTheme(): Theme {
   try {
     const stored = localStorage.getItem(THEME_KEY)
@@ -1153,6 +1161,16 @@ export default function LearningApp() {
   const [browserCopied, setBrowserCopied] = useState(false)
   const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
+  // "This Week" tab — offset 0 is the current week, -1/+1 step a week at a
+  // time. weekData is the combined schedule+activity-log+deadlines response
+  // (see week.go); scheduleDraft mirrors it into an editable row list for the
+  // mini-editor, only diverging from weekData.schedule while the parent has
+  // unsaved edits open.
+  const [weekOffset, setWeekOffset] = useState(0)
+  const [weekData, setWeekData] = useState<WeekResponse | null>(null)
+  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false)
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleEntry[]>([])
+  const [savingSchedule, setSavingSchedule] = useState(false)
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
@@ -1506,6 +1524,20 @@ export default function LearningApp() {
     return () => { cancelled = true }
   }, [drawerTab, mapRefreshKey])
 
+  // "This Week" tab — combined schedule/activity-log/deadlines view (see
+  // week.go). Re-fetches whenever the tab is open, the week being viewed
+  // changes, or a turn just completed (mapRefreshKey — same signal Progress
+  // uses, since a turn can add an activity-log entry or update the schedule).
+  useEffect(() => {
+    if (drawerTab !== 'week') return
+    let cancelled = false
+    fetch(`${FAMILY_API}/api/week?offset=${weekOffset}`)
+      .then((r) => r.json())
+      .then((d: WeekResponse) => { if (!cancelled) setWeekData(d) })
+      .catch(() => { if (!cancelled) setWeekData(null) })
+    return () => { cancelled = true }
+  }, [drawerTab, weekOffset, mapRefreshKey])
+
   // Every activity, structured — refetched whenever the Files/Uploaded tab is
   // open or a turn just completed (Quill may have created or added to one).
   // Gated on the drawer tab as a whole, deliberately loosely: open_activity
@@ -1761,6 +1793,42 @@ export default function LearningApp() {
       .then((d) => setPulseConfig(d))
       .catch(() => {})
       .finally(() => setSavingPulse(false))
+  }
+
+  // Opens the schedule mini-editor, seeding the draft from whatever the week
+  // view currently knows the schedule to be — de-duplicated across days since
+  // weekData.days each carry their own matching entries (one recurring entry
+  // appears on every matching weekday in the response).
+  const openScheduleEditor = () => {
+    const seen = new Set<string>()
+    const entries: ScheduleEntry[] = []
+    for (const day of weekData?.days ?? []) {
+      for (const e of day.schedule ?? []) {
+        const key = `${e.day}|${e.start}|${e.end}|${e.label}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        entries.push(e)
+      }
+    }
+    setScheduleDraft(entries)
+    setScheduleEditorOpen(true)
+  }
+
+  // Wholesale replace — the mini-editor always sends its whole edited list
+  // (conversational capture goes through set_child_schedule instead, which
+  // ADDS rather than replaces — see parent_tools.go).
+  const saveSchedule = () => {
+    setSavingSchedule(true)
+    fetch(`${FAMILY_API}/api/child-schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: scheduleDraft }),
+    })
+      .then(() => fetch(`${FAMILY_API}/api/week?offset=${weekOffset}`))
+      .then((r) => r.json())
+      .then((d: WeekResponse) => { setWeekData(d); setScheduleEditorOpen(false) })
+      .catch(() => {})
+      .finally(() => setSavingSchedule(false))
   }
 
   // Runs Pulse right now (regardless of the recurring toggle) — used to test
@@ -2993,6 +3061,7 @@ export default function LearningApp() {
               <div className="fl-drawer-tabs" role="tablist" aria-label="Workspace views">
                 <button role="tab" aria-selected={drawerTab === 'map'} className={drawerTab === 'map' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('map')}>Academics</button>
                 <button role="tab" aria-selected={drawerTab === 'progress'} className={drawerTab === 'progress' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('progress')}>Progress</button>
+                <button role="tab" aria-selected={drawerTab === 'week'} className={drawerTab === 'week' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('week')}>This Week</button>
                 <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Workspace</button>
                 <button role="tab" aria-selected={drawerTab === 'uploaded'} className={drawerTab === 'uploaded' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('uploaded')}>Uploaded</button>
                 {/* Browsing every raw file is a power-user escape hatch, not a
@@ -3068,6 +3137,88 @@ export default function LearningApp() {
                     <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={progressHtml} />
                   )}
                 </>
+              )}
+
+              {drawerTab === 'week' && (
+                <div className="fl-week">
+                  <div className="fl-week-nav">
+                    <button type="button" className="fl-week-nav-btn" onClick={() => setWeekOffset((o) => o - 1)} aria-label="Previous week">← Previous</button>
+                    <span className="fl-week-range">
+                      {weekData ? `${new Date(weekData.week_start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${new Date(weekData.week_end).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : 'Loading…'}
+                      {weekOffset === 0 && <span className="fl-week-badge">This week</span>}
+                    </span>
+                    <button type="button" className="fl-week-nav-btn" onClick={() => setWeekOffset((o) => o + 1)} aria-label="Next week">Next →</button>
+                  </div>
+
+                  {weekData && weekData.upcoming_deadlines && weekData.upcoming_deadlines.length > 0 && (
+                    <div className="fl-week-deadlines">
+                      <p className="fl-drawer-label">Coming up</p>
+                      {weekData.upcoming_deadlines.map((d, i) => (
+                        <div key={i} className="fl-week-deadline-row">
+                          <span className={`fl-week-deadline-kind is-${d.kind || 'assignment'}`}>{d.kind === 'test' ? 'Test' : 'Due'}</span>
+                          <span className="fl-week-deadline-title">{d.title}</span>
+                          {d.subject && <span className="fl-week-deadline-subject">{d.subject}</span>}
+                          <span className="fl-week-deadline-date">{d.due_date ? new Date(d.due_date).toLocaleDateString(undefined, { weekday: 'short' }) : ''}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {weekData ? (
+                    <div className="fl-week-grid">
+                      {weekData.days.map((day) => {
+                        const isToday = day.date === new Date().toLocaleDateString('en-CA')
+                        return (
+                          <div key={day.date} className={`fl-week-day${isToday ? ' is-today' : ''}`}>
+                            <div className="fl-week-day-head">
+                              <strong>{day.weekday.slice(0, 3)}</strong>
+                              <span>{new Date(day.date).getDate()}</span>
+                            </div>
+                            {(day.schedule ?? []).map((s, i) => (
+                              <div key={i} className="fl-week-block is-busy" title={`${s.start}–${s.end}`}>{s.label}</div>
+                            ))}
+                            {(day.activities ?? []).map((a, i) => (
+                              <div key={i} className="fl-week-block is-activity" title={a.title}>{a.title}</div>
+                            ))}
+                            {(day.deadlines ?? []).map((d, i) => (
+                              <div key={i} className={`fl-week-block is-deadline is-${d.kind || 'assignment'}`} title={d.title}>{d.kind === 'test' ? '📝 ' : '📌 '}{d.title}</div>
+                            ))}
+                            {(day.schedule ?? []).length === 0 && (day.activities ?? []).length === 0 && (day.deadlines ?? []).length === 0 && (
+                              <p className="fl-week-day-free">Free</p>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="fl-note">Loading this week…</p>
+                  )}
+
+                  {!scheduleEditorOpen ? (
+                    <button type="button" className="fl-week-edit-schedule" onClick={openScheduleEditor}>Edit recurring schedule</button>
+                  ) : (
+                    <div className="fl-week-editor">
+                      <p className="fl-drawer-label">Recurring weekly schedule</p>
+                      {scheduleDraft.map((e, i) => (
+                        <div key={i} className="fl-week-editor-row">
+                          <select value={e.day} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, day: ev.target.value } : r))}>
+                            {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                          <input type="time" value={e.start} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, start: ev.target.value } : r))} />
+                          <input type="time" value={e.end} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, end: ev.target.value } : r))} />
+                          <input type="text" placeholder="Label, e.g. School" value={e.label} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, label: ev.target.value } : r))} />
+                          <button type="button" className="fl-icon-btn" aria-label="Remove" onClick={() => setScheduleDraft((rows) => rows.filter((_, j) => j !== i))}>×</button>
+                        </div>
+                      ))}
+                      <div className="fl-week-editor-actions">
+                        <button type="button" onClick={() => setScheduleDraft((rows) => [...rows, { day: 'Monday', start: '08:00', end: '14:30', label: '' }])}>+ Add a commitment</button>
+                        <span className="fl-week-editor-spacer" />
+                        <button type="button" onClick={() => setScheduleEditorOpen(false)} disabled={savingSchedule}>Cancel</button>
+                        <button type="button" className="fl-week-editor-save" onClick={saveSchedule} disabled={savingSchedule}>{savingSchedule ? 'Saving…' : 'Save'}</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {(drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath ? (

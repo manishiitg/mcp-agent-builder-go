@@ -57,7 +57,7 @@ func currentDateTimeLine() string {
 	return "Right now it is " + now.Format("Monday, January 2, 2006, 3:04 PM") + " (" + now.Format("2006-01-02") + ") in the family's local time zone.\n"
 }
 
-func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) string {
+func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig, schedule ChildSchedule) string {
 	name := "your child"
 	who := name
 	if child != nil {
@@ -90,6 +90,13 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 	parentLabelNudge := ""
 	if strings.TrimSpace(parentLabel) == "" {
 		parentLabelNudge = "IMPORTANT — you don't yet know what to call the parent when you talk ABOUT them to " + name + " (e.g. \"your mom set this up for you\" vs \"your dad\" vs a name like \"Priya\"). Early on — the same moment you're gathering the child's grade/board is a natural time — warmly ask something like \"quick one so I can talk about you naturally with " + name + " — should I say mom, dad, or something else?\" and save the answer with set_parent_label. Don't block other work on this; ask once, naturally, and move on.\n"
+	}
+	scheduleNudge := ""
+	if len(schedule.Entries) == 0 {
+		scheduleNudge = "You don't yet know " + name + "'s recurring weekly schedule (school hours, tuition, sports practice) — " +
+			"this powers the parent's \"This Week\" view, showing her free study time around these commitments. If the " +
+			"conversation is about planning, study time, or when she's free, ask about her class schedule and save what " +
+			"you learn with set_child_schedule. Not urgent otherwise — no need to interrupt an unrelated conversation for it.\n"
 	}
 	// Configured connectors the parent may reference in normal conversation
 	// (not just during Pulse) — e.g. "did the school email anything?" or "check
@@ -138,7 +145,7 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- MARKING: when the parent asks you to mark her work, write ONLY the verdict onto her page — \"Correct\" / \"Not quite\" beside that question, nothing more. NEVER write the right answer, a corrected value, or a worked solution onto a child-facing page, even while marking it wrong, and even if the parent's request sounds like it wants that: it silently converts her practice page into an answer sheet, and she may well reopen it before re-attempting. The solution belongs in the answer key, which is yours. Put what she should do differently in your reply to the parent instead, and offer to build a fresh practice activity on the questions she missed.\n" +
 		"- If material or handwriting is unclear, say so and ask for a clearer photo.\n" +
 		"\n" +
-		"YOUR TOOLS — set_child_profile, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
+		"YOUR TOOLS — set_child_profile, set_child_schedule, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
 		"- If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here and can never write. Never conclude the workspace is read-only or that something needs enabling — execute_shell_command (or diff_patch_workspace_file for a precise edit) is what writes.\n" +
 		"- Secrets: the parent saves credentials in Settings → Secrets, or states one and you call set_secret (never a value you guessed). Remove one with delete_secret by its exact saved name — call list_secrets first if you're not sure of it, and ask rather than guess if nothing matches. list_secrets returns names only. A saved value reaches execute_shell_command as $SECRET_<NAME>, usable there directly. It ALSO works inside agent_browser's fill/type args — write the literal $SECRET_<NAME> placeholder as the value and the real credential is substituted server-side before it reaches the browser; you never see it. NEVER print, echo, or include a secret's value anywhere, and never ask the parent to type it themselves if it's already saved. If a login fails (2FA, a CAPTCHA, an unfamiliar-device prompt), stop and say so rather than retrying blind.\n" +
 		"- PDF on WhatsApp, only when explicitly asked: agent_browser's \"pdf\" command to export into the activity folder (or reports/ for the academic map or progress report), then send_whatsapp_file with that path.\n" +
@@ -177,7 +184,8 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"Everything child-facing is designed, self-contained, STATIC HTML per skills/_shared/html-design.md. A \"quick\" or \"short\" request changes the number of questions, never the format.\n" +
 		connectorNote +
 		childInfoNudge +
-		parentLabelNudge
+		parentLabelNudge +
+		scheduleNudge
 }
 
 // childInterestsNote reads memory/interests.md server-side and returns its
@@ -475,7 +483,7 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		ModelID:         mediumTierModelID(provider),
 		ReasoningEffort: "high",
 		WorkingDir:      workDir,
-		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		// Stable SessionID = the conversation id, so the SAME warm tmux session
 		// is reused across turns within this process. SessionHandle restores the
 		// coding agent's own `--resume` state across process restarts (loaded from
@@ -597,7 +605,7 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 func fallbackParentMessage(w http.ResponseWriter, r *http.Request, s familyState, req parentMessageRequest) {
 	workDir := filepath.Join(familyDataDir(), "workspace")
 	_ = os.MkdirAll(workDir, 0o700)
-	reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse), req.Messages)
+	reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule), req.Messages)
 	if err != nil {
 		writeJSON(w, http.StatusOK, parentMessageResponse{Error: friendlyTurnError(err)})
 		return

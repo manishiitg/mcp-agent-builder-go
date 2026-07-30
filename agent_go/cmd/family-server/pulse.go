@@ -107,7 +107,13 @@ func pulseChecks(s familyState) []pulseCheck {
 				"guessing. Before finishing, update memory/browser-notes.md with anything you learned this run that will save time next check-in — " +
 				"a menu path, a section that turned out to be a dead end, a login quirk. Keep it SHORT (a few lines per site, not a transcript of the " +
 				"visit) and edit your own existing entry for that site rather than appending a new one each time, so the file stays a compact, " +
-				"current cheat sheet instead of growing forever." + pulseReplyRules,
+				"current cheat sheet instead of growing forever. " +
+				"Also rewrite memory/school-deadlines.json with the CURRENT real picture of assignments/tests and their due dates you just saw across " +
+				"the site(s) — this powers the parent's \"This Week\" view, so it needs real structured data, not prose. Fully rewrite the whole file " +
+				"each time (same convention as browser-notes.md/preferences.md: the current real picture, not an accumulating log) — drop anything no " +
+				"longer listed on the site (submitted, past its window, removed) rather than leaving it sitting there stale. Shape: " +
+				"{\"deadlines\":[{\"title\":\"...\",\"subject\":\"...\",\"due_date\":\"YYYY-MM-DD\",\"kind\":\"assignment|test\"}],\"updated_at\":\"...\"}. " +
+				"Only include items with a real, known due date — skip anything where the site didn't give you one rather than guessing." + pulseReplyRules,
 		})
 	}
 
@@ -315,7 +321,7 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 		ModelID:                   mediumTierModelID(provider),
 		ReasoningEffort:           "high",
 		WorkingDir:                filepath.Join(familyDataDir(), "workspace"),
-		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		SessionID:                 convID,
 		SessionHandle:             loadSessionHandle("parent", convID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),

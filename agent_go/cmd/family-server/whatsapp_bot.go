@@ -1178,7 +1178,7 @@ func (w *waBot) runTurn(text string) (string, error) {
 		// Same base persona as the web chat — it's one unified conversation, so
 		// the prompt shouldn't fork by channel; WhatsApp formatting is the per-turn
 		// hint appended to the message above.
-		SystemPrompt: parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt: parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		// Stable SessionID = the single parent conversation, so the SAME warm
 		// tmux session is used across turns AND channels within this process.
 		// SessionHandle restores the coding agent's `--resume` state across

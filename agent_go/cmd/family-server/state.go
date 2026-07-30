@@ -66,6 +66,27 @@ type familyState struct {
 	// because the tiers have entirely different voice catalogs: picking
 	// "Aman" only means something for the built-in Mac voices.
 	VoiceChoices map[string]string `json:"voice_choices,omitempty"`
+
+	// Schedule is the child's recurring weekly class/commitment schedule (see
+	// week.go) — parent-configurable settings, same lifecycle as PulseConfig
+	// above, not a log. Powers the "This Week" view's busy/free-time display.
+	Schedule ChildSchedule `json:"schedule,omitempty"`
+}
+
+// ScheduleEntry is one recurring weekly commitment — school, tuition, a
+// sports practice, anything that recurs on the same day/time every week.
+type ScheduleEntry struct {
+	Day   string `json:"day"`   // "Monday".."Sunday"
+	Start string `json:"start"` // "08:00", 24h local time
+	End   string `json:"end"`   // "14:30"
+	Label string `json:"label"` // "School", "Football practice", etc.
+}
+
+// ChildSchedule is the parent-configurable recurring weekly schedule. A
+// struct (not a bare slice) so it can grow additional fields later without
+// an incompatible JSON shape change.
+type ChildSchedule struct {
+	Entries []ScheduleEntry `json:"entries,omitempty"`
 }
 
 // PulseConfig is the parent-configurable settings for the Pulse background
