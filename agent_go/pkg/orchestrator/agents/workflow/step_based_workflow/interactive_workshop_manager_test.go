@@ -154,7 +154,8 @@ func TestPulseReviewResultPathAcceptsEveryCanonicalModule(t *testing.T) {
 	// package is not importable from this one.
 	for _, module := range []string{
 		"bug_review", "artifact_review", "report_health", "eval_health",
-		"stores_health", "cost_llm_time", "llm_ops_review", "goal_advisor",
+		"stores_health", "cost_llm_time", "llm_ops_review", "strategy_auditor",
+		"goal_advisor",
 	} {
 		path, err := pulseReviewResultPath(reviewRunID, module)
 		if err != nil {

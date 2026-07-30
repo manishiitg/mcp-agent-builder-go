@@ -257,7 +257,7 @@ Goal: bring every workflow onto the current human-readable, responsive Pulse his
    - keep the user-facing timeline concise, with raw continuity state in one closed-by-default #pulse-agent-handoff block near the bottom;
    - keep Kind/Search/Reset filtering when present, but no date picker.
 4. Attribute every dated recent-run row and timeline card with data-date, data-kind, data-pulse-section, and one canonical data-module:
-   - Signals / Kizuki: bug_review, artifact_review, learning_health, knowledgebase_health, db_health, eval_health, report_health, cost_llm_time, or llm_ops_review. These cards state evidence-backed reviewer findings, not fixes;
+   - Signals / Kizuki: bug_review, artifact_review, learning_health, knowledgebase_health, db_health, eval_health, report_health, cost_llm_time, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes;
    - Reflection / Hansei: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
    - Improvements / Kaizen: pulse_fixer for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the Signal evidence they address.
    - Keep every historical question and answer with who asked it: Goal Advisor -> improvements/goal_advisor; a known reviewer -> signals/<reviewer module>; a general Pulse/run question -> reflection/run_summary. Reclassify old reflection/goal_advisor answer cards into improvements/goal_advisor.

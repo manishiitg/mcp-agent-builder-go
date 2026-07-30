@@ -1263,7 +1263,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                             </span>
                           )}
                         </span>
-                        <span className="block truncate text-[10px] text-muted-foreground">{section.concept}</span>
                       </span>
                     </button>
                   )

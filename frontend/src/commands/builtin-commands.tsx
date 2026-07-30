@@ -221,6 +221,19 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
+    command: 'strategy-auditor',
+    description: 'Diagnose whether the current plan is moving the goal using cross-run evidence',
+    icon: <Target className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: 'workshop',
+    source: 'builtin',
+    execute: (ctx) => {
+      const runFolder = ctx.getWorkflowStore().selectedRunFolder
+      submitGuidedWorkflowCommand(ctx, 'strategy-auditor', { runFolder, background: true })
+    }
+  },
+  {
     command: 'pulse-fixer',
     description: 'Apply and verify safe fixes from existing Pulse review findings',
     icon: <CheckCircle className="w-4 h-4" />,

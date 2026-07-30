@@ -217,7 +217,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <span class="chip">Last run <b>—</b></span>
   </div>
 
-  <!-- PULSE COVERAGE — always all 8 modules, always visible, even the clean/boring ones.
+  <!-- PULSE COVERAGE — always all 9 modules, always visible, even the clean/boring ones.
        This is the proof-of-life row: it answers "is Pulse actually checking things" (real
        dates from pulse_module_state, never a static claim) separately from "is each area
        healthy" (the dot color, never blended into one score). Never hide a clean module —
@@ -233,6 +233,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <div class="covitem ok"><span class="dot"></span><span class="cl">Report health</span><span class="cd"><!-- as of — --></span></div>
     <div class="covitem ok"><span class="dot"></span><span class="cl">Cost + time</span><span class="cd"><!-- as of — --></span></div>
     <div class="covitem ok"><span class="dot"></span><span class="cl">Steps &amp; setup</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem pending"><span class="dot"></span><span class="cl">Strategy Auditor</span><span class="cd">never checked</span></div>
     <div class="covitem pending"><span class="dot"></span><span class="cl">Goal Advisor</span><span class="cd">never checked</span></div>
   </div>
 

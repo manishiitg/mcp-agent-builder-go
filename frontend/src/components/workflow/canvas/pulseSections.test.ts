@@ -30,6 +30,15 @@ describe('Pulse section design', () => {
       'reflection',
       'improvements',
     ])
+    expect(PULSE_SECTIONS.every(section => !('concept' in section))).toBe(true)
+  })
+
+  it('shows Strategy Auditor in the Pulse popup Signals section', () => {
+    const strategy = PULSE_MODULE_COMMANDS.find(command => command.id === 'strategy_auditor')
+
+    expect(strategy?.label).toBe('Strategy Auditor')
+    expect(strategy?.description).toContain('Cross-run diagnosis')
+    expect(PULSE_SECTIONS.find(section => section.id === 'signals')?.moduleIds).toContain('strategy_auditor')
   })
 
   it('keeps questions and answers with the Pulse area that asked them', () => {

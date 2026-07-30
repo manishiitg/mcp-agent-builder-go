@@ -15,10 +15,27 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'bug-review', 'llm-ops-review', 'pulse-fixer', 'goal-advisor']) {
+    for (const command of ['pulse', 'bug-review', 'llm-ops-review', 'strategy-auditor', 'pulse-fixer', 'goal-advisor']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
+  })
+
+  it('runs Strategy Auditor as a background guided review anchored to the selected run', () => {
+    const command = findCommand('strategy-auditor', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'focus on repeated targets',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-7/group-a' }),
+    } as CommandContext)
+
+    expect(submitted).toContain('Run the /strategy-auditor review as a BACKGROUND task')
+    expect(submitted).toContain('kind=\\\"strategy-auditor\\\"')
+    expect(submitted).toContain('iteration-7/group-a')
+    expect(submitted).toContain('focus on repeated targets')
   })
 
   it('uses design-plan as the single comprehensive plan review command', () => {

@@ -40,14 +40,15 @@ type Module struct {
 // Canonical module IDs. Consumers that need compile-time constants must alias
 // these values rather than restating their string literals.
 const (
-	BugReviewID      = "bug_review"
-	ArtifactReviewID = "artifact_review"
-	ReportHealthID   = "report_health"
-	EvalHealthID     = "eval_health"
-	StoresHealthID   = "stores_health"
-	CostLLMTimeID    = "cost_llm_time"
-	LLMOpsReviewID   = "llm_ops_review"
-	GoalAdvisorID    = "goal_advisor"
+	BugReviewID       = "bug_review"
+	ArtifactReviewID  = "artifact_review"
+	ReportHealthID    = "report_health"
+	EvalHealthID      = "eval_health"
+	StoresHealthID    = "stores_health"
+	CostLLMTimeID     = "cost_llm_time"
+	LLMOpsReviewID    = "llm_ops_review"
+	StrategyAuditorID = "strategy_auditor"
+	GoalAdvisorID     = "goal_advisor"
 )
 
 // Historical IDs remain constants because read paths must recognize them, but
@@ -112,11 +113,22 @@ var All = []Module{
 	},
 	{
 		// Also owns plan-design hygiene (step-type fitness, prevalidation
-		// fitness, schema/description drift), which Goal Advisor's contract
-		// explicitly excludes.
+		// fitness, schema/description drift). It judges whether the selected
+		// tactic is built correctly, not whether that tactic can reach the goal.
 		ID:        LLMOpsReviewID,
 		Label:     "Steps & setup",
 		StepLabel: "llm-ops-review",
+	},
+	{
+		// Strategy Auditor is the read-only plan-versus-goal diagnosis layer.
+		// It uses retained cross-run evidence to find strategy ceilings, proxy
+		// optimization, source/target concentration, saturation, and missing
+		// outcome telemetry. Goal Advisor consumes the diagnosis and owns any
+		// proposal, experiment, approval, or plan change.
+		ID:        StrategyAuditorID,
+		Label:     "Strategy Auditor",
+		StepLabel: "strategy-auditor",
+		Aliases:   []string{"strategy", "strategy_review", "plan_effectiveness"},
 	},
 	{
 		ID:        GoalAdvisorID,

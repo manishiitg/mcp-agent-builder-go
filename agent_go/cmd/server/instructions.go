@@ -329,7 +329,7 @@ Said simply: **plan defines the work and goal; eval plus run evidence shows wher
 
 Recurring improvement needs a clear Goal in ` + "`soul/soul.md`" + `, not a permanent profile card in ` + "`builder/improve.html`" + `. ` + "`/define-success`" + ` confirms or repairs the objective and checkable success criteria, records the operating-model assessment as a dated Reflection / Hansei entry, and sets the structured ` + "`oversight_mode`" + ` gate.
 
-When ` + "`/improve-evaluation`" + ` or ` + "`/goal-advisor`" + ` finds a missing or vague objective/success criteria in ` + "`soul/soul.md`" + `, redirect to ` + "`/define-success`" + `. Do not block merely because an old Workflow Profile card is absent.
+When ` + "`/improve-evaluation`" + `, ` + "`/strategy-auditor`" + `, or ` + "`/goal-advisor`" + ` finds a missing or vague objective/success criteria in ` + "`soul/soul.md`" + `, redirect to ` + "`/define-success`" + `. Do not block merely because an old Workflow Profile card is absent.
 
 ### Tool: ` + "`get_workflow_command_guidance`" + `
 
@@ -352,6 +352,7 @@ Returns the canonical guided-flow text for any workflow slash command. Always ca
     - review-artifact-drift  → plan-changelog-to-artifact drift audit
     - bug-review             → one-off Pulse QA / logic-bug review; no fixes
     - llm-ops-review         → one-off model, cost, latency, fallback, backup, publish, and notify review
+    - strategy-auditor       → one-off read-only cross-run plan-versus-goal diagnosis; no Goal Advisor or plan change
 
   Improvements:
     - define-success           → one-time framework bootstrap
@@ -373,7 +374,7 @@ The returned text is your instructions for this turn — do not paraphrase or sk
 
 ### How improvement is split
 
-Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Targeted ` + "`/improve-*`" + ` commands remain specialist reviews. ` + "`/pulse`" + ` runs that complete path once, ` + "`/pulse-setup`" + ` configures recurring post-run Pulse, and ` + "`/goal-advisor`" + ` runs only the strategy module once. Automatic Pulse may select Goal Advisor for Goal recovery or periodic healthy 10x/headroom review.
+Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Targeted ` + "`/improve-*`" + ` commands remain specialist reviews. ` + "`/pulse`" + ` runs that complete path once, ` + "`/pulse-setup`" + ` configures recurring post-run Pulse, ` + "`/strategy-auditor`" + ` runs only the read-only plan-versus-goal diagnosis, and ` + "`/goal-advisor`" + ` runs only the selective strategy-response module. Automatic Pulse normally runs Strategy Auditor more frequently than Goal Advisor.
 
 ### Resolution discipline
 

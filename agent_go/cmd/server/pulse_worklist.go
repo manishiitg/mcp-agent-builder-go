@@ -40,7 +40,11 @@ const (
 	// change trigger inside Goal Advisor was never actually consistent with
 	// what Goal Advisor is for.
 	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
-	pulseModuleGoalAdvisor  = pulsemodules.GoalAdvisorID
+	// pulseModuleStrategyAuditor owns read-only plan-versus-goal diagnosis
+	// across retained runs. Goal Advisor owns the resulting proposal,
+	// experiment, approval, or plan mutation.
+	pulseModuleStrategyAuditor = pulsemodules.StrategyAuditorID
+	pulseModuleGoalAdvisor     = pulsemodules.GoalAdvisorID
 )
 
 // Derived from the canonical registry — see pkg/pulsemodules. Do not restate
@@ -982,7 +986,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: "Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each Pulse module: bug_review, artifact_review, report_health, eval_health, stores_health, cost_llm_time, llm_ops_review, and goal_advisor. stores_health covers learnings, knowledgebase, and database freshness/quality — do not pass the old learning_health/knowledgebase_health/db_health names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.",
+			Description: "Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each Pulse module: bug_review, artifact_review, report_health, eval_health, stores_health, cost_llm_time, llm_ops_review, strategy_auditor, and goal_advisor. stores_health covers learnings, knowledgebase, and database freshness/quality — do not pass the old learning_health/knowledgebase_health/db_health names. strategy_auditor diagnoses plan-versus-goal from cross-run evidence; goal_advisor owns proposals and experiments. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,

@@ -11,7 +11,6 @@ export type PulseCommandDefinition = {
 export type PulseSectionDefinition = {
   id: PulseSectionId
   label: string
-  concept: string
   moduleIds: string[]
   commandIds: string[]
   historyIds: string[]
@@ -25,6 +24,7 @@ export const PULSE_MODULE_COMMANDS: PulseCommandDefinition[] = [
   { id: 'stores_health', label: 'Stores health', description: 'Learnings, knowledge base, and database freshness/quality' },
   { id: 'cost_llm_time', label: 'Cost + time', description: 'Cost, model usage, and runtime telemetry' },
   { id: 'llm_ops_review', label: 'LLM + operations', description: 'Model routing, workflow setup, and plan-design hygiene recommendations' },
+  { id: 'strategy_auditor', label: 'Strategy Auditor', description: 'Cross-run diagnosis of whether the plan can achieve the goal' },
   { id: 'goal_advisor', label: 'Goal Advisor', description: 'Strategic review when goal evidence is weak' },
 ]
 
@@ -50,7 +50,6 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
   {
     id: 'goal',
     label: 'Goal',
-    concept: 'Ikigai',
     moduleIds: [],
     commandIds: [],
     historyIds: [],
@@ -58,7 +57,6 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
   {
     id: 'signals',
     label: 'Signals',
-    concept: 'Kizuki',
     moduleIds: [
       'bug_review',
       'artifact_review',
@@ -67,6 +65,7 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
       'stores_health',
       'cost_llm_time',
       'llm_ops_review',
+      'strategy_auditor',
     ],
     commandIds: [],
     historyIds: [],
@@ -74,7 +73,6 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
   {
     id: 'reflection',
     label: 'Reflection',
-    concept: 'Hansei',
     moduleIds: [],
     commandIds: ['dashboard'],
     historyIds: [],
@@ -82,7 +80,6 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
   {
     id: 'improvements',
     label: 'Improvements',
-    concept: 'Kaizen',
     moduleIds: ['goal_advisor'],
     commandIds: [],
     historyIds: ['pulse_fixer'],

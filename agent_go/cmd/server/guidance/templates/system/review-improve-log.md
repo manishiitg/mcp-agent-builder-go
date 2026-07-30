@@ -5,9 +5,8 @@ Canonical conventions shared by every `/review-*`/`/improve-*` skill, the post-r
 ### Reviewer/writer boundary
 
 Pulse specialists investigate; the active Workshop parent or Pulse Fixer writes.
-This boundary applies to Bug Review, Artifact Review, Stores Health, Eval
-Health, Report Health, Cost/LLM/Time, LLM/Ops Review, plan review, and both
-Goal Advisor reviewers.
+This covers all Pulse reviewers, including Bug Review, Strategy Auditor,
+LLM/Ops, plan review, and Goal Advisor.
 
 - A specialist is strictly read-only. It must not edit workflow files, update
   `builder/improve.html`, create or consume human-input requests, mark module
@@ -107,9 +106,9 @@ Different sections may use different evidence dates. The overall status headline
 
 ### Pulse coverage — proof Pulse is actually checking
 
-Right after `.chips`, one always-visible `.coverage` row shows all 8 canonical modules as compact `.covitem` chips (dot + plain-language label, e.g. `llm_ops_review`→"Steps & setup" + real `last_ran_at` from `get_pulse_module_state`, e.g. "as of 2h ago"). Proves two things nothing else on the page does: Pulse is actually checking things (a real date, not a claim), and each area's health (dot color, never blended into one score).
+Right after `.chips`, one always-visible `.coverage` row shows all 9 canonical modules as compact `.covitem` chips (dot + plain-language label, e.g. `llm_ops_review`→"Steps & setup" + real `last_ran_at` from `get_pulse_module_state`, e.g. "as of 2h ago"). Proves two things nothing else on the page does: Pulse is actually checking things (a real date, not a claim), and each area's health (dot color, never blended into one score).
 
-**Always show all 8, never hide a clean one** — a clean module's date is the proof it was checked. Dot: `ok` clean/current, `warn` open finding or overdue by one cycle, `bad` CRITICAL or badly overdue, `pending` never checked (say so, not a fabricated date). Never mark `ok` merely because a module wasn't selected this pass — carry its last real result forward; update every pass from `get_pulse_module_state`.
+**Always show all 9, never hide a clean one** — a clean module's date is the proof it was checked. Dot: `ok` clean/current, `warn` open finding or overdue by one cycle, `bad` CRITICAL or badly overdue, `pending` never checked (say so, not a fabricated date). Never mark `ok` merely because a module wasn't selected this pass — carry its last real result forward; update every pass from `get_pulse_module_state`.
 
 ### Needs your decision — always first when present
 
@@ -266,7 +265,7 @@ Update this hidden block in place on each Pulse. Never append historical copies.
 
 New entries go at the **top** of the timeline, not appended at the bottom. The file carries a stable anchor comment `<!-- LOG ENTRIES: newest first -->` directly below the header/tiles; insert each new entry immediately after it with `diff_patch_workspace_file`. Never reorder or rewrite existing entries except to close out an open finding (below). **Always read the existing file first** so you continue its style and don't duplicate entries. For a new date, insert the whole new `.daygroup` (its `.run` row plus every entry for that date) as one unit right after the anchor; for a date whose `.daygroup` already exists, insert new entries into it instead of creating a second `.daygroup` for the same date.
 
-Every dated recent-run or timeline record (`.run[data-date]`, `.entry[data-date]`, or `.pulse-record[data-date]`) must include an explicit `data-pulse-section` and `data-module`. Runloop uses these attributes to show the complete history for one review when the user clicks that review in the Pulse popup. Use only the canonical module ids: `run_summary`, `bug_review`, `artifact_review`, `stores_health`, `eval_health`, `report_health`, `cost_llm_time`, `llm_ops_review`, `goal_advisor`, or `pulse_fixer`. `stores_health` covers all three of learnings, knowledgebase, and DB — do not invent separate ids for them. Use `signals` for reviewer findings and their questions, `reflection` for run summaries/general Pulse questions/measurement, and `improvements` for Goal Advisor questions or decisions and Pulse Fixer decisions. A Pulse batch may update the file once, but it still writes one attributed card per due module; never hide multiple review results inside one mixed card. Do not infer or invent a new module id.
+Every dated recent-run or timeline record (`.run[data-date]`, `.entry[data-date]`, or `.pulse-record[data-date]`) must include an explicit `data-pulse-section` and `data-module`. Runloop uses these attributes to show the complete history for one review when the user clicks that review in the Pulse popup. Use only the canonical module ids: `run_summary`, `bug_review`, `artifact_review`, `stores_health`, `eval_health`, `report_health`, `cost_llm_time`, `llm_ops_review`, `strategy_auditor`, `goal_advisor`, or `pulse_fixer`. `stores_health` covers all three of learnings, knowledgebase, and DB — do not invent separate ids for them. Use `signals` for reviewer findings and their questions, `reflection` for run summaries/general Pulse questions/measurement, and `improvements` for Goal Advisor questions or decisions and Pulse Fixer decisions. A Pulse batch may update the file once, but it still writes one attributed card per due module; never hide multiple review results inside one mixed card. Do not infer or invent a new module id.
 
 ### Entry kinds
 
@@ -405,7 +404,7 @@ An existing `builder/improve.html` is **old-format** — and must be upgraded, n
 - missing `.worklabel` CSS/action-label examples. Current logs need action chips such as `Bug fix`, `Improvement`, `Advisor idea`, `Artifact drift`, `Report fix`, `Eval fix`, `Cost/time`, `Backup/publish`, `Needs input`, and `Manual` so the user can scan what kind of work happened.
 - a separate "Recent runs" strip followed by a separate flat timeline, instead of one date-grouped Activity section (`.daygroup` wrapping that date's `.run` plus its `gate`/module/Fixer entries together). Upgrade to the current Activity structure — see review-improve-log-skeleton.md.
 - a text-heavy first screen, a visible `What matters now` heading instead of `Today's outcome`, signal/cost/Maintenance tiles outside a closed-by-default `.technical` details block, no optional `.assumptions` support, no hidden `#pulse-agent-handoff` recovery marker, or recent runs rendered as a dense table. Upgrade it to the current human-first dashboard shell before appending new entries.
-- a merged "Issues & fixes" cell instead of "Fixed today"/"Open now", or a missing `.coverage` row (8-module strip). Upgrade both — see the skeleton.
+- a merged "Issues & fixes" cell instead of "Fixed today"/"Open now", or a missing `.coverage` row (9-module strip). Upgrade both — see the skeleton.
 
 Missing `#pulse-bug-verdict` or `#pulse-goal-verdict` alone does **not** require a full old-format rewrite when the rest of the current skeleton is intact. Insert the standard `.verdicts` block in place and preserve all existing cards, filters, and history.
 

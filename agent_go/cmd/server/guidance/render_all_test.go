@@ -140,6 +140,14 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Missing evidence means keep the tier",
 			"before `/pulse-fixer` can apply them",
 		},
+		"strategy-auditor": {
+			"STANDALONE STRATEGY AUDITOR",
+			"without running Pulse Gate, Goal Advisor",
+			"READ-ONLY REVIEW",
+			"one primary classification",
+			`data-module="strategy_auditor"`,
+			"Do not launch `/goal-advisor` automatically",
+		},
 		"pulse-fixer": {
 			"STANDALONE PULSE FIXER",
 			"does not rerun Pulse Gate or launch review agents",
@@ -550,6 +558,75 @@ func TestPulseGuidanceRejudgesActiveExperimentCadenceFromCurrentEvidence(t *test
 	}
 }
 
+func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t *testing.T) {
+	auditor, err := renderFromRegistry("strategy-auditor", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render strategy-auditor: %v", err)
+	}
+	for _, want := range []string{
+		"plan can plausibly achieve the objective",
+		"goal -> plan version -> run/group -> action -> target/cohort -> source/channel",
+		"stable target",
+		"new from repeated targets",
+		"activity, opportunity/yield, and business outcome",
+		"repeated targeting or audience saturation",
+		"exploitation without enough discovery or exploration",
+		"perfect-execution counterfactual",
+		"strategy_flaw",
+		"execution_bug",
+		"measurement_gap",
+		"insufficient_evidence",
+		"no_material_problem",
+		"Missing target/source/outcome linkage",
+		"Goal Advisor",
+		"Never edit files or databases",
+		"Bug Review first",
+		"normally runs more frequently than Goal Advisor",
+		"correctness bug invalidates the evidence window",
+	} {
+		if !strings.Contains(auditor, want) {
+			t.Fatalf("strategy-auditor guidance missing %q:\n%s", want, auditor)
+		}
+	}
+
+	gate, err := renderFromRegistry("pulse-gate", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render pulse-gate: %v", err)
+	}
+	for _, want := range []string{
+		"`strategy_auditor`",
+		"activity and actual outcomes diverge",
+		"Missing telemetry is",
+		"Mark Bug Review and Strategy Auditor together",
+		"Goal Advisor consumes the Auditor result",
+		"Bug Review first and frequently",
+		"Strategy Auditor second and more frequently than Goal Advisor",
+		"Goal Advisor last and selectively",
+		"A goal miss alone does not launch it",
+	} {
+		if !strings.Contains(gate, want) {
+			t.Fatalf("pulse-gate missing Strategy Auditor routing %q:\n%s", want, gate)
+		}
+	}
+
+	reviewer, err := renderFromRegistry("pulse-review-fixer", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render pulse-review-fixer: %v", err)
+	}
+	for _, want := range []string{
+		"Strategy Auditor runs before Goal Advisor",
+		"Strategy Auditor findings are diagnostic handoffs",
+		"challenge the causal claim",
+		"run Bug Review alone first",
+		"A confirmed correctness bug that invalidates that window defers Auditor",
+		"launch Advisor only for an actionable diagnosis",
+	} {
+		if !strings.Contains(reviewer, want) {
+			t.Fatalf("pulse-review-fixer missing Strategy Auditor boundary %q:\n%s", want, reviewer)
+		}
+	}
+}
+
 func TestTierGuidanceProtectsQualityWhileGoalsAreBelowTarget(t *testing.T) {
 	cases := map[string][]string{
 		"post-run-monitor": {
@@ -679,7 +756,9 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		t.Fatalf("render post-run-monitor: %v", err)
 	}
 	for _, want := range []string{
-		`one reviewer task for **every** due module`,
+		`run Bug Review alone first`,
+		`record Auditor as terminally deferred`,
+		`one reviewer task for **every** remaining due module`,
 		`Never rank the due worklist and run only a "top 3"`,
 		`one compact dated result card for every due module`,
 		`data-pulse-section`,
@@ -720,7 +799,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"bug-review", "llm-ops-review"} {
+	for _, kind := range []string{"bug-review", "llm-ops-review", "strategy-auditor"} {
 		review, renderErr := renderFromRegistry(kind, tmplData{}, allKinds)
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
@@ -744,6 +823,7 @@ func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 		"define-success":        {`data-pulse-section="reflection"`, `data-module="run_summary"`, "do not copy the Goal"},
 		"pulse-setup":           {`data-pulse-section="improvements"`, `data-module="pulse_fixer"`, "do not seed or refresh a Goal/Profile card"},
 		"pulse-fixer":           {`data-pulse-section="improvements"`, `data-module="pulse_fixer"`},
+		"strategy-auditor":      {`data-pulse-section="signals"`, `data-module="strategy_auditor"`, "Do not launch `/goal-advisor` automatically"},
 		"goal-advisor":          {`data-pulse-section="improvements"`, `data-module="goal_advisor"`, "do not duplicate the pending question"},
 	}
 
@@ -833,6 +913,7 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 		"design-plan",
 		"bug-review",
 		"llm-ops-review",
+		"strategy-auditor",
 		"review-code",
 		"review-cost",
 		"review-speed",
@@ -885,6 +966,7 @@ func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 		"design-plan",
 		"review-code",
 		"review-artifact-drift",
+		"strategy-auditor",
 		"goal-advisor",
 		"improve-evaluation",
 		"improve-report",
@@ -969,8 +1051,9 @@ func TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence(t *testing.T) {
 		"broader criteria within explicit user boundaries",
 		"Never recommend violating an explicit user exclusion",
 		"opportunity supply or conversion",
-		"Do not require every producing step to be clean before reviewing strategy",
-		"Pulse can run Bug Review and Goal Advisor in the same cycle",
+		"Goal Advisor is intentionally less frequent",
+		"Require a clean Bug Review",
+		"only after Auditor and never in parallel",
 		"include an alternative growth path",
 		"Check optimization headroom even when every success criterion is currently",
 		"Treat a numeric target as a floor",

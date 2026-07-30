@@ -21,7 +21,7 @@ When updating `builder/improve.html`, keep the first screen short and user-prior
 
 ## Timeout Recovery
 
-The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. When a step makes no progress for its full inactivity window, the scheduler records the selected module as `timed_out`, cancels work owned by the old Pulse session, and skips the remaining optional maintenance modules so concurrent repairs cannot race. It then resumes the single ordered finalizer in a fresh recovery session. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns must read the current Pulse Fixer recovery ledger in `#pulse-agent-handoff`, report the partial outcome plainly, and must not claim that timed-out or skipped work succeeded.
+The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Strategy Auditor or Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. When a step makes no progress for its full inactivity window, the scheduler records the selected module as `timed_out`, cancels work owned by the old Pulse session, and skips the remaining optional maintenance modules so concurrent repairs cannot race. It then resumes the single ordered finalizer in a fresh recovery session. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns must read the current Pulse Fixer recovery ledger in `#pulse-agent-handoff`, report the partial outcome plainly, and must not claim that timed-out or skipped work succeeded.
 
 ## Gate Contract
 
@@ -87,8 +87,9 @@ decision:
   mark `bug_review` due
 - report, evaluation, learning, knowledgebase, DB, artifact, cost, or LLM/ops
   concern: mark the matching module due
-- strategy or outcome concern: mark `goal_advisor` due when its normal evidence
-  threshold is met
+- strategy or outcome concern: mark `strategy_auditor` due when diagnosis is
+  needed; also mark `goal_advisor` due when the resulting diagnosis or current
+  goal/experiment evidence needs a strategy response
 - user judgment is genuinely required: route it to a due module whose Pulse
   Fixer can use `create_human_input_request`; Gate itself does not create the
   question
@@ -150,8 +151,11 @@ sections below as domain and evidence guidance.
    blindly reapply a partially completed fix. A `changed_unverified` row is
    resumed only when its named next valid evidence boundary has arrived; until
    then preserve it without reapplying the change or claiming it is fixed.
-2. Create one reviewer task for **every** due module. Partition unresolved due
-   modules into consecutive parallel batches of at most two reviewers, and
+2. Resolve off-track dependencies first: run Bug Review alone first; if its bug
+   invalidates the window, record Auditor as terminally deferred to the post-fix
+   outcome checkpoint. Otherwise run Auditor before any due Advisor.
+   Create one reviewer task for **every** remaining due module. Partition them
+   into consecutive parallel batches of at most two reviewers, and
    issue each current batch's independent `call_generic_agent` calls in the
    same tool-call batch. Never rank the due worklist and run only a "top 3" or
    other subset: Gate already applied the per-pass cap when it built the
@@ -369,6 +373,12 @@ future. A checkpoint is a planned evidence boundary, not a lock. The agent may
 keep the checkpoint only when current evidence still shows that waiting is the
 most informative and cost-conscious choice.
 
+### Off-track diagnostic escalation
+
+Use `Bug Review -> Strategy Auditor -> Goal Advisor`: Bug is frequent, Auditor
+follows a clean relevant review and runs more often than Advisor, and Advisor
+runs only for a new actionable diagnosis or its decision/experiment checkpoint.
+
 ### Reviewed-baseline rule
 
 A successful workflow run is evidence for a review; it is not a substitute for
@@ -426,6 +436,7 @@ Use these module names exactly:
 - `stores_health`
 - `cost_llm_time`
 - `llm_ops_review`
+- `strategy_auditor`
 - `goal_advisor`
 
 ### bug_review
@@ -476,9 +487,11 @@ these conditions holds:
 When a defined material success criterion is trustworthily below target,
 declining, or stalled, treat that as a direct reason for more frequent bounded
 exploratory QA even when every step completed and no `CONCERNS:` marker exists.
-Mark both Bug Review and Goal Advisor due when appropriate: Bug Review tests
-whether the workflow is executing the intended behavior correctly; Goal Advisor
-tests whether the intended behavior or strategy is good enough.
+If no clean Bug Review covers that miss and its relevant control path, mark Bug
+Review due now and defer Strategy Auditor to the next valid checkpoint. Once
+Bug Review is clean and the goal remains off track, mark Strategy Auditor due.
+Mark Goal Advisor only when the resulting diagnosis needs a new proposal,
+experiment, or decision under the escalation rules above.
 
 If no exploratory QA checkpoint was completed after the latest observed goal
 miss, Bug Review is due now. While the goal remains off track, choose a short
@@ -651,7 +664,7 @@ This is a low-frequency coaching pass, not telemetry and not Goal Advisor. Mark 
 
 Inspect resolved provider/model/options/fallback configuration and actual step/eval tier use. Inventory every exact model pin in explicit workflow roles and planning/evaluation step config (`execution_llm`, `validation_llm`, and orchestrator overrides). Call `list_provider_models` once for each pinned provider and use its catalog plus `default_tier_models` as the authoritative current comparison. Classify a pin as unavailable/deprecated, still supported but different from the provider-owned role/tier default, or current. Never infer recency by sorting model names. Provider-profile workflows inherit current defaults and must not be reported as stale merely because their resolved model changed after an app update. Check whether high, medium, and low are configured and used sensibly; whether repeated low-risk validation, extraction, formatting, or summarization uses an unnecessarily expensive tier; whether eval/verification would benefit from provider diversity; whether Pulse and Maintenance models are sensible; and whether fallbacks exist. Also check report publishing/password protection, notification instructions/setup, backup status, and workflow-version readiness.
 
-This module also owns plan-design hygiene — engineering correctness, not strategy. Load `get_workflow_command_guidance(kind="design-plan")` as a read-only structural checklist and apply it to the current plan: step-type fitness (is each step the right type — scripted, message_sequence, routing, todo_task, orphan), prevalidation fitness (an unjustified or redundant `prevalidation` item that just restates the step's own final gate), schema/description drift (a `validation_schema` demanding a field the description never asks the agent to produce, or a non-nullable field the step's own branching logic can legitimately leave absent, forcing a fabricated value), and the rest of that doc's integrity checks and design lenses. Do not judge whether the plan's tactic is good — that is Goal Advisor's job; judge only whether the plan is built correctly given whatever tactic it already has. Findings here follow the same evidence-backed, bounded-fix-or-decision-request path as the rest of this module.
+This module also owns plan-design hygiene — engineering correctness, not strategy. Load `get_workflow_command_guidance(kind="design-plan")` as a read-only structural checklist and apply it to the current plan: step-type fitness (is each step the right type — scripted, message_sequence, routing, todo_task, orphan), prevalidation fitness (an unjustified or redundant `prevalidation` item that just restates the step's own final gate), schema/description drift (a `validation_schema` demanding a field the description never asks the agent to produce, or a non-nullable field the step's own branching logic can legitimately leave absent, forcing a fabricated value), and the rest of that doc's integrity checks and design lenses. Do not judge whether the plan's tactic is good — that is Strategy Auditor's job; judge only whether the plan is built correctly given whatever tactic it already has. Findings here follow the same evidence-backed, bounded-fix-or-decision-request path as the rest of this module.
 
 Goal quality outranks tier savings. When any material success criterion is
 trustworthily below target, do not recommend lowering the model or reasoning tier
@@ -669,40 +682,31 @@ Keep one compact **LLM & operations recommendations** area in `builder/improve.h
 
 Configuration changes require the existing human-input flow. For a stale exact pin, prefer clearing the pin so the role/step inherits its tier when no model-specific capability is required; otherwise propose one exact replacement model and supported reasoning options. Use `create_human_input_request(source="pulse", input_id="llm-ops-<stable-slug>", options=[approve,reject,defer], allow_free_text=true, context="<plain-English current model + affected role/steps + exact proposed clear/replacement + capability/cost/reasoning comparison + approval basis + expected impact + risk>")`. The visible choice must mean Upgrade, Keep current, or Decide later. The approval basis must identify the current resolved provider/model/options/fallback state, affected config/step ids and hashes or versions, evidence as-of run/date, and assumptions that must still hold. A newer catalog model is a review candidate, not proof that it is better; ask only when the replacement is supported and materially useful. Keep at most two open LLM/Ops decisions. On a later run, revalidate that basis and apply only an explicitly approved exact edit with normal LLM/workflow/step config tools. If provider capabilities, target ids, config semantics, user intent, or material cost/quality evidence changed, consume the old answer as `stale_not_applied` and create a refreshed request only if the recommendation remains useful. Verify an applied edit, record the outcome, and call `mark_human_input_consumed`. Reject, defer, and custom answers are recorded and consumed without applying the proposed edit. Never invent models, providers, recipients, destinations, passwords, secrets, or credentials; never publish or notify from this module.
 
+### strategy_auditor
+
+After a clean relevant Bug Review, run this read-only diagnosis more frequently
+than Goal Advisor. Load `get_reference_doc(kind="strategy-auditor")`; select it
+for a baseline, activity/outcome divergence, concentration/saturation/
+exploration concerns, a reached checkpoint, or missing outcome linkage. It classifies and routes only; Auditor precedes Advisor.
+
 ### goal_advisor
 
 Mark due when strategic judgment is needed:
 
-- a defined, measurable success criterion is below its target in the latest
-  trustworthy current-run or retained cross-run evidence, and no active advisor
-  experiment is already waiting for its planned measurement checkpoint
-- Goal drift persists even when execution is clean
-- the current strategy appears capped or too narrow
+- a current Strategy Auditor `strategy_flaw` or strategy-critical
+  `measurement_gap` is new or materially changed and needs an alternative,
+  experiment, or user decision, with no active response already covering it
 - a user answered a strategic question
-- enough new cross-run evidence exists for an expert out-of-plan critique
 - a healthy workflow reaches its previously scheduled headroom checkpoint
 - an active `.advisor-experiment` has an answer, reaches `data-review-after`,
   accumulates enough measurement evidence, becomes blocked/unblocked, or gains
   decisive contradictory evidence
-- repeated goal misses, recurring bugs, or material cost/latency evidence suggest
-  the plan shape itself may be limiting outcomes (this is a strategic-thesis
-  signal — whether the plan is *structurally well-built* is `llm_ops_review`'s
-  job, not this one; see that module)
-- the workflow may need an eval/report measurement change to judge success correctly
-- a material success criterion or active experiment is `Not measured`, and Goal
-  Advisor must propose a bounded metric definition plus a normal `regular`
-  collection step before Report Health can visualize it
 
-An unmet measured goal is a direct Goal Advisor trigger, not merely a signal for
-a later cadence check. Do not skip Goal Advisor just because execution is clean,
-the eval passed, or the module ran recently. If an active experiment already
-addresses that miss through a materially different strategy, preserve the
-experiment and use its `data-review-after` checkpoint instead of proposing
-another strategy. A card that only adds diagnostics, attribution, reporting,
-evaluation, or measurement to the unchanged tactic is instrumentation, not an
-active strategy experiment, and must not defer Goal Advisor. If the criterion has no usable
-target or was not measured, label that explicitly and use the measurement-design
-path rather than claiming that the goal was missed.
+A miss tightens Bug Review and Auditor; it does not alone launch Advisor. Run
+Advisor for a new actionable diagnosis, while an active matching experiment or
+unchanged diagnosis waits for `data-review-after`. Instrumentation-only tracking
+cannot suppress action. For unmeasured criteria, Auditor classifies the gap
+before Advisor proposes the smallest decision-useful measurement contract.
 
 An active strategy experiment earns that deferral only when Gate verifies all of the
 following from current evidence:
@@ -721,10 +725,12 @@ following from current evidence:
    exposure rate, and latest evidence. New contradictory evidence or a flat
    trustworthy goal metric can justify reviewing earlier.
 
-When one of these conditions fails, select Goal Advisor to challenge, advance,
-revise, or recommend retiring that same strategy experiment. Goal Advisor does
-not perform the operational repair; also select Bug Review, Eval Health, Report
-Health, or the matching module when that cause is operational. When Goal Advisor is skipped, the visible
+When an evidence checkpoint arrives or trustworthy contradictory outcomes
+challenge the thesis, select Goal Advisor to advance, revise, or recommend
+retiring that experiment. When the condition fails only because of an
+operational defect, select Bug Review, Eval Health, Report Health, or the
+matching module first and defer Advisor until the repair is verified unless a
+separate strategy decision is already actionable. When Goal Advisor is skipped, the visible
 Gate entry must name the experiment id, implementation/control-path evidence,
 valid run or exposure count, latest goal measurement and freshness, why the
 checkpoint is still fair, and the exact evidence that would trigger earlier
