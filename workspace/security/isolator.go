@@ -33,6 +33,16 @@ type Isolator struct {
 	// Opt-in and additive: every existing caller that leaves this false gets
 	// byte-for-byte the same profile as before.
 	StrictAllowlist bool
+	// AllowNetwork opts a StrictAllowlist caller into outbound network access.
+	// macOS's sandbox-exec does NOT support scoping this to specific hosts —
+	// (remote ip "some-host:443") is rejected outright ("host must be * or
+	// localhost in network address"), confirmed by direct testing — so this
+	// is all-or-nothing. It is a real, accepted tradeoff for whichever caller
+	// sets it: every OTHER secret that caller's shell has access to via env
+	// could in principle be sent to ANY host now, not just wherever the
+	// caller intends. Leave false (default) for callers — like a child's own
+	// shell — that should stay fully network-denied.
+	AllowNetwork bool
 }
 
 const defaultBaseDir = "/app/workspace-docs"
@@ -354,6 +364,31 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 	sb.WriteString("(allow sysctl-read)\n")
 	sb.WriteString("(allow mach-lookup)\n")
 	sb.WriteString("(allow iokit-open)\n\n")
+
+	if iso.AllowNetwork {
+		// Outbound network, opted into explicitly (see AllowNetwork's own doc
+		// comment for the tradeoff this accepts). Getting actual hostname
+		// resolution working here took real trial and error: (allow
+		// network*) alone connects fine to a raw IP (confirmed via curl
+		// --resolve) but getaddrinfo()-based resolution still silently failed
+		// with NO logged sandbox denial — `log show --predicate 'eventMessage
+		// contains "deny"'` showed nothing network-related at all. The actual
+		// missing pieces, found by removing restrictions one at a time until
+		// resolution worked: the mach-lookup for opendirectoryd (glibc-style
+		// resolution goes through it) IS covered by the unscoped (allow
+		// mach-lookup) above, but file-read-metadata on "/", "/var", "/etc"
+		// plus broader /var subpath read access were still being silently
+		// denied and were load-bearing for the resolver to actually get a
+		// response back. Do not narrow this without re-testing a real `curl
+		// https://<host>` end to end — a change that "looks sufficient" by
+		// reading Apple's sandbox docs was insufficient twice before this.
+		sb.WriteString("; Outbound network (opted in) + what hostname resolution actually needs — see AllowNetwork's doc comment\n")
+		sb.WriteString("(allow network*)\n")
+		sb.WriteString("(allow ipc-posix-shm-read-data)\n")
+		sb.WriteString("(allow ipc-posix-shm)\n")
+		sb.WriteString("(allow file-read-metadata (literal \"/\") (literal \"/var\") (literal \"/etc\"))\n")
+		sb.WriteString("(allow file-read* (subpath \"/var\"))\n\n")
+	}
 
 	// The shell itself (and ordinary tools resolving relative/absolute paths)
 	// needs to list "/"'s own top-level entries — standard macOS directory
