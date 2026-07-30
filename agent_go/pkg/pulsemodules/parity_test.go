@@ -3,6 +3,7 @@ package pulsemodules
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,14 +21,20 @@ func TestRegistryIsInternallyConsistent(t *testing.T) {
 	seenStep := map[string]bool{}
 	seenAlias := map[string]string{}
 
+	// Collect every canonical ID before checking aliases. Checking only IDs
+	// encountered earlier would miss an alias that collides with a module
+	// declared later in All.
 	for _, m := range All {
-		if m.ID == "" || m.Label == "" || m.StepLabel == "" {
-			t.Fatalf("module %+v has an empty required field", m)
-		}
 		if seenID[m.ID] {
 			t.Fatalf("duplicate module ID %q", m.ID)
 		}
 		seenID[m.ID] = true
+	}
+
+	for _, m := range All {
+		if m.ID == "" || m.Label == "" || m.StepLabel == "" {
+			t.Fatalf("module %+v has an empty required field", m)
+		}
 
 		if seenStep[m.StepLabel] {
 			t.Fatalf("duplicate StepLabel %q", m.StepLabel)
@@ -131,14 +138,41 @@ func repoFile(t *testing.T, rel string) string {
 func TestFrontendPulseSectionsMatchRegistry(t *testing.T) {
 	src := repoFile(t, "frontend/src/components/workflow/canvas/pulseSections.ts")
 
-	for _, m := range All {
-		if !strings.Contains(src, "id: '"+m.ID+"'") {
-			t.Fatalf("pulseSections.ts has no entry for current module %q — it would have no Pulse popup tab", m.ID)
+	commandBlock := regexp.MustCompile(`(?s)export const PULSE_MODULE_COMMANDS[^=]*=\s*\[(.*?)\]\s*\n`).FindStringSubmatch(src)
+	if len(commandBlock) != 2 {
+		t.Fatal("could not parse PULSE_MODULE_COMMANDS from pulseSections.ts")
+	}
+	idPattern := regexp.MustCompile(`id:\s*'([^']+)'`)
+	commandIDs := map[string]bool{}
+	for _, match := range idPattern.FindAllStringSubmatch(commandBlock[1], -1) {
+		commandIDs[match[1]] = true
+	}
+
+	sectionIDs := map[string]bool{}
+	moduleListPattern := regexp.MustCompile(`(?s)moduleIds:\s*\[([^\]]*)\]`)
+	quotedPattern := regexp.MustCompile(`'([^']+)'`)
+	for _, list := range moduleListPattern.FindAllStringSubmatch(src, -1) {
+		for _, match := range quotedPattern.FindAllStringSubmatch(list[1], -1) {
+			sectionIDs[match[1]] = true
 		}
 	}
-	for _, r := range RetiredIDs {
-		if strings.Contains(src, "id: '"+r+"'") {
-			t.Fatalf("pulseSections.ts still lists retired module %q — it would render a permanently empty tab", r)
+
+	assertExactModuleSet(t, "PULSE_MODULE_COMMANDS", commandIDs)
+	assertExactModuleSet(t, "PULSE_SECTIONS.moduleIds", sectionIDs)
+}
+
+func assertExactModuleSet(t *testing.T, surface string, got map[string]bool) {
+	t.Helper()
+	want := map[string]bool{}
+	for _, m := range All {
+		want[m.ID] = true
+		if !got[m.ID] {
+			t.Fatalf("%s has no entry for current module %q", surface, m.ID)
+		}
+	}
+	for id := range got {
+		if !want[id] {
+			t.Fatalf("%s contains unknown or retired module %q", surface, id)
 		}
 	}
 }

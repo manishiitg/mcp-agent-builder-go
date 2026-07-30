@@ -25,6 +25,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,6 +55,29 @@ const (
 	SeverityHigh   = "high"
 	SeverityMedium = "medium"
 )
+
+const (
+	// DetectorVersion changes when finding semantics or coverage rules change.
+	// Shadow comparisons must never mix observations from incompatible rules
+	// without making that difference explicit.
+	DetectorVersion = "loopclosure/v1"
+
+	CoverageVerified        = "verified"
+	CoveragePartial         = "partial"
+	CoverageNotInstrumented = "not_instrumented"
+	CoverageUnavailable     = "unavailable"
+)
+
+// Result distinguishes a detector that checked and found nothing from one
+// that could not prove anything. Findings alone are not sufficient evidence:
+// an empty slice with unavailable coverage must never be interpreted as clean.
+type Result struct {
+	DetectorVersion string    `json:"detector_version"`
+	ObservedAt      string    `json:"observed_at"`
+	CoverageStatus  string    `json:"coverage_status"`
+	CoverageReason  string    `json:"coverage_reason,omitempty"`
+	Findings        []Finding `json:"findings"`
+}
 
 // Config holds the thresholds. Defaults are deliberately conservative: this
 // layer should report obvious stalls, not manufacture urgency.
@@ -146,6 +170,9 @@ func Evaluate(now, lastGatePass time.Time, inputs []HumanInput, concerns []Conce
 	for _, in := range inputs {
 		switch strings.ToLower(strings.TrimSpace(in.Status)) {
 		case "answered":
+			if in.UpdatedAt.IsZero() {
+				continue
+			}
 			// The core invariant. If a Gate pass completed after the operator
 			// answered and the answer is still unconsumed, that pass had the
 			// answer available and did not act on it. That is not a judgement
@@ -164,6 +191,9 @@ func Evaluate(now, lastGatePass time.Time, inputs []HumanInput, concerns []Conce
 				ID:      in.ID,
 			})
 		case "pending":
+			if in.CreatedAt.IsZero() {
+				continue
+			}
 			age := now.Sub(in.CreatedAt)
 			if age < cfg.PendingAgedAfter {
 				continue
@@ -189,6 +219,9 @@ func Evaluate(now, lastGatePass time.Time, inputs []HumanInput, concerns []Conce
 		if c.SeenCount < cfg.ConcernRecurrenceThreshold {
 			continue
 		}
+		if c.LastSeenAt.IsZero() {
+			continue
+		}
 		out = append(out, Finding{
 			Kind:     KindRecurringConcern,
 			Severity: SeverityHigh,
@@ -211,64 +244,149 @@ func Evaluate(now, lastGatePass time.Time, inputs []HumanInput, concerns []Conce
 	return out
 }
 
-// Check reads the workflow's db.sqlite and reports stalled loops. Best-effort
-// by contract: a missing database or table means "nothing to report", never an
-// error that could block a Pulse pass.
-func Check(ctx context.Context, workspacePath string, now time.Time) ([]Finding, error) {
-	db, err := openReadOnly(workspacePath)
-	if err != nil || db == nil {
-		return nil, err
+// Check reads the workflow's db.sqlite and reports stalled loops together with
+// explicit coverage. It never mutates workflow state and never blocks live
+// scheduling, but it also never converts a read/schema failure into "clean".
+func Check(ctx context.Context, workspacePath string, now time.Time) Result {
+	now = now.UTC()
+	result := Result{
+		DetectorVersion: DetectorVersion,
+		ObservedAt:      now.Format(time.RFC3339),
+		Findings:        []Finding{},
+	}
+
+	db, exists, err := openReadOnly(ctx, workspacePath)
+	if err != nil {
+		result.CoverageStatus = CoverageUnavailable
+		result.CoverageReason = err.Error()
+		return result
+	}
+	if !exists {
+		result.CoverageStatus = CoverageNotInstrumented
+		result.CoverageReason = "db/db.sqlite does not exist"
+		return result
 	}
 	defer db.Close()
 
-	lastGatePass := queryLastGatePass(ctx, db)
-	inputs := queryHumanInputs(ctx, db)
-	concerns := queryConcerns(ctx, db)
+	lastGatePass, gateErr := queryLastGatePass(ctx, db, workspacePath)
+	inputs, inputsErr := queryHumanInputs(ctx, db)
+	concerns, concernsErr := queryConcerns(ctx, db)
+	result.Findings = Evaluate(now, lastGatePass, inputs, concerns, DefaultConfig())
 
-	return Evaluate(now, lastGatePass, inputs, concerns, DefaultConfig()), nil
+	type sourceRead struct {
+		name string
+		err  error
+	}
+	reads := []sourceRead{
+		{name: "pulse_module_state", err: gateErr},
+		{name: "report_human_inputs", err: inputsErr},
+		{name: "run_concerns", err: concernsErr},
+	}
+	var failures []string
+	successes := 0
+	missing := 0
+	for _, read := range reads {
+		if read.err == nil {
+			successes++
+			continue
+		}
+		if isMissingTableError(read.err) {
+			missing++
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", read.name, read.err))
+	}
+	switch {
+	case len(failures) == 0:
+		result.CoverageStatus = CoverageVerified
+	case successes == 0 && missing == len(reads):
+		result.CoverageStatus = CoverageNotInstrumented
+	case successes == 0:
+		result.CoverageStatus = CoverageUnavailable
+	default:
+		result.CoverageStatus = CoveragePartial
+	}
+	result.CoverageReason = strings.Join(failures, "; ")
+	return result
 }
 
-func dbPath(workspacePath string) string {
-	return filepath.Join(fsutil.WorkspaceDocsRoot(),
-		filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "db", "db.sqlite")
+func dbPath(workspacePath string) (string, error) {
+	workspacePath = strings.TrimSpace(strings.ReplaceAll(workspacePath, "\\", "/"))
+	workspacePath = strings.Trim(workspacePath, "/")
+	if workspacePath == "" {
+		return "", fmt.Errorf("workspace_path is required")
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(workspacePath))
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace_path must stay inside the workspace root")
+	}
+	root, err := filepath.Abs(fsutil.WorkspaceDocsRoot())
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace root: %w", err)
+	}
+	path, err := filepath.Abs(filepath.Join(root, cleaned, "db", "db.sqlite"))
+	if err != nil {
+		return "", fmt.Errorf("resolve workflow database: %w", err)
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace_path escapes the workspace root")
+	}
+	return path, nil
 }
 
-func openReadOnly(workspacePath string) (*sql.DB, error) {
-	path := dbPath(workspacePath)
+func openReadOnly(ctx context.Context, workspacePath string) (*sql.DB, bool, error) {
+	path, err := dbPath(workspacePath)
+	if err != nil {
+		return nil, false, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	// Read-only: this layer observes, it never mutates workflow state.
-	db, err := sql.Open("sqlite", path+"?mode=ro")
+	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	return db, nil
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, true, err
+	}
+	return db, true, nil
 }
 
 // queryLastGatePass returns the most recent completed Gate pass.
 // last_checked_at is the right field: Gate records a decision for every module
 // each pass, so it advances even for skipped modules, whereas last_ran_at only
 // advances for modules that actually ran.
-func queryLastGatePass(ctx context.Context, db *sql.DB) time.Time {
+func queryLastGatePass(ctx context.Context, db *sql.DB, workspacePath string) (time.Time, error) {
 	var raw sql.NullString
 	err := db.QueryRowContext(ctx,
-		`SELECT MAX(last_checked_at) FROM pulse_module_state WHERE last_checked_at != ''`).Scan(&raw)
-	if err != nil || !raw.Valid {
-		return time.Time{}
+		`SELECT MAX(last_checked_at) FROM pulse_module_state
+		 WHERE workspace_path = ? AND last_checked_at != ''`,
+		strings.Trim(strings.ReplaceAll(strings.TrimSpace(workspacePath), "\\", "/"), "/")).Scan(&raw)
+	if err != nil {
+		return time.Time{}, err
 	}
-	return parseTime(raw.String)
+	if !raw.Valid {
+		return time.Time{}, nil
+	}
+	parsed := parseTime(raw.String)
+	if parsed.IsZero() {
+		return time.Time{}, fmt.Errorf("invalid last_checked_at timestamp %q", raw.String)
+	}
+	return parsed, nil
 }
 
-func queryHumanInputs(ctx context.Context, db *sql.DB) []HumanInput {
+func queryHumanInputs(ctx context.Context, db *sql.DB) ([]HumanInput, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, source, question, status, created_at, updated_at
 		 FROM report_human_inputs WHERE status IN ('answered','pending')`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -277,21 +395,27 @@ func queryHumanInputs(ctx context.Context, db *sql.DB) []HumanInput {
 		var in HumanInput
 		var created, updated string
 		if err := rows.Scan(&in.ID, &in.Source, &in.Question, &in.Status, &created, &updated); err != nil {
-			return out
+			return out, err
 		}
 		in.CreatedAt = parseTime(created)
 		in.UpdatedAt = parseTime(updated)
+		if in.CreatedAt.IsZero() || in.UpdatedAt.IsZero() {
+			return out, fmt.Errorf("input %q has an invalid created_at or updated_at timestamp", in.ID)
+		}
 		out = append(out, in)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
-func queryConcerns(ctx context.Context, db *sql.DB) []Concern {
+func queryConcerns(ctx context.Context, db *sql.DB) ([]Concern, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT fingerprint, text, status, seen_count, last_seen_at
 		 FROM run_concerns WHERE status IN ('open','acknowledged')`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -300,12 +424,22 @@ func queryConcerns(ctx context.Context, db *sql.DB) []Concern {
 		var c Concern
 		var lastSeen string
 		if err := rows.Scan(&c.Fingerprint, &c.Text, &c.Status, &c.SeenCount, &lastSeen); err != nil {
-			return out
+			return out, err
 		}
 		c.LastSeenAt = parseTime(lastSeen)
+		if c.LastSeenAt.IsZero() {
+			return out, fmt.Errorf("concern %q has an invalid last_seen_at timestamp", c.Fingerprint)
+		}
 		out = append(out, c)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func isMissingTableError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such table")
 }
 
 // parseTime accepts the RFC3339 shapes actually present in these tables, with

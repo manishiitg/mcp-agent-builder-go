@@ -284,7 +284,23 @@ proven.
 
 ### Sentinel
 
-Sentinel is deterministic and initially runs only in shadow mode.
+Sentinel's **routing policy** is deterministic and initially runs only in
+shadow mode. Shadow mode does not require hiding deterministic facts from Gate.
+
+Existing code-owned facts may remain live Gate inputs. This includes
+`open_concerns`, `plan_change_backlog`, module review history, and the validated
+loop-closure findings. For loop closure:
+
+- Gate receives the findings and coverage state as read-only evidence;
+- no finding mandates a module or overrides the three-module cap;
+- no finding authorizes mutation;
+- an empty result is clean only when coverage is verified;
+- the server snapshots the same facts with Gate's worklist for measurement.
+
+This measures whether a deterministic **routing decision** could replace Gate.
+It does not claim to be a counterfactual test of how Gate would behave if the
+underlying facts had been hidden. New fact families without equivalent
+operational validation remain shadow-only.
 
 Candidate deterministic signals:
 
@@ -314,6 +330,10 @@ During Stage A, shadow signals:
 - never launch or suppress a reviewer;
 - never mutate module state;
 - never compete with Gate.
+
+Live fact feeds may influence Gate's reasoning, just as existing concerns and
+plan-change backlog already do. What remains shadow-only is the deterministic
+decision that maps those facts to reviewer selection or suppression.
 
 ### Route-level ownership after measurement
 
@@ -592,7 +612,7 @@ For every pass, record:
 - actions and verification outcomes;
 - Gate, reviewer, Fixer, finalizer, and recovery cost/timing.
 
-### Shadow signals
+### Shadow routing signals
 
 Begin with a small set:
 
@@ -867,7 +887,8 @@ ownership or introduce a second Fixer.
 
 ### Stage A
 
-- shadow signals never affect live scheduling;
+- shadow routing decisions never launch or suppress live work;
+- validated live fact feeds may inform Gate but never mandate routing;
 - every comparison is tied to the exact EvidenceBundle and Gate decision;
 - sampled clean runs receive independent Doctor review;
 - misses are adjudicated;

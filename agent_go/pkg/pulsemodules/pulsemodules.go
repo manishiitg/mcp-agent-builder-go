@@ -37,28 +37,55 @@ type Module struct {
 	Aliases []string
 }
 
+// Canonical module IDs. Consumers that need compile-time constants must alias
+// these values rather than restating their string literals.
+const (
+	BugReviewID      = "bug_review"
+	ArtifactReviewID = "artifact_review"
+	ReportHealthID   = "report_health"
+	EvalHealthID     = "eval_health"
+	StoresHealthID   = "stores_health"
+	CostLLMTimeID    = "cost_llm_time"
+	LLMOpsReviewID   = "llm_ops_review"
+	GoalAdvisorID    = "goal_advisor"
+)
+
+// Historical IDs remain constants because read paths must recognize them, but
+// current writers must never emit them.
+const (
+	RetiredLearningHealthID      = "learning_health"
+	RetiredKnowledgebaseHealthID = "knowledgebase_health"
+	RetiredDBHealthID            = "db_health"
+)
+
+// HTML-only classifications. They are not scheduled review modules.
+const (
+	PseudoRunSummaryID = "run_summary"
+	PseudoPulseFixerID = "pulse_fixer"
+)
+
 // All is the canonical, ordered module set. Order is the Pulse worklist order
 // and is part of the contract — the scheduler and UI both rely on it.
 var All = []Module{
 	{
-		ID:        "bug_review",
+		ID:        BugReviewID,
 		Label:     "Bug review",
 		StepLabel: "bug-review",
 	},
 	{
-		ID:        "artifact_review",
+		ID:        ArtifactReviewID,
 		Label:     "Plan drift",
 		StepLabel: "artifact",
 		Aliases:   []string{"artifact", "artifact_drift"},
 	},
 	{
-		ID:        "report_health",
+		ID:        ReportHealthID,
 		Label:     "Report health",
 		StepLabel: "report-health",
 		Aliases:   []string{"report", "reporting", "report_repair"},
 	},
 	{
-		ID:        "eval_health",
+		ID:        EvalHealthID,
 		Label:     "Eval health",
 		StepLabel: "eval-health",
 		Aliases:   []string{"eval", "evaluation", "evaluation_health", "eval_repair"},
@@ -68,7 +95,7 @@ var All = []Module{
 		// due-cadence mechanism, one freshness check, one plan_change_backlog
 		// trigger, and one bounded-fix authority. Only the content domain
 		// differed (learnings HOW / KB facts / DB schema).
-		ID:        "stores_health",
+		ID:        StoresHealthID,
 		Label:     "Stores health",
 		StepLabel: "stores-health",
 		Aliases: []string{
@@ -78,7 +105,7 @@ var All = []Module{
 		},
 	},
 	{
-		ID:        "cost_llm_time",
+		ID:        CostLLMTimeID,
 		Label:     "Cost + time",
 		StepLabel: "cost-llm-time",
 		Aliases:   []string{"cost", "llm_cost", "cost_time"},
@@ -87,12 +114,12 @@ var All = []Module{
 		// Also owns plan-design hygiene (step-type fitness, prevalidation
 		// fitness, schema/description drift), which Goal Advisor's contract
 		// explicitly excludes.
-		ID:        "llm_ops_review",
+		ID:        LLMOpsReviewID,
 		Label:     "Steps & setup",
 		StepLabel: "llm-ops-review",
 	},
 	{
-		ID:        "goal_advisor",
+		ID:        GoalAdvisorID,
 		Label:     "Goal Advisor",
 		StepLabel: "goal-advisor",
 		Aliases:   []string{"advisor"},
@@ -103,13 +130,17 @@ var All = []Module{
 // historical reviewer artifacts under pulse/reviews/<run>/<module>.md and old
 // builder/improve.html cards still carry them, so read paths must keep
 // accepting them. They must never be written by current runs.
-var RetiredIDs = []string{"learning_health", "knowledgebase_health", "db_health"}
+var RetiredIDs = []string{
+	RetiredLearningHealthID,
+	RetiredKnowledgebaseHealthID,
+	RetiredDBHealthID,
+}
 
 // PseudoIDs are data-module values that appear in builder/improve.html but are
 // not scheduled review modules: run_summary covers Gate and run rows,
 // pulse_fixer covers applied fixes. Consumers that classify HTML must accept
 // them; the scheduler must not treat them as modules.
-var PseudoIDs = []string{"run_summary", "pulse_fixer"}
+var PseudoIDs = []string{PseudoRunSummaryID, PseudoPulseFixerID}
 
 // IDs returns the canonical module IDs in worklist order.
 func IDs() []string {

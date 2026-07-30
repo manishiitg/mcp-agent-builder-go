@@ -416,10 +416,37 @@ export interface PulseFinalCommandState {
   updated_at?: string
 }
 
+export interface PulseLoopClosureFinding {
+  kind: 'answer_not_applied' | 'decision_waiting_on_user' | 'concern_keeps_recurring' | string
+  severity: 'high' | 'medium' | string
+  subject: string
+  detail: string
+  evidence: string
+  age_days: number
+  id?: string
+}
+
+export interface PulseShadowSignalObservation {
+  workspace_path: string
+  pulse_run_id: string
+  detector: string
+  detector_version: string
+  observed_at: string
+  coverage_status: 'verified' | 'partial' | 'not_instrumented' | 'unavailable' | string
+  coverage_reason?: string
+  signals: PulseLoopClosureFinding[]
+  recorded_at: string
+}
+
 export interface PulseModuleStateResponse {
   success: boolean
   modules: PulseModuleState[]
   commands: PulseFinalCommandState[]
+  shadow_signal_observations?: PulseShadowSignalObservation[]
+  shadow_signal_coverage?: {
+    status: string
+    reason?: string
+  }
   error?: string
 }
 

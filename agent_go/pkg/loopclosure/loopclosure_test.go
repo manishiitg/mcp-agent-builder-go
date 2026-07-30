@@ -1,6 +1,11 @@
 package loopclosure
 
 import (
+	"context"
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -236,4 +241,113 @@ func TestSummarizeStripsWhitespaceAndTruncates(t *testing.T) {
 	if summarize("  a\n\tb  ") != "a b" {
 		t.Fatalf("whitespace not normalized: %q", summarize("  a\n\tb  "))
 	}
+}
+
+func TestCheckDistinguishesMissingDatabaseFromClean(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+
+	result := Check(context.Background(), "Workflow/new", ts(t, "2026-07-29T22:00:00Z"))
+	if result.CoverageStatus != CoverageNotInstrumented {
+		t.Fatalf("coverage = %q, want %q: %+v", result.CoverageStatus, CoverageNotInstrumented, result)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("missing database produced findings: %+v", result.Findings)
+	}
+	if result.DetectorVersion != DetectorVersion {
+		t.Fatalf("detector version = %q, want %q", result.DetectorVersion, DetectorVersion)
+	}
+}
+
+func TestCheckReportsVerifiedCoverageAndFindings(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	db := openLoopClosureFixtureDB(t, root, "Workflow/example")
+	defer db.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE pulse_module_state (
+			workspace_path TEXT NOT NULL, last_checked_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE report_human_inputs (
+			id TEXT NOT NULL, source TEXT NOT NULL, question TEXT NOT NULL,
+			status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE run_concerns (
+			fingerprint TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL,
+			seen_count INTEGER NOT NULL, last_seen_at TEXT NOT NULL
+		)`,
+		`INSERT INTO pulse_module_state(workspace_path, last_checked_at)
+		 VALUES ('Workflow/example', '2026-07-29T14:57:51Z')`,
+		`INSERT INTO report_human_inputs
+			(id, source, question, status, created_at, updated_at)
+		 VALUES
+			('answered-1', 'pulse', 'Apply the approved destination.', 'answered',
+			 '2026-07-29T10:00:00Z', '2026-07-29T11:00:00Z')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("fixture statement %q: %v", stmt, err)
+		}
+	}
+
+	result := Check(context.Background(), "Workflow/example", ts(t, "2026-07-29T22:00:00Z"))
+	if result.CoverageStatus != CoverageVerified {
+		t.Fatalf("coverage = %q, want %q: %s", result.CoverageStatus, CoverageVerified, result.CoverageReason)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].ID != "answered-1" {
+		t.Fatalf("findings = %+v, want answered-1", result.Findings)
+	}
+}
+
+func TestCheckMakesPartialSchemaExplicit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	db := openLoopClosureFixtureDB(t, root, "Workflow/example")
+	defer db.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE pulse_module_state (
+			workspace_path TEXT NOT NULL, last_checked_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE report_human_inputs (
+			id TEXT NOT NULL, source TEXT NOT NULL, question TEXT NOT NULL,
+			status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("fixture statement %q: %v", stmt, err)
+		}
+	}
+
+	result := Check(context.Background(), "Workflow/example", ts(t, "2026-07-29T22:00:00Z"))
+	if result.CoverageStatus != CoveragePartial {
+		t.Fatalf("coverage = %q, want %q: %+v", result.CoverageStatus, CoveragePartial, result)
+	}
+	if !strings.Contains(result.CoverageReason, "run_concerns") {
+		t.Fatalf("coverage reason does not identify missing source: %q", result.CoverageReason)
+	}
+}
+
+func TestCheckRejectsWorkspaceTraversal(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+
+	result := Check(context.Background(), "../../outside", ts(t, "2026-07-29T22:00:00Z"))
+	if result.CoverageStatus != CoverageUnavailable {
+		t.Fatalf("coverage = %q, want %q", result.CoverageStatus, CoverageUnavailable)
+	}
+	if !strings.Contains(result.CoverageReason, "workspace root") {
+		t.Fatalf("unexpected coverage reason: %q", result.CoverageReason)
+	}
+}
+
+func openLoopClosureFixtureDB(t *testing.T, root, workspacePath string) *sql.DB {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(workspacePath), "db", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create fixture directory: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open fixture database: %v", err)
+	}
+	return db
 }

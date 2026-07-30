@@ -307,14 +307,15 @@ func TestPulseGuidanceRequiresReviewedBaselineBeforeCadenceSkip(t *testing.T) {
 	}
 }
 
-func TestPulseGuidanceRequiresAuthoritativeHTMLAndVisibleFreshness(t *testing.T) {
+func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) {
 	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
 	if err != nil {
 		t.Fatalf("render post-run-monitor: %v", err)
 	}
 	for _, want := range []string{
-		"builder/improve.html` is the authoritative durable source",
-		"only the current machine-readable Gate/worklist/result cache",
+		"SQLite/runtime state is authoritative",
+		"`builder/improve.html` is the durable explanatory",
+		"HTML never overrides contradictory runtime state",
 		"not measured this run · last measured",
 		"Every skipped module must set at least one concrete next-check condition",
 		"what new evidence caused the override",

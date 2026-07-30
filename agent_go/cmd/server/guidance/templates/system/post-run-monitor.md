@@ -7,11 +7,15 @@ result carries the entire contract: `pulse-archive`, `pulse-gate`,
 
 Pulse runs after a scheduled workflow run. It is not a fixed checklist. It is a small sequence with one mandatory intelligence turn:
 
-1. **Gate / Worklist** — read the evidence, update `builder/improve.html`, and call `record_pulse_worklist`.
+1. **Gate / Worklist** — read the evidence, update the explanatory `builder/improve.html` view, and call `record_pulse_worklist`.
 2. **Selected modules only** — the scheduler runs the modules Gate marked `due`.
 3. **One ordered finalizer turn** — dashboard/questions, backup, conditional publish, then notify. Each command records its own live/final status in `pulse_final_command_state`.
 
-`builder/improve.html` is the authoritative durable source for Pulse history, prior fixes, findings, cadence reasoning, and decisions. The workflow's `db/db.sqlite` table `pulse_module_state` is only the current machine-readable Gate/worklist/result cache used by the scheduler and Pulse popup; it must not replace or contradict the HTML history. Every Gate decision, cadence reason, and module outcome that matters later must also be recorded visibly in `builder/improve.html`.
+SQLite/runtime state is authoritative for scheduling, recovery, approvals, and
+new behavior. `builder/improve.html` is the durable explanatory projection, never
+the sole source for a machine action. Preserve its legacy recovery/Advisor state
+until replaced, but add no new state semantics. Project user-relevant outcomes
+without contradicting runtime state.
 
 When updating `builder/improve.html`, keep the first screen short and user-prioritized. Runloop renders pending **Needs your decision** requests above the HTML. The HTML then shows active **Assumptions challenged** only when consequential assumptions exist, followed by **Today's outcome**, goal progress, and recent activity. Signal tiles, cost/time, Maintenance Radar, and cadence may stay inside closed-by-default operator details, but raw evidence never appears in visible HTML. A hidden `#pulse-agent-handoff` marker may hold only compact interrupted-fix recovery state; it is not a visible Agent log and must not duplicate the report narrative. Do not duplicate the full latest-run Bug/Goal narrative at the top if the same details already appear in Recent runs or the timeline.
 
@@ -21,7 +25,9 @@ The scheduler uses a sliding inactivity timeout: 10 minutes without observable p
 
 ## Gate Contract
 
-Gate decides what the next Pulse modules should do. Read `builder/improve.html` as the primary historical source before using the SQLite cache for current scheduler state. It must call:
+Gate decides what the next Pulse modules should do. Read runtime facts first and
+HTML only for narrative context; HTML never overrides contradictory runtime state.
+Gate must call:
 
 - `get_pulse_module_state(workspace_path="<current workflow>")` before deciding.
 - `record_pulse_worklist(workspace_path="<current workflow>", pulse_run_id="<pulse session id>", decisions=[...])` exactly once before stopping.
@@ -353,7 +359,7 @@ the two-reviewer concurrency cap and persists one result file per module.
 
 ## Module Decisions
 
-Every decision needs a reason and evidence. Skips are useful only when they explain why work is not worth doing yet. Every skipped module must set at least one concrete next-check condition: `next_check_at`, `next_check_after_run_id`, or a positive `cooldown_runs`. Write that planned next check visibly in the Gate/Worklist entry in `builder/improve.html`; SQLite only mirrors it for the scheduler and popup.
+Every decision needs a reason and evidence. Skips are useful only when they explain why work is not worth doing yet. Every skipped module must set at least one concrete next-check condition: `next_check_at`, `next_check_after_run_id`, or a positive `cooldown_runs`. Record that condition authoritatively through `record_pulse_worklist`, then project it visibly in the Gate/Worklist entry in `builder/improve.html`.
 
 Cadence remains agentic. New evidence can override any earlier cooldown or next-check suggestion, but when Gate checks a module earlier than previously planned, its reason and the visible Gate entry must say what new evidence caused the override. Do not silently ignore the prior cadence.
 

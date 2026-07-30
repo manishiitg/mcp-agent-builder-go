@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	pulseModuleBugReview      = "bug_review"
-	pulseModuleArtifactReview = "artifact_review"
-	pulseModuleReportHealth   = "report_health"
-	pulseModuleEvalHealth     = "eval_health"
+	pulseModuleBugReview      = pulsemodules.BugReviewID
+	pulseModuleArtifactReview = pulsemodules.ArtifactReviewID
+	pulseModuleReportHealth   = pulsemodules.ReportHealthID
+	pulseModuleEvalHealth     = pulsemodules.EvalHealthID
 	// pulseModuleStoresHealth replaces the former separate learning_health,
 	// knowledgebase_health, and db_health modules. All three shared the same
 	// due-cadence mechanism (Reviewed-baseline rule, no special throttling),
@@ -30,8 +30,8 @@ const (
 	// only the content domain (learnings HOW / KB facts / DB schema) differed.
 	// One due-decision and one Fixer pass now covers all three, each with its
 	// own small checklist inside.
-	pulseModuleStoresHealth = "stores_health"
-	pulseModuleCostLLMTime  = "cost_llm_time"
+	pulseModuleStoresHealth = pulsemodules.StoresHealthID
+	pulseModuleCostLLMTime  = pulsemodules.CostLLMTimeID
 	// pulseModuleLLMOpsReview also owns plan-design hygiene (step-type
 	// fitness, prevalidation fitness, schema/description drift) alongside its
 	// original model/tier/catalog scope — see its due-trigger section in
@@ -39,8 +39,8 @@ const (
 	// contract explicitly excludes plan-cleanup content, so a plan-design
 	// change trigger inside Goal Advisor was never actually consistent with
 	// what Goal Advisor is for.
-	pulseModuleLLMOpsReview = "llm_ops_review"
-	pulseModuleGoalAdvisor  = "goal_advisor"
+	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
+	pulseModuleGoalAdvisor  = pulsemodules.GoalAdvisorID
 )
 
 // Derived from the canonical registry — see pkg/pulsemodules. Do not restate
@@ -88,6 +88,20 @@ const pulseModuleAuditSchema = `CREATE TABLE IF NOT EXISTS pulse_module_audit (
 	after_refs_json TEXT NOT NULL DEFAULT '[]',
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (workspace_path, module, pulse_run_id)
+)`
+
+const pulseShadowSignalObservationSchema = `CREATE TABLE IF NOT EXISTS pulse_shadow_signal_observation (
+	workspace_path TEXT NOT NULL,
+	pulse_run_id TEXT NOT NULL,
+	detector TEXT NOT NULL,
+	detector_version TEXT NOT NULL,
+	observed_at TEXT NOT NULL,
+	coverage_status TEXT NOT NULL,
+	coverage_reason TEXT NOT NULL DEFAULT '',
+	signals_json TEXT NOT NULL DEFAULT '[]',
+	gate_decisions_json TEXT NOT NULL DEFAULT '[]',
+	recorded_at TEXT NOT NULL,
+	PRIMARY KEY (workspace_path, pulse_run_id, detector)
 )`
 
 type PulseModuleState struct {
@@ -139,6 +153,22 @@ type PulseModuleAuditInput struct {
 	AfterRefs    []string
 }
 
+// PulseShadowSignalObservation is retained experimental evidence. It is
+// deliberately not returned by get_pulse_module_state, so the live Gate cannot
+// condition its worklist on a shadow detector before Stage B approval.
+type PulseShadowSignalObservation struct {
+	WorkspacePath   string                  `json:"workspace_path"`
+	PulseRunID      string                  `json:"pulse_run_id"`
+	Detector        string                  `json:"detector"`
+	DetectorVersion string                  `json:"detector_version"`
+	ObservedAt      string                  `json:"observed_at"`
+	CoverageStatus  string                  `json:"coverage_status"`
+	CoverageReason  string                  `json:"coverage_reason,omitempty"`
+	Signals         []loopclosure.Finding   `json:"signals"`
+	GateDecisions   []PulseWorklistDecision `json:"gate_decisions"`
+	RecordedAt      string                  `json:"recorded_at"`
+}
+
 func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	if err := migratePulseModuleStateSchema(ctx, db); err != nil {
 		return err
@@ -146,6 +176,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
 		pulseModuleStateSchema,
 		pulseModuleAuditSchema,
+		pulseShadowSignalObservationSchema,
 		pulseFinalCommandStateSchema,
 	}
 	for _, stmt := range stmts {
@@ -159,6 +190,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	stmts = []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_state_run ON pulse_module_state(last_pulse_run_id, last_decision)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_audit_recorded ON pulse_module_audit(workspace_path, recorded_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_pulse_shadow_signal_observed ON pulse_shadow_signal_observation(workspace_path, observed_at DESC)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -370,6 +402,21 @@ func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, 
 }
 
 func recordTrustedPulseWorklistOnce(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
+	return recordTrustedPulseWorklistOnceAfter(ctx, workspacePath, pulseRunID, decisions, nil)
+}
+
+func recordTrustedPulseWorklistOnceWithShadow(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision, shadowResult loopclosure.Result) ([]PulseModuleState, error) {
+	return recordTrustedPulseWorklistOnceAfter(ctx, workspacePath, pulseRunID, decisions, func() {
+		// Shadow instrumentation cannot block or modify live scheduling.
+		// Coverage failures are retained in shadowResult rather than converted
+		// to an empty, apparently-clean signal set.
+		if err := recordPulseShadowSignalObservation(ctx, workspacePath, pulseRunID, shadowResult, decisions); err != nil {
+			log.Printf("[PULSE] record shadow loop-closure observation for %s: %v", workspacePath, err)
+		}
+	})
+}
+
+func recordTrustedPulseWorklistOnceAfter(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision, afterRecord func()) ([]PulseModuleState, error) {
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
 		return nil, err
 	}
@@ -393,7 +440,14 @@ func recordTrustedPulseWorklistOnce(ctx context.Context, workspacePath, pulseRun
 		}
 		return states, nil
 	}
-	return recordPulseWorklist(ctx, workspacePath, pulseRunID, decisions)
+	states, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, decisions)
+	if err != nil {
+		return nil, err
+	}
+	if afterRecord != nil {
+		afterRecord()
+	}
+	return states, nil
 }
 
 func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
@@ -690,6 +744,101 @@ func recordPulseModuleAudit(ctx context.Context, execer pulseModuleAuditExecer, 
 	return err
 }
 
+const pulseShadowDetectorLoopClosure = "loop_closure"
+
+func recordPulseShadowSignalObservation(ctx context.Context, workspacePath, pulseRunID string, result loopclosure.Result, decisions []PulseWorklistDecision) error {
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	if pulseRunID == "" {
+		return fmt.Errorf("pulse_run_id is required")
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	signalsJSON, err := json.Marshal(result.Findings)
+	if err != nil {
+		return err
+	}
+	decisionsJSON, err := json.Marshal(decisions)
+	if err != nil {
+		return err
+	}
+	recordedAt := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.ExecContext(ctx, `INSERT INTO pulse_shadow_signal_observation (
+			workspace_path, pulse_run_id, detector, detector_version, observed_at,
+			coverage_status, coverage_reason, signals_json, gate_decisions_json, recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(workspace_path, pulse_run_id, detector) DO NOTHING`,
+		normalized, pulseRunID, pulseShadowDetectorLoopClosure, result.DetectorVersion,
+		result.ObservedAt, result.CoverageStatus, result.CoverageReason,
+		string(signalsJSON), string(decisionsJSON), recordedAt)
+	return err
+}
+
+func getPulseShadowSignalObservations(ctx context.Context, workspacePath string, limit int) ([]PulseShadowSignalObservation, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return []PulseShadowSignalObservation{}, nil
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT workspace_path, pulse_run_id, detector,
+			detector_version, observed_at, coverage_status, coverage_reason,
+			signals_json, gate_decisions_json, recorded_at
+		FROM pulse_shadow_signal_observation
+		WHERE workspace_path = ?
+		ORDER BY observed_at DESC
+		LIMIT ?`, normalized, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []PulseShadowSignalObservation{}
+	for rows.Next() {
+		var observation PulseShadowSignalObservation
+		var signalsJSON, decisionsJSON string
+		if err := rows.Scan(
+			&observation.WorkspacePath,
+			&observation.PulseRunID,
+			&observation.Detector,
+			&observation.DetectorVersion,
+			&observation.ObservedAt,
+			&observation.CoverageStatus,
+			&observation.CoverageReason,
+			&signalsJSON,
+			&decisionsJSON,
+			&observation.RecordedAt,
+		); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(signalsJSON), &observation.Signals); err != nil {
+			return nil, fmt.Errorf("decode shadow signals for %s: %w", observation.PulseRunID, err)
+		}
+		if err := json.Unmarshal([]byte(decisionsJSON), &observation.GateDecisions); err != nil {
+			return nil, fmt.Errorf("decode shadow Gate decisions for %s: %w", observation.PulseRunID, err)
+		}
+		if observation.Signals == nil {
+			observation.Signals = []loopclosure.Finding{}
+		}
+		if observation.GateDecisions == nil {
+			observation.GateDecisions = []PulseWorklistDecision{}
+		}
+		out = append(out, observation)
+	}
+	return out, rows.Err()
+}
+
 func getPulseModuleStates(ctx context.Context, workspacePath string) ([]PulseModuleState, error) {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
 	if err != nil {
@@ -736,11 +885,27 @@ func (api *StreamingAPI) handleGetPulseModuleState(w http.ResponseWriter, r *htt
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	shadowObservations, shadowErr := getPulseShadowSignalObservations(r.Context(), r.URL.Query().Get("workspace_path"), 20)
+	shadowCoverage := map[string]string{}
+	if shadowErr != nil {
+		log.Printf("[PULSE] shadow signal observations unavailable: %v", shadowErr)
+		shadowObservations = []PulseShadowSignalObservation{}
+		shadowCoverage = map[string]string{"status": "unavailable", "reason": shadowErr.Error()}
+	} else if len(shadowObservations) == 0 {
+		shadowCoverage = map[string]string{"status": "not_instrumented", "reason": "no shadow observations recorded yet"}
+	} else {
+		shadowCoverage["status"] = shadowObservations[0].CoverageStatus
+		if shadowObservations[0].CoverageReason != "" {
+			shadowCoverage["reason"] = shadowObservations[0].CoverageReason
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"modules":  states,
-		"commands": commands,
+		"success":                    true,
+		"modules":                    states,
+		"commands":                   commands,
+		"shadow_signal_observations": shadowObservations,
+		"shadow_signal_coverage":     shadowCoverage,
 	})
 }
 
@@ -850,7 +1015,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_pulse_module_state",
-			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus any open step-raised concerns (most-recurring first). Use this before record_pulse_worklist. A concern with a high seen_count has been reported on that many runs and should weigh heavily on which module you mark due; resolve or reject it with resolve_run_concern once a module has acted on it.",
+			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus open concerns and read-only loop-closure facts. Use this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module, override the 3-module cap, or authorize a mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily on which module you mark due; resolve or reject it with resolve_run_concern once a module has acted on it.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -913,7 +1078,16 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if err != nil {
 				return "", err
 			}
-			states, err := recordTrustedPulseWorklistOnce(ctx, workspacePath, pulseRunID, decisions)
+			normalized, err := normalizeReportHumanInputWorkspacePath(workspacePath)
+			if err != nil {
+				return "", err
+			}
+			// Capture the deterministic result before writing this Gate pass so
+			// answer_not_applied is evaluated against the preceding completed
+			// pass. The result is retained only for shadow comparison and is
+			// never returned to the Gate that made these decisions.
+			shadowResult := loopclosure.Check(ctx, normalized, time.Now().UTC())
+			states, err := recordTrustedPulseWorklistOnceWithShadow(ctx, normalized, pulseRunID, decisions, shadowResult)
 			if err != nil {
 				return "", err
 			}
@@ -947,23 +1121,19 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if historyErr != nil {
 				log.Printf("[PULSE] get_pulse_module_state: review history unavailable for %s: %v", workspacePath, historyErr)
 			}
-			// Loops that failed to close. Deterministic arithmetic over state
-			// that already exists — no judgement, no LLM. A 2026-07-29 fleet
-			// census found 28 answered-but-never-applied operator decisions
-			// against only 5 awaiting the operator: the system owed the user
-			// 5.6x more than the reverse, and nothing surfaced it because
-			// noticing was left to an agent. Best-effort, like the reads above.
-			stalled, stalledErr := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
-			if stalledErr != nil {
-				log.Printf("[PULSE] get_pulse_module_state: loop-closure check unavailable for %s: %v", workspacePath, stalledErr)
-			}
+			// This detector has already been validated against fleet state and
+			// is supplied as a read-only fact feed, like open_concerns and
+			// plan_change_backlog. Gate may weigh it but receives no mandatory
+			// routing rule. A separate pre-decision snapshot is still retained
+			// when Gate records its worklist so its handling remains auditable.
+			loopClosure := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
 			payload, _ := json.Marshal(map[string]interface{}{
 				"modules":               states,
 				"open_concerns":         concerns,
 				"concerns_note":         "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
 				"plan_change_backlog":   planBacklog,
-				"stalled_loops":         stalled,
-				"stalled_loops_note":    "Work that passed its own deadline, computed deterministically — not opinions. `answer_not_applied` is the most serious: the user answered and a later Pulse pass still did not apply it, so the loop is broken on our side, not theirs. Clear these before starting new review work; an unapplied answer is worth more than another finding.",
+				"loop_closure":          loopClosure,
+				"loop_closure_note":     "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module, override the 3-module cap, or authorize a mutation. coverage_status must be verified before an empty findings list means clean.",
 				"module_review_history": reviewHistory,
 				"review_history_note":   "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 			})

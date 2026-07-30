@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -442,9 +443,10 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	var payload struct {
-		Success  bool                     `json:"success"`
-		Modules  []PulseModuleState       `json:"modules"`
-		Commands []PulseFinalCommandState `json:"commands"`
+		Success        bool                     `json:"success"`
+		Modules        []PulseModuleState       `json:"modules"`
+		Commands       []PulseFinalCommandState `json:"commands"`
+		ShadowCoverage map[string]string        `json:"shadow_signal_coverage"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -460,6 +462,9 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	}
 	if payload.Commands[0].Command != pulseFinalCommandDashboard || payload.Commands[0].Status != "done" {
 		t.Fatalf("dashboard command mismatch: %+v", payload.Commands[0])
+	}
+	if payload.ShadowCoverage["status"] != "not_instrumented" {
+		t.Fatalf("shadow coverage = %+v, want not_instrumented", payload.ShadowCoverage)
 	}
 }
 
@@ -602,6 +607,121 @@ func TestCreatePulseWorklistToolsEveryToolHasACategory(t *testing.T) {
 			t.Fatalf("tool %q has an empty category", name)
 		}
 	}
+}
+
+func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["get_pulse_module_state"].(func(context.Context, map[string]interface{}) (string, error))
+
+	raw, err := execute(context.Background(), map[string]interface{}{"workspace_path": "Workflow/example"})
+	if err != nil {
+		t.Fatalf("get_pulse_module_state: %v", err)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode Gate payload: %v", err)
+	}
+	loopClosure, exists := payload["loop_closure"].(map[string]interface{})
+	if !exists {
+		t.Fatalf("Gate payload is missing loop_closure evidence: %s", raw)
+	}
+	if got := loopClosure["coverage_status"]; got != loopclosure.CoverageNotInstrumented {
+		t.Fatalf("loop_closure coverage = %#v, want %q", got, loopclosure.CoverageNotInstrumented)
+	}
+	note, _ := payload["loop_closure_note"].(string)
+	for _, required := range []string{"do not mandate a module", "override the 3-module cap", "coverage_status"} {
+		if !strings.Contains(note, required) {
+			t.Fatalf("loop_closure_note missing %q: %q", required, note)
+		}
+	}
+	for _, forbidden := range []string{"stalled_loops", "shadow_signals", "shadow_signal_observations"} {
+		if _, exists := payload[forbidden]; exists {
+			t.Fatalf("Gate payload exposes internal shadow field %q: %s", forbidden, raw)
+		}
+	}
+}
+
+func TestRecordPulseWorklistPersistsShadowObservationAfterDecision(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--shadow"
+	sessionID := "schedule-cron--shadow-session"
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	release := registerTrustedPulseSession(sessionID, pulseRunID)
+	defer release()
+
+	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleBugReview: {
+			Module:   pulseModuleBugReview,
+			Due:      true,
+			Reason:   "Gate independently found a failed step.",
+			Evidence: []string{"run_metadata.json"},
+		},
+	})
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_worklist"].(func(context.Context, map[string]interface{}) (string, error))
+	args := map[string]interface{}{
+		"workspace_path": workspacePath,
+		"pulse_run_id":   pulseRunID,
+		"decisions":      pulseWorklistDecisionToolArgs(decisions),
+	}
+	if _, err := execute(ctx, args); err != nil {
+		t.Fatalf("record_pulse_worklist: %v", err)
+	}
+	// An idempotent retry happens after the current Gate state exists. It must
+	// not overwrite the pre-decision shadow snapshot with a later observation.
+	if _, err := execute(ctx, args); err != nil {
+		t.Fatalf("idempotent record_pulse_worklist retry: %v", err)
+	}
+
+	observations, err := getPulseShadowSignalObservations(context.Background(), workspacePath, 10)
+	if err != nil {
+		t.Fatalf("get shadow observations: %v", err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("observations = %d, want 1: %+v", len(observations), observations)
+	}
+	got := observations[0]
+	if got.PulseRunID != pulseRunID || got.DetectorVersion != loopclosure.DetectorVersion {
+		t.Fatalf("observation identity mismatch: %+v", got)
+	}
+	if got.CoverageStatus != loopclosure.CoverageNotInstrumented {
+		t.Fatalf("coverage = %q, want %q", got.CoverageStatus, loopclosure.CoverageNotInstrumented)
+	}
+	if len(got.GateDecisions) != len(pulseModuleOrder) {
+		t.Fatalf("Gate decisions = %d, want %d", len(got.GateDecisions), len(pulseModuleOrder))
+	}
+	if len(got.Signals) != 0 {
+		t.Fatalf("new workflow should have no shadow findings: %+v", got.Signals)
+	}
+}
+
+func pulseWorklistDecisionToolArgs(decisions []PulseWorklistDecision) []interface{} {
+	out := make([]interface{}, 0, len(decisions))
+	for _, decision := range decisions {
+		item := map[string]interface{}{
+			"module":        decision.Module,
+			"due":           decision.Due,
+			"reason":        decision.Reason,
+			"cooldown_runs": decision.CooldownRuns,
+		}
+		if len(decision.Evidence) > 0 {
+			evidence := make([]interface{}, 0, len(decision.Evidence))
+			for _, value := range decision.Evidence {
+				evidence = append(evidence, value)
+			}
+			item["evidence"] = evidence
+		}
+		if decision.NextCheckAt != "" {
+			item["next_check_at"] = decision.NextCheckAt
+		}
+		if decision.NextCheckAfterRunID != "" {
+			item["next_check_after_run_id"] = decision.NextCheckAfterRunID
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) []PulseWorklistDecision {

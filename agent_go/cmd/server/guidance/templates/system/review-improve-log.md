@@ -47,7 +47,9 @@ Goal Advisor reviewers.
 
 ### One log: `builder/improve.html`
 
-The workflow keeps a **single durable log** — `builder/improve.html` — the workflow's journal and the user's primary window into it. Everything the user should be able to see later goes here, in one place:
+`builder/improve.html` is the explanatory journal and user view; SQLite/runtime
+is authoritative. Preserve legacy HTML recovery/Advisor state; add no new
+machine semantics. Everything users should see goes here:
 
 - **applied or proposed changes** (what Pulse Fixer, Goal Advisor, `/improve-*` reviews, and chat fixes did, and why),
 - **review findings** (what `/review-*` flagged — recommendations, REVIEW = recommend, do NOT apply),
@@ -371,7 +373,7 @@ So a Decision is checkable, **state the expected effect when you write it** ("ex
 
 The log must not grow without bound. Before Gate, the scheduler conditionally sends a dedicated archive turn when `builder/improve.html` has **more than 20 timeline entries** and at least one older resolved entry is safe to move. Byte size and line count do not trigger archiving. That turn decides semantically what can move; normal Gate/module turns should not improvise a second archive pass.
 
-`builder/improve.html` remains the authoritative **current** Pulse view. Keep its complete top dashboard, current metrics/freshness, all open findings, user rules, current notes, unresolved or unconfirmed decisions, unanswered or not-yet-consumed human questions, the newest **20** timeline cards, and at least the newest **5** recent-run rows. Move only older **resolved** findings, superseded confirmed decisions, and routine old run rows into self-contained monthly archives at `builder/improve-archive/YYYY-MM.html`.
+`builder/improve.html` remains the **current explanatory** Pulse view. Keep its complete top dashboard, current metrics/freshness, all open findings, user rules, current notes, unresolved or unconfirmed decisions, unanswered or not-yet-consumed human questions, the newest **20** timeline cards, and at least the newest **5** recent-run rows. Move only older **resolved** findings, superseded confirmed decisions, and routine old run rows into self-contained monthly archives at `builder/improve-archive/YYYY-MM.html`.
 
 Archive safely:
 

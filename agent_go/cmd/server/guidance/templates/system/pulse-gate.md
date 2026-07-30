@@ -10,13 +10,13 @@ open/answered `report_human_inputs`. Stay on compact signals; open a full
 artifact only when a targeted fact needs it.
 
 `get_pulse_module_state` also returns `open_concerns` (recurrence counts),
-`plan_change_backlog`, `stalled_loops`, and `module_review_history`. Weigh them
+`plan_change_backlog`, `loop_closure`, and `module_review_history`. Weigh them
 rather than re-deriving them; justify every skip against that history. A module
 absent from it has not run at all — a reason to run it.
 
-**Clear `stalled_loops` first** — deterministic, not judgements; do not
-re-evaluate. `answer_not_applied` means the user answered and a later pass did
-not apply it: it outranks any new finding and the 3-cap never defers one.
+`loop_closure` is read-only evidence, not a route: findings neither mandate a
+module, override the 3-cap, nor authorize mutation; empty is clean only with
+verified coverage. Facts/worklist are snapshotted; routes remain shadow-only.
 
 Compare exact pins with `list_provider_models` and `default_tier_models`.
 Provider-profile defaults auto-update; never flag them or
