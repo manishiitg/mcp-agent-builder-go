@@ -1175,6 +1175,11 @@ export default function LearningApp() {
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pendingConvUpdate, setPendingConvUpdate] = useState<StoredMsg[] | null>(null)
+  // Same idea as pendingConvUpdate, for Child Mode — an @child WhatsApp
+  // message (or any other background write to this activity's own
+  // conversation.json) can land while she's got the screen open, with
+  // nothing else telling this tab to know. See the polling effect below.
+  const [pendingChildConvUpdate, setPendingChildConvUpdate] = useState<StoredMsg[] | null>(null)
   // Messages the parent typed while a turn was still processing — sent one at
   // a time as the current turn finishes (see the drain effect). Shown as
   // "queued" bubbles so they know it's coming.
@@ -1760,6 +1765,34 @@ export default function LearningApp() {
   // conversations or sends their own message — it only ever refers to the
   // specific conversation/point in time it was detected for.
   useEffect(() => { setPendingConvUpdate(null) }, [conversationId])
+
+  // Child Mode's own version of the polling above — same reasoning
+  // (pendingConvUpdate's own comment), just watching the CURRENT activity's
+  // own conversation.json instead of conversations/parent.json, and gated on
+  // being in the tutor screen with a bound activity rather than 'parent'.
+  useEffect(() => {
+    const dir = childActivity?.dir
+    if (screen !== 'tutor' || !dir) return
+    const id = window.setInterval(() => {
+      if (childSending) return
+      fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${dir}/conversation.json`)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d?.content) return
+          const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
+          const fresh = c.messages || []
+          if (fresh.length > childMessages.length) {
+            setPendingChildConvUpdate(fresh)
+          }
+        })
+        .catch(() => {})
+    }, 20000)
+    return () => window.clearInterval(id)
+  }, [screen, childActivity?.dir, childSending, childMessages.length])
+
+  // Clear any pending Child Mode "new update" banner whenever the bound
+  // activity changes — same reasoning as the parent's own clear-on-switch.
+  useEffect(() => { setPendingChildConvUpdate(null) }, [childActivity?.dir])
 
   // Drain the send queue: once the current turn finishes, send the next queued
   // message. One at a time, in order — so the transcript stays well-formed and
@@ -2367,6 +2400,10 @@ export default function LearningApp() {
     const next: ParentMsg[] = [...(base ?? childMessages), { role: 'user', text }]
     setChildMessages(next)
     setChildInput('')
+    // Drop any pending "new update" banner — same reasoning as the parent's
+    // own send (sendParentText's comment): her own send supersedes it, and
+    // applying the stale pre-send snapshot would wipe out what she just typed.
+    setPendingChildConvUpdate(null)
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
@@ -3902,6 +3939,30 @@ export default function LearningApp() {
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
+              {pendingChildConvUpdate && (
+                <button
+                  type="button"
+                  className="fl-new-update-banner"
+                  onClick={() => {
+                    // Re-fetch on tap rather than applying the snapshot from
+                    // when the banner appeared — same reasoning as the
+                    // parent banner's own click handler.
+                    setPendingChildConvUpdate(null)
+                    const dir = childActivity?.dir
+                    if (!dir) return
+                    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${dir}/conversation.json`)}`)
+                      .then((r) => r.json())
+                      .then((d) => {
+                        if (!d?.content) return
+                        const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
+                        setChildMessages((c.messages || []).map(toParentMsg))
+                      })
+                      .catch(() => {})
+                  }}
+                >
+                  <RefreshCw size={14} /> New update — tap to refresh
+                </button>
+              )}
               <div className="fl-child-thread" aria-label="Tutor conversation">
                 {childMessages.map((m, i) => (
                   m.role === 'tool' && m.tool === 'debug_summary' ? (
