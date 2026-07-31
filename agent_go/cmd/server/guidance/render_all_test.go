@@ -80,15 +80,15 @@ func TestFocusedScheduledPulseReferencesStayBoundedAndComplete(t *testing.T) {
 		"pulse-review-fixer": {
 			max: 6200,
 			wants: []string{
-				"batches of at most two", "supported transport", "automatic", "pulse/reviews/<dated-review-run-id>/<module>.md",
+				"batches of at most two", "supported transport", "automatic", "get_pulse_review_result",
 				"only Pulse Fixer", "global finding-ID reconciliation", "terminal current-run result",
 			},
 		},
 		"pulse-finalizer": {
 			max: 4500,
 			wants: []string{
-				"Never treat missing as skipped/successful", "Dashboard + questions", "directly in this parent",
-				"Publish", "Notify", "mark_pulse_final_command_result",
+				"Never treat missing as skipped/successful", "dedicated Dashboard stage", "do not rewrite them",
+				"directly in this parent", "Publish", "Notify", "mark_pulse_final_command_result",
 			},
 		},
 	}
@@ -133,7 +133,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"READ-ONLY REVIEW",
 			"`/pulse-fixer`",
 		},
-		"llm-ops-review": {
+		"ops-review": {
 			"STANDALONE LLM AND OPERATIONS REVIEW",
 			"must not edit files or config",
 			"material goal criterion is below target",
@@ -203,29 +203,39 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 	if err != nil {
 		t.Fatalf("render post-run-monitor: %v", err)
 	}
-	reviewCost, err := renderFromRegistry("review-cost", tmplData{}, allKinds)
+	opsReview, err := renderFromRegistry("ops-review", tmplData{}, allKinds)
 	if err != nil {
-		t.Fatalf("render review-cost: %v", err)
+		t.Fatalf("render ops-review: %v", err)
 	}
 
-	for kind, rendered := range map[string]string{
-		"post-run-monitor": postRun,
-		"review-cost":      reviewCost,
+	for _, want := range []string{
+		"group_folder",
+		"by_model",
+		"authoritative LLM total",
+		"by_step_and_model",
+		"never add",
+		"unattributed/orchestrator",
+		"workflow_orchestrator",
+		"scripted/zero-LLM step",
+		"run-folder",
 	} {
-		for _, want := range []string{
-			"group_folder",
-			"by_model",
-			"authoritative LLM total",
-			"by_step_and_model",
-			"never add",
-			"unattributed/orchestrator",
-			"workflow_orchestrator",
-			"scripted/zero-LLM step",
-			"run-folder",
-		} {
-			if !strings.Contains(rendered, want) {
-				t.Fatalf("%s cost reconciliation guidance missing %q", kind, want)
-			}
+		if !strings.Contains(postRun, want) {
+			t.Fatalf("post-run-monitor cost reconciliation guidance missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"group_folder",
+		"run_folder",
+		"by_model",
+		"by_step_and_model",
+		"never add",
+		"unattributed/orchestrator",
+		"workflow_orchestrator",
+		"missing buckets",
+		"unpriced calls",
+	} {
+		if !strings.Contains(opsReview, want) {
+			t.Fatalf("ops-review cost reconciliation guidance missing %q", want)
 		}
 	}
 }
@@ -335,27 +345,28 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"parallel batches of at most two reviewers",
 		"under 3000 characters",
 		"in-turn review ledger",
-		".pulse-fixer-recovery",
+		"Never trust HTML as recovery truth",
 		"blindly reapply",
 		"fixed_verified",
-		"normal user-facing cards once",
+		"must not update `builder/improve.html`",
+		"dedicated Dashboard prevents competing",
 		"conflict map grouped by target key",
 		"explicit user-approved decisions and constraints",
 		"mark only the affected",
 		"finding-id manifest",
-		"every finding id must have",
+		"give every finding exactly one evidence-backed",
 		"global finding-ID reconciliation",
 		"Do not claim",
 		"approval revalidation",
 		"Unrelated drift",
 		"stale_not_applied",
 		"Never silently rebase or broaden",
-		"post-change evidence boundary",
+		"only passed post-change proof",
 		"changed_unverified",
 		"awaiting_next_valid_run",
 		"Do not use `run_in_background`",
 		"READ-ONLY REVIEW",
-		"same parent Pulse turn",
+		"parent becomes the only **Pulse Fixer**",
 		"does not launch",
 		"`run_goal_advisor_review`",
 		"backend independently enforces",
@@ -476,7 +487,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Assumptions challenged",
 		"Today's outcome",
 		`<details class="technical">`,
-		"Hidden recovery handoff",
+		"Hidden agent handoff projection",
 		`#pulse-agent-handoff`,
 		"scheduler conditionally sends a dedicated archive turn",
 		"newest **20** timeline cards",
@@ -681,7 +692,7 @@ func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
 			"Never silently replace an exact pin",
 			"Upgrade, Keep current, or Decide later",
 		},
-		"llm-ops-review": {
+		"ops-review": {
 			"Inventory exact model",
 			"list_provider_models",
 			"default_tier_models",
@@ -692,7 +703,7 @@ func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
 
 	for kind, wants := range cases {
 		registry := referenceKinds
-		if kind == "llm-ops-review" {
+		if kind == "ops-review" {
 			registry = allKinds
 		}
 		rendered, err := renderFromRegistry(kind, tmplData{}, registry)
@@ -738,8 +749,8 @@ func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 		rendered string
 		wants    []string
 	}{
-		"review-improve-log": {logGuide, []string{"reviewer result file", "#pulse-agent-handoff", "no_terminal_packet", "retry_due", "approved_awaiting_evidence", "The review did not finish.", "Pulse will retry.", "Approved; waiting to confirm results.", "Review incomplete"}},
-		"post-run-monitor":   {monitor, []string{"user-facing outcome record", "reviewer result file", "#pulse-agent-handoff", "no_terminal_packet", "retry_due", "approved_awaiting_evidence", "The review did not finish.", "Pulse will retry.", "Approved; waiting to confirm results.", "Review incomplete"}},
+		"review-improve-log": {logGuide, []string{"SQLite-backed reviewer result", "#pulse-agent-handoff", "no_terminal_packet", "retry_due", "approved_awaiting_evidence", "The review did not finish.", "Pulse will retry.", "Approved; waiting to confirm results.", "Review incomplete"}},
+		"post-run-monitor":   {monitor, []string{"SQLite-backed reviewer records", "structured Pulse state", "must not update `builder/improve.html`", "dedicated Dashboard"}},
 	}
 	for label, check := range checks {
 		for _, want := range check.wants {
@@ -760,9 +771,9 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		`record Auditor as terminally deferred`,
 		`one reviewer task for **every** remaining due module`,
 		`Never rank the due worklist and run only a "top 3"`,
-		`one compact dated result card for every due module`,
-		`data-pulse-section`,
-		`data-module`,
+		`one honest terminal result for every due module`,
+		`later Dashboard stage`,
+		`must not update ` + "`builder/improve.html`",
 	} {
 		if !strings.Contains(monitor, want) {
 			t.Fatalf("post-run-monitor missing complete reviewer contract %q", want)
@@ -790,7 +801,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	}
 	for _, want := range []string{
 		"evaluation health",
-		"LLM/operations review",
+		"Ops Review",
 		"builder/improve.html",
 		"only the current machine-readable scheduler/UI mirror",
 	} {
@@ -799,7 +810,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"bug-review", "llm-ops-review", "strategy-auditor"} {
+	for _, kind := range []string{"bug-review", "ops-review", "strategy-auditor"} {
 		review, renderErr := renderFromRegistry(kind, tmplData{}, allKinds)
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
@@ -816,8 +827,7 @@ func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 	cases := map[string][]string{
 		"design-plan":           {`data-pulse-section="signals"`, "data-module` set per the attribution rule above", "never discard findings"},
 		"review-code":           {`data-pulse-section="signals"`, `data-module="bug_review"`, "every finding"},
-		"review-cost":           {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
-		"review-speed":          {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
+		"ops-review":            {`data-pulse-section="signals"`, `data-module="llm_ops_review"`, "Every finding"},
 		"review-artifact-drift": {`data-pulse-section="signals"`, `data-module="artifact_review"`},
 		"improve-evaluation":    {`data-pulse-section="signals"`, `data-module="eval_health"`},
 		"define-success":        {`data-pulse-section="reflection"`, `data-module="run_summary"`, "do not copy the Goal"},
@@ -912,11 +922,9 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 	kinds := []string{
 		"design-plan",
 		"bug-review",
-		"llm-ops-review",
+		"ops-review",
 		"strategy-auditor",
 		"review-code",
-		"review-cost",
-		"review-speed",
 		"review-artifact-drift",
 		"improve-learnings",
 		"improve-knowledge",
@@ -952,11 +960,38 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 		"Reviewer/writer boundary",
 		"A specialist is strictly read-only",
 		"the parent validates evidence",
-		"updates `builder/improve.html` once",
+		"dedicated Dashboard stage is the only HTML",
+		"records terminal module",
 		"specialists never load either presentation reference",
 	} {
 		if !strings.Contains(logGuidance, want) {
 			t.Fatalf("review-improve-log missing parent-only writer contract %q", want)
+		}
+	}
+}
+
+func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T) {
+	for kind, module := range map[string]string{
+		"bug-review":            "bug_review",
+		"ops-review":            "llm_ops_review",
+		"strategy-auditor":      "strategy_auditor",
+		"review-artifact-drift": "artifact_review",
+	} {
+		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
+		if err != nil {
+			t.Fatalf("render %s: %v", kind, err)
+		}
+		for _, want := range []string{
+			"call_generic_agent",
+			`module="` + module + `"`,
+			"Do not pass `pulse_run_id` or `review_run_id`",
+			"SQLite",
+			"structured finding lifecycle",
+			"get_pulse_review_result",
+		} {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%s missing persisted standalone-review contract %q", kind, want)
+			}
 		}
 	}
 }

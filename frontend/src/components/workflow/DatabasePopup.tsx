@@ -70,28 +70,6 @@ type MaximizedCell = {
   detail: string
 }
 
-type PlannerFilesLikeResponse = {
-  success?: boolean
-  message?: string
-  data?: PlannerFile[]
-}
-
-function normalizePlannerFilesResponse(resp: PlannerFile[] | PlannerFilesLikeResponse | null | undefined): PlannerFile[] {
-  if (Array.isArray(resp)) return resp
-  if (Array.isArray(resp?.data)) return resp.data
-  return []
-}
-
-function collectFiles(items: PlannerFile[], out: PlannerFile[] = []): PlannerFile[] {
-  for (const item of items) {
-    const hasChildren = Array.isArray(item.children) && item.children.length > 0
-    const isFolder = item.type === 'folder' || hasChildren
-    if (item.filepath && !isFolder) out.push(item)
-    if (hasChildren) collectFiles(item.children ?? [], out)
-  }
-  return out
-}
-
 function fileName(path: string): string {
   return path.split('/').filter(Boolean).pop() || path
 }
@@ -305,46 +283,6 @@ function formatCellDetail(value: unknown): string {
 
 function canMaximizeCell(value: unknown, text: string): boolean {
   return text.length > 80 || text.includes('\n') || (value != null && typeof value === 'object')
-}
-
-function buildDBTablesFromContent(workspacePath: string | null, path: string, content: string | null): DBTable[] {
-  if (!content) return []
-  const label = workspacePath ? relativeDBPath(workspacePath, path) : fileName(path)
-  if (path.toLowerCase().endsWith('.jsonl')) {
-    const rows = content
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(Boolean)
-      .flatMap(line => {
-        try {
-          const parsed = JSON.parse(line)
-          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? [parsed as Record<string, unknown>] : []
-        } catch {
-          return []
-        }
-      })
-    const table = createTable(path, label, rows)
-    return table ? [table] : []
-  }
-
-  try {
-    const parsed = JSON.parse(content)
-    const topRows = objectRows(parsed)
-    if (topRows.length > 0) {
-      const table = createTable(path, label, topRows)
-      return table ? [table] : []
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
-    const out: DBTable[] = []
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      const rows = objectRows(value)
-      const table = createTable(`${path}#${key}`, `${label}.${key}`, rows)
-      if (table) out.push(table)
-    }
-    return out
-  } catch {
-    return []
-  }
 }
 
 function relationshipConfidence(from: DBTable, fromField: string, to: DBTable, toField: string): 'strong' | 'possible' | null {

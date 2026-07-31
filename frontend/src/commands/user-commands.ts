@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import {
   Zap, Eye, Code, FileText, MessageCircle, Search, Bookmark, Star, Terminal
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { commandsApi } from '../api/commands'
 import type { UserCommand } from '../types/commands'
 import type { CommandDefinition } from './types'
@@ -10,7 +11,7 @@ import { setUserCommands } from './registry'
 
 type CommandMode = Exclude<ModeCategory, null>
 
-const iconComponents: Record<string, any> = {
+const iconComponents: Record<string, LucideIcon> = {
   zap: Zap,
   eye: Eye,
   code: Code,

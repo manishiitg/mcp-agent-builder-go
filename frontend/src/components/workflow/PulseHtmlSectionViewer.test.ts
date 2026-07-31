@@ -18,4 +18,12 @@ describe('buildPulseTimelineHtml', () => {
     expect(result).toContain('<div id="original">Pulse</div>')
     expect(result.indexOf('__runloop_pulse_section_script')).toBeLessThan(result.indexOf('</body>'))
   })
+
+  it('routes historical cost/time cards into the merged Ops review', () => {
+    const result = buildPulseTimelineHtml('<html><body><div class="wrap"></div></body></html>')
+
+    expect(result).toContain("if (explicit === 'cost_llm_time') return 'llm_ops_review'")
+    expect(result).toContain("value.indexOf('cost')")
+    expect(result).toContain("return 'llm_ops_review'")
+  })
 })

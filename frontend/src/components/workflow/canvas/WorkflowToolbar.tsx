@@ -15,15 +15,9 @@ import {
   Activity,
   BellRing,
   CalendarClock,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
-  Radar,
   RefreshCw,
-  ScanSearch,
   Search,
-  Sparkles,
-  Target,
   X,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
@@ -54,14 +48,13 @@ import { getBackupDotClass, formatBackupStateLabel } from '../backupStatus'
 import WorkflowPublishPopup from '../WorkflowPublishPopup'
 import { getPublishDotClass, formatPublishStateLabel } from '../publishStatus'
 import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
-import { ReportHumanInputPanel } from '../ReportHumanInputPanel'
-import { PulseHtmlSectionViewer } from '../PulseHtmlSectionViewer'
+import { PulseWorkspace } from '../PulseWorkspace'
 import { formatNotificationStateLabel, getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
-import { SoulViewer, WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
+import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { WORKFLOW_LOG_REFRESH_EVENT } from '../workflowEvents'
 import {
   resolveGroupFolderPath
@@ -69,12 +62,7 @@ import {
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
 import {
   PULSE_FIXED_COMMANDS,
-  PULSE_FOOTER_COMMAND_IDS,
-  PULSE_HISTORY_ITEMS,
-  PULSE_HUMAN_INPUT_SOURCE_BY_SECTION,
   PULSE_MODULE_COMMANDS,
-  PULSE_SECTIONS,
-  type PulseSectionId,
 } from './pulseSections'
 
 // Execution phase ID - special phase that should be displayed separately
@@ -108,37 +96,6 @@ function formatWorkflowNameFromPath(path?: string | null): string {
   return name || 'Workflow'
 }
 
-const PULSE_SECTION_ICONS: Record<PulseSectionId, React.ComponentType<{ className?: string }>> = {
-  goal: Target,
-  signals: Radar,
-  reflection: ScanSearch,
-  improvements: Sparkles,
-}
-
-const PULSE_SECTION_ICON_CLASSES: Record<PulseSectionId, string> = {
-  goal: 'border-sky-500/25 bg-sky-500/10 text-sky-500',
-  signals: 'border-amber-500/25 bg-amber-500/10 text-amber-500',
-  reflection: 'border-rose-500/25 bg-rose-500/10 text-rose-400',
-  improvements: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500',
-}
-
-function pulseStatusToneClass(status: string): string {
-  const normalized = status.toLowerCase().replace(/^last\s+/, '')
-  if (normalized === 'failed' || normalized === 'blocked' || normalized === 'timed_out' || normalized === 'timed out') {
-    return 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-300'
-  }
-  if (normalized === 'changed' || normalized === 'due') {
-    return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-  }
-  if (normalized === 'done') {
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-  }
-  if (normalized === 'skipped' || normalized === 'no data' || normalized === 'waiting' || normalized === 'if set') {
-    return 'border-border bg-muted text-muted-foreground'
-  }
-  return 'border-primary/20 bg-primary/10 text-primary'
-}
-
 function formatPulseTimestamp(value?: string): string {
   if (!value) return ''
   const date = new Date(value)
@@ -149,34 +106,6 @@ function formatPulseTimestamp(value?: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function formatPulseNextCheck(state?: PulseModuleState): string {
-  if (!state) return ''
-  const hints: string[] = []
-  const nextCheckAt = (state.next_check_at || '').trim()
-  if (nextCheckAt) {
-    let date: Date
-    if (/^\d{4}-\d{2}-\d{2}$/.test(nextCheckAt)) {
-      const [year, month, day] = nextCheckAt.split('-').map(Number)
-      date = new Date(year, month - 1, day)
-    } else {
-      date = new Date(nextCheckAt)
-    }
-    if (!Number.isNaN(date.getTime())) {
-      const includesTime = nextCheckAt.includes('T')
-      hints.push(date.toLocaleString(undefined, includesTime
-        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
-        : { month: 'short', day: 'numeric' }))
-    } else {
-      hints.push(nextCheckAt)
-    }
-  }
-  const afterRun = (state.next_check_after_run_id || '').trim()
-  if (afterRun) hints.push('after newer workflow evidence is available')
-  const cooldownRuns = state.cooldown_runs || 0
-  if (cooldownRuns > 0) hints.push(`after ${cooldownRuns} workflow run${cooldownRuns === 1 ? '' : 's'}`)
-  return hints.length > 0 ? `Next check: ${hints.join(' · ')}` : ''
 }
 
 function getPulseModuleStatus(state?: PulseModuleState): { label: string; detail: string; time: string } {
@@ -223,46 +152,6 @@ function getPulseFinalCommandStatus(state?: PulseFinalCommandState): { label: st
 function pulseStatusNeedsAttention(status: string): boolean {
   const normalized = status.trim().toLowerCase().replace(/^last\s+/, '')
   return ['failed', 'blocked', 'timed out', 'timed_out', 'changed', 'due'].includes(normalized)
-}
-
-type PulseStatusRowProps = {
-  label: string
-  description: string
-  status: { label: string; detail: string; time: string }
-  nextCheck?: string
-  selected?: boolean
-  onSelect?: () => void
-}
-
-function PulseStatusRow({ label, description, status, nextCheck, selected = false, onSelect }: PulseStatusRowProps) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 border-b px-3 py-3 text-left transition-colors last:border-b-0 sm:px-4 ${selected ? 'bg-primary/10' : 'hover:bg-muted/40'}`}
-    >
-      <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-foreground">{label}</span>
-        </div>
-        <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground" title={status.detail || description}>
-          {status.detail || description}
-        </div>
-        {nextCheck && (
-          <div className="mt-1.5 line-clamp-2 text-[11px] font-medium text-primary/80" title={nextCheck}>
-            {nextCheck}
-          </div>
-        )}
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1.5">
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${pulseStatusToneClass(status.label)}`}>
-          {status.label}
-        </span>
-        <span className="whitespace-nowrap text-[10px] text-muted-foreground">{status.time}</span>
-      </div>
-    </button>
-  )
 }
 
 function pulseLoopClosureKindLabel(kind: string): string {
@@ -463,8 +352,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
   const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
   const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
-  const [activePulseSection, setActivePulseSection] = useState<PulseSectionId>('goal')
-  const [activePulseTimeline, setActivePulseTimeline] = useState<{ module: string; label: string } | null>(null)
   // Backup popup state
   const [showBackupPopup, setShowBackupPopup] = useState(false)
   const [backupState, setBackupState] = useState<string>('loading')
@@ -501,10 +388,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
   }, [manualPulseStarting, workspacePath])
 
-  useEffect(() => {
-    setActivePulseTimeline(null)
-  }, [workspacePath])
-
   const workflowScheduleLabel = useMemo(
     () => formatWorkflowNameFromPath(workspacePath),
     [workspacePath]
@@ -539,11 +422,19 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   }, [workspacePath])
 
   useEffect(() => {
-    if (!showMonitorHelp || !monitorOn) return
+    if (!showMonitorHelp) return
     void refreshPulseModuleStates()
     const timer = window.setInterval(() => { void refreshPulseModuleStates(false) }, 5_000)
     return () => window.clearInterval(timer)
-  }, [showMonitorHelp, monitorOn, refreshPulseModuleStates])
+  }, [showMonitorHelp, refreshPulseModuleStates])
+
+  const openPulseDashboard = useCallback(() => {
+    setShowMonitorHelp(false)
+    const workflowStore = useWorkflowStore.getState()
+    workflowStore.setShowWorkspacePane(true)
+    workflowStore.setWorkflowWorkspaceView('log')
+    workflowStore.setCanvasViewMode('log')
+  }, [])
 
   const pulseModuleStateByModule = useMemo(() => {
     return new Map(pulseModuleStates.map(state => [state.module, state]))
@@ -552,32 +443,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const pulseFinalCommandStateByCommand = useMemo(() => {
     return new Map(pulseFinalCommandStates.map(state => [state.command, state]))
   }, [pulseFinalCommandStates])
-
-  const pulseSectionSummaries = useMemo(() => {
-    return new Map(PULSE_SECTIONS.map((section) => {
-      let recorded = 0
-      let attention = 0
-
-      section.moduleIds.forEach((id) => {
-        const state = pulseModuleStateByModule.get(id)
-        if (!state) return
-        recorded += 1
-        if (pulseStatusNeedsAttention(getPulseModuleStatus(state).label)) attention += 1
-      })
-      section.commandIds.forEach((id) => {
-        const state = pulseFinalCommandStateByCommand.get(id)
-        if (!state) return
-        recorded += 1
-        if (pulseStatusNeedsAttention(getPulseFinalCommandStatus(state).label)) attention += 1
-      })
-
-      return [section.id, {
-        recorded,
-        attention,
-        total: section.moduleIds.length + section.commandIds.length,
-      }]
-    }))
-  }, [pulseFinalCommandStateByCommand, pulseModuleStateByModule])
 
   const pulseOverview = useMemo(() => {
     const timestamps = [
@@ -589,62 +454,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       const time = new Date(value).getTime()
       return Number.isNaN(time) || time <= latest ? latest : time
     }, 0)
-    const summaries = [...pulseSectionSummaries.values()]
-    const footerStatuses = PULSE_FOOTER_COMMAND_IDS
-      .map(command => pulseFinalCommandStateByCommand.get(command))
+    const recordedModuleStates = PULSE_MODULE_COMMANDS
+      .map(command => pulseModuleStateByModule.get(command.id))
+      .filter((state): state is PulseModuleState => !!state)
+    const recordedFinalStates = PULSE_FIXED_COMMANDS
+      .map(command => pulseFinalCommandStateByCommand.get(command.id))
       .filter((state): state is PulseFinalCommandState => !!state)
     return {
-      recorded: summaries.reduce((sum, summary) => sum + summary.recorded, 0) + footerStatuses.length,
-      attention: summaries.reduce((sum, summary) => sum + summary.attention, 0) + footerStatuses.filter(state => pulseStatusNeedsAttention(getPulseFinalCommandStatus(state).label)).length,
-      total: summaries.reduce((sum, summary) => sum + summary.total, 0) + PULSE_FOOTER_COMMAND_IDS.length,
+      recorded: recordedModuleStates.length + recordedFinalStates.length,
+      attention: recordedModuleStates.filter(state => pulseStatusNeedsAttention(getPulseModuleStatus(state).label)).length
+        + recordedFinalStates.filter(state => pulseStatusNeedsAttention(getPulseFinalCommandStatus(state).label)).length,
+      total: PULSE_MODULE_COMMANDS.length + PULSE_FIXED_COMMANDS.length,
       latest: latestTimestamp > 0 ? formatPulseTimestamp(new Date(latestTimestamp).toISOString()) : '',
     }
-  }, [pulseFinalCommandStateByCommand, pulseFinalCommandStates, pulseLoopClosureObservation, pulseModuleStates, pulseSectionSummaries])
-
-  const activePulseSectionDefinition = useMemo(
-    () => PULSE_SECTIONS.find(section => section.id === activePulseSection) || PULSE_SECTIONS[0],
-    [activePulseSection]
-  )
-
-  const activePulseModuleCommands = useMemo(
-    () => activePulseSectionDefinition.moduleIds
-      .map(id => PULSE_MODULE_COMMANDS.find(command => command.id === id))
-      .filter((command): command is (typeof PULSE_MODULE_COMMANDS)[number] => !!command),
-    [activePulseSectionDefinition]
-  )
-
-  const activePulseFinalCommands = useMemo(
-    () => activePulseSectionDefinition.commandIds
-      .map(id => PULSE_FIXED_COMMANDS.find(command => command.id === id))
-      .filter((command): command is (typeof PULSE_FIXED_COMMANDS)[number] => !!command),
-    [activePulseSectionDefinition]
-  )
-
-  const activePulseHistoryItems = useMemo(
-    () => activePulseSectionDefinition.historyIds
-      .map(id => PULSE_HISTORY_ITEMS.find(item => item.id === id))
-      .filter((item): item is (typeof PULSE_HISTORY_ITEMS)[number] => !!item),
-    [activePulseSectionDefinition]
-  )
-
-  const activePulseCarouselItems = useMemo(() => [
-    ...activePulseModuleCommands.map(command => ({ module: command.id, label: command.label })),
-    ...activePulseFinalCommands.map(command => ({
-      module: command.id === 'dashboard' ? 'run_summary' : command.id,
-      label: command.label,
-    })),
-    ...activePulseHistoryItems.map(item => ({ module: item.id, label: item.label })),
-  ], [activePulseFinalCommands, activePulseHistoryItems, activePulseModuleCommands])
-
-  const activePulseTimelineIndex = activePulseTimeline
-    ? activePulseCarouselItems.findIndex(item => item.module === activePulseTimeline.module)
-    : -1
-
-  const movePulseTimeline = (offset: number) => {
-    if (activePulseTimelineIndex < 0 || activePulseCarouselItems.length < 2) return
-    const nextIndex = (activePulseTimelineIndex + offset + activePulseCarouselItems.length) % activePulseCarouselItems.length
-    setActivePulseTimeline(activePulseCarouselItems[nextIndex])
-  }
+  }, [pulseFinalCommandStateByCommand, pulseFinalCommandStates, pulseLoopClosureObservation, pulseModuleStateByModule, pulseModuleStates])
 
   const updateWorkflowScheduleStats = useCallback((jobs: ScheduledJob[]) => {
     const normalizedWorkspacePath = normalizeWorkspacePath(workspacePath)
@@ -748,7 +571,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     setShowNotifications(false)
     setShowWorkflowSchedulesPanel(false)
     setShowMonitorHelp(false)
-    setActivePulseTimeline(null)
   }, [])
   
   // Close popups only when switching between two concrete workflows.
@@ -1175,10 +997,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       />
     )}
 
-    {/* Pulse cycle */}
+    {/* Database-native Pulse workspace */}
     {showMonitorHelp && (
       <ModalPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setShowMonitorHelp(false); setActivePulseTimeline(null) }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setShowMonitorHelp(false) }}>
           <div className="flex h-[calc(100vh-1rem)] w-[calc(100vw-1rem)] max-w-7xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl sm:h-[calc(100vh-2rem)] sm:w-[calc(100vw-2rem)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3.5 sm:px-5">
               <div className="flex min-w-0 items-center gap-3">
@@ -1193,19 +1015,19 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     </span>
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                    {monitorOn && <span>{pulseOverview.recorded}/{pulseOverview.total} statuses recorded</span>}
+                    <span>{pulseOverview.recorded}/{pulseOverview.total} statuses recorded</span>
                     {pulseOverview.latest && <span>Updated {pulseOverview.latest}</span>}
                   </div>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {monitorOn && pulseOverview.attention > 0 && (
+                {pulseOverview.attention > 0 && (
                   <span className="mr-1 hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-300 sm:inline-flex">
                     <CircleAlert className="h-3.5 w-3.5" />
                     {pulseOverview.attention} need attention
                   </span>
                 )}
-                {monitorOn && (pulseLoopClosureObservation?.signals?.length || 0) > 0 && (
+                {(pulseLoopClosureObservation?.signals?.length || 0) > 0 && (
                   <span className="mr-1 hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300 sm:inline-flex">
                     <CircleAlert className="h-3.5 w-3.5" />
                     {pulseLoopClosureObservation?.signals.length} stalled
@@ -1227,176 +1049,30 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     <RefreshCw className={`h-3.5 w-3.5 ${pulseStatusLoading ? 'animate-spin' : ''}`} />
                   </button>
                 )}
-                <button onClick={() => { setShowMonitorHelp(false); setActivePulseTimeline(null) }} className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
+                <button onClick={() => { setShowMonitorHelp(false) }} className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
                   <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
 
-            <div className="shrink-0 overflow-x-auto border-b px-2 py-2 sm:px-3" role="tablist" aria-label="Pulse cycle">
-              <div className="grid min-w-[600px] grid-cols-4 gap-1">
-                {PULSE_SECTIONS.map((section) => {
-                  const Icon = PULSE_SECTION_ICONS[section.id]
-                  const summary = pulseSectionSummaries.get(section.id)
-                  const active = activePulseSection === section.id
-                  return (
-                    <button
-                      key={section.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onClick={() => {
-                        setActivePulseSection(section.id)
-                        setActivePulseTimeline(null)
-                      }}
-                      className={`group flex min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left transition-colors ${active ? 'border-border bg-muted text-foreground shadow-sm' : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground'}`}
-                    >
-                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${PULSE_SECTION_ICON_CLASSES[section.id]}`}>
-                        <Icon className="h-3.5 w-3.5" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
-                          <span className="truncate text-xs font-semibold">{section.label}</span>
-                          {!!summary?.attention && (
-                            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500/15 px-1 text-[9px] font-semibold text-amber-600 dark:text-amber-300">
-                              {summary.attention}
-                            </span>
-                          )}
-                        </span>
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="p-3 sm:p-4">
-                {monitorOn && (
-                  <PulseLoopClosureNotice observation={pulseLoopClosureObservation} />
-                )}
-                {activePulseSection === 'goal' && workspacePath && (
-                  <section className="min-w-0 w-full" aria-label="Workflow goal">
-                    <SoulViewer workspacePath={workspacePath} embedded />
-                  </section>
-                )}
-
-                {activePulseSection !== 'goal' && (
-                  <div className="min-w-0">
-                    {workspacePath && PULSE_HUMAN_INPUT_SOURCE_BY_SECTION[activePulseSection] && (
-                      <ReportHumanInputPanel
-                        workspacePath={workspacePath}
-                        source={PULSE_HUMAN_INPUT_SOURCE_BY_SECTION[activePulseSection]}
-                        contentMode="all"
-                        historyMode="expanded"
-                        historyLimit={8}
-                        className="mb-4 w-full"
-                      />
-                    )}
-                    {pulseStatusError && (
-                      <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
-                        {pulseStatusError}
-                      </div>
-                    )}
-
-                  {!monitorOn ? (
-                    <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 px-6 py-8 text-center">
-                      <Activity className="h-5 w-5 text-muted-foreground" />
-                      <div className="mt-3 text-sm font-medium text-foreground">Pulse is off</div>
-                      <div className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">Turn it on below to review future workflow runs.</div>
-                    </div>
-                  ) : activePulseTimeline ? (
-                    <div className="min-w-0 overflow-hidden rounded-lg border bg-background">
-                      <div className="border-b px-3 py-2.5 sm:px-4">
-                        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setActivePulseTimeline(null)}
-                            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            aria-label="Close timeline and return to all reviews"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            All reviews
-                          </button>
-                          <div className="inline-flex shrink-0 items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => movePulseTimeline(-1)}
-                              disabled={activePulseCarouselItems.length < 2}
-                              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
-                              aria-label="Previous review"
-                              title="Previous review"
-                            >
-                              <ChevronLeft className="h-4 w-4" />
-                            </button>
-                            <span className="min-w-10 text-center text-[10px] tabular-nums text-muted-foreground">
-                              {activePulseTimelineIndex + 1} / {activePulseCarouselItems.length}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => movePulseTimeline(1)}
-                              disabled={activePulseCarouselItems.length < 2}
-                              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
-                              aria-label="Next review"
-                              title="Next review"
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="mt-2 min-w-0 px-1">
-                          <div className="truncate text-sm font-semibold text-foreground">{activePulseTimeline.label}</div>
-                          <div className="truncate text-[11px] text-muted-foreground">Timeline across all Pulse runs</div>
-                        </div>
-                      </div>
-                      <PulseHtmlSectionViewer
-                        workspacePath={workspacePath || ''}
-                        module={activePulseTimeline.module}
-                        label={activePulseTimeline.label}
-                      />
-                    </div>
-                  ) : (
-                    <div className="overflow-hidden rounded-lg border bg-background">
-                      {activePulseModuleCommands.map((command) => {
-                        const state = pulseModuleStateByModule.get(command.id)
-                        return (
-                          <PulseStatusRow
-                            key={command.id}
-                            label={command.label}
-                            description={command.description}
-                            status={getPulseModuleStatus(state)}
-                            nextCheck={formatPulseNextCheck(state)}
-                            onSelect={() => setActivePulseTimeline({ module: command.id, label: command.label })}
-                          />
-                        )
-                      })}
-                      {activePulseFinalCommands.map((command) => {
-                        const state = pulseFinalCommandStateByCommand.get(command.id)
-                        return (
-                          <PulseStatusRow
-                            key={command.id}
-                            label={command.label}
-                            description={command.description}
-                            status={getPulseFinalCommandStatus(state)}
-                            onSelect={() => setActivePulseTimeline({
-                              module: command.id === 'dashboard' ? 'run_summary' : command.id,
-                              label: command.label,
-                            })}
-                          />
-                        )
-                      })}
-                      {activePulseHistoryItems.map((item) => (
-                        <PulseStatusRow
-                          key={item.id}
-                          label={item.label}
-                          description={item.description}
-                          status={{ label: 'TIMELINE', detail: item.description, time: '' }}
-                          onSelect={() => setActivePulseTimeline({ module: item.id, label: item.label })}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  </div>
+                <PulseLoopClosureNotice observation={pulseLoopClosureObservation} />
+                {workspacePath && (
+                  <PulseWorkspace
+                    workspacePath={workspacePath}
+                    monitorOn={monitorOn}
+                    moduleStates={pulseModuleStates}
+                    finalCommandStates={pulseFinalCommandStates}
+                    statusLoading={pulseStatusLoading}
+                    statusError={pulseStatusError}
+                    onRefresh={() => {
+                      window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
+                      window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
+                      void refreshPulseModuleStates()
+                    }}
+                    onOpenDashboard={openPulseDashboard}
+                  />
                 )}
               </div>
             </div>
@@ -1423,7 +1099,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">
                 <button
                   type="button"
-                  onClick={() => { setShowMonitorHelp(false); setActivePulseTimeline(null); setShowBackupPopup(true) }}
+                  onClick={() => { setShowMonitorHelp(false); setShowBackupPopup(true) }}
                   className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <Cloud className="h-3.5 w-3.5" />
@@ -1433,7 +1109,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <span className="h-4 w-px bg-border" aria-hidden="true" />
                 <button
                   type="button"
-                  onClick={() => { setShowMonitorHelp(false); setActivePulseTimeline(null); setShowPublishPopup(true) }}
+                  onClick={() => { setShowMonitorHelp(false); setShowPublishPopup(true) }}
                   className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <Globe className="h-3.5 w-3.5" />
@@ -1443,7 +1119,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <span className="h-4 w-px bg-border" aria-hidden="true" />
                 <button
                   type="button"
-                  onClick={() => { setShowMonitorHelp(false); setActivePulseTimeline(null); setShowNotifications(true) }}
+                  onClick={() => { setShowMonitorHelp(false); setShowNotifications(true) }}
                   className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <BellRing className="h-3.5 w-3.5" />

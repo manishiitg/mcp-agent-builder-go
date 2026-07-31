@@ -160,7 +160,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
      open, agent, etc.) in place of (or alongside) the plain takeaway/impact
      prose, when the module has structured fields worth showing directly
      rather than only prose — e.g. bug_review's finding/evidence/classification/
-     recommended_fix, or cost_llm_time's cost/token/efficiency buckets. */
+     recommended_fix, or llm_ops_review's cost/token/efficiency buckets. */
   .modfields{margin-top:9px;padding-left:10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:4px}
   .mf{display:flex;gap:8px;font:540 12px/1.5 var(--sans)}
   .mf .mfk{flex:none;width:128px;font:600 10px/1.4 var(--mono);letter-spacing:.03em;color:var(--ink-3)}
@@ -217,7 +217,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <span class="chip">Last run <b>—</b></span>
   </div>
 
-  <!-- PULSE COVERAGE — always all 9 modules, always visible, even the clean/boring ones.
+  <!-- PULSE COVERAGE — always all 8 modules, always visible, even the clean/boring ones.
        This is the proof-of-life row: it answers "is Pulse actually checking things" (real
        dates from pulse_module_state, never a static claim) separately from "is each area
        healthy" (the dot color, never blended into one score). Never hide a clean module —
@@ -226,15 +226,14 @@ Use this document only when creating a new `builder/improve.html` or doing the r
        checked, use --ink-3, say "never checked" not a fabricated date). Update this row
        every Pulse pass, in the same write as Today's outcome. -->
   <div class="coverage" aria-label="Pulse coverage">
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Bug review</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Plan drift</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Stores health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Eval health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Report health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Cost + time</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok"><span class="dot"></span><span class="cl">Steps &amp; setup</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem pending"><span class="dot"></span><span class="cl">Strategy Auditor</span><span class="cd">never checked</span></div>
-    <div class="covitem pending"><span class="dot"></span><span class="cl">Goal Advisor</span><span class="cd">never checked</span></div>
+    <div class="covitem ok" data-module="bug_review"><span class="dot"></span><span class="cl">Bug review</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="artifact_review"><span class="dot"></span><span class="cl">Plan drift</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="stores_health"><span class="dot"></span><span class="cl">Stores health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="eval_health"><span class="dot"></span><span class="cl">Eval health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="report_health"><span class="dot"></span><span class="cl">Report health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="llm_ops_review"><span class="dot"></span><span class="cl">Ops review</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem pending" data-module="strategy_auditor"><span class="dot"></span><span class="cl">Strategy Auditor</span><span class="cd">never checked</span></div>
+    <div class="covitem pending" data-module="goal_advisor"><span class="dot"></span><span class="cl">Goal Advisor</span><span class="cd">never checked</span></div>
   </div>
 
   <!-- ACTIVE ASSUMPTIONS CHALLENGED — render this block ONLY when a consequential assumption is actively limiting the workflow.
@@ -279,7 +278,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   <div class="tiles">
     <div class="tile goal"><div class="k">Goal signal</div><div class="v">—</div><div class="d">no runs yet</div><div class="asof">last measured run — · YYYY-MM-DD</div></div>
   </div>
-  <div class="grouplbl">Cost + time · latest run</div>
+  <div class="grouplbl">Ops review · cost + time · latest run</div>
   <div class="tiles">
     <div class="tile cost"><div class="k">Cost</div><div class="v">—</div><div class="d">missing cost evidence</div><div class="asof">as of run — · YYYY-MM-DD</div></div>
     <div class="tile info"><div class="k">Time</div><div class="v">—</div><div class="d">missing timing evidence</div><div class="asof">as of run — · YYYY-MM-DD</div></div>
@@ -350,11 +349,11 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <div class="daydate">YYYY-MM-DD</div>
     <div class="run" data-date="YYYY-MM-DD" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">MM-DD</span><span class="st ok"><span class="d"></span>completed</span><span class="col">…</span><span class="ago">just now</span></div>
 
-    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 8 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> bug_review, cost_llm_time — skipped the other 6 (recent clean reviews, no new evidence).</p><p class="meta"><b>Why bug_review:</b> plain-language trigger reason.</p></div>
+    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 8 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> bug_review, llm_ops_review — skipped the other 6 (recent clean reviews, no new evidence).</p><p class="meta"><b>Why bug_review:</b> plain-language trigger reason.</p></div>
 
     <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><div class="modfields"><div class="mf"><span class="mfk">Evidence</span><span class="mfv">exact evidence, not a path/id</span></div><div class="mf"><span class="mfk">Classification</span><span class="mfv">correctness_bug</span></div><div class="mf"><span class="mfk">Recommended fix</span><span class="mfv">plain-language bounded fix</span></div></div></div>
 
-    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="cost_llm_time"><div class="ehead"><span class="tag monitor">Cost / LLM / Time</span><span class="etitle">Clean</span><span class="when">…</span></div><div class="modfields"><div class="mf"><span class="mfk">Workflow execution</span><span class="mfv">$0.31 · 41k tokens · wall 4m12s</span></div></div></div>
+    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="llm_ops_review"><div class="ehead"><span class="tag monitor">Ops review</span><span class="etitle">Clean</span><span class="when">…</span></div><div class="modfields"><div class="mf"><span class="mfk">Workflow execution</span><span class="mfv">$0.31 · 41k tokens · wall 4m12s</span></div></div></div>
 
     <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">what was actually applied</span><span class="when">…</span></div><p class="takeaway">What was applied, or what's left open and why.</p></div>
   </div>
@@ -384,7 +383,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
        <p class="outcome bad">No effect by YYYY-MM-DD — reopened as a Goal finding.</p>
        <p class="outcome flat">Inconclusive on YYYY-MM-DD — the changed path was not exercised; still pending. -->
 
-  <!-- HIDDEN RECOVERY HANDOFF — minimal interrupted-fix state only; technical proof stays in reviewer result files and SQLite. -->
+  <!-- HIDDEN RECOVERY HANDOFF — minimal interrupted-fix state only; technical proof stays in SQLite-backed reviewer results. -->
   <div id="pulse-agent-handoff" data-pulse-run-id="" data-workflow-version="" hidden>
       <div class="agentrow" data-agent-key="state"><b>Current state</b><code>Latest execution: no result recorded yet</code></div>
       <!-- One compact row per module; use data attributes for scheduler-relevant continuity:

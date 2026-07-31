@@ -237,7 +237,7 @@ export function HtmlReportFrame({
         /* ResizeObserver unavailable — height stays at last measure */
       }
     }
-  }, [dataApi, autoHeight, resize])
+  }, [dataApi, autoHeight, resize, applyTheme])
 
   // Re-inject when the report data changes (sources refreshed).
   useEffect(() => {

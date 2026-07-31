@@ -24,7 +24,7 @@ export default function ServerConnectionStatus({ children }: { children: React.R
       console.info('[ServerConnectionStatus] checking health', {
         apiBaseUrl,
         healthUrl,
-        runtimeConfig: typeof window !== 'undefined' ? (window as any).__APP_RUNTIME_CONFIG__ : undefined,
+        runtimeConfig: typeof window !== 'undefined' ? window.__APP_RUNTIME_CONFIG__ : undefined,
       })
       const res = await fetch(healthUrl, { signal: ac.signal })
       clearTimeout(t)

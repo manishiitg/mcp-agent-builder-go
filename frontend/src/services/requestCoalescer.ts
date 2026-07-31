@@ -21,8 +21,7 @@ export function createRequestCoalescer(): RequestCoalescer {
       requestResult = Promise.reject(error)
     }
 
-    let pending: Promise<T>
-    pending = requestResult
+    const pending: Promise<T> = requestResult
       .finally(() => {
         if (inFlight.get(key) === pending) inFlight.delete(key)
       })

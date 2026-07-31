@@ -45,7 +45,6 @@ const (
 	ReportHealthID    = "report_health"
 	EvalHealthID      = "eval_health"
 	StoresHealthID    = "stores_health"
-	CostLLMTimeID     = "cost_llm_time"
 	LLMOpsReviewID    = "llm_ops_review"
 	StrategyAuditorID = "strategy_auditor"
 	GoalAdvisorID     = "goal_advisor"
@@ -57,6 +56,9 @@ const (
 	RetiredLearningHealthID      = "learning_health"
 	RetiredKnowledgebaseHealthID = "knowledgebase_health"
 	RetiredDBHealthID            = "db_health"
+	// CostLLMTimeID remains readable for historical Pulse state and artifacts.
+	// New runs fold cost, timing, and tool/LLM operations into LLMOpsReviewID.
+	CostLLMTimeID = "cost_llm_time"
 )
 
 // HTML-only classifications. They are not scheduled review modules.
@@ -106,18 +108,14 @@ var All = []Module{
 		},
 	},
 	{
-		ID:        CostLLMTimeID,
-		Label:     "Cost + time",
-		StepLabel: "cost-llm-time",
-		Aliases:   []string{"cost", "llm_cost", "cost_time"},
-	},
-	{
-		// Also owns plan-design hygiene (step-type fitness, prevalidation
-		// fitness, schema/description drift). It judges whether the selected
-		// tactic is built correctly, not whether that tactic can reach the goal.
+		// Also owns cost/timing/tool-call operations and plan-design hygiene
+		// (step-type fitness, prevalidation fitness, schema/description drift).
+		// It judges operational and engineering quality, not whether the
+		// selected tactic can reach the goal.
 		ID:        LLMOpsReviewID,
-		Label:     "Steps & setup",
+		Label:     "Ops review",
 		StepLabel: "llm-ops-review",
+		Aliases:   []string{"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID},
 	},
 	{
 		// Strategy Auditor is the read-only plan-versus-goal diagnosis layer.
@@ -146,6 +144,7 @@ var RetiredIDs = []string{
 	RetiredLearningHealthID,
 	RetiredKnowledgebaseHealthID,
 	RetiredDBHealthID,
+	CostLLMTimeID,
 }
 
 // PseudoIDs are data-module values that appear in builder/improve.html but are

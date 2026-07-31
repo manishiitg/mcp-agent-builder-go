@@ -13,8 +13,6 @@ export const BatchProgressHeader: React.FC<BatchProgressHeaderProps> = ({
 }) => {
   const batchProgress = useWorkflowStore(state => state.batchProgress)
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
-  const variablesManifest = useWorkflowStore(state => state.variablesManifest)
-
   // Don't render if no active batch
   if (!batchProgress?.isActive) {
     return null

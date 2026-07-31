@@ -80,9 +80,9 @@ func TestRecordPulseReviewBuildsPerModuleHistory(t *testing.T) {
 	for _, h := range history {
 		byModule[h.Module] = h
 	}
-	kb, ok := byModule["knowledgebase_health"]
+	kb, ok := byModule["stores_health"]
 	if !ok || kb.RunCount != 2 {
-		t.Fatalf("knowledgebase_health should show 2 runs, got %#v", byModule)
+		t.Fatalf("stores_health should show 2 migrated-alias runs, got %#v", byModule)
 	}
 	if len(kb.RecentVerdict) != 2 || !strings.Contains(strings.Join(kb.RecentVerdict, " "), "Half-migration") {
 		t.Fatalf("verdicts not retained: %#v", kb.RecentVerdict)

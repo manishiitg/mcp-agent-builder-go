@@ -106,7 +106,7 @@ export function WorkspaceConnectionSwitcher({ placement = 'sidebar' }: Workspace
   const activeWorkspaceId = useWorkspaceConnectionStore(state => state.activeWorkspaceId)
   const addProfile = useWorkspaceConnectionStore(state => state.addProfile)
   const removeProfile = useWorkspaceConnectionStore(state => state.removeProfile)
-  const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI)
+  const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI)
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [apiBaseUrl, setApiBaseUrl] = useState('')

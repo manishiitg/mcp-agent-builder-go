@@ -450,6 +450,129 @@ export interface PulseModuleStateResponse {
   error?: string
 }
 
+export interface PulseFindingVerification {
+  check: string
+  verdict: 'passed' | 'failed' | 'inconclusive' | string
+  expected?: string
+  observed?: string
+  evidence?: string[]
+  verified_at?: string
+}
+
+export interface PulseFixFindingRef {
+  fingerprint: string
+  finding_id: string
+  disposition?: string
+  summary?: string
+}
+
+export interface PulseFixAttempt {
+  attempt_id: string
+  module: string
+  pulse_run_id: string
+  summary: string
+  status: string
+  intended_files: string[]
+  changed_files: string[]
+  before_refs: string[]
+  after_refs: string[]
+  started_at: string
+  completed_at?: string
+  findings?: PulseFixFindingRef[]
+}
+
+export interface PulseFindingEvent {
+  finding_id?: string
+  event_type: string
+  summary: string
+  pulse_run_id?: string
+  attempt_id?: string
+  recorded_at: string
+}
+
+export interface PulseFindingReproduction {
+  safe: boolean
+  setup?: string
+  action?: string
+  expected?: string
+  observed?: string
+  limitations?: string
+}
+
+export interface PulseFindingDetails {
+  finding_id?: string
+  target_key?: string
+  issue_kind?: 'harness_issue' | 'workflow_bug' | 'external_dependency' | 'evidence_gap' | string
+  classification?: string
+  severity?: string
+  summary?: string
+  impact?: string
+  workaround?: string
+  evidence?: string[]
+  reproduction: PulseFindingReproduction
+  platform?: {
+    issue_key: string
+    affected_workflows: string[]
+    seen_count: number
+    first_seen_at?: string
+    last_seen_at?: string
+  }
+}
+
+export interface PulseFindingLifecycle {
+  fingerprint: string
+  finding_id?: string
+  module?: string
+  step_id: string
+  phase: string
+  group_name?: string
+  text: string
+  status: string
+  first_seen_run?: string
+  first_seen_at?: string
+  last_seen_run?: string
+  last_seen_at?: string
+  seen_count: number
+  resolution_note?: string
+  details?: PulseFindingDetails
+  fix_attempts: PulseFixAttempt[]
+  verifications: PulseFindingVerification[]
+  events: PulseFindingEvent[]
+}
+
+export interface PulseFindingsResponse {
+  success: boolean
+  findings: PulseFindingLifecycle[]
+  error?: string
+}
+
+export interface PulseReviewRecord {
+  id: number
+  module: string
+  review_run_id: string
+  pulse_run_id?: string
+  verdict?: string
+  status?: string
+  artifact_kind: string
+  legacy_source_path?: string
+  artifact_bytes: number
+  content_sha256?: string
+  recorded_at: string
+  markdown?: string
+}
+
+export interface PulseReviewsResponse {
+  success: boolean
+  reviews: PulseReviewRecord[]
+  error?: string
+}
+
+export interface PulseReviewResponse {
+  success: boolean
+  review: PulseReviewRecord
+  error?: string
+}
+
 // Context Summarization types
 export interface SummarizeConversationRequest {
   keep_last_messages?: number // Optional: number of recent messages to keep (default: 8)

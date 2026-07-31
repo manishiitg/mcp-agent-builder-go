@@ -1,6 +1,15 @@
 import type { ReactNode } from 'react'
 import type { ModeCategory } from '../stores/useModeStore'
 import type { ExecutionOptions } from '../services/api-types'
+import type { ChatTabConfig, useChatStore } from '../stores/useChatStore'
+import type { useAppStore } from '../stores/useAppStore'
+import type { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import type { useWorkflowStore } from '../stores/useWorkflowStore'
+import type { DialogName } from '../stores/useCommandDialogStore'
+
+type AppStoreState = ReturnType<typeof useAppStore.getState>
+type WorkspaceStoreState = ReturnType<typeof useWorkspaceStore.getState>
+type WorkflowStoreState = ReturnType<typeof useWorkflowStore.getState>
 
 // Visible workshop modes in the main workshop UI:
 //   - 'builder'   — design the workflow plan, step config, and live report
@@ -25,21 +34,21 @@ export interface CommandContext {
   beforeSlash: string
   activeTabId: string
   tabSessionId: string | null
-  tabConfig: any
+  tabConfig: ChatTabConfig | undefined
   isSummarizing: boolean
   isStreaming: boolean
   onSubmit: (msg: string) => void
   setInputText: (text: string) => void
-  openDialog: (name: any) => void
+  openDialog: (name: DialogName) => void
   openResumeDialog?: () => void
-  setTabConfig: (tabId: string, config: any) => void
+  setTabConfig: ReturnType<typeof useChatStore.getState>['setTabConfig']
   addToast: (msg: string, type: 'success' | 'error' | 'info') => void
   handleSummarize: (ctx?: string) => void
   handleCompact: (ctx?: string) => void
   submitWithExecutionOptions?: (msg: string, executionOptions?: ExecutionOptions) => void
-  getAppStore: () => any
-  getWorkspaceStore: () => any
-  getWorkflowStore: () => any
+  getAppStore: () => AppStoreState
+  getWorkspaceStore: () => WorkspaceStoreState
+  getWorkflowStore: () => WorkflowStoreState
   modeCategory?: ModeCategory
   workflowMode?: 'plan' | 'eval' | 'output'
   workshopMode?: WorkshopMode

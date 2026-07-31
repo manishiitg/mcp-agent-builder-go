@@ -17,21 +17,24 @@ for `CONCERNS:`: `execution-final-summary.json`, `session.json`, or latest
 `execution-attempt-*.json` fallback. Retain step/item and evidence path;
 completion does not erase it, but it is not automatic run failure.
 
-Update `builder/improve.html` once with a compact Gate/Worklist entry and
-refresh `#pulse-agent-handoff` with current decisions and evidence pointers.
+Gate owns only the durable worklist. Do not write HTML, a recovery ledger, or
+any workflow artifact; the dedicated Dashboard projects recorded state later.
 
 Call `record_pulse_worklist` exactly once with one decision for every canonical
 module: `bug_review`, `artifact_review`, `report_health`, `eval_health`,
-`stores_health`, `cost_llm_time`, `llm_ops_review`, `strategy_auditor`,
-`goal_advisor`. On recovery, if this Pulse run already has a complete worklist,
-repair/verify HTML and handoff only; do not record it twice.
+`stores_health`, `llm_ops_review`, `strategy_auditor`, `goal_advisor`.
+`llm_ops_review` owns cost, time, tool/runtime operations, model routing, setup,
+and plan-design hygiene; do not emit a separate cost/time module.
+On recovery, if this Pulse run already has a complete worklist,
+verify and stop; do not record it twice.
 
 Every skip needs reason, evidence, and `next_check_at`, positive `cooldown_runs`,
 or `next_check_after_run_id`. Name evidence that overrides cadence.
 Missing baseline means `baseline pending`, not healthy. Use bounded adaptive cadence.
 
-**Cap 3 per pass.** If >3 are due, run the 3 strongest; defer the rest to this
-run's next checkpoint as "deferred by 3-cap", never "clean".
+**Cap 3 reviewer modules per pass, not fixes.** If >3 are due, prioritize the
+oldest unresolved/unattempted backlog and defer the rest by 3-cap, never as
+clean. A selected module's Fixer may drain all safe retained findings.
 
 For an off-track material goal, use this escalation ladder:
 
@@ -55,9 +58,9 @@ Select other modules agentically:
 - Bug Review is also due for failures, suspicious success, stale evidence,
   wrong tool/source/route/decision evidence, or a reached QA checkpoint.
 - Artifact/Report/Eval/Stores: relevant contract, freshness, or drift.
-- Cost/LLM/Time: missing/unpriced telemetry, material change, or checkpoint.
-- LLM/Ops: after config/readiness change, checkpoint, retained efficiency
-  evidence, or a catalog-confirmed exact-pin issue. Catalog changes override
+- Ops Review: missing/unpriced telemetry, material cost/latency change,
+  retained tool/runtime efficiency evidence, config/readiness change,
+  checkpoint, or a catalog-confirmed exact-pin issue. Catalog changes override
   cooldown; never silently change models/tiers.
 
 Mark Bug Review and Strategy Auditor together only when a recent clean Bug
@@ -67,5 +70,5 @@ When Auditor and Goal Advisor are both due, Auditor runs first.
 Goal Advisor consumes the Auditor result rather than repeating it. A clean run or green eval
 cannot suppress a measured miss. Operational correctness stays Bug/Eval work.
 Gate must not launch reviewers, mutate plan/config/artifacts, create the human-input request,
-publish, back up, or notify. Stop after recording the complete
+publish, back up, notify, or write HTML. Stop after recording the complete
 worklist.

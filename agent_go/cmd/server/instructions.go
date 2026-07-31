@@ -346,12 +346,10 @@ Returns the canonical guided-flow text for any workflow slash command. Always ca
 
   Reviews (recommend, don't apply; appends to ` + "`builder/improve.html`" + `):
     - review-plan            → comprehensive plan audit (structure + per-step descriptions + todo_task orchestrators)
-    - review-speed           → latency analysis
-    - review-cost            → cost analysis
     - review-code            → saved main.py vs step descriptions (drift + browser + dynamism)
     - review-artifact-drift  → plan-changelog-to-artifact drift audit
     - bug-review             → one-off Pulse QA / logic-bug review; no fixes
-    - llm-ops-review         → one-off model, cost, latency, fallback, backup, publish, and notify review
+    - ops-review             → one agentic cost, time, tool/runtime, model, setup, and plan-design review
     - strategy-auditor       → one-off read-only cross-run plan-versus-goal diagnosis; no Goal Advisor or plan change
 
   Improvements:

@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,14 +33,10 @@ const (
 	// One due-decision and one Fixer pass now covers all three, each with its
 	// own small checklist inside.
 	pulseModuleStoresHealth = pulsemodules.StoresHealthID
-	pulseModuleCostLLMTime  = pulsemodules.CostLLMTimeID
-	// pulseModuleLLMOpsReview also owns plan-design hygiene (step-type
-	// fitness, prevalidation fitness, schema/description drift) alongside its
-	// original model/tier/catalog scope — see its due-trigger section in
-	// post-run-monitor.md. This was previously unowned: Goal Advisor's own
-	// contract explicitly excludes plan-cleanup content, so a plan-design
-	// change trigger inside Goal Advisor was never actually consistent with
-	// what Goal Advisor is for.
+	// pulseModuleLLMOpsReview owns cost, timing, tool-call operations,
+	// model/tier/catalog review, and plan-design hygiene (step-type fitness,
+	// prevalidation fitness, schema/description drift). These checks need one
+	// agentic judgment pass over the same runtime and goal evidence.
 	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
 	// pulseModuleStrategyAuditor owns read-only plan-versus-goal diagnosis
 	// across retained runs. Goal Advisor owns the resulting proposal,
@@ -509,7 +507,10 @@ func pulseWorklistIsComplete(worklist map[string]PulseModuleState) bool {
 	return true
 }
 
-func validatePulseGateCompletion(ctx context.Context, workspacePath, pulseRunID, previousHTML string, previousExists bool) error {
+// validatePulseGateCompletion validates only Gate's durable control-plane
+// output. Gate does not own builder/improve.html; coupling routing to an HTML
+// write made a presentation failure discard an otherwise complete worklist.
+func validatePulseGateCompletion(ctx context.Context, workspacePath, pulseRunID string) error {
 	worklist, exists, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
 	if err != nil {
 		return fmt.Errorf("read Pulse Gate worklist: %w", err)
@@ -517,74 +518,384 @@ func validatePulseGateCompletion(ctx context.Context, workspacePath, pulseRunID,
 	if !exists || !pulseWorklistIsComplete(worklist) {
 		return fmt.Errorf("Pulse Gate did not record a complete worklist for pulse_run_id %q", pulseRunID)
 	}
+	return nil
+}
 
+// validatePulseDashboardArtifact proves that the dedicated Dashboard turn made
+// a current, contract-compliant write. An agent-reported "done" is not enough:
+// this check catches the production failure where Pulse completed while
+// builder/improve.html remained in the retired Issues & fixes format.
+func validatePulseDashboardArtifact(ctx context.Context, workspacePath, pulseRunID, previousHTML string, previousExists bool) error {
 	htmlPath := strings.TrimSuffix(workspacePath, "/") + "/builder/improve.html"
-	html, htmlExists, err := readFileFromWorkspace(ctx, htmlPath)
+	html, exists, err := readFileFromWorkspace(ctx, htmlPath)
 	if err != nil {
-		return fmt.Errorf("read Pulse Gate handoff: %w", err)
+		return fmt.Errorf("read Pulse dashboard artifact: %w", err)
 	}
-	if !htmlExists || strings.TrimSpace(html) == "" {
-		return fmt.Errorf("Pulse Gate did not write %s", htmlPath)
+	if !exists || strings.TrimSpace(html) == "" {
+		return fmt.Errorf("Pulse Dashboard did not write %s", htmlPath)
 	}
 	if previousExists && html == previousHTML {
-		return fmt.Errorf("Pulse Gate left %s unchanged", htmlPath)
+		return fmt.Errorf("Pulse Dashboard left %s unchanged", htmlPath)
 	}
-	if !pulseGateHandoffContainsRunID(html, pulseRunID) {
-		return fmt.Errorf("Pulse Gate handoff does not contain current pulse_run_id %q", pulseRunID)
+	if !pulseDashboardHandoffContainsRunID(html, pulseRunID) {
+		return fmt.Errorf("Pulse Dashboard handoff does not contain current pulse_run_id %q", pulseRunID)
+	}
+	if err := validatePulseImproveHTMLContract(html); err != nil {
+		return fmt.Errorf("Pulse Dashboard wrote an outdated builder/improve.html: %w", err)
 	}
 	return nil
 }
 
-func pulseGateHandoffContainsRunID(html, pulseRunID string) bool {
+type pulseDashboardArtifactSnapshot struct {
+	Path    string
+	Content string
+	Exists  bool
+}
+
+// capturePulseDashboardArtifacts snapshots the two files owned by the
+// Dashboard stage so a timed-out or invalid write cannot leave a half-rendered
+// pair behind.
+func capturePulseDashboardArtifacts(ctx context.Context, workspacePath string) ([]pulseDashboardArtifactSnapshot, error) {
+	base := strings.TrimSuffix(workspacePath, "/") + "/builder/"
+	paths := []string{base + "improve.html", base + "card.health.html"}
+	snapshots := make([]pulseDashboardArtifactSnapshot, 0, len(paths))
+	for _, path := range paths {
+		content, exists, err := readFileFromWorkspace(ctx, path)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", path, err)
+		}
+		snapshots = append(snapshots, pulseDashboardArtifactSnapshot{
+			Path: path, Content: content, Exists: exists,
+		})
+	}
+	return snapshots, nil
+}
+
+func restorePulseDashboardArtifacts(ctx context.Context, snapshots []pulseDashboardArtifactSnapshot) error {
+	var failures []string
+	for _, snapshot := range snapshots {
+		if snapshot.Exists {
+			if err := writeFileToWorkspace(ctx, snapshot.Path, snapshot.Content); err != nil {
+				failures = append(failures, snapshot.Path+": "+err.Error())
+				continue
+			}
+		} else {
+			_, exists, err := readFileFromWorkspace(ctx, snapshot.Path)
+			if err != nil {
+				failures = append(failures, snapshot.Path+": "+err.Error())
+				continue
+			}
+			if exists {
+				if err := deleteWorkspaceFile(ctx, snapshot.Path); err != nil {
+					failures = append(failures, snapshot.Path+": "+err.Error())
+					continue
+				}
+			}
+		}
+		content, exists, err := readFileFromWorkspace(ctx, snapshot.Path)
+		if err != nil {
+			failures = append(failures, snapshot.Path+": verify restore: "+err.Error())
+			continue
+		}
+		if exists != snapshot.Exists || (snapshot.Exists && content != snapshot.Content) {
+			failures = append(failures, snapshot.Path+": restore verification mismatch")
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("restore Pulse dashboard artifacts: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// validatePulseImproveHTMLContract checks the stable structural surface that
+// distinguishes the current human-first Pulse page from retired or partially
+// written shells. It intentionally does not validate prose or styling.
+func validatePulseImproveHTMLContract(content string) error {
+	if err := validatePulseHTMLTagBalance(content); err != nil {
+		return err
+	}
+	document, err := htmlpkg.Parse(strings.NewReader(content))
+	if err != nil {
+		return fmt.Errorf("parse HTML: %w", err)
+	}
+
+	coverage, err := requireSinglePulseElement(document, "coverage", "Pulse coverage")
+	if err != nil {
+		return err
+	}
+	coverageItems := pulseElementsWithClass(coverage, "covitem")
+	if len(coverageItems) != len(pulsemodules.All) {
+		return fmt.Errorf("Pulse coverage must contain exactly %d module items (found %d)", len(pulsemodules.All), len(coverageItems))
+	}
+	expectedCoverage := make(map[string]bool, len(pulsemodules.All))
+	for _, module := range pulsemodules.All {
+		expectedCoverage[module.ID] = true
+	}
+	seenCoverage := make(map[string]bool, len(coverageItems))
+	for _, item := range coverageItems {
+		labels := pulseElementsWithClass(item, "cl")
+		if len(labels) != 1 {
+			return fmt.Errorf("each Pulse coverage item must contain exactly one .cl label")
+		}
+		if normalizePulseHTMLText(pulseHTMLText(labels[0])) == "" {
+			return fmt.Errorf("each Pulse coverage item must contain a non-empty .cl label")
+		}
+		moduleID := strings.TrimSpace(pulseHTMLAttribute(item, "data-module"))
+		if !expectedCoverage[moduleID] {
+			return fmt.Errorf("Pulse coverage contains unknown data-module %q", moduleID)
+		}
+		if seenCoverage[moduleID] {
+			return fmt.Errorf("Pulse coverage contains duplicate data-module %q", moduleID)
+		}
+		seenCoverage[moduleID] = true
+	}
+
+	brief, err := requireSinglePulseElement(document, "brief", "Today's outcome brief")
+	if err != nil {
+		return err
+	}
+	briefGrids := pulseElementsWithClass(brief, "briefgrid")
+	if len(briefGrids) != 1 {
+		return fmt.Errorf("Today's outcome must contain exactly one .briefgrid (found %d)", len(briefGrids))
+	}
+	briefItems := pulseDirectChildrenWithClass(briefGrids[0], "briefitem")
+	expectedBriefLabels := []string{"Outcome", "Goal progress", "Fixed today", "Open now", "Next Pulse"}
+	if len(briefItems) != len(expectedBriefLabels) {
+		return fmt.Errorf("Today's outcome must contain exactly %d brief cells (found %d)", len(expectedBriefLabels), len(briefItems))
+	}
+	expectedBrief := make(map[string]bool, len(expectedBriefLabels))
+	for _, label := range expectedBriefLabels {
+		expectedBrief[normalizePulseHTMLText(label)] = true
+	}
+	seenBrief := make(map[string]bool, len(briefItems))
+	for _, item := range briefItems {
+		headings := pulseElementsWithClass(item, "k")
+		if len(headings) != 1 {
+			return fmt.Errorf("each Today's outcome cell must contain exactly one .k heading")
+		}
+		label := normalizePulseHTMLText(pulseHTMLText(headings[0]))
+		if !expectedBrief[label] {
+			return fmt.Errorf("Today's outcome contains unknown cell heading %q", pulseHTMLText(headings[0]))
+		}
+		if seenBrief[label] {
+			return fmt.Errorf("Today's outcome contains duplicate cell heading %q", pulseHTMLText(headings[0]))
+		}
+		seenBrief[label] = true
+	}
+
+	technical, err := requireSinglePulseElement(document, "technical", "collapsed technical details")
+	if err != nil {
+		return err
+	}
+	if technical.Data != "details" {
+		return fmt.Errorf(".technical must be a details element")
+	}
+	if technical.Parent == nil || technical.Parent != brief.Parent {
+		return fmt.Errorf("Today's outcome and technical details must be sibling sections")
+	}
+	if len(pulseDirectChildrenByTag(technical, "summary")) != 1 {
+		return fmt.Errorf("technical details must contain exactly one direct summary")
+	}
+	if len(pulseDirectChildrenWithClass(technical, "techbody")) != 1 {
+		return fmt.Errorf("technical details must contain exactly one direct .techbody")
+	}
+
+	if _, err := requireSinglePulseElementByID(document, "pulse-agent-handoff"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func pulseDashboardHandoffContainsRunID(content, pulseRunID string) bool {
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if pulseRunID == "" {
 		return false
 	}
-	tokenizer := htmlpkg.NewTokenizer(strings.NewReader(html))
-	depth := 0
+	document, err := htmlpkg.Parse(strings.NewReader(content))
+	if err != nil {
+		return false
+	}
+	handoff, err := requireSinglePulseElementByID(document, "pulse-agent-handoff")
+	if err != nil {
+		return false
+	}
+	for _, attr := range handoff.Attr {
+		if attr.Key == "data-pulse-run-id" {
+			return strings.TrimSpace(attr.Val) == pulseRunID
+		}
+	}
+	return false
+}
+
+// pulseGateHandoffContainsRunID remains a compatibility read for legacy
+// recovery markers. Live Gate routing no longer depends on HTML.
+func pulseGateHandoffContainsRunID(content, pulseRunID string) bool {
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	if pulseRunID == "" {
+		return false
+	}
+	document, err := htmlpkg.Parse(strings.NewReader(content))
+	if err != nil {
+		return false
+	}
+	handoff, err := requireSinglePulseElementByID(document, "pulse-agent-handoff")
+	if err != nil {
+		return false
+	}
+	for _, attr := range handoff.Attr {
+		if strings.TrimSpace(attr.Val) == pulseRunID {
+			return true
+		}
+	}
+	return strings.Contains(pulseHTMLText(handoff), pulseRunID)
+}
+
+func validatePulseHTMLTagBalance(content string) error {
+	tracked := map[string]bool{"div": true, "details": true, "summary": true}
+	var stack []string
+	tokenizer := htmlpkg.NewTokenizer(strings.NewReader(content))
 	for {
 		switch tokenizer.Next() {
 		case htmlpkg.ErrorToken:
-			return false
-		case htmlpkg.StartTagToken, htmlpkg.SelfClosingTagToken:
-			token := tokenizer.Token()
-			if depth == 0 {
-				if !htmlTokenHasID(token, "pulse-agent-handoff") {
-					continue
-				}
-				// Any attribute carrying this run's id counts. The canonical name is
-				// data-pulse-run-id, but the .pulse-fixer-recovery ledger nested in
-				// this same element is keyed by data-pulse-run, and Gate has written
-				// the correct id under the ledger's name — one letter apart, same
-				// element hierarchy. Rejecting that cost a full Pulse run and forced
-				// a recovery session while the handoff was, substantively, right.
-				//
-				// What matters is that this handoff belongs to this run, which any
-				// attribute holding the id establishes. A stale handoff still fails,
-				// because no attribute would carry the current id.
-				for _, attr := range token.Attr {
-					if strings.TrimSpace(attr.Val) == pulseRunID {
-						return true
-					}
-				}
-				if token.Type == htmlpkg.StartTagToken {
-					depth = 1
-				}
-				continue
+			if len(stack) > 0 {
+				return fmt.Errorf("unclosed <%s> element", stack[len(stack)-1])
 			}
-			if token.Type == htmlpkg.StartTagToken {
-				depth++
-			}
-		case htmlpkg.TextToken:
-			if depth > 0 && strings.Contains(tokenizer.Token().Data, pulseRunID) {
-				return true
+			return nil
+		case htmlpkg.StartTagToken:
+			name, _ := tokenizer.TagName()
+			tag := strings.ToLower(string(name))
+			if tracked[tag] {
+				stack = append(stack, tag)
 			}
 		case htmlpkg.EndTagToken:
-			if depth > 0 {
-				depth--
+			name, _ := tokenizer.TagName()
+			tag := strings.ToLower(string(name))
+			if !tracked[tag] {
+				continue
+			}
+			if len(stack) == 0 {
+				return fmt.Errorf("unexpected closing </%s> element", tag)
+			}
+			if stack[len(stack)-1] != tag {
+				return fmt.Errorf("mismatched closing </%s>; expected </%s>", tag, stack[len(stack)-1])
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+}
+
+func requireSinglePulseElement(root *htmlpkg.Node, className, description string) (*htmlpkg.Node, error) {
+	nodes := pulseElementsWithClass(root, className)
+	if len(nodes) != 1 {
+		return nil, fmt.Errorf("%s must appear exactly once (found %d)", description, len(nodes))
+	}
+	return nodes[0], nil
+}
+
+func requireSinglePulseElementByID(root *htmlpkg.Node, id string) (*htmlpkg.Node, error) {
+	var nodes []*htmlpkg.Node
+	pulseWalkElements(root, func(node *htmlpkg.Node) {
+		for _, attr := range node.Attr {
+			if attr.Key == "id" && attr.Val == id {
+				nodes = append(nodes, node)
+				return
+			}
+		}
+	})
+	if len(nodes) != 1 {
+		return nil, fmt.Errorf("#%s must appear exactly once (found %d)", id, len(nodes))
+	}
+	return nodes[0], nil
+}
+
+func pulseElementsWithClass(root *htmlpkg.Node, className string) []*htmlpkg.Node {
+	var nodes []*htmlpkg.Node
+	pulseWalkElements(root, func(node *htmlpkg.Node) {
+		for _, attr := range node.Attr {
+			if attr.Key != "class" {
+				continue
+			}
+			for _, class := range strings.Fields(attr.Val) {
+				if class == className {
+					nodes = append(nodes, node)
+					return
+				}
+			}
+		}
+	})
+	return nodes
+}
+
+func pulseHTMLAttribute(node *htmlpkg.Node, key string) string {
+	if node == nil {
+		return ""
+	}
+	for _, attr := range node.Attr {
+		if attr.Key == key {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func pulseDirectChildrenWithClass(root *htmlpkg.Node, className string) []*htmlpkg.Node {
+	var nodes []*htmlpkg.Node
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != htmlpkg.ElementNode {
+			continue
+		}
+		for _, attr := range child.Attr {
+			if attr.Key != "class" {
+				continue
+			}
+			for _, class := range strings.Fields(attr.Val) {
+				if class == className {
+					nodes = append(nodes, child)
+					break
+				}
 			}
 		}
 	}
+	return nodes
+}
+
+func pulseDirectChildrenByTag(root *htmlpkg.Node, tag string) []*htmlpkg.Node {
+	var nodes []*htmlpkg.Node
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == htmlpkg.ElementNode && child.Data == tag {
+			nodes = append(nodes, child)
+		}
+	}
+	return nodes
+}
+
+func pulseWalkElements(root *htmlpkg.Node, visit func(*htmlpkg.Node)) {
+	if root.Type == htmlpkg.ElementNode {
+		visit(root)
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		pulseWalkElements(child, visit)
+	}
+}
+
+func pulseHTMLText(root *htmlpkg.Node) string {
+	var text strings.Builder
+	var walk func(*htmlpkg.Node)
+	walk = func(node *htmlpkg.Node) {
+		if node.Type == htmlpkg.TextNode {
+			text.WriteString(" ")
+			text.WriteString(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+	return strings.Join(strings.Fields(text.String()), " ")
+}
+
+func normalizePulseHTMLText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func markPulseModuleResult(ctx context.Context, workspacePath, module, pulseRunID, result, reason string, evidence []string) (*PulseModuleState, error) {
@@ -658,6 +969,18 @@ func markPulseModuleResultFromAgent(ctx context.Context, workspacePath, module, 
 }
 
 func markPulseModuleResultFromAgentWithAudit(ctx context.Context, workspacePath, module, pulseRunID, result, reason string, evidence []string, audit PulseModuleAuditInput) (*PulseModuleState, error) {
+	return markPulseModuleResultFromAgentWithAuditAndFindings(
+		ctx, workspacePath, module, pulseRunID, result, reason, evidence, audit, nil,
+	)
+}
+
+func markPulseModuleResultFromAgentWithAuditAndFindings(
+	ctx context.Context,
+	workspacePath, module, pulseRunID, result, reason string,
+	evidence []string,
+	audit PulseModuleAuditInput,
+	dispositions []step_based_workflow.PulseFindingDisposition,
+) (*PulseModuleState, error) {
 	module = normalizePulseModule(module)
 	if !validPulseModules[module] {
 		return nil, fmt.Errorf("module %q is not valid", module)
@@ -705,7 +1028,20 @@ func markPulseModuleResultFromAgentWithAudit(ctx context.Context, workspacePath,
 			return nil, fmt.Errorf("Pulse module %q is not an unresolved due module for run %q", module, pulseRunID)
 		}
 		if existing.LastPulseRunID == pulseRunID && existing.LastResult == result {
-			if err := recordPulseModuleAudit(ctx, db, normalized, module, pulseRunID, result, reason, evidence, audit, now); err != nil {
+			retryTx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return nil, err
+			}
+			defer retryTx.Rollback()
+			if err := recordPulseModuleAudit(ctx, retryTx, normalized, module, pulseRunID, result, reason, evidence, audit, now); err != nil {
+				return nil, err
+			}
+			if err := step_based_workflow.RecordPulseFindingDispositionsTx(
+				ctx, retryTx, module, pulseRunID, dispositions, now,
+			); err != nil {
+				return nil, err
+			}
+			if err := retryTx.Commit(); err != nil {
 				return nil, err
 			}
 			return existing, nil
@@ -713,6 +1049,11 @@ func markPulseModuleResultFromAgentWithAudit(ctx context.Context, workspacePath,
 		return nil, fmt.Errorf("Pulse module %q for run %q is already terminal or belongs to another run", module, pulseRunID)
 	}
 	if err := recordPulseModuleAudit(ctx, tx, normalized, module, pulseRunID, result, reason, evidence, audit, now); err != nil {
+		return nil, err
+	}
+	if err := step_based_workflow.RecordPulseFindingDispositionsTx(
+		ctx, tx, module, pulseRunID, dispositions, now,
+	); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -913,6 +1254,77 @@ func (api *StreamingAPI) handleGetPulseModuleState(w http.ResponseWriter, r *htt
 	})
 }
 
+func (api *StreamingAPI) handleGetPulseFindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	workspacePath, err := normalizeReportHumanInputWorkspacePath(r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	module := normalizePulseModule(r.URL.Query().Get("module"))
+	if module != "" && !validPulseModules[module] {
+		http.Error(w, fmt.Sprintf("module %q is not valid", module), http.StatusBadRequest)
+		return
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(
+		r.Context(), workspacePath, module, 200,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"findings": findings,
+	})
+}
+
+func (api *StreamingAPI) handleGetPulseReviews(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	workspacePath, err := normalizeReportHumanInputWorkspacePath(r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if rawID := strings.TrimSpace(r.URL.Query().Get("id")); rawID != "" {
+		id, err := strconv.ParseInt(rawID, 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "id must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		artifact, err := step_based_workflow.LoadPulseReviewArtifact(r.Context(), workspacePath, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "Pulse review not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "review": artifact})
+		return
+	}
+	module := normalizePulseModule(r.URL.Query().Get("module"))
+	if module != "" && !validPulseModules[module] {
+		http.Error(w, fmt.Sprintf("module %q is not valid", module), http.StatusBadRequest)
+		return
+	}
+	artifacts, err := step_based_workflow.LoadPulseReviewArtifacts(r.Context(), workspacePath, module, false, 500)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts})
+}
+
 func getPulseWorklistForRun(ctx context.Context, workspacePath, pulseRunID string) (map[string]PulseModuleState, bool, error) {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
 	if err != nil {
@@ -986,7 +1398,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: "Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each Pulse module: bug_review, artifact_review, report_health, eval_health, stores_health, cost_llm_time, llm_ops_review, strategy_auditor, and goal_advisor. stores_health covers learnings, knowledgebase, and database freshness/quality — do not pass the old learning_health/knowledgebase_health/db_health names. strategy_auditor diagnoses plan-versus-goal from cross-run evidence; goal_advisor owns proposals and experiments. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.",
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. stores_health covers learnings, knowledgebase, and database freshness/quality; llm_ops_review covers cost, timing, tool-call operations, model routing, setup, and plan-design hygiene. Do not pass retired module names. strategy_auditor diagnoses plan-versus-goal from cross-run evidence; goal_advisor owns proposals and experiments. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1019,7 +1431,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_pulse_module_state",
-			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus open concerns and read-only loop-closure facts. Use this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module, override the 3-module cap, or authorize a mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily on which module you mark due; resolve or reject it with resolve_run_concern once a module has acted on it.",
+			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus open concerns and read-only loop-closure facts. Use this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module, override the 3-module cap, or authorize a mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily. Close a real finding only through a verified finding_disposition; resolve_run_concern is limited to acknowledgment or rejection.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1029,11 +1441,44 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			}),
 		},
 	}
+	startFixTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "start_pulse_fix_attempt",
+			Description: "Durably start one Pulse Fixer attempt before mutating workflow state. Link every finding to its concern fingerprint from get_pulse_module_state and stable reviewer finding_id. The backend moves those concerns to fixing and returns an idempotent attempt_id. Use that attempt_id in mark_pulse_module_result.finding_dispositions after post-change verification. Never start an attempt for proposal-only, awaiting-user, or rejected findings.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+					"pulse_run_id":   map[string]interface{}{"type": "string", "description": "Scheduler-provided Pulse run id."},
+					"module":         map[string]interface{}{"type": "string", "enum": moduleEnum},
+					"summary":        map[string]interface{}{"type": "string", "description": "Short description of the bounded fix attempt."},
+					"findings": map[string]interface{}{
+						"type":     "array",
+						"minItems": 1,
+						"items": map[string]interface{}{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]interface{}{
+								"fingerprint": map[string]interface{}{"type": "string", "description": "Concern fingerprint from get_pulse_module_state."},
+								"finding_id":  map[string]interface{}{"type": "string", "description": "Stable finding id from the reviewer artifact."},
+							},
+							"required": []string{"fingerprint", "finding_id"},
+						},
+					},
+					"intended_files": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Exact files/actions intended for this attempt before mutation."},
+					"before_refs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Pre-change hashes, versions, cursors, or runtime evidence used as the change boundary."},
+				},
+				"required": []string{"workspace_path", "pulse_run_id", "module", "summary", "findings", "intended_files"},
+			}),
+		},
+	}
 	resultTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "mark_pulse_module_result",
-			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This also writes the durable internal audit row for that run and module. For result=changed, changed_files and verification are required. before_refs and after_refs carry only useful hashes, versions, or cursors when they exist. Put an exact technical failure in reason for failed/blocked results. Scheduler timeouts are recorded by the scheduler and cannot be overwritten by an agent.",
+			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required. A fixed_verified finding needs a started attempt plus only passed post-change checks. changed_unverified needs an inconclusive check and remains open awaiting future evidence. A failed check reopens the concern. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for attempt/finding/run linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1044,9 +1489,44 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 					"reason":         map[string]interface{}{"type": "string", "description": "One-sentence result summary."},
 					"evidence":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 					"changed_files":  map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Exact workspace-relative files changed by this module. Required when result=changed; otherwise omit."},
-					"verification":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Exact checks performed and their factual outcomes. Required when result=changed; otherwise include only when useful."},
-					"before_refs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional pre-change hashes, versions, or cursors used to detect drift."},
-					"after_refs":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional post-change hashes, versions, or cursors paired with before_refs."},
+					"verification":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Agent-reported checks performed and their observed outcomes. Required when result=changed; otherwise include only when useful. These records are audit evidence, not backend-executed proof."},
+					"before_refs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional agent-supplied pre-change hashes, versions, or cursors. When present, provide an equal-length after_refs audit pair."},
+					"after_refs":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional agent-supplied post-change hashes, versions, or cursors paired positionally with before_refs."},
+					"finding_dispositions": map[string]interface{}{
+						"type":        "array",
+						"description": "Per-finding outcome. Required for changed modules and whenever a reviewer returned trackable findings.",
+						"items": map[string]interface{}{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]interface{}{
+								"fingerprint":   map[string]interface{}{"type": "string"},
+								"finding_id":    map[string]interface{}{"type": "string"},
+								"attempt_id":    map[string]interface{}{"type": "string", "description": "Required for fixed_verified and changed_unverified."},
+								"disposition":   map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "blocked", "failed", "rejected"}},
+								"summary":       map[string]interface{}{"type": "string"},
+								"changed_files": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"before_refs":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"after_refs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"next_check":    map[string]interface{}{"type": "string"},
+								"verification": map[string]interface{}{
+									"type": "array",
+									"items": map[string]interface{}{
+										"type":                 "object",
+										"additionalProperties": false,
+										"properties": map[string]interface{}{
+											"check":    map[string]interface{}{"type": "string"},
+											"verdict":  map[string]interface{}{"type": "string", "enum": []string{"passed", "failed", "inconclusive"}},
+											"expected": map[string]interface{}{"type": "string"},
+											"observed": map[string]interface{}{"type": "string"},
+											"evidence": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+										},
+										"required": []string{"check", "verdict"},
+									},
+								},
+							},
+							"required": []string{"fingerprint", "finding_id", "disposition", "summary"},
+						},
+					},
 				},
 				"required": []string{"workspace_path", "pulse_run_id", "module", "result", "reason"},
 			}),
@@ -1096,6 +1576,41 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				return "", err
 			}
 			payload, _ := json.Marshal(map[string]interface{}{"status": "recorded", "modules": states})
+			return string(payload), nil
+		},
+		"start_pulse_fix_attempt": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			pulseRunID, _ := args["pulse_run_id"].(string)
+			module, _ := args["module"].(string)
+			summary, _ := args["summary"].(string)
+			if err := validateTrustedPulseToolRunID(ctx, pulseRunID); err != nil {
+				return "", err
+			}
+			module = normalizePulseModule(module)
+			if !validPulseModules[module] {
+				return "", fmt.Errorf("module %q is not valid", module)
+			}
+			worklist, ok, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
+			if err != nil {
+				return "", err
+			}
+			state, exists := worklist[module]
+			if !ok || !exists || state.LastDecision != "due" || state.LastResult != "" {
+				return "", fmt.Errorf("module %q is not an unresolved due module for run %q", module, pulseRunID)
+			}
+			findings, err := pulseFixFindingRefsFromToolArg(args["findings"])
+			if err != nil {
+				return "", err
+			}
+			attempt, err := step_based_workflow.StartPulseFixAttempt(
+				ctx, workspacePath, pulseRunID, module, summary, findings,
+				stringSliceFromToolArg(args["intended_files"]),
+				stringSliceFromToolArg(args["before_refs"]),
+			)
+			if err != nil {
+				return "", err
+			}
+			payload, _ := json.Marshal(map[string]interface{}{"status": "fixing", "attempt": attempt})
 			return string(payload), nil
 		},
 		"get_pulse_module_state": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -1158,6 +1673,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				BeforeRefs:   stringSliceFromToolArg(args["before_refs"]),
 				AfterRefs:    stringSliceFromToolArg(args["after_refs"]),
 			}
+			if len(audit.BeforeRefs) != len(audit.AfterRefs) {
+				return "", fmt.Errorf("before_refs and after_refs must be supplied as equal-length audit pairs")
+			}
+			dispositions, err := pulseFindingDispositionsFromToolArg(args["finding_dispositions"])
+			if err != nil {
+				return "", err
+			}
 			if strings.EqualFold(strings.TrimSpace(result), "changed") {
 				if len(audit.ChangedFiles) == 0 {
 					return "", fmt.Errorf("changed_files is required when result=changed")
@@ -1165,8 +1687,14 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				if len(audit.Verification) == 0 {
 					return "", fmt.Errorf("verification is required when result=changed")
 				}
+				if len(dispositions) == 0 {
+					return "", fmt.Errorf("finding_dispositions is required when result=changed")
+				}
 			}
-			state, err := markPulseModuleResultFromAgentWithAudit(ctx, workspacePath, module, pulseRunID, result, reason, stringSliceFromToolArg(args["evidence"]), audit)
+			state, err := markPulseModuleResultFromAgentWithAuditAndFindings(
+				ctx, workspacePath, module, pulseRunID, result, reason,
+				stringSliceFromToolArg(args["evidence"]), audit, dispositions,
+			)
 			if err != nil {
 				return "", err
 			}
@@ -1193,6 +1721,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	categories := map[string]string{
 		"record_pulse_worklist":           "workflow",
 		"get_pulse_module_state":          "workflow",
+		"start_pulse_fix_attempt":         "workflow",
 		"mark_pulse_module_result":        "workflow",
 		"mark_pulse_final_command_result": "workflow",
 		"resolve_run_concern":             "workflow",
@@ -1201,13 +1730,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "resolve_run_concern",
-			Description: "Record a terminal judgement on a step-raised concern returned by get_pulse_module_state. Use 'resolved' only when the underlying problem was actually fixed — if it recurs afterwards the concern reopens automatically, because a fix that did not hold matters more than the original report. Use 'rejected' when it is genuinely not a problem; rejected concerns stay closed even if reported again. Use 'acknowledged' when it is real but deliberately deferred. Never leave a concern open simply because it stopped appearing: absence is not evidence of a fix.",
+			Description: "Acknowledge or reject a concern returned by get_pulse_module_state. Use rejected only when evidence shows it is not a problem; rejected concerns stay closed if the same text recurs. Use acknowledged when it is real but deliberately deferred. This tool cannot close a real bug as resolved: use start_pulse_fix_attempt plus a verified finding_disposition so changed files and test evidence are retained. Absence is never evidence of a fix.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
 					"fingerprint":    map[string]interface{}{"type": "string", "description": "The concern's fingerprint from get_pulse_module_state."},
-					"status":         map[string]interface{}{"type": "string", "enum": []string{"acknowledged", "resolved", "rejected"}},
+					"status":         map[string]interface{}{"type": "string", "enum": []string{"acknowledged", "rejected"}},
 					"note":           map[string]interface{}{"type": "string", "description": "Short justification recorded with the judgement."},
 				},
 				"required": []string{"workspace_path", "fingerprint", "status"},
@@ -1219,13 +1748,52 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		fingerprint, _ := args["fingerprint"].(string)
 		status, _ := args["status"].(string)
 		note, _ := args["note"].(string)
+		if strings.EqualFold(strings.TrimSpace(status), step_based_workflow.ConcernStatusResolved) {
+			return "", fmt.Errorf("resolve_run_concern cannot close a real finding; use start_pulse_fix_attempt and mark_pulse_module_result with verified finding_dispositions")
+		}
 		if err := step_based_workflow.ResolveRunConcern(ctx, workspacePath, fingerprint, status, "pulse", note); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Concern %s marked %s.", fingerprint, status), nil
 	}
 
-	return []llmtypes.Tool{recordTool, stateTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
+	return []llmtypes.Tool{recordTool, stateTool, startFixTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
+}
+
+func pulseFixFindingRefsFromToolArg(raw interface{}) ([]step_based_workflow.PulseFixFindingRef, error) {
+	if raw == nil {
+		return nil, fmt.Errorf("findings is required")
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode findings: %w", err)
+	}
+	var findings []step_based_workflow.PulseFixFindingRef
+	if err := json.Unmarshal(encoded, &findings); err != nil {
+		return nil, fmt.Errorf("decode findings: %w", err)
+	}
+	if len(findings) == 0 {
+		return nil, fmt.Errorf("findings must not be empty")
+	}
+	return findings, nil
+}
+
+func pulseFindingDispositionsFromToolArg(raw interface{}) ([]step_based_workflow.PulseFindingDisposition, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode finding_dispositions: %w", err)
+	}
+	var dispositions []step_based_workflow.PulseFindingDisposition
+	if err := json.Unmarshal(encoded, &dispositions); err != nil {
+		return nil, fmt.Errorf("decode finding_dispositions: %w", err)
+	}
+	for index := range dispositions {
+		dispositions[index] = step_based_workflow.NormalizePulseFindingDisposition(dispositions[index])
+	}
+	return dispositions, nil
 }
 
 func pulseWorklistDecisionsFromArgs(raw interface{}) ([]PulseWorklistDecision, error) {

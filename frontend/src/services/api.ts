@@ -75,6 +75,9 @@ import type {
   ReportWidgetResponseResponse,
   ReportWidgetResponsesResponse,
   PulseModuleStateResponse,
+  PulseFindingsResponse,
+  PulseReviewResponse,
+  PulseReviewsResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1473,6 +1476,33 @@ export const agentApi = {
       params: { workspace_path: workspacePath },
     })
     return response.data as PulseModuleStateResponse
+  },
+
+  getPulseFindings: async (workspacePath: string, module?: string) => {
+    const response = await api.get('/api/workflow/pulse-findings', {
+      params: {
+        workspace_path: workspacePath,
+        ...(module ? { module } : {}),
+      },
+    })
+    return response.data as PulseFindingsResponse
+  },
+
+  getPulseReviews: async (workspacePath: string, module?: string) => {
+    const response = await api.get('/api/workflow/pulse-reviews', {
+      params: {
+        workspace_path: workspacePath,
+        ...(module ? { module } : {}),
+      },
+    })
+    return response.data as PulseReviewsResponse
+  },
+
+  getPulseReview: async (workspacePath: string, id: number) => {
+    const response = await api.get('/api/workflow/pulse-reviews', {
+      params: { workspace_path: workspacePath, id },
+    })
+    return response.data as PulseReviewResponse
   },
 
   answerReportHumanInput: async (

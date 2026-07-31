@@ -49,8 +49,14 @@ whatever. Shell-first; Python is optional.
 
 ```bash
 payload='{"arg1":"value1"}'
-curl -sS --json "$payload" -H "$MCP_AUTH" "$MCP_MCP/{server_name}/{tool_name}" | jq
+curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_MCP/{server_name}/{tool_name}"
 ```
+
+`$MCP_AUTH` is already the complete `Authorization: Bearer ...` header. Never
+prepend another header or Bearer prefix. `--json` already selects POST and
+Content-Type, so do not add `-X POST`, another Content-Type header, or `--data`.
+Keep the call unpiped so curl's nonzero HTTP-failure status reaches
+`execute_shell_command`.
 
 ## Calling a custom / built-in tool
 
@@ -61,7 +67,7 @@ servers from the workflow's selected server list. Call their tools through
 
 ```bash
 payload='{"message_for_user":"Workflow completed successfully.","slack_title":"Workflow complete","slack_color":"success","slack_fields":[{"label":"Status","value":"Passed"}]}'
-curl -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/notify_user" | jq
+curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/notify_user"
 ```
 
 `notify_user` owns Slack delivery and renders Block Kit in the backend. For structured

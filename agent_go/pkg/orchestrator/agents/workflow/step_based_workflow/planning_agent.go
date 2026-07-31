@@ -1186,7 +1186,7 @@ func getUpdateMessageSequenceStepSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
-			"existing_step_id": {"type": "string", "description": "REQUIRED: ID of the message_sequence step to update."},
+			"existing_step_id": {"type": "string", "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
 			"title": {"type": "string"},
 			"description": {"type": "string"},
 			"context_dependencies": {"type": "array", "items": {"type": "string"}},
@@ -2708,6 +2708,34 @@ func updateStepRecursively(steps []PlanStepInterface, partialUpdate PartialPlanS
 	return false, -1
 }
 
+// replaceStepRecursively replaces a step while preserving its position in the
+// plan, including inline todo-task routes. This is used by compatibility
+// upgrades where a persisted legacy type must become its effective runtime type
+// before the normal partial-update machinery can run.
+func replaceStepRecursively(steps []PlanStepInterface, stepID string, replacement PlanStepInterface) (bool, int) {
+	for i, step := range steps {
+		if step.GetID() == stepID {
+			steps[i] = replacement
+			return true, i
+		}
+
+		if todoStep, ok := step.(*TodoTaskPlanStep); ok {
+			for routeIndex := range todoStep.PredefinedRoutes {
+				routeStep := todoStep.PredefinedRoutes[routeIndex].SubAgentStep
+				if routeStep == nil {
+					continue
+				}
+				tmpSlice := []PlanStepInterface{routeStep}
+				if replaced, _ := replaceStepRecursively(tmpSlice, stepID, replacement); replaced {
+					todoStep.PredefinedRoutes[routeIndex].SubAgentStep = tmpSlice[0]
+					return true, i
+				}
+			}
+		}
+	}
+	return false, -1
+}
+
 func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fieldChanges *[]PlanFieldChange) (int, []string, error) {
 	// Find the step to update (for field tracking)
 	existingStep, _, _ := findStepByID(plan.Steps, partialUpdate.ExistingStepID)
@@ -3129,7 +3157,12 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	// Apply updates recursively
 	updated, topLevelIndex := updateStepRecursively(plan.Steps, partialUpdate, fieldChanges)
 	if !updated {
-		// This shouldn't happen because we already checked for existence using findStepByID
+		// Orphan definitions are editable too. Routes that reference them are
+		// materialized only for runtime and continue to serialize by reference.
+		updated, topLevelIndex = updateStepRecursively(plan.OrphanSteps, partialUpdate, fieldChanges)
+	}
+	if !updated {
+		// This shouldn't happen because we already checked for existence using findStepByID.
 		return -1, nil, fmt.Errorf("failed to apply update to step '%s'", partialUpdate.ExistingStepID)
 	}
 
@@ -3143,7 +3176,8 @@ func planStepUpdateRequiresDependentArtifactReview(fieldChanges []PlanFieldChang
 func planStepUpdateInvalidatesDescriptionReview(fieldChanges []PlanFieldChange) bool {
 	for _, change := range fieldChanges {
 		field := change.Field
-		if field == "description" ||
+		if field == "type" ||
+			field == "description" ||
 			field == "context_dependencies" ||
 			field == "context_output" ||
 			field == "items" ||
@@ -3408,9 +3442,46 @@ func validateScriptedStepUpdateTarget(plan *PlanningResponse, stepConfigs []Step
 		return fmt.Errorf("step %q is %q, not a scripted step; use its type-specific update tool", stepID, existingStep.StepType())
 	}
 	if !isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
-		return fmt.Errorf("step %q is a legacy agentic regular step, not a declared scripted step; replace it with a message_sequence step instead of using update_scripted_step", stepID)
+		return fmt.Errorf("step %q is a legacy agentic regular step, not a declared scripted step; use update_message_sequence_step, which will atomically upgrade its saved type and apply the edit", stepID)
 	}
 	return nil
+}
+
+// prepareMessageSequenceUpdateTarget makes the mutation API agree with the
+// runtime compatibility adapter. Persisted non-scripted regular steps already
+// execute as message_sequence, so the message-sequence updater is their single
+// valid editing path and upgrades the stored type atomically with the edit.
+func prepareMessageSequenceUpdateTarget(plan *PlanningResponse, stepConfigs []StepConfig, stepID string) (bool, error) {
+	if plan == nil {
+		return false, fmt.Errorf("cannot update message_sequence step %q: plan is unavailable", stepID)
+	}
+	existingStep, _, _ := findStepByID(plan.Steps, stepID)
+	if existingStep == nil {
+		existingStep, _, _ = findStepByID(plan.OrphanSteps, stepID)
+	}
+	if existingStep == nil {
+		return false, nil // updateSingleStep returns the detailed not-found error.
+	}
+
+	switch step := existingStep.(type) {
+	case *MessageSequencePlanStep:
+		return false, nil
+	case *RegularPlanStep:
+		if isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
+			return false, fmt.Errorf("step %q is a declared scripted regular step, not message_sequence; use update_scripted_step", stepID)
+		}
+		replacement := normalizeRegularStepToMessageSequence(step)
+		replaced, _ := replaceStepRecursively(plan.Steps, stepID, replacement)
+		if !replaced {
+			replaced, _ = replaceStepRecursively(plan.OrphanSteps, stepID, replacement)
+		}
+		if !replaced {
+			return false, fmt.Errorf("failed to upgrade legacy agentic regular step %q to message_sequence", stepID)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("step %q is %q, not message_sequence; use its type-specific update tool", stepID, existingStep.StepType())
+	}
 }
 
 func createUpdateMessageSequenceStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
@@ -3431,15 +3502,24 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 		if err != nil {
 			return "", fmt.Errorf("failed to read plan: %w", err)
 		}
-		existingStep, _, _ := findStepByID(plan.Steps, partialUpdate.ExistingStepID)
-		if existingStep == nil {
-			existingStep, _, _ = findStepByID(plan.OrphanSteps, partialUpdate.ExistingStepID)
+		stepConfigs, err := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read step config: %w", err)
 		}
-		if _, ok := existingStep.(*MessageSequencePlanStep); existingStep != nil && !ok {
-			return "", fmt.Errorf("step %q is %T, not message_sequence", partialUpdate.ExistingStepID, existingStep)
+		upgradedLegacyRegular, err := prepareMessageSequenceUpdateTarget(plan, stepConfigs, partialUpdate.ExistingStepID)
+		if err != nil {
+			return "", err
 		}
 
 		fieldChanges := make([]PlanFieldChange, 0)
+		if upgradedLegacyRegular {
+			fieldChanges = append(fieldChanges, PlanFieldChange{
+				StepID:   partialUpdate.ExistingStepID,
+				Field:    "type",
+				OldValue: string(StepTypeRegular),
+				NewValue: string(StepTypeMessageSeq),
+			})
+		}
 		stepIndex, _, err := updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
 			return "", err
@@ -3478,8 +3558,12 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 			}
 		}
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
-		logger.Info(fmt.Sprintf("✅ Updated message_sequence step '%s' in plan", partialUpdate.ExistingStepID))
-		return fmt.Sprintf("Successfully updated message_sequence step '%s' in the plan%s", partialUpdate.ExistingStepID, dependentReviewNotice), nil
+		upgradeNotice := ""
+		if upgradedLegacyRegular {
+			upgradeNotice = " and upgraded its saved legacy regular type to message_sequence"
+		}
+		logger.Info(fmt.Sprintf("✅ Updated message_sequence step '%s' in plan%s", partialUpdate.ExistingStepID, upgradeNotice))
+		return fmt.Sprintf("Successfully updated message_sequence step '%s' in the plan%s%s", partialUpdate.ExistingStepID, upgradeNotice, dependentReviewNotice), nil
 	}
 }
 
@@ -4830,7 +4914,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_message_sequence_step",
-		"Update a message_sequence step in the plan. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update a message_sequence step in the plan. This also accepts a persisted legacy non-scripted regular step and atomically upgrades it to message_sequence, matching the compatibility runtime agents already see; declared scripted regular steps still require update_scripted_step. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		messageSequenceUpdateParams,
 		createUpdateMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
 		"workflow",

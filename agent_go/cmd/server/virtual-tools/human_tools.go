@@ -63,7 +63,7 @@ func CreateHumanTools() []llmtypes.Tool {
 	notifyProps := map[string]interface{}{
 		"message_for_user": map[string]interface{}{
 			"type":        "string",
-			"description": "Concise plain-text summary sent to every channel and used as the Slack/email fallback. When supplying rich Slack fields, make this the lead verdict rather than duplicating every detail.",
+			"description": "Concise plain-text summary sent to every channel and used as the automatic email fallback. When supplying rich Slack or email fields, make this the lead verdict rather than duplicating every detail.",
 		},
 		"slack_title": map[string]interface{}{
 			"type":        "string",
@@ -124,10 +124,6 @@ func CreateHumanTools() []llmtypes.Tool {
 			"type":        "string",
 			"description": "Custom subject line for the email rendering (Gmail). When Gmail is enabled, set this by default for workflow/Pulse/Goal Advisor notifications unless the user explicitly asked not to email. Other channels ignore this.",
 		}
-		notifyProps["email_body"] = map[string]interface{}{
-			"type":        "string",
-			"description": "PLAIN-TEXT email body (longer than message_for_user). When Gmail is enabled, set this as the plain fallback by default for workflow/Pulse/Goal Advisor notifications unless the user explicitly asked not to email. Do NOT put HTML here — for a formatted email use email_html. If omitted, message_for_user is the body. (HTML accidentally placed here is auto-detected and rendered, but email_html is correct.)",
-		}
 		notifyProps["email_to"] = map[string]interface{}{
 			"type":        "array",
 			"items":       map[string]interface{}{"type": "string"},
@@ -150,7 +146,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		}
 		notifyProps["email_html"] = map[string]interface{}{
 			"type":        "string",
-			"description": "Rich HTML body for a designed/formatted email (Gmail only). When Gmail is enabled, set this by default for workflow/Pulse/Goal Advisor notifications unless the user explicitly asked not to email. MUST be EMAIL-SAFE: use INLINE styles only (a style attribute on each element). Gmail strips <style> blocks, <head>, <script>, and class-based CSS, so a full browser HTML document or a generated *.html report (e.g. pulse/org-pulse.html) arrives UNSTYLED — build a compact inline-styled summary and link to the full report instead of pasting it. message_for_user / email_body remain the plain-text fallback for clients that don't render HTML. Other channels ignore this.",
+			"description": "The single rich email body (Gmail only). For workflow/Pulse/Goal Advisor notifications, supply this by default unless the user explicitly asked not to email. MUST be EMAIL-SAFE: use INLINE styles only (a style attribute on each element). Gmail strips <style> blocks, <head>, <script>, and class-based CSS, so a full browser HTML document or a generated *.html report (e.g. pulse/org-pulse.html) arrives UNSTYLED — build a compact inline-styled summary and link to the full report instead of pasting it. Do not create a separate plain email version; message_for_user is the automatic fallback. Other channels ignore this.",
 		}
 		notifyProps["email_html_file"] = map[string]interface{}{
 			"type":        "string",
@@ -214,7 +210,7 @@ func buildNotifyDescription() string {
 	}
 	desc := base + " Currently enabled delivery channels: " + strings.Join(labels, ", ") + ". The message is delivered to all enabled channels — you do not choose which."
 	if gmailOn {
-		desc += " Gmail is enabled, so email_subject, email_body, email_to, email_cc, email_html, email_html_file, and email_attachments are available for the email rendering (other channels ignore these). For workflow, Pulse, org pulse, and Goal Advisor notifications, treat email as the default rich rendering: set email_subject, email_html, and plain email_body on the same notify_user call unless the user's notification preference explicitly says not to email. Set email_to only when the user's preference asks to replace the configured default To recipient; set email_cc only when the preference asks for CC recipients. Keep email_body plain text as the fallback."
+		desc += " Gmail is enabled, so email_subject, email_to, email_cc, email_html, email_html_file, and email_attachments are available for the email rendering (other channels ignore these). For workflow, Pulse, org pulse, and Goal Advisor notifications, treat email as the default rich rendering: set email_subject and one inline-styled email_html body on the same notify_user call unless the user's notification preference explicitly says not to email. Do not write a separate plain email body; message_for_user is the automatic fallback. Set email_to only when the user's preference asks to replace the configured default To recipient; set email_cc only when the preference asks for CC recipients."
 	}
 	return desc
 }
@@ -240,7 +236,8 @@ func gmailEnabled() bool {
 var htmlTagRe = regexp.MustCompile(`(?is)<(?:!doctype\s+html|/?(?:html|head|body|div|span|table|thead|tbody|tr|td|th|p|h[1-6]|br|hr|ul|ol|li|a|img|strong|em|b|i|u|style|center|font|pre|blockquote))[\s/>]`)
 
 // looksLikeHTML reports whether a string contains real HTML markup. Used to
-// rescue HTML an agent placed in email_body (plain) instead of email_html.
+// rescue HTML from the retired email_body argument for compatibility with old
+// scheduled prompts and persisted agent sessions.
 func looksLikeHTML(s string) bool {
 	return htmlTagRe.MatchString(s)
 }
@@ -264,10 +261,9 @@ func gmailContentFromArgs(args map[string]interface{}) (*services.GmailContent, 
 		html = string(data)
 	}
 
-	// Robustness: agents frequently drop HTML into email_body (the plain field).
-	// If email_body clearly contains HTML and no explicit email_html was given,
-	// treat it as the HTML body so it renders instead of showing raw markup; the
-	// plain-text fallback then falls back to message_for_user.
+	// Backward compatibility: old callers may still send the retired
+	// email_body argument. If it contains HTML and no explicit email_html was
+	// given, render it as HTML rather than exposing raw markup.
 	if strings.TrimSpace(html) == "" && looksLikeHTML(body) {
 		html = body
 		body = ""

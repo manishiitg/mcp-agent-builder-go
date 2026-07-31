@@ -25,10 +25,16 @@ smallest useful retained window.{{end}}
    `insufficient_evidence`, identify the affected path, and name the exact
    post-fix outcome-bearing checkpoint. This command does not run Bug Review or
    Goal Advisor.
-4. Launch exactly one generic reviewer with a prompt beginning
-   `READ-ONLY REVIEW`. It must not edit files or databases, run producing
-   actions, publish, notify, ask the user, create/consume decisions, update
-   Pulse state, or launch another agent. SQLite access is read-only.
+4. Launch exactly one reviewer with
+   `call_generic_agent(todo_id="standalone-strategy-auditor",
+   instructions="READ-ONLY REVIEW ...", preferred_tier=3,
+   module="strategy_auditor")`. Do not pass `pulse_run_id` or `review_run_id`;
+   for this standalone command the backend generates both identities, stores
+   the complete Markdown in SQLite, and files its `CONCERNS:` lines into the
+   structured finding lifecycle. The reviewer must not edit files or databases,
+   run producing actions, publish, notify, ask the user, create/consume
+   decisions, update Pulse state, or launch another agent. SQLite access is
+   read-only.
 5. Require one primary classification: `strategy_flaw`, `execution_bug`,
    `measurement_gap`, `insufficient_evidence`, or `no_material_problem`.
    Require the goal/causal chain, evidence window and exclusions,
@@ -40,9 +46,10 @@ smallest useful retained window.{{end}}
    claim/mechanism, exact evidence, confidence, `recommended_fix` limited to an
    evidence or module handoff rather than a plan mutation, verification, and
    `user_judgment_required` with reason.
-6. Validate and deduplicate the complete result against
-   `builder/improve.html`. As the parent, append one compact newest-first
-   diagnostic entry with
+6. Read the persisted result with `get_pulse_review_result` using the exact
+   `review_run_id` and `module` returned by `call_generic_agent`. Validate and
+   deduplicate that complete result against `builder/improve.html`. As the
+   parent, append one compact newest-first diagnostic entry with
    `data-pulse-section="signals" data-module="strategy_auditor"`. Do not edit
    the plan, configuration, DB, reports/evals, or Pulse module state.
    Do not launch `/goal-advisor` automatically.

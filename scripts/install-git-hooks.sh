@@ -178,13 +178,9 @@ cd agent_go 2>/dev/null || {
 echo ""
 set +e
 LINT_OUTPUT_FULL=$($GOLANGCI_LINT_CMD run ./... 2>&1)
+LINT_EXIT=$?
 LINT_OUTPUT=$(echo "$LINT_OUTPUT_FULL" | grep -v -E "(tool_output_folder|tool_output/|cache/|bin/)")
 echo "$LINT_OUTPUT"
-if echo "$LINT_OUTPUT" | grep -qE "(^[^:]+:[0-9]+:[0-9]+:.*(error|expected|found))|issues found"; then
-    LINT_EXIT=1
-else
-    LINT_EXIT=0
-fi
 set -e
 
 # Frontend build check — only runs if any staged file is under frontend/

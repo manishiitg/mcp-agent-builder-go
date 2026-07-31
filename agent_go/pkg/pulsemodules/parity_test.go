@@ -258,3 +258,19 @@ func TestGuidanceDocsNameCurrentModules(t *testing.T) {
 		}
 	}
 }
+
+func TestPulseDashboardSkeletonHasOneCoverageChipPerCurrentModule(t *testing.T) {
+	skeleton := repoFile(t, "agent_go/cmd/server/guidance/templates/system/review-improve-log-skeleton.md")
+	const chip = `<div class="covitem `
+	if got, want := strings.Count(skeleton, chip), len(All); got != want {
+		t.Fatalf("Pulse coverage chips = %d, want one for each of %d current modules", got, want)
+	}
+	for _, retiredLabel := range []string{">Cost + time<", ">Steps &amp; setup<"} {
+		if strings.Contains(skeleton, retiredLabel) {
+			t.Fatalf("Pulse coverage still contains pre-merge module label %q", retiredLabel)
+		}
+	}
+	if !strings.Contains(skeleton, `class="cl">Ops review</span>`) {
+		t.Fatal("Pulse coverage is missing the merged Ops review chip")
+	}
+}

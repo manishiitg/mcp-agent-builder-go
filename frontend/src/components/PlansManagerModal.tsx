@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { X, GitBranch, Trash2, Clock } from 'lucide-react'
 import { agentApi } from '../services/api'
-import type { PlannerFile, PlannerFilesResponse } from '../services/api-types'
+import type { PlannerFile } from '../services/api-types'
 
 interface PlanInfo {
   name: string

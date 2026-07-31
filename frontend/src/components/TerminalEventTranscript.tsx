@@ -11,6 +11,7 @@ import {
   type TranscriptItem,
 } from '../utils/terminalEventTranscript'
 import { formatDurationCompact } from '../utils/duration'
+import { formatToolCallArguments, formatToolCallResult } from '../utils/toolCallFormatting'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 
 // Clean view = the SAME rich event components the tree used, laid out as one
@@ -46,10 +47,15 @@ const PREVIEW_LIMIT = 600
 const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
   const [open, setOpen] = useState(false)
   const hasDetail = Boolean(pair.args || pair.result)
+  const resultFormatting = useMemo(
+    () => pair.result ? formatToolCallResult(pair.result) : null,
+    [pair.result],
+  )
+  const displayStatus = resultFormatting?.isError ? 'error' : pair.status
 
-  const mark = pair.status === 'error' ? '✗' : pair.status === 'ok' ? '✓' : '⋯'
+  const mark = displayStatus === 'error' ? '✗' : displayStatus === 'ok' ? '✓' : '⋯'
   const markClass =
-    pair.status === 'error' ? 'text-red-400' : pair.status === 'ok' ? 'text-emerald-400' : 'text-neutral-500'
+    displayStatus === 'error' ? 'text-red-400' : displayStatus === 'ok' ? 'text-emerald-400' : 'text-neutral-500'
   // Shared formatter rather than a local one: the local copy assumed milliseconds
   // while the wire value is nanoseconds, and it had no minutes branch, so long
   // calls printed absurd second counts.
@@ -57,7 +63,14 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
     pair.durationNs != null && pair.durationNs > 0 ? formatDurationCompact(pair.durationNs) : null
 
   return (
-    <div data-testid="terminal-clear-tool-call" className="rounded border border-neutral-800 bg-neutral-900/40">
+    <div
+      data-testid="terminal-clear-tool-call"
+      className={`rounded border ${
+        displayStatus === 'error'
+          ? 'border-red-900/80 bg-red-950/20'
+          : 'border-neutral-800 bg-neutral-900/40'
+      }`}
+    >
       <button
         type="button"
         onClick={() => hasDetail && setOpen(prev => !prev)}
@@ -75,6 +88,11 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
           </span>
         )}
         {duration && <span className="shrink-0 tabular-nums text-[10px] text-neutral-500">{duration}</span>}
+        {displayStatus === 'error' && (
+          <span className="shrink-0 rounded bg-red-950 px-1.5 py-0.5 text-[10px] text-red-300">
+            failed
+          </span>
+        )}
         {hasDetail && <span className="ml-auto shrink-0 font-mono text-neutral-600">{open ? '▾' : '▸'}</span>}
       </button>
 
@@ -93,12 +111,32 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
 // the row past the viewport and took the transcript's scroll with it.
 const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, value }) => {
   const [full, setFull] = useState(false)
-  const isLong = value.length > PREVIEW_LIMIT
-  const shown = full || !isLong ? value : `${value.slice(0, PREVIEW_LIMIT)}…`
+  const formatted = useMemo(
+    () => label === 'Result' ? formatToolCallResult(value) : formatToolCallArguments(value),
+    [label, value],
+  )
+  const isLong = formatted.text.length > PREVIEW_LIMIT
+  const shown = full || !isLong ? formatted.text : `${formatted.text.slice(0, PREVIEW_LIMIT)}…`
   return (
     <div className="min-w-0">
-      <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">{label}</div>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] leading-5 text-neutral-300">
+      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+        <span>{label}</span>
+        {formatted.format !== 'text' && (
+          <span className="rounded bg-neutral-800 px-1 py-0.5 text-[9px] tracking-normal text-neutral-400">
+            {formatted.format}
+          </span>
+        )}
+        {formatted.isError && (
+          <span className="rounded bg-red-950 px-1 py-0.5 text-[9px] tracking-normal text-red-300">
+            error
+          </span>
+        )}
+      </div>
+      <pre className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2 text-[11px] leading-5 ${
+        formatted.isError
+          ? 'border-red-900/70 bg-red-950/30 text-red-200'
+          : 'border-transparent bg-black/30 text-neutral-300'
+      }`}>
         {shown}
       </pre>
       {isLong && (
@@ -107,7 +145,7 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
           onClick={() => setFull(prev => !prev)}
           className="mt-1 text-[10px] text-neutral-500 hover:text-neutral-300"
         >
-          {full ? 'Show less' : `Show all (${value.length.toLocaleString()} chars)`}
+          {full ? 'Show less' : `Show all (${formatted.text.length.toLocaleString()} chars)`}
         </button>
       )}
     </div>

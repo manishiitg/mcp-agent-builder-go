@@ -25,7 +25,7 @@ interface SchedulerState {
   triggerJob: (id: string) => Promise<{ session_id: string }>
 }
 
-export const useSchedulerStore = create<SchedulerState>()((set, get) => ({
+export const useSchedulerStore = create<SchedulerState>()((set) => ({
   jobs: [],
   isLoading: false,
   error: null,

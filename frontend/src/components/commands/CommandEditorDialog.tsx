@@ -114,8 +114,17 @@ export const CommandEditorDialog: React.FC<CommandEditorDialogProps> = ({
       await loadAndRegisterUserCommands()
       onSaved?.()
       onClose()
-    } catch (err: any) {
-      setError(err?.response?.data || err?.message || 'Failed to save command')
+    } catch (cause: unknown) {
+      const responseData = typeof cause === 'object' && cause !== null && 'response' in cause
+        ? (cause as { response?: { data?: unknown } }).response?.data
+        : undefined
+      setError(
+        typeof responseData === 'string'
+          ? responseData
+          : cause instanceof Error
+            ? cause.message
+            : 'Failed to save command',
+      )
     } finally {
       setSaving(false)
     }

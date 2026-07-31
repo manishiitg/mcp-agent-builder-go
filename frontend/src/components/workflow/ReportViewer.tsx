@@ -3,7 +3,7 @@
 // interaction widgets persist configured responses through backend-owned APIs.
 // See docs/workflow/persistent_stores_design.md.
 
-import { createElement, lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -18,7 +18,7 @@ import {
   isHtmlDocumentWidget,
 } from './reportWidgets/shared'
 import { useCompactWidgetLayout, useContainerSizeTier } from './reportWidgets/tableHelpers'
-import { BarChart3, Check, ChevronDown, Download, Loader2, RefreshCw } from 'lucide-react'
+import { BarChart3, Check, ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { agentApi, workspaceApi } from '../../services/api'
 import { useReportFilePreviewStore } from '../../stores/useReportFilePreviewStore'
 import { useChatStore } from '../../stores/useChatStore'
@@ -711,7 +711,7 @@ export function ReportViewer({ workspacePath, isOpen, onClose }: ReportViewerPro
 
 // Inline content — renders the report plan directly without modal chrome. Used by the
 // workflow canvas when canvasViewMode === 'report'.
-function ReportViewComponent({ workspacePath, selectedRunFolder, reviewData, onClose, focusTier, reserveTopControlsSpace = false }: ReportViewProps) {
+function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusTier, reserveTopControlsSpace = false }: ReportViewProps) {
   // Three explicit preview widths plus 'auto'. The internal name 'desktop' is
   // surfaced as "Laptop" in the UI to match the user's mental model — laptop
   // viewports are what fill the full max-width shell. 'auto' falls back to
@@ -742,7 +742,7 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, reviewData, onC
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [initialLoadDeferred, setInitialLoadDeferred] = useState(false)
   const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(() => new Set())
-  const [isExportingReport, setIsExportingReport] = useState(false)
+  const [, setIsExportingReport] = useState(false)
   const reportExportRef = useRef<HTMLDivElement>(null)
   const reportScrollContainerRef = useRef<HTMLDivElement>(null)
   const refreshWorkspaceRef = useRef<string | null>(null)
@@ -1415,7 +1415,7 @@ function SectionContainer({
   }, [entries, tabsEnabled])
   const sectionStateKey = useMemo(
     () => reportSectionTabStateKey(section, sectionIndex),
-    [section.heading, sectionIndex],
+    [section, sectionIndex],
   )
   const tabStateScope = `${viewStateKey}::${sectionStateKey}`
   const [activeTabState, setActiveTabState] = useState<{ scope: string; key: string | null }>(() => ({

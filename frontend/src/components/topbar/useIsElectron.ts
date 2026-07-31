@@ -5,7 +5,7 @@ export function useIsElectron(): boolean {
   const [isElectron, setIsElectron] = useState(false)
 
   useEffect(() => {
-    setIsElectron(!!(window as any).electronAPI)
+    setIsElectron(!!window.electronAPI)
   }, [])
 
   return isElectron

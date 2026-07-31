@@ -125,7 +125,7 @@ export function DynamicModelSelector({
       } else {
         setError('Failed to load full model catalog')
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load full model catalog')
     } finally {
       setLoadingFull(false)

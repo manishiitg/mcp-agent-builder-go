@@ -25,8 +25,7 @@ import {
   restoreExpandedFolders,
   getOriginalPath,
   isPathWithinFolder,
-  adjustFilePathsRecursive,
-  findIterationFolders
+  adjustFilePathsRecursive
 } from '../utils/workspacePathUtils'
 import { useIterationExpansion } from './workspace/useIterationExpansion'
 
@@ -49,7 +48,7 @@ export default function Workspace({
   const getActiveTab = useChatStore(state => state.getActiveTab)
   const setTabConfig = useChatStore(state => state.setTabConfig)
   const { getActivePreset } = usePresetApplication()
-  
+
   // Get file context based on mode: multi-agent mode uses tab config, workflow mode uses preset
   const chatFileContext = useMemo(() => {
     if (selectedModeCategory === 'multi-agent') {
@@ -67,7 +66,7 @@ export default function Workspace({
     }
     return []
   }, [selectedModeCategory, getActiveTab, getActivePreset])
-  
+
   // Add file to context handler - mode-specific
   const addFileToContext = useCallback((file: { name: string; path: string; type: 'file' | 'folder' }) => {
     if (selectedModeCategory === 'multi-agent') {
@@ -205,7 +204,7 @@ export default function Workspace({
   // We should rename the local one to avoid confusion or remove the one from store if unused
   // But for now, we'll keep the local one as it was added for the rename feature
   // and the store one might be used by other components or hooks
-  
+
   // Local Move Dialog State (overrides store state for this component)
   const [localMoveDialog, setLocalMoveDialog] = useState<{
     isOpen: boolean
@@ -249,7 +248,7 @@ export default function Workspace({
     isLoading: false,
     item: null
   })
-  
+
   const openRenameDialog = (item: PlannerFile) => {
     setRenameDialog({
       isOpen: true,
@@ -257,7 +256,7 @@ export default function Workspace({
       item
     })
   }
-  
+
   const closeRenameDialog = () => {
     setRenameDialog({
       isOpen: false,
@@ -265,10 +264,10 @@ export default function Workspace({
       item: null
     })
   }
-  
+
   // Ref for the workspace scrollable container
   const workspaceScrollRef = useRef<HTMLDivElement>(null)
-  
+
   // Track which workflow preset we've already auto-expanded to prevent re-expansion
   const autoExpandedWorkflowRef = useRef<string | null>(null)
   // Track whether we've auto-expanded Chats/ for multi-agent mode
@@ -280,7 +279,7 @@ export default function Workspace({
   const loadedIterationsRef = useRef<Map<string, Set<string>>>(new Map())
   // Stable empty Set for loadingChildren prop to prevent unnecessary re-renders
   const emptyLoadingSet = useMemo(() => new Set<string>(), [])
-  
+
   // Get workflow folder path from selected workflow folder in the preset
   // The selectedFolder.filepath is the folder path stored in the database
   // We'll use this directly to filter the workspace
@@ -340,7 +339,7 @@ export default function Workspace({
   // This matches the logic in filteredFiles useMemo to ensure paths are consistent
   const applyFilteringAndPathAdjustment = useCallback((filesToProcess: PlannerFile[]): PlannerFile[] => {
     let result = filesToProcess
-    
+
     // Only filter if we're in workflow mode and have a workflow folder path
     // When in multi-agent mode, show all files regardless of preset
     if (selectedModeCategory === 'workflow' && effectiveWorkflowFolderPath) {
@@ -375,26 +374,26 @@ export default function Workspace({
   useEffect(() => {
     // Skip if no files loaded yet
     if (files.length === 0) return
-    
+
     // In workflow mode, completely skip restore effect to let auto-expand handle it
     // This prevents any interference with the auto-expansion logic
     if (selectedModeCategory === 'workflow' && effectiveWorkflowFolderPath) {
       return
     }
-    
+
     // Get current expanded folders
     const currentExpanded = expandedFolders
     const previouslyExpanded = new Set(currentExpanded)
-    
+
     // Apply filtering and path adjustment to get display files
     const displayFiles = applyFilteringAndPathAdjustment(files)
-    
+
     // Collect all available folder paths from display files
     const availableFolderPaths = collectFolderPaths(displayFiles, true)
-    
+
     // Restore expanded folders that still exist in the filtered tree
     const restoredExpanded = restoreExpandedFolders(previouslyExpanded, availableFolderPaths)
-    
+
     // Only update if something changed AND we had folders expanded before
     // This prevents auto-collapse when files refresh during agent runs
     if (previouslyExpanded.size > 0 && restoredExpanded.size !== previouslyExpanded.size) {
@@ -406,18 +405,18 @@ export default function Workspace({
       setExpandedFolders(restoredExpanded)
     }
   }, [files, applyFilteringAndPathAdjustment, expandedFolders, setExpandedFolders, selectedModeCategory, effectiveWorkflowFolderPath])
-  
+
   // Function to scroll to highlighted file
   const scrollToHighlightedFile = useCallback((filepath: string) => {
     if (!workspaceScrollRef.current) return
-    
+
     // Find the highlighted file element by looking for the data attribute or class
     // Check both data-filepath (adjusted path) and data-original-filepath (original path)
     // This ensures workspace tool events can scroll to files even when paths are adjusted in workflow mode
     const highlightedElement = workspaceScrollRef.current.querySelector(`[data-filepath="${filepath}"]`) ||
                               workspaceScrollRef.current.querySelector(`[data-original-filepath="${filepath}"]`) ||
                               workspaceScrollRef.current.querySelector(`[data-highlighted="true"]`)
-    
+
     if (highlightedElement) {
       highlightedElement.scrollIntoView({
         behavior: 'smooth',
@@ -437,26 +436,29 @@ export default function Workspace({
       if (selectedModeCategory !== 'workflow' || !effectiveWorkflowFolderPath) {
         return filepath
       }
-      
+
       // Check if the filepath has been adjusted (doesn't start with workflow folder path)
       // Use the utility function to reconstruct if needed
       if (!isPathWithinFolder(filepath, effectiveWorkflowFolderPath)) {
         return getOriginalPath(filepath, effectiveWorkflowFolderPath)
       }
-      
+
       // If the filepath already starts with the workflow folder path, use it as-is
       return filepath
     }
-    
+
     // If file is a PlannerFile object, use originalFilepath if available
     return file.originalFilepath || file.filepath
   }, [selectedModeCategory, effectiveWorkflowFolderPath])
-  
+
   // Legacy function name for backward compatibility
   const getFullFilePath = getOriginalFilePath
 
   // Recursively prune the runs/ subtree to only show the specified iteration
-  const pruneRunsToIteration = (node: PlannerFile, iterationName: string): PlannerFile => {
+  const pruneRunsToIteration = useCallback(function pruneRuns(
+    node: PlannerFile,
+    iterationName: string,
+  ): PlannerFile {
     if (node.filepath === 'runs' && node.children) {
       const matching = node.children.find(c =>
         c.filepath === `runs/${iterationName}` || c.filepath.endsWith(`/${iterationName}`)
@@ -464,17 +466,17 @@ export default function Workspace({
       return { ...node, children: matching ? [matching] : [] }
     }
     if (node.children && node.children.length > 0) {
-      return { ...node, children: node.children.map(c => pruneRunsToIteration(c, iterationName)) }
+      return { ...node, children: node.children.map(c => pruneRuns(c, iterationName)) }
     }
     return node
-  }
+  }, [])
 
   // Filter by query: match file names and folder names; hide folders with no match and no matching descendants
   const filterFiles = (files: PlannerFile[], query: string): PlannerFile[] => {
     if (!query.trim()) return files
-    
+
     const lowercaseQuery = query.toLowerCase()
-    
+
     const filterRecursive = (fileList: PlannerFile[]): PlannerFile[] => {
       return fileList.map(file => {
         if (file.type === 'folder') {
@@ -496,10 +498,10 @@ export default function Workspace({
         }
       }).filter(Boolean) as PlannerFile[]
     }
-    
+
     return filterRecursive(files)
   }
-  
+
   // Iteration display filter - Files defaults to iteration-0 for stable workflow views.
   // selectedRunFolder is still used by useIterationExpansion for execution context.
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
@@ -620,7 +622,7 @@ export default function Workspace({
     result = filterFiles(result, searchQuery)
 
     return result
-  }, [files, effectiveWorkflowFolderPath, searchQuery, selectedModeCategory, effectiveDisplayedIteration, currentUserFolder])
+  }, [files, effectiveWorkflowFolderPath, searchQuery, selectedModeCategory, effectiveDisplayedIteration, currentUserFolder, pruneRunsToIteration])
 
   // Refresh file tree from server (re-fetch all files so local filter can find them)
   const handleRefreshAndSearch = useCallback(async () => {
@@ -658,14 +660,14 @@ export default function Workspace({
       }, 100)
     }
   }, [highlightedFile, expandFoldersForFile, scrollToHighlightedFile, selectedModeCategory])
-  
+
   // Automatically expand workspace folder when a workflow is first opened
   // Only runs once per workflow preset or mode switch to allow manual open/close afterward
   useEffect(() => {
     if (selectedModeCategory === 'workflow' && effectiveWorkflowFolderPath && filteredFiles.length > 0) {
       // Check if we've already auto-expanded for this workflow preset
       const workflowPresetId = activeWorkflowPreset?.id || effectiveWorkflowFolderPath
-      
+
       // Only auto-expand if we haven't done it for this workflow yet
       if (autoExpandedWorkflowRef.current !== workflowPresetId) {
         // Small delay to ensure files are fully loaded and rendered
@@ -673,26 +675,26 @@ export default function Workspace({
           // Determine what files to expand
           const workflowFolder = filteredFiles.length > 0 && filteredFiles[0].type === 'folder' ? filteredFiles[0] : null
           const filesToExpand = workflowFolder && workflowFolder.children
-            ? workflowFolder.children 
+            ? workflowFolder.children
             : filteredFiles
-          
+
           // Expand only the first-level folders inside the workflow root.
           // filesToExpand is already workflowFolder.children, so level 0 means direct children only.
           const additionalFolders = workflowFolder ? [workflowFolder.filepath] : undefined
           const excludeFolders = ['planning', 'variables', 'learnings', 'logs', 'runs']
           expandFoldersToLevel(filesToExpand, 0, additionalFolders, excludeFolders)
-          
+
           // Mark this workflow as auto-expanded
           autoExpandedWorkflowRef.current = workflowPresetId
         }, 500)
-        
+
         return () => clearTimeout(timeoutId)
       }
     } else if (selectedModeCategory !== 'workflow') {
       // Reset the auto-expanded ref when switching away
       autoExpandedWorkflowRef.current = null
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [selectedModeCategory, effectiveWorkflowFolderPath, filteredFiles, expandFoldersToLevel, activeWorkflowPreset?.id])
 
   // In multi-agent mode, auto-expand Chats/ folder by default (skills/ stays closed)
@@ -720,7 +722,7 @@ export default function Workspace({
       autoExpandedMultiAgentRef.current = false
     }
   }, [selectedModeCategory, filteredFiles, setExpandedFolders])
-  
+
   // Use custom hook to handle iteration expansion logic
   useIterationExpansion({
     selectedModeCategory,
@@ -801,7 +803,7 @@ export default function Workspace({
         fetch(activeFolder, { maxDepth: 2 })
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [activeFolder, minimized, selectedModeCategory])
 
   // Check if a file is a viewable binary format that we can render inline.
@@ -962,7 +964,7 @@ export default function Workspace({
     setSelectedFiles(prev => {
       const newSet = new Set(prev)
       const filePath = file.filepath
-      
+
       if (newSet.has(filePath)) {
         // Unselect: remove this item only (not children)
         newSet.delete(filePath)
@@ -1141,12 +1143,12 @@ export default function Workspace({
     try {
       // Use original filepath if available (when path was adjusted for display)
       const fullFilePath = getOriginalFilePath(deleteDialog.item)
-      
+
       // Extract parent folder path to preserve its expanded state
       const itemPath = deleteDialog.item.filepath // Use display path for expanded folders
       const pathParts = itemPath.split('/').filter(Boolean)
       let parentFolderPath: string | null = null
-      
+
       if (pathParts.length > 1) {
         // Parent folder is all parts except the last one
         parentFolderPath = pathParts.slice(0, -1).join('/')
@@ -1154,7 +1156,7 @@ export default function Workspace({
         // Item is at root level, no parent folder
         parentFolderPath = null
       }
-      
+
       // Preserve parent folder expansion before refresh
       if (parentFolderPath) {
         const currentExpanded = useWorkspaceStore.getState().expandedFolders
@@ -1162,16 +1164,16 @@ export default function Workspace({
         newExpanded.add(parentFolderPath)
         setExpandedFolders(newExpanded)
       }
-      
+
       if (deleteDialog.item.type !== 'folder') {
         await wsFileApi.deleteFile(fullFilePath)
       } else {
         await wsFileApi.deleteFolder(fullFilePath)
       }
-      
+
       // Refresh the file list to show updated state
       await fetchFiles(activeFolder, { force: true })
-      
+
       // Close dialog
       closeDeleteDialog()
     } catch (err) {
@@ -1195,12 +1197,12 @@ export default function Workspace({
     try {
       // Use original filepath if available (when path was adjusted for display)
       const fullFolderPath = getOriginalFilePath(deleteAllFilesDialog.folder)
-      
+
       await wsFileApi.deleteAllFilesInFolder(fullFolderPath)
-      
+
       // Refresh the file list to show updated state
       await fetchFiles(activeFolder, { force: true })
-      
+
       // Close dialog
       closeDeleteAllFilesDialog()
     } catch (err) {
@@ -1222,11 +1224,11 @@ export default function Workspace({
       const fullFilePath = getOriginalFilePath(file)
       const fileName = fullFilePath.split('/').pop() || fullFilePath
       const extension = fileName.split('.').pop()?.toLowerCase() || ''
-      
+
       // List of binary file extensions
       const binaryExtensions = ['xls', 'xlsx', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'zip', 'rar', '7z', 'tar', 'gz', 'exe', 'dll', 'so', 'dylib', 'bin', 'qif', 'webm', 'mp4', 'mov']
       const isLikelyBinary = binaryExtensions.includes(extension)
-      
+
       let blob: Blob
       let mimeType: string
 
@@ -1242,14 +1244,14 @@ export default function Workspace({
             'Accept': 'application/octet-stream'
           }
         })
-        
+
         // Check if we got JSON instead of blob (backend might not have handled download param correctly)
         if (response.data instanceof Blob) {
           // Check if it's actually JSON by reading the first few bytes
           const firstBytes = await response.data.slice(0, 10).arrayBuffer()
           const firstBytesArray = new Uint8Array(firstBytes)
           const firstChar = String.fromCharCode(firstBytesArray[0])
-          
+
           // JSON typically starts with '{' or '['
           if (firstChar === '{' || firstChar === '[') {
             // It's JSON, read it and check
@@ -1268,7 +1270,7 @@ export default function Workspace({
               // Not JSON, use as-is
             }
           }
-          
+
           blob = response.data
           mimeType = blob.type || getMimeType(extension)
         } else {
@@ -1279,7 +1281,7 @@ export default function Workspace({
       } else {
         // For text files and images, use the regular API
         const response = await wsFileApi.getFileContent(fullFilePath)
-        
+
         if (!response.success || !response.data) {
           setError(response.message || 'Failed to download file')
           return
@@ -1298,14 +1300,14 @@ export default function Workspace({
               },
               transformResponse: [(data) => data] // Prevent axios from parsing response
             })
-            
+
             // Verify we got actual binary data, not JSON
             if (binaryResponse.data instanceof Blob) {
               // Check if it's actually JSON by reading the first few bytes
               const firstBytes = await binaryResponse.data.slice(0, 10).arrayBuffer()
               const firstBytesArray = new Uint8Array(firstBytes)
               const firstChar = String.fromCharCode(firstBytesArray[0])
-              
+
               // JSON typically starts with '{' or '['
               if (firstChar === '{' || firstChar === '[') {
                 // It's JSON, read it and check
@@ -1321,7 +1323,7 @@ export default function Workspace({
                   // Not JSON, use as-is
                 }
               }
-              
+
               blob = binaryResponse.data
               mimeType = blob.type || getMimeType(extension)
             } else {
@@ -1332,7 +1334,7 @@ export default function Workspace({
             console.error('[Download] Failed to download binary file:', binaryErr)
             throw new Error('This file is binary but could not be downloaded. Please download it directly from the file system.')
           }
-          
+
           // Skip the rest of the text/image handling and download immediately
           const url = URL.createObjectURL(blob)
           const link = document.createElement('a')
@@ -1426,16 +1428,16 @@ export default function Workspace({
     try {
       // Use original filepath if available (when path was adjusted for display)
       const fullFilePath = getOriginalFilePath(localMoveDialog.item)
-      
+
       // Reconstruct destination path using getFullFilePath to handle workflow mode correctly
       // This ensures paths like "HRMS PR Review/itemName" become "Workflow/HRMS PR Review/itemName"
       const fullDestinationPath = getFullFilePath(destinationPath)
-      
+
       await wsFileApi.moveFile(fullFilePath, fullDestinationPath, commitMessage)
-      
+
       // Refresh the file list to show updated state
       await fetchFiles(activeFolder, { force: true })
-      
+
       // Update selected file if it was moved
       if (localMoveDialog.item.filepath === highlightedFile) {
         // Clear highlight since file moved
@@ -1443,7 +1445,7 @@ export default function Workspace({
         setFileContent('')
         setShowFileContent(false)
       }
-      
+
       // Close dialog
       closeLocalMoveDialog()
     } catch (err) {
@@ -1468,18 +1470,18 @@ export default function Workspace({
     try {
       // Use original filepath if available (when path was adjusted for display)
       const fullFilePath = getOriginalFilePath(renameDialog.item)
-      
+
       // Calculate new path
       // Handle root level files correctly
       const pathParts = fullFilePath.split('/')
       const parentPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : ''
       const destinationPath = parentPath ? `${parentPath}/${newName}` : newName
-      
+
       await wsFileApi.moveFile(fullFilePath, destinationPath, commitMessage)
-      
+
       // Refresh the file list to show updated state
       await fetchFiles(activeFolder, { force: true })
-      
+
       // Update selected file if it was renamed
       if (renameDialog.item.filepath === highlightedFile) {
         // Clear highlight since file renamed (or maybe we should update it to new name?)
@@ -1488,7 +1490,7 @@ export default function Workspace({
         setFileContent('')
         setShowFileContent(false)
       }
-      
+
       // Close dialog
       closeRenameDialog()
     } catch (err) {
@@ -1615,7 +1617,7 @@ export default function Workspace({
       setPendingFiles(prev => prev.filter(f => failedNames.has(f.name)))
       setUploadDialog({ isLoading: false })
     }
-  }, [pendingFiles, uploadDialog.folderPath, uploadDialog.commitMessage, setUploadDialog, closeUploadDialog, fetchFiles, activeFolder, setError, getFullFilePath, validateFile])
+  }, [pendingFiles, uploadDialog.folderPath, uploadDialog.commitMessage, setUploadDialog, closeUploadDialog, fetchFiles, activeFolder, setError, getFullFilePath, validateFile, wsFileApi])
 
   const cancelUpload = useCallback(() => {
     setPendingFiles([])
@@ -1672,9 +1674,9 @@ export default function Workspace({
   // Folder creation handlers
   const handleCreateFolder = (parentFolder?: PlannerFile | string) => {
     // Use originalFilepath if parentFolder is a PlannerFile object, otherwise reconstruct from string
-    const fullParentPath = parentFolder 
-      ? (typeof parentFolder === 'string' 
-          ? getFullFilePath(parentFolder) 
+    const fullParentPath = parentFolder
+      ? (typeof parentFolder === 'string'
+          ? getFullFilePath(parentFolder)
           : getOriginalFilePath(parentFolder))
       : undefined
     openCreateFolderDialog(fullParentPath)
@@ -1686,10 +1688,10 @@ export default function Workspace({
       // This ensures paths are correct even if parentPath wasn't properly fixed
       const fullFolderPath = getFullFilePath(folderPath)
       await wsFileApi.createFolder(fullFolderPath, commitMessage)
-      
+
       // Refresh file list to show the new folder
       await fetchFiles(activeFolder, { force: true })
-      
+
       // Close dialog
       closeCreateFolderDialog()
     } catch (err) {
@@ -1721,17 +1723,17 @@ export default function Workspace({
         ? getOriginalFilePath(folderPath)
         : workspacePath
       const blob = await agentApi.exportWorkflowBackup(fullPath)
-      
+
       // Create download link
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      
+
       // Generate filename
       const workspaceName = fullPath.split('/').pop() || 'workspace'
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
       link.download = `${workspaceName}-backup-${timestamp}.zip`
-      
+
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -1765,7 +1767,7 @@ export default function Workspace({
     // Get folder path from input's data attribute
     const folderPath = backupFileInputRef.current?.getAttribute('data-folder-path') || ''
     const workspacePath = folderPath || activeWorkflowPreset?.selectedFolder?.filepath
-    
+
     if (!workspacePath) {
       setError('No workspace folder selected')
       return
@@ -1795,7 +1797,7 @@ export default function Workspace({
       const fullPath = folderPath && selectedModeCategory === 'workflow' && effectiveWorkflowFolderPath
         ? getOriginalFilePath(folderPath)
         : workspacePath
-      
+
       // Ask for confirmation
       const overwrite = window.confirm(
         'This will restore the workspace from the backup. Existing files may be overwritten. Continue?'
@@ -1809,20 +1811,20 @@ export default function Workspace({
       }
 
       const result = await agentApi.importWorkflowBackup(
-        fullPath, 
-        file, 
+        fullPath,
+        file,
         true, // overwrite confirmed above
         (progress) => setImportProgress(progress)
       )
-      
+
       if (result.success) {
         setImportSuccess(`Successfully imported ${result.data?.files_extracted || 0} files`)
-        
+
         // Refresh workspace files
         setTimeout(() => {
           fetchFiles(activeFolder, { force: true }).catch(console.error)
         }, 500)
-        
+
         // Auto-dismiss success message after 5 seconds
         setTimeout(() => {
           setImportSuccess(null)
@@ -1948,7 +1950,7 @@ export default function Workspace({
                   </Tooltip>
                 </>
               )}
-              
+
               {/* Refresh button - always visible when not in selection mode */}
               {!isSelectionMode && (
                 <Tooltip>
@@ -1968,7 +1970,7 @@ export default function Workspace({
                   </TooltipContent>
                 </Tooltip>
               )}
-              
+
               {/* Combined Actions Dropdown - Hidden in selection mode */}
               {!isSelectionMode && (
                 <div className="relative actions-dropdown">
@@ -2053,7 +2055,7 @@ export default function Workspace({
             </div>
           </div>
         )}
-        
+
         {/* Search/Filter Input */}
         {!minimized && (
           <div className="relative">
@@ -2090,7 +2092,7 @@ export default function Workspace({
             )}
           </div>
         )}
-        
+
       </div>
 
       {/* Content */}
@@ -2544,10 +2546,10 @@ export default function Workspace({
         </div>
       )}
 
-      <ImportProgressDialog 
-        isOpen={isImporting} 
-        progress={importProgress} 
-        fileName={importingFileName} 
+      <ImportProgressDialog
+        isOpen={isImporting}
+        progress={importProgress}
+        fileName={importingFileName}
       />
       </div>
     </TooltipProvider>

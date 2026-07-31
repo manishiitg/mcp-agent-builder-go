@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -86,6 +89,70 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	}
 	if timedOut.LastResult != "timed_out" || timedOut.LastResultReason == "" {
 		t.Fatalf("timed-out state mismatch: %+v", timedOut)
+	}
+}
+
+func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	markdown := "# Pulse reviewer result\n\n- Status: `completed`\n\n## Verdict\n\nA real issue was found.\n"
+	if err := step_based_workflow.RecordPulseReview(
+		context.Background(), workspacePath, pulseModuleBugReview,
+		"2026-07-31T08-00-00.000Z_pulse-1", "pulse-1", "", markdown,
+	); err != nil {
+		t.Fatalf("record review: %v", err)
+	}
+
+	api := &StreamingAPI{}
+	listRequest := httptest.NewRequest(
+		http.MethodGet,
+		"/api/workflow/pulse-reviews?workspace_path=Workflow%2Fexample&module=bug_review",
+		nil,
+	)
+	listResponse := httptest.NewRecorder()
+	api.handleGetPulseReviews(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	var listBody struct {
+		Success bool `json:"success"`
+		Reviews []struct {
+			ID       int64  `json:"id"`
+			Markdown string `json:"markdown"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if !listBody.Success || len(listBody.Reviews) != 1 || listBody.Reviews[0].ID <= 0 {
+		t.Fatalf("list response = %+v", listBody)
+	}
+	if listBody.Reviews[0].Markdown != "" {
+		t.Fatalf("list response unexpectedly included full Markdown")
+	}
+
+	detailRequest := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/workflow/pulse-reviews?workspace_path=Workflow%%2Fexample&id=%d", listBody.Reviews[0].ID),
+		nil,
+	)
+	detailResponse := httptest.NewRecorder()
+	api.handleGetPulseReviews(detailResponse, detailRequest)
+	if detailResponse.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, body=%s", detailResponse.Code, detailResponse.Body.String())
+	}
+	var detailBody struct {
+		Success bool `json:"success"`
+		Review  struct {
+			Markdown string `json:"markdown"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(detailResponse.Body.Bytes(), &detailBody); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+	if !detailBody.Success || detailBody.Review.Markdown != markdown {
+		t.Fatalf("detail response = %+v", detailBody)
 	}
 }
 
@@ -239,8 +306,41 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
+	if _, err := step_based_workflow.RecordRunConcerns(
+		ctx, workspacePath, pulseRunID, "", pulseModuleBugReview,
+		step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: stale run binding in planning/step_config.json",
+	); err != nil {
+		t.Fatalf("record reviewer finding: %v", err)
+	}
+	concerns, err := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, 10)
+	if err != nil || len(concerns) != 1 {
+		t.Fatalf("load reviewer finding: concerns=%+v err=%v", concerns, err)
+	}
+	startFix := executors["start_pulse_fix_attempt"].(func(context.Context, map[string]interface{}) (string, error))
+	startedJSON, err := startFix(ctx, map[string]interface{}{
+		"workspace_path": workspacePath,
+		"pulse_run_id":   pulseRunID,
+		"module":         pulseModuleBugReview,
+		"summary":        "Repair the stale run binding.",
+		"findings": []map[string]interface{}{{
+			"fingerprint": concerns[0].Fingerprint,
+			"finding_id":  "BUG-1",
+		}},
+		"intended_files": []string{"planning/step_config.json"},
+		"before_refs":    []string{"step_config:sha256:before"},
+	})
+	if err != nil {
+		t.Fatalf("start fix attempt: %v", err)
+	}
+	var started struct {
+		Attempt step_based_workflow.PulseFixAttempt `json:"attempt"`
+	}
+	if err := json.Unmarshal([]byte(startedJSON), &started); err != nil || started.Attempt.AttemptID == "" {
+		t.Fatalf("decode fix attempt: payload=%s err=%v", startedJSON, err)
+	}
 	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
-	_, err := execute(ctx, map[string]interface{}{
+	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
 		"module":         pulseModuleBugReview,
@@ -251,6 +351,23 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"verification":   []string{"targeted binding test passed"},
 		"before_refs":    []string{"step_config:sha256:before"},
 		"after_refs":     []string{"step_config:sha256:after"},
+		"finding_dispositions": []map[string]interface{}{{
+			"fingerprint":   concerns[0].Fingerprint,
+			"finding_id":    "BUG-1",
+			"attempt_id":    started.Attempt.AttemptID,
+			"disposition":   "fixed_verified",
+			"summary":       "The stale run binding was corrected and the targeted test passed.",
+			"changed_files": []string{"planning/step_config.json"},
+			"before_refs":   []string{"step_config:sha256:before"},
+			"after_refs":    []string{"step_config:sha256:after"},
+			"verification": []map[string]interface{}{{
+				"check":    "targeted binding test",
+				"verdict":  "passed",
+				"expected": "the configured run binding resolves",
+				"observed": "the configured run binding resolved",
+				"evidence": []string{"go test ./cmd/server -run TestRunBinding"},
+			}},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("mark module result: %v", err)
@@ -289,6 +406,17 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		if len(values) != 1 || values[0] != tc.want {
 			t.Fatalf("%s = %v, want [%q]", name, values, tc.want)
 		}
+	}
+	lifecycles, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, 10)
+	if err != nil {
+		t.Fatalf("load finding lifecycles: %v", err)
+	}
+	if len(lifecycles) != 1 || lifecycles[0].Status != step_based_workflow.ConcernStatusResolved {
+		t.Fatalf("finding lifecycle not closed: %+v", lifecycles)
+	}
+	if len(lifecycles[0].Attempts) != 1 || len(lifecycles[0].Verification) != 1 ||
+		lifecycles[0].Verification[0].Verdict != step_based_workflow.VerificationPassed {
+		t.Fatalf("finding fix evidence missing: %+v", lifecycles[0])
 	}
 }
 
@@ -374,43 +502,212 @@ func TestPulseAgentCannotOverwriteSchedulerTimeout(t *testing.T) {
 	}
 }
 
-func TestValidatePulseGateCompletionRequiresWorklistAndCurrentHandoff(t *testing.T) {
+func TestValidatePulseGateCompletionRequiresOnlyCompleteDurableWorklist(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/gate-contract"
 	pulseRunID := "schedule-manual--gate-contract"
-	htmlPath := workspacePath + "/builder/improve.html"
-	workspaceState := &mockWorkspaceAPI{files: map[string]string{
-		htmlPath: `<html><details id="pulse-agent-handoff">old run</details></html>`,
-	}}
-	workspace := httptest.NewServer(workspaceState)
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
 
-	previousHTML := workspaceState.files[htmlPath]
-	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "complete worklist") {
+	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "complete worklist") {
 		t.Fatalf("missing worklist error = %v", err)
 	}
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(nil)); err != nil {
 		t.Fatalf("record complete worklist: %v", err)
 	}
-	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "unchanged") {
-		t.Fatalf("unchanged handoff error = %v", err)
-	}
-
-	workspaceState.mu.Lock()
-	workspaceState.files[htmlPath] = `<html><div>new entry ` + pulseRunID + `</div><details id="pulse-agent-handoff">old run</details></html>`
-	workspaceState.mu.Unlock()
-	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "handoff") {
-		t.Fatalf("stale handoff error = %v", err)
-	}
-
-	workspaceState.mu.Lock()
-	workspaceState.files[htmlPath] = `<html><div>new entry</div><section id = 'pulse-agent-handoff' data-pulse-run-id="` + pulseRunID + `"><div>handoff</div></section></html>`
-	workspaceState.mu.Unlock()
-	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID, previousHTML, true); err != nil {
+	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("valid Gate completion rejected: %v", err)
+	}
+}
+
+func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := "Workflow/dashboard-contract"
+	pulseRunID := "schedule-manual--dashboard-contract"
+	htmlPath := workspacePath + "/builder/improve.html"
+	previousHTML := pulseImproveHTMLFixture(pulseRunID, "gate-only")
+	workspaceState := &mockWorkspaceAPI{files: map[string]string{htmlPath: previousHTML}}
+	workspace := httptest.NewServer(workspaceState)
+	defer workspace.Close()
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "unchanged") {
+		t.Fatalf("unchanged dashboard error = %v", err)
+	}
+
+	workspaceState.mu.Lock()
+	workspaceState.files[htmlPath] = `<html><body><div>Issues &amp; fixes</div><div id="pulse-agent-handoff" data-pulse-run-id="` + pulseRunID + `"></div></body></html>`
+	workspaceState.mu.Unlock()
+	if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "outdated") {
+		t.Fatalf("retired dashboard format error = %v", err)
+	}
+
+	workspaceState.mu.Lock()
+	workspaceState.files[htmlPath] = pulseImproveHTMLFixture(pulseRunID, "dashboard-updated")
+	workspaceState.mu.Unlock()
+	if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err != nil {
+		t.Fatalf("valid dashboard artifact rejected: %v", err)
+	}
+
+	t.Run("rejects malformed technical nesting from production regression", func(t *testing.T) {
+		malformed := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "malformed"),
+			`</div></div><details class="technical"><summary>Technical details</summary><div class="techbody">`,
+			`</div><div class="tiles"></div>`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = malformed
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil ||
+			(!strings.Contains(err.Error(), "unexpected closing") && !strings.Contains(err.Error(), "mismatched closing")) {
+			t.Fatalf("malformed technical nesting error = %v", err)
+		}
+	})
+
+	t.Run("allows coverage display copy changes", func(t *testing.T) {
+		renamed := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "renamed-label"),
+			`<span class="cl">Plan drift</span>`,
+			`<span class="cl">Planning consistency</span>`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = renamed
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err != nil {
+			t.Fatalf("cosmetic coverage label change was rejected: %v", err)
+		}
+	})
+
+	t.Run("rejects duplicate coverage module identity", func(t *testing.T) {
+		duplicate := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "duplicate-module"),
+			`data-module="artifact_review"`,
+			`data-module="bug_review"`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = duplicate
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "duplicate data-module") {
+			t.Fatalf("duplicate coverage module error = %v", err)
+		}
+	})
+
+	t.Run("rejects missing outcome cell", func(t *testing.T) {
+		missing := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "missing-cell"),
+			`<div class="briefitem"><div class="k">Next Pulse</div><p>Later.</p></div>`,
+			``,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = missing
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "exactly 5 brief cells") {
+			t.Fatalf("missing outcome cell error = %v", err)
+		}
+	})
+
+	t.Run("requires canonical handoff attribute", func(t *testing.T) {
+		wrongAttribute := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "wrong-attribute"),
+			`data-pulse-run-id="`+pulseRunID+`"`,
+			`data-pulse-run="`+pulseRunID+`"`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = wrongAttribute
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "handoff") {
+			t.Fatalf("non-canonical handoff error = %v", err)
+		}
+	})
+}
+
+func pulseImproveHTMLFixture(pulseRunID, marker string) string {
+	var coverage strings.Builder
+	for _, module := range pulsemodules.All {
+		coverage.WriteString(`<div class="covitem ok" data-module="` + module.ID + `"><span class="dot"></span><span class="cl">` + module.Label + `</span></div>`)
+	}
+	return `<html><body><div class="coverage">` + coverage.String() + `</div>` +
+		`<div class="brief"><div class="brief-h">Today's outcome</div><div class="briefgrid">` +
+		`<div class="briefitem"><div class="k">Outcome</div><p>Complete.</p></div>` +
+		`<div class="briefitem"><div class="k">Goal progress</div><p>On track.</p></div>` +
+		`<div class="briefitem"><div class="k">Fixed today</div><p>Nothing fixed.</p></div>` +
+		`<div class="briefitem"><div class="k">Open now</div><p>Nothing open.</p></div>` +
+		`<div class="briefitem"><div class="k">Next Pulse</div><p>Later.</p></div>` +
+		`</div></div>` +
+		`<details class="technical"><summary>Technical details</summary><div class="techbody">Details.</div></details>` +
+		`<div id="pulse-agent-handoff" data-pulse-run-id="` + pulseRunID + `" hidden>` + marker + `</div>` +
+		`</body></html>`
+}
+
+func TestRestorePulseDashboardArtifactsRestoresBothFiles(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := "Workflow/dashboard-rollback"
+	improvePath := workspacePath + "/builder/improve.html"
+	cardPath := workspacePath + "/builder/card.health.html"
+	workspaceState := &mockWorkspaceAPI{files: map[string]string{
+		improvePath: "previous improve",
+		cardPath:    "previous card",
+	}}
+	workspace := httptest.NewServer(workspaceState)
+	defer workspace.Close()
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	snapshots, err := capturePulseDashboardArtifacts(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("capture dashboard artifacts: %v", err)
+	}
+	workspaceState.mu.Lock()
+	workspaceState.files[improvePath] = "partial improve"
+	workspaceState.files[cardPath] = "partial card"
+	workspaceState.mu.Unlock()
+
+	if err := restorePulseDashboardArtifacts(ctx, snapshots); err != nil {
+		t.Fatalf("restore dashboard artifacts: %v", err)
+	}
+	workspaceState.mu.Lock()
+	defer workspaceState.mu.Unlock()
+	if got := workspaceState.files[improvePath]; got != "previous improve" {
+		t.Fatalf("improve after restore = %q", got)
+	}
+	if got := workspaceState.files[cardPath]; got != "previous card" {
+		t.Fatalf("card after restore = %q", got)
+	}
+}
+
+func TestRestorePulseDashboardArtifactsRemovesNewPartialFiles(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := "Workflow/dashboard-new-rollback"
+	improvePath := workspacePath + "/builder/improve.html"
+	cardPath := workspacePath + "/builder/card.health.html"
+	workspaceState := &mockWorkspaceAPI{files: map[string]string{}}
+	workspace := httptest.NewServer(workspaceState)
+	defer workspace.Close()
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	snapshots, err := capturePulseDashboardArtifacts(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("capture missing dashboard artifacts: %v", err)
+	}
+	workspaceState.mu.Lock()
+	workspaceState.files[improvePath] = "partial improve"
+	workspaceState.files[cardPath] = "partial card"
+	workspaceState.mu.Unlock()
+
+	if err := restorePulseDashboardArtifacts(ctx, snapshots); err != nil {
+		t.Fatalf("restore dashboard artifacts: %v", err)
+	}
+	workspaceState.mu.Lock()
+	defer workspaceState.mu.Unlock()
+	if _, exists := workspaceState.files[improvePath]; exists {
+		t.Fatal("new partial improve file was not removed")
+	}
+	if _, exists := workspaceState.files[cardPath]; exists {
+		t.Fatal("new partial card file was not removed")
 	}
 }
 
@@ -465,6 +762,47 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	}
 	if payload.ShadowCoverage["status"] != "not_instrumented" {
 		t.Fatalf("shadow coverage = %+v, want not_instrumented", payload.ShadowCoverage)
+	}
+}
+
+func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	if _, err := step_based_workflow.RecordRunConcerns(
+		ctx, workspacePath, "pulse-run-1", "", pulseModuleBugReview,
+		step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: selector keeps targeting the same accounts",
+	); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=bug_review",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetPulseFindings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Success  bool                                        `json:"success"`
+		Findings []step_based_workflow.PulseFindingLifecycle `json:"findings"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.Success || len(payload.Findings) != 1 {
+		t.Fatalf("payload = %+v", payload)
+	}
+	finding := payload.Findings[0]
+	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleBugReview {
+		t.Fatalf("finding identity/status mismatch: %+v", finding)
+	}
+	if len(finding.Events) != 1 || finding.Events[0].EventType != "filed" {
+		t.Fatalf("filed lifecycle event missing: %+v", finding.Events)
 	}
 }
 
@@ -524,6 +862,69 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 			t.Fatalf("unresolved command not timed out: %+v", state)
 		}
 	}
+}
+
+func TestReconcilePulseDashboardCommandRequiresDone(t *testing.T) {
+	t.Run("silent running stage becomes failed without touching later commands", func(t *testing.T) {
+		ctx := context.Background()
+		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+		workspacePath := "Workflow/dashboard-silent"
+		pulseRunID := "pulse-dashboard-silent"
+		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
+			t.Fatalf("initialize final commands: %v", err)
+		}
+		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
+			t.Fatalf("mark dashboard running: %v", err)
+		}
+		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "without recording a done outcome") {
+			t.Fatalf("silent dashboard reconciliation error = %v", err)
+		}
+		states, err := getPulseFinalCommandStates(ctx, workspacePath)
+		if err != nil {
+			t.Fatalf("get states: %v", err)
+		}
+		for _, state := range states {
+			if state.Command == pulseFinalCommandDashboard {
+				if state.Status != "failed" {
+					t.Fatalf("dashboard status = %q, want failed", state.Status)
+				}
+			} else if state.Status != "waiting" {
+				t.Fatalf("later command %q status = %q, want waiting", state.Command, state.Status)
+			}
+		}
+	})
+
+	t.Run("done dashboard is accepted", func(t *testing.T) {
+		ctx := context.Background()
+		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+		workspacePath := "Workflow/dashboard-done"
+		pulseRunID := "pulse-dashboard-done"
+		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
+			t.Fatalf("initialize final commands: %v", err)
+		}
+		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered and verified"); err != nil {
+			t.Fatalf("mark dashboard done: %v", err)
+		}
+		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err != nil {
+			t.Fatalf("done dashboard rejected: %v", err)
+		}
+	})
+
+	t.Run("terminal failure remains a stage failure", func(t *testing.T) {
+		ctx := context.Background()
+		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+		workspacePath := "Workflow/dashboard-failed"
+		pulseRunID := "pulse-dashboard-failed"
+		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
+			t.Fatalf("initialize final commands: %v", err)
+		}
+		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "failed", "Write failed"); err != nil {
+			t.Fatalf("mark dashboard failed: %v", err)
+		}
+		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), `non-success status "failed"`) {
+			t.Fatalf("failed dashboard reconciliation error = %v", err)
+		}
+	})
 }
 
 func TestPulseFinalCommandAgentWritesAreOrderedAndMonotonic(t *testing.T) {
@@ -606,6 +1007,20 @@ func TestCreatePulseWorklistToolsEveryToolHasACategory(t *testing.T) {
 		if category == "" {
 			t.Fatalf("tool %q has an empty category", name)
 		}
+	}
+}
+
+func TestResolveRunConcernToolCannotCloseWithoutVerification(t *testing.T) {
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["resolve_run_concern"].(func(context.Context, map[string]interface{}) (string, error))
+	_, err := execute(context.Background(), map[string]interface{}{
+		"workspace_path": "Workflow/example",
+		"fingerprint":    "finding-fingerprint",
+		"status":         "resolved",
+		"note":           "claimed fixed without proof",
+	})
+	if err == nil || !strings.Contains(err.Error(), "verified finding_dispositions") {
+		t.Fatalf("unverified close error = %v", err)
 	}
 }
 

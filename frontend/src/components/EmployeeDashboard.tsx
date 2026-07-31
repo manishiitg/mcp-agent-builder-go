@@ -745,14 +745,14 @@ export const EmployeeDashboard: React.FC = () => {
     }
   }, [selectedWorkflowId, workflows])
 
-  const loadWorkflowReview = useCallback(async (workflow: WorkflowSummary | null) => {
-    if (!workflow || !workflow.workspacePath || !workflow.latestRunFolder) {
+  const loadWorkflowReview = useCallback(async (
+    workspacePath: string | null | undefined,
+    runFolder: string | null | undefined,
+  ) => {
+    if (!workspacePath || !runFolder) {
       setReviewState(EMPTY_REVIEW_STATE)
       return
     }
-
-    const workspacePath = workflow.workspacePath
-    const runFolder = workflow.latestRunFolder
 
     setReviewState({
       ...EMPTY_REVIEW_STATE,
@@ -822,7 +822,7 @@ export const EmployeeDashboard: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    loadWorkflowReview(selectedWorkflow)
+    loadWorkflowReview(selectedWorkflow?.workspacePath, selectedWorkflow?.latestRunFolder)
   }, [loadWorkflowReview, selectedWorkflow?.workspacePath, selectedWorkflow?.latestRunFolder])
 
   useEffect(() => {

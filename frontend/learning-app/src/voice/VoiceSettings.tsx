@@ -6,15 +6,12 @@
 // what an Intel vs Apple Silicon Mac can run — it just renders what it's told.
 
 import { useState } from 'react'
-import { Volume2 } from 'lucide-react'
 import type { VoiceStatus } from '../stores'
-import { speakText } from './speech'
 import { VoiceTierCard } from './VoiceTierCard'
 import { FAMILY_API } from '../apiBase'
 
 export function VoiceSettings({
   status,
-  childName,
   onRefresh,
 }: {
   status: VoiceStatus | null
@@ -23,7 +20,6 @@ export function VoiceSettings({
    *  download progress live while an install is running. */
   onRefresh: () => void
 }) {
-  const [previewing, setPreviewing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -43,16 +39,6 @@ export function VoiceSettings({
       })
       .catch((err) => setActionError(err instanceof Error ? err.message : 'Something went wrong'))
       .finally(() => { setBusy(false); onRefresh() })
-  }
-
-  // Play a short sample, so a parent can actually HEAR a voice before
-  // committing to it — the whole point of offering tiers is that "more
-  // natural" is a judgment only they can make.
-  const preview = () => {
-    setPreviewing(true)
-    speakText(`Hi ${childName || 'there'}! This is how I'll read things out to you.`)
-      .then(() => setPreviewing(false))
-      .catch(() => setPreviewing(false))
   }
 
   return (

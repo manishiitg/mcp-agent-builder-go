@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-func TestPulseReviewResultPathRequiresDatedRunAndSeparateModuleFile(t *testing.T) {
+func TestPulseReviewResultReferenceRequiresDatedRunAndModule(t *testing.T) {
 	path, err := pulseReviewResultPath("2026-07-21T00-08-44.123Z_pulse-run-1", "bug_review")
 	if err != nil {
 		t.Fatalf("pulseReviewResultPath: %v", err)
 	}
-	if want := "pulse/reviews/2026-07-21T00-08-44.123Z_pulse-run-1/bug_review.md"; path != want {
+	if want := "pulse_review_log:2026-07-21T00-08-44.123Z_pulse-run-1:bug_review"; path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 	for _, tc := range []struct {
@@ -28,6 +28,41 @@ func TestPulseReviewResultPathRequiresDatedRunAndSeparateModuleFile(t *testing.T
 		if _, err := pulseReviewResultPath(tc.runID, tc.module); err == nil {
 			t.Fatalf("pulseReviewResultPath(%q, %q) unexpectedly succeeded", tc.runID, tc.module)
 		}
+	}
+}
+
+func TestNewManualPulseReviewIdentityProducesValidUniqueReviewIDs(t *testing.T) {
+	firstTime := time.Date(2026, 7, 31, 9, 8, 7, 123456789, time.FixedZone("IST", 5*60*60+30*60))
+	firstPulseID, firstReviewID := newManualPulseReviewIdentity(firstTime, "standalone bug review", "bug_review")
+	if firstPulseID == "" {
+		t.Fatal("manual pulse id is empty")
+	}
+	if _, err := pulseReviewResultPath(firstReviewID, "bug_review"); err != nil {
+		t.Fatalf("manual review identity is invalid: %v", err)
+	}
+	if !strings.Contains(firstReviewID, "_manual-bug-review-standalone-bug-review-") {
+		t.Fatalf("manual review id %q does not preserve its module/task identity", firstReviewID)
+	}
+
+	_, secondReviewID := newManualPulseReviewIdentity(firstTime.Add(time.Nanosecond), "standalone bug review", "bug_review")
+	if firstReviewID == secondReviewID {
+		t.Fatalf("manual review ids must be unique: %q", firstReviewID)
+	}
+}
+
+func TestNewDerivedPulseReviewIdentityPreservesScheduledPulseID(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 987654321, time.UTC)
+	pulseID, reviewID := newDerivedPulseReviewIdentity(
+		now,
+		"pulse-2026-07-31-001",
+		"goal-advisor-pipeline",
+		"goal_advisor",
+	)
+	if pulseID != "pulse-2026-07-31-001" {
+		t.Fatalf("pulse id = %q", pulseID)
+	}
+	if _, err := pulseReviewResultPath(reviewID, "goal_advisor"); err != nil {
+		t.Fatalf("scheduled derived review identity is invalid: %v", err)
 	}
 }
 

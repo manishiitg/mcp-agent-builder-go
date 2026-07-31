@@ -2,7 +2,7 @@ import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffe
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Square, Code2, Sparkles, Wand2, Loader2, Search, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
+import { Send, Square, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -24,7 +24,6 @@ import WorkflowSelectionDialog from './WorkflowSelectionDialog'
 import { isChatCompatiblePhase } from '../utils/chatSubmitHelpers'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
-import { requestTerminalRefreshBurst } from '../utils/terminalRefresh'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
@@ -169,7 +168,6 @@ import LLMConfigurationModal from './LLMConfigurationModal'
 import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
-import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { usePresetApplication, useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -586,7 +584,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Get active tab and its config. Embedded workflow panes pass tabId so this
   // remains scoped to the visible pane instead of the global active chat.
   const isOrganizationAssistant = !!activeTab?.metadata?.isOrganizationAssistant
-  const isOrganizationContext = isOrganizationAssistant || showWorkflowsOverview
   // Memoize tabConfig to prevent unnecessary re-renders
   const tabConfig = useMemo(() => activeTab?.config, [activeTab?.config])
 
@@ -739,11 +736,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     [effectiveProviderForSteer, selectedProviderManifestEntry]
   )
   const canShowSteer = useMemo(() => canSteer && !isCLIProvider, [canSteer, isCLIProvider])
-  // CLI providers always require code execution mode
-  const useCodeExecutionMode = useMemo(() => isCLIProvider ? true : (tabConfig?.useCodeExecutionMode ?? false), [isCLIProvider, tabConfig?.useCodeExecutionMode])
   const browserMode = useMemo(() => tabConfig?.browserMode ?? 'auto', [tabConfig?.browserMode])
   const cdpPort = useMemo(() => tabConfig?.cdpPort ?? 9222, [tabConfig?.cdpPort])
-  const isLocalMode = useCapabilitiesStore(state => state.capabilities?.local_mode ?? false)
   const workspaceActiveFolder = useWorkspaceStore(state => state.activeFolder)
   const [cdpConnected, setCdpConnected] = useState<boolean | null>(null)
   const [cdpError, setCdpError] = useState<string | null>(null)
@@ -847,13 +841,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }
   }, [activeTabId, activeTab, chatFileContext, setTabConfig])
   
-  const setUseCodeExecutionMode = useCallback((enabled: boolean) => {
-    if (activeTabId) {
-      setTabConfig(activeTabId, { useCodeExecutionMode: enabled })
-    }
-  }, [activeTabId, setTabConfig])
-
-
   const {
     toolList: mcpToolList,
     setChatSelectedServers
@@ -1175,13 +1162,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     getCurrentLLMOption,
     refreshAvailableLLMs: onRefreshAvailableLLMs,
     llmConfigLocked,
-    workflowPrimaryConfig
   } = useLLMStore(useShallow(state => ({
     availableLLMs: state.availableLLMs,
     getCurrentLLMOption: state.getCurrentLLMOption,
     refreshAvailableLLMs: state.refreshAvailableLLMs,
     llmConfigLocked: state.llmConfigLocked,
-    workflowPrimaryConfig: state.workflowPrimaryConfig,
   })))
 
   const scrollToFile = useWorkspaceStore(state => state.scrollToFile)
@@ -1321,13 +1306,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     activeSessionRuntime?.provider,
     delegationTierConfig?.mode,
     delegationTierConfig?.provider,
-    workflowPrimaryConfig,
-    manifestBuilderLLM?.provider,
-    manifestBuilderLLM?.model_id,
-    workflowPhasePreset?.llmConfig?.builder_llm?.provider,
-    workflowPhasePreset?.llmConfig?.builder_llm?.model_id,
-    workflowPhasePreset?.llmConfig?.provider,
-    workflowPhasePreset?.llmConfig?.mode,
+    manifestBuilderLLM,
+    workflowPhasePreset,
     providerManifest,
     workflowPhaseWorkspacePath,
   ])
@@ -1565,9 +1545,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }
   }, [])
 
-  // Get active preset for multi-agent mode (used for preset query sync and UI)
-  const chatActivePreset = getActivePreset('multi-agent')
-  
   // Sync tab config inputText with preset query when preset is selected
   useEffect(() => {
     const activePresetId = activePresetIds['multi-agent']
@@ -2293,7 +2270,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       ? (Array.isArray(cmd.requiredWorkshopMode) ? cmd.requiredWorkshopMode : [cmd.requiredWorkshopMode])
       : []
     // If current workshop mode is already one of the allowed modes, no switch needed
-    const workshopModeMatches = requiredWorkshopModes.length === 0 || requiredWorkshopModes.includes(currentWorkshopMode as any)
+    const workshopModeMatches = requiredWorkshopModes.length === 0 || requiredWorkshopModes.includes(currentWorkshopMode)
     // When we need to switch, pick the first allowed mode
     const targetWorkshopMode = workshopModeMatches ? undefined : requiredWorkshopModes[0]
     // After the 6→4 mode consolidation, all workshop modes live under workflowMode='plan'.
@@ -2765,7 +2742,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         textareaRef.current.setSelectionRange(cursorPosition, cursorPosition)
       }
     }, 0)
-  }, [inputText, atPosition, fileSearchQuery, chatFileContext, addFileToContext, scrollToFile, activeTabId, setTabConfig])
+  }, [inputText, atPosition, fileSearchQuery, chatFileContext, addFileToContext, scrollToFile, activeTabId])
 
   const handleCommandDialogClose = useCallback(() => {
     setShowCommandDialog(false)
@@ -3195,7 +3172,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (!tabSessionId && (canBootstrapMultiAgentTab || canBootstrapWorkflowPhaseTab)) return `Ask anything... chat will initialize on send (${baseHints})`
     if (isMultiAgentMode) return `Ask anything... (${baseHints})`
     return `Ask anything... (${baseHints})`
-  }, [isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, workflowPhaseId, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
+  }, [isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
 
   const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer)
   const liveDeliveryText = liveMessageDelivery

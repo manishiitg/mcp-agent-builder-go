@@ -48,7 +48,7 @@ function pulseReviewTitleFromIdentity(searchable: string): string {
     { title: 'Database health', phrases: ['database health', 'db health'] },
     { title: 'Report health', phrases: ['report health'] },
     { title: 'Artifact review', phrases: ['artifact review'] },
-    { title: 'LLM operations review', phrases: ['llm ops'] },
+    { title: 'Ops review', phrases: ['llm ops', 'ops review'] },
     { title: 'Goal Advisor', phrases: ['goal advisor'] },
   ]
   const matches = candidates.flatMap(candidate => candidate.phrases

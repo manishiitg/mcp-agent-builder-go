@@ -5,6 +5,14 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
 - In Pulse, the parent passes this rendered checklist to one `call_generic_agent` reviewer in the consolidated parallel review batch.
 - Outside Pulse, the parent may call `call_generic_agent` once with this checklist as its instructions.
 - If you are already that generic reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
+- Otherwise launch exactly one reviewer with
+  `call_generic_agent(todo_id="standalone-artifact-review",
+  instructions="READ-ONLY REVIEW ...", preferred_tier=2,
+  module="artifact_review")`. Do not pass `pulse_run_id` or `review_run_id`;
+  the backend generates standalone identities, stores the complete Markdown in
+  SQLite, and files its `CONCERNS:` lines into the structured finding lifecycle.
+  Load the persisted result with `get_pulse_review_result` before the parent
+  validates, reports, or records any outcome.
 - `call_generic_agent` is synchronous. Its direct result is authoritative; do not poll, sleep, call `query_step`, or wait for an auto-notification.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config, write `builder/improve.html`, mark changelog entries, or mark Pulse module state.
 - Read only the matching Artifact Review cursor, open findings, and relevant

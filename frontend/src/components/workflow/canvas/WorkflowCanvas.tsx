@@ -3105,7 +3105,8 @@ export const WorkflowCanvasWithProvider = React.memo(forwardRef<WorkflowCanvasRe
   }
 
   // Report and Pulse (log) are lightweight preview-pane views (no React Flow tree).
-  // Legacy saved Soul state opens Pulse; Soul now lives inside the Pulse Goal tab.
+  // Legacy saved Soul state opens Pulse; Goal context now lives inside the
+  // database-native Pulse workspace.
   if (effectiveCanvasViewMode === 'report' || effectiveCanvasViewMode === 'log' || effectiveCanvasViewMode === 'soul') {
     return <WorkflowReportCanvasInner {...props} ref={ref} />
   }

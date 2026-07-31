@@ -94,8 +94,9 @@ The same verdicts/Decisions/cards the loops produce while fixing are what surfac
 *#2 is #1 seen again*, never a separate analysis.
 
 - **Notifications — `notify_user`** (active, "you need to know this"). Fans out to connected
-  channels: **Gmail** (`email_html` rich body + `email_body` plain fallback — must be
-  **inline-styled**, Gmail strips `<style>`/`<head>`), **WhatsApp**, **Slack**. Deliberately
+  channels: **Gmail** (one **inline-styled** `email_html` body; `message_for_user`
+  is the automatic plain fallback because Gmail strips `<style>`/`<head>`),
+  **WhatsApp**, **Slack**. Deliberately
   **sparing** — only on a decision-worthy transition (broke / recovered / new finding);
   silence on a steady run. Code: `virtual-tools/human_tools.go`, `services/gmail_service.go`.
 - **Org dashboard** (passive, "where things stand right now"). The default Org view. It

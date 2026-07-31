@@ -32,7 +32,7 @@ export function getTerminalOwnerPayload(event: PollingEvent): Record<string, unk
 
 // Shared with EventHierarchy; keeping it beside the dispatcher avoids duplicating
 // the event-owner normalization rules.
-// eslint-disable-next-line react-refresh/only-export-components
+
 export function getOwnedTerminalOwnerKeys(event: PollingEvent, payload?: Record<string, unknown>): string[] {
   const sessionId = event.session_id?.trim()
   if (!sessionId) return []

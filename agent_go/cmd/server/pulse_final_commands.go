@@ -371,3 +371,45 @@ func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath,
 	}
 	return result.RowsAffected()
 }
+
+// reconcilePulseDashboardCommand requires the dedicated dashboard stage to
+// record a successful terminal outcome. It resolves only that command when the
+// stage ended silently and returns an error so the scheduler reports a partial
+// Pulse instead of treating missing proof as success.
+//
+// The dashboard has its own stage, so the blanket
+// finalizeUnresolvedPulseFinalCommands is wrong here: it would mark
+// backup/publish/notify failed before their stage has even started. A dashboard
+// stage that ends cleanly without self-reporting is treated as failed rather
+// than assumed successful — the same rule the finalizer applies, since a silent
+// stage is exactly how a page write goes unnoticed. Only "done" is success:
+// the dashboard is mandatory and cannot truthfully skip its per-pass render.
+func reconcilePulseDashboardCommand(ctx context.Context, workspacePath, pulseRunID string) error {
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var currentStatus string
+	err = db.QueryRowContext(ctx, `SELECT status FROM pulse_final_command_state
+		WHERE workspace_path = ? AND pulse_run_id = ? AND command = ?`,
+		normalized, strings.TrimSpace(pulseRunID), pulseFinalCommandDashboard).Scan(&currentStatus)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("dashboard command was not initialized for Pulse run %q", strings.TrimSpace(pulseRunID))
+		}
+		return err
+	}
+	if currentStatus == "done" {
+		return nil
+	}
+	if currentStatus == "waiting" || currentStatus == "running" {
+		if _, markErr := markPulseFinalCommandStateInDB(ctx, db, normalized, pulseFinalCommandDashboard, pulseRunID,
+			"failed", "Dashboard stage ended without recording its outcome"); markErr != nil {
+			return markErr
+		}
+		return fmt.Errorf("dashboard stage ended without recording a done outcome")
+	}
+	return fmt.Errorf("dashboard command ended with non-success status %q", currentStatus)
+}

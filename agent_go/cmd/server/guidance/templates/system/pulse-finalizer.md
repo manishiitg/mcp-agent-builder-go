@@ -1,24 +1,23 @@
 ## Pulse finalizer
 
-Use only after Gate and all due modules. Confirm every due module has a terminal
-result. Never treat missing as skipped/successful. If unresolved, do not claim a
-complete Pulse. Run these four commands in order. Before and after each, call
-`mark_pulse_final_command_result` with its exact name and truthful `running` then
-terminal status. Continue through Notify after individual failures.
+Use only after Gate, all due modules, and the dedicated Dashboard stage. Confirm
+every due module has a terminal result. Never treat missing as skipped/successful.
+If unresolved, do not claim a complete Pulse. The Dashboard
+stage exclusively owns `builder/improve.html`, `builder/card.health.html`, and
+Pulse questions; do not rewrite them in this turn.
 
-1. **Dashboard + questions.** Refresh `builder/card.health.html`: Today's
-   outcome, active assumptions, module outcomes, Bug/Goal freshness, user
-   requests, backup/publish intent, and next action. Use
-   `create_human_input_request` only for a real user/business decision; never
-   hand-edit or duplicate requests.
-2. **Backup.** Load `backup-strategy`; perform Git/backup directly in this parent,
+Run the three remaining commands in order. Before and after each, call
+`mark_pulse_final_command_result` with its exact name and truthful `running`
+then terminal status. Continue through Notify after individual failures.
+
+1. **Backup.** Load `backup-strategy`; perform Git/backup directly in this parent,
    never through a reviewer/sub-agent. Skip only when the current source hash is
    backed up. Keep `backup/status.json` truthful. Use the
    zero-config local-git default when backup is absent.
-3. **Publish.** Read config/status. Skip when disabled, unverified, or current.
+2. **Publish.** Read config/status. Skip when disabled, unverified, or current.
    Never do the first/verifying publish unattended or publish unbacked changes
    after backup failure. Keep status truthful and record the live URL.
-4. **Notify.** Notify every run. Account channels are inherited; absent workflow
+3. **Notify.** Notify every run. Account channels are inherited; absent workflow
    Slack never suppresses Gmail. Do not copy account Gmail config into
    `workflow.json`. Workflow preferences belong in `notifications`:
    `exclude_channels` suppresses inherited channels and `block_recipients` adds
@@ -42,9 +41,9 @@ terminal status. Continue through Notify after individual failures.
    sections because channels differ.
 
 Use rich `notify_user` fields; never read webhook secrets or post directly. Put
-the takeaway first and evidence last. Stop after all four terminal statuses.
+the takeaway first and evidence last. Stop after all three terminal statuses.
 
 Translate internal results into ordinary language. Never expose manifests,
 finding ids, hashes, packet names, paths, or state codes in cards, summaries, or
-email. Keep them in reviewer result files and the global Agent log. Include one
+email. Keep them in SQLite-backed reviewer results and the global Agent log. Include one
 concise diagnostic reference only when needed to explain a failure.

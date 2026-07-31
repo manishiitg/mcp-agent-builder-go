@@ -25,7 +25,7 @@ function reportRendererError(kind: string, detail: unknown) {
       url: window.location.href,
       time: new Date().toISOString(),
     }
-    // eslint-disable-next-line no-console
+
     console.error('[renderer-error]', payload)
     ;(window as unknown as { electronAPI?: { logRendererError?: (p: unknown) => void } })
       .electronAPI?.logRendererError?.(payload)

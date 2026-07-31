@@ -257,7 +257,7 @@ Goal: bring every workflow onto the current human-readable, responsive Pulse his
    - keep the user-facing timeline concise, with raw continuity state in one closed-by-default #pulse-agent-handoff block near the bottom;
    - keep Kind/Search/Reset filtering when present, but no date picker.
 4. Attribute every dated recent-run row and timeline card with data-date, data-kind, data-pulse-section, and one canonical data-module:
-   - Signals / Kizuki: bug_review, artifact_review, learning_health, knowledgebase_health, db_health, eval_health, report_health, cost_llm_time, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes;
+   - Signals / Kizuki: bug_review, artifact_review, stores_health, eval_health, report_health, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes. Normalize historical learning_health / knowledgebase_health / db_health evidence to stores_health, and historical cost_llm_time evidence to llm_ops_review;
    - Reflection / Hansei: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
    - Improvements / Kaizen: pulse_fixer for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the Signal evidence they address.
    - Keep every historical question and answer with who asked it: Goal Advisor -> improvements/goal_advisor; a known reviewer -> signals/<reviewer module>; a general Pulse/run question -> reflection/run_summary. Reclassify old reflection/goal_advisor answer cards into improvements/goal_advisor.
@@ -389,6 +389,16 @@ If evaluation/evaluation_plan.json does not exist, this is a no-op — skip to t
 11. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.16". Do not change schema_version, planning/plan.json, schedules, notifications, or publishing in this step.
 
 Report: which eval steps needed changes vs. were already compliant, the old-shape -> new-field mapping per changed step, validate_evaluation_plan result, run_full_evaluation verification result confirming real scores are now captured (or why it was skipped), and any blockers. If evaluation_plan.json does not exist or every step already emits a numeric "score", this is a no-op migration — say so explicitly and just bump the version.`,
+	},
+	{
+		from:  workflowContractEvalVerdictSchemaVersion,
+		to:    workflowContractPulseReviewSQLiteVersion,
+		label: "upgrade-1.0.17",
+		query: `WORKFLOW VERSION UPGRADE v1.0.16 -> v1.0.17.
+
+This is a trusted backend compatibility migration from filesystem Pulse review Markdown to SQLite. Do not edit or delete review files manually. The backend imports every recognized pulse/reviews/**/*.md artifact byte-for-byte into pulse_review_log, imports only explicit CONCERNS lines into the structured finding lifecycle, verifies each transaction, retains the legacy source files for rollback/read parity, and stamps workflow.json version 1.0.17. New reviewers write their complete human-readable Markdown directly to SQLite and create no review file.
+
+If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
 	},
 }
 

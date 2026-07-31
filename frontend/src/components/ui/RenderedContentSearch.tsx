@@ -189,10 +189,7 @@ export const useRenderedContentSearch = ({
     setCurrentIndex(index => marks.length > 0 ? Math.min(index, marks.length - 1) : 0)
 
     return () => {
-      const currentRoot = targetRef.current
-      if (currentRoot) {
-        clearSearchMarks(currentRoot)
-      }
+      clearSearchMarks(root)
       marksRef.current = []
     }
   }, [contentKey, debouncedQuery, enabled, isOpen, targetRef])

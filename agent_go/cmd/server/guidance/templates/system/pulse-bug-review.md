@@ -83,9 +83,10 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
      `correctness_bug` in the step's own logic, not the gate; fix the step
    A step eventually passing does not make this `no_issue`: a guaranteed extra
    retry every run is real cost, and a schema-forced fabricated value is a real
-   integrity defect even when the run "succeeds." Resolve the concern via
-   `resolve_run_concern` only after the fix holds on a later run — recurrence
-   reopens it automatically, which is deliberate.
+   integrity defect even when the run "succeeds." If a fix needs a later run
+   for proof, record `changed_unverified`; on that later run close it through a
+   `verified_no_change` finding disposition only after the expected behavior is
+   observed. Failed proof or recurrence reopens it automatically.
 9. Return `QA coverage`, `expected versus observed`, exact evidence, confidence,
    and `untested risk` alongside the normal ordered findings. Coverage is not a
    percentage unless a real denominator exists.
@@ -149,6 +150,17 @@ verification. Use exactly these classifications:
   failure whose final evidence is sound
 - `insufficient_evidence` — the observable trace cannot establish whether the
   decision was wrong; name the missing evidence and do not invent a defect
+
+When the trace proves the shared harness, runtime adapter, MCP bridge, or tool
+API violated its own contract, set `issue_kind=harness_issue` and emit the
+single-line `PULSE_FINDING_JSON` record required by the reviewer artifact
+contract immediately before the matching `CONCERNS:` line. Prove ownership:
+show that the workflow supplied a valid request and that the shared boundary
+rejected, rewrote, mislabeled, truncated, or misreported it. Include a minimal
+side-effect-free reproduction with setup, action, expected, and observed; when
+safe reproduction is impossible, mark it unsafe and name the missing fixture or
+boundary. Never label bad workflow arguments, paths, credentials, IDs, or stale
+inputs as a harness issue.
 
 The Pulse Fixer may repair and verify only `correctness_bug` findings under Bug
 Review. It must not rewrite a step merely because another tool might have been

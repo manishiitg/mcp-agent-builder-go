@@ -702,9 +702,6 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
       // Check if binary viewable file
       const isViewableBinary = ['xls', 'xlsx', 'docx', 'pdf', 'webm', 'mp4', 'mov'].includes(ext)
-      // Check if image file (workspace API returns base64 data URL for these)
-      const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)
-
       // 1. Ensure workspace is visible
       setWorkspaceMinimized(false)
 

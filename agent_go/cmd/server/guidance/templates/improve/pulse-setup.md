@@ -11,11 +11,9 @@ Pulse is the recurring maintenance system. After every scheduled run, Pulse Gate
 - artifact review
 - report health
 - evaluation health
-- learning health
-- knowledgebase health
-- DB health
-- cost/LLM/time reporting
-- LLM/operations review
+- stores health (learnings, knowledgebase, and DB)
+- Ops Review (cost, timing, tool/runtime reliability, model routing, setup,
+  and plan-design hygiene)
 - Strategy Auditor
 - Goal Advisor
 

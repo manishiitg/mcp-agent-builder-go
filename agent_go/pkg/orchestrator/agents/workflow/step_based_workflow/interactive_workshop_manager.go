@@ -124,11 +124,38 @@ func pulseReviewerCompletionMarker(todoID string) string {
 	return fmt.Sprintf("%s todo_id=%s", pulseReviewerCompletionPrefix, sanitizeWorkshopAgentIdentityPart(todoID))
 }
 
+func newManualPulseReviewIdentity(now time.Time, todoID, module string) (pulseRunID, reviewRunID string) {
+	now = now.UTC()
+	suffix := fmt.Sprintf(
+		"manual-%s-%s-%d",
+		sanitizeWorkshopAgentIdentityPart(module),
+		sanitizeWorkshopAgentIdentityPart(todoID),
+		now.UnixNano(),
+	)
+	reviewRunID = now.Format("2006-01-02T15-04-05.000Z") + "_" + suffix
+	return "manual-" + suffix, reviewRunID
+}
+
+func newDerivedPulseReviewIdentity(now time.Time, pulseRunID, todoID, module string) (effectivePulseRunID, reviewRunID string) {
+	if strings.TrimSpace(pulseRunID) == "" {
+		return newManualPulseReviewIdentity(now, todoID, module)
+	}
+	now = now.UTC()
+	suffix := fmt.Sprintf(
+		"%s-%s-%s-%d",
+		sanitizeWorkshopAgentIdentityPart(pulseRunID),
+		sanitizeWorkshopAgentIdentityPart(module),
+		sanitizeWorkshopAgentIdentityPart(todoID),
+		now.UnixNano(),
+	)
+	return strings.TrimSpace(pulseRunID), now.Format("2006-01-02T15-04-05.000Z") + "_" + suffix
+}
+
 func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker string) string {
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep the complete response under 6000 characters and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact findings body that the backend will persist at %s. Write it as a durable Markdown review artifact, not as a conversational message to the parent or user. Do not add greetings, progress narration, notification prose, or a second summary. Do not attempt to write the file yourself: this reviewer is read-only and the trusted backend persists the validated response atomically. The parent receives only the artifact path and must read that file.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the artifact body as usual — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
 	}
 	completionFooter := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker in the review brief. Only after the complete review is written, emit this exact final line and nothing after it:\n%s", marker)
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + completionFooter
@@ -183,7 +210,7 @@ func pulseReviewResultPath(reviewRunID, module string) (string, error) {
 	if err := validatePulseReviewIdentity(reviewRunID, module); err != nil {
 		return "", err
 	}
-	return filepath.ToSlash(filepath.Join("pulse", "reviews", reviewRunID, module+".md")), nil
+	return fmt.Sprintf("pulse_review_log:%s:%s", reviewRunID, module), nil
 }
 
 func pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, status, result string, completedAt time.Time) string {
@@ -1374,8 +1401,11 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// dynamic Pulse worklist/result state.
 	pulseState := []string{
 		"get_pulse_module_state",
+		"get_pulse_review_result",
 		"record_pulse_worklist",
+		"start_pulse_fix_attempt",
 		"mark_pulse_module_result",
+		"resolve_run_concern",
 		"mark_pulse_final_command_result",
 		"mark_changelog_artifact_reviewed",
 	}
@@ -3368,7 +3398,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// executor from being selected through the global code-exec registry.
 	if err := mcpAgent.RegisterCustomTool(
 		"call_generic_agent",
-		"Run one read-only reviewer in an isolated context for this workflow. In coding-agent code-execution mode, invoke this custom tool through the documented API bridge shell call; that transport is supported. Every reviewer is tracked as a child execution and sends a compact automatic start/completion notification to the parent. If the outer MCP shell call moves to the background, end the current turn and wait for that automatic notification instead of polling. Pulse permits at most two concurrent calls. For Pulse, pass pulse_run_id, review_run_id, and module: the reviewer is instructed to produce a durable Markdown artifact rather than a conversational completion message; the trusted backend persists that complete artifact to pulse/reviews/<dated-review-run-id>/<module>.md and returns/notifies only its compact path reference. The reviewer cannot mutate files, configuration, plans, reports, evaluations, human inputs, or module state. Incomplete provider snapshots are rejected and retried once. Do not put a custom completion marker in instructions; this tool appends and validates its own marker.",
+		"Run one read-only reviewer in an isolated context for this workflow. In coding-agent code-execution mode, invoke this custom tool through the documented API bridge shell call; that transport is supported. Every reviewer is tracked as a child execution and sends a compact automatic start/completion notification to the parent. If the outer MCP shell call moves to the background, end the current turn and wait for that automatic notification instead of polling. Pulse permits at most two concurrent calls. For a scheduled Pulse review, pass pulse_run_id, review_run_id, and module. For a standalone/manual Pulse-module review, pass module alone and the trusted backend generates the run identities. In both cases it stores the complete human-readable Markdown review directly in SQLite, files its CONCERNS lines into the structured lifecycle, and returns/notifies only its compact review identity. Load it with get_pulse_review_result. No Pulse review Markdown file is created. The reviewer cannot mutate files, configuration, plans, reports, evaluations, human inputs, or module state. Incomplete provider snapshots are rejected and retried once. Do not put a custom completion marker in instructions; this tool appends and validates its own marker.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3387,15 +3417,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"pulse_run_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Pulse worklist run ID. Required together with review_run_id and module for a persisted Pulse review.",
+					"description": "Scheduled Pulse worklist run ID. When supplied, review_run_id and module are also required. Omit both IDs and pass module alone for a standalone persisted review.",
 				},
 				"review_run_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Exact scheduler-provided dated review ID (YYYY-MM-DDTHH-MM-SS.mmmZ_<pulse-id>). Required for Pulse.",
+					"description": "Exact scheduler-provided dated review ID (YYYY-MM-DDTHH-MM-SS.mmmZ_<pulse-id>). Required with pulse_run_id; omit for a standalone persisted review.",
 				},
 				"module": map[string]interface{}{
 					"type":        "string",
-					"description": "Exact Pulse module name. Required for Pulse and used as the separate result filename.",
+					"description": "Exact canonical Pulse module name. Pass it with scheduled IDs, or alone to let the backend create standalone run identities and persist the review.",
 				},
 			},
 			"required": []string{"todo_id", "instructions", "preferred_tier"},
@@ -3421,16 +3451,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			reviewRunID = strings.TrimSpace(reviewRunID)
 			module, _ := args["module"].(string)
 			module = strings.TrimSpace(module)
+			looksLikeScheduledPulseReview := strings.Contains(strings.ToLower(instructions), "pulse_run_id") ||
+				strings.Contains(strings.ToLower(instructions), "pulse run id")
+			if module != "" && pulseRunID == "" && reviewRunID == "" && !looksLikeScheduledPulseReview {
+				pulseRunID, reviewRunID = newManualPulseReviewIdentity(time.Now(), todoID, module)
+			}
 			pulseMetadataCount := 0
 			for _, value := range []string{pulseRunID, reviewRunID, module} {
 				if value != "" {
 					pulseMetadataCount++
 				}
 			}
-			looksLikePulseReview := strings.Contains(strings.ToLower(instructions), "pulse_run_id") ||
-				strings.Contains(strings.ToLower(instructions), "pulse run id")
-			if (pulseMetadataCount != 0 || looksLikePulseReview) && pulseMetadataCount != 3 {
-				return "", fmt.Errorf("pulse_run_id, review_run_id, and module must be provided together")
+			if (pulseMetadataCount != 0 || looksLikeScheduledPulseReview) && pulseMetadataCount != 3 {
+				return "", fmt.Errorf("scheduled Pulse reviews require pulse_run_id, review_run_id, and module together; standalone reviews pass module alone and keep scheduler identity fields out of reviewer instructions")
 			}
 			isPulseReview := pulseMetadataCount == 3
 			var resultPath string
@@ -3530,7 +3563,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					return nil
 				}
 				body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "failed", message, time.Now())
-				return iwm.controller.WriteWorkspaceFile(ctx, resultPath, body)
+				return RecordPulseReview(ctx, workspacePath, module, reviewRunID, pulseRunID, "", body)
 			}
 
 			var incompleteErr error
@@ -3558,14 +3591,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						return completed, nil
 					}
 					body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", completed, time.Now())
-					if writeErr := iwm.controller.WriteWorkspaceFile(ctx, resultPath, body); writeErr != nil {
+					if writeErr := RecordPulseReview(ctx, workspacePath, module, reviewRunID, pulseRunID, "", body); writeErr != nil {
 						return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
 					}
-					// A reviewer artifact is a per-run file that nothing diffs across
-					// runs, so a finding repeated every cycle reads as new every cycle.
-					// File its CONCERNS: lines through the same Go-side path steps use,
-					// keyed by module, so recurrence becomes visible. The artifact stays
-					// the full evidence; this is only the trackable index into it.
+					// File the review's CONCERNS: lines through the same Go-side path
+					// steps use, keyed by module, so a finding repeated across database
+					// review records becomes visible as recurrence. The Markdown stored
+					// in SQLite remains the full evidence; this is only its trackable
+					// lifecycle index.
 					iwm.controller.recordStepConcerns(ctx, module, map[string]string{
 						ConcernPhaseReview: completed,
 					})
@@ -3575,10 +3608,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					// Recorded here rather than by the Fixer: reviews that found live
 					// breakages have gone entirely unrecorded because the Fixer never
 					// called mark_pulse_module_result.
-					if err := RecordPulseReview(ctx, iwm.controller.GetWorkspacePath(), module, reviewRunID, pulseRunID, resultPath, completed); err != nil {
-						logger.Warn(fmt.Sprintf("⚠️ Failed to log Pulse review outcome for %s: %v", module, err))
-					}
-					return fmt.Sprintf("Pulse reviewer completed and was persisted.\nmodule: %s\nreview_result_path: %s\nRead that file before applying or recording fixes.", module, resultPath), nil
+					return fmt.Sprintf("Pulse reviewer completed and was persisted in SQLite.\nmodule: %s\nreview_run_id: %s\nCall get_pulse_review_result(review_run_id=%q, module=%q) before applying or recording fixes.", module, reviewRunID, reviewRunID, module), nil
 				}
 				incompleteErr = completionErr
 				logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned incomplete output: %v", todoID, attempt, completionErr))
@@ -3595,6 +3625,37 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop call_generic_agent tool: %v", err))
+	}
+
+	if err := mcpAgent.RegisterCustomTool(
+		"get_pulse_review_result",
+		"Load one complete human-readable Pulse reviewer Markdown result from SQLite. Call this after call_generic_agent returns its review_run_id and module. This is a database read; Pulse review Markdown files are no longer created.",
+		map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]interface{}{
+				"review_run_id": map[string]interface{}{"type": "string"},
+				"module":        map[string]interface{}{"type": "string"},
+			},
+			"required": []string{"review_run_id", "module"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			reviewRunID, _ := args["review_run_id"].(string)
+			module, _ := args["module"].(string)
+			if err := validatePulseReviewIdentity(strings.TrimSpace(reviewRunID), strings.TrimSpace(module)); err != nil {
+				return "", err
+			}
+			artifact, err := LoadPulseReviewArtifactForRun(
+				ctx, iwm.controller.GetWorkspacePath(), reviewRunID, module,
+			)
+			if err != nil {
+				return "", err
+			}
+			return artifact.Markdown, nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop get_pulse_review_result tool: %v", err))
 	}
 
 	// Tool: run_goal_advisor_review — dedicated strategic review background pipeline.
@@ -9503,6 +9564,11 @@ When writing builder/improve.html, show both:
 Overwrite builder/card.progress.html with a compact progress card when useful.
 
 Finish with a concise summary: changed/applied/proposed/skipped/blocked, critic verdict, evidence paths, files touched, and any human input request ids created or consumed.
+For each finding, proposal, measurement gap, or unblock condition that remains
+open after this finalizer, add one separate ` + "`CONCERNS: <plain-language issue with the affected strategy/artifact named>`" + `
+line. Do not emit a CONCERNS line for no-action observations or work completed
+and verified during this pipeline. The trusted backend indexes these lines into
+the structured Pulse finding lifecycle.
 `)
 	return strings.TrimSpace(sb.String())
 }
@@ -9719,7 +9785,54 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	return result, nil
 }
 
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.Context, pulseRunID, focus string) (string, error) {
+func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.Context, pulseRunID, focus string) (result string, resultErr error) {
+	effectivePulseRunID, reviewRunID := newDerivedPulseReviewIdentity(
+		time.Now(),
+		pulseRunID,
+		"goal-advisor-pipeline",
+		pulsemodules.GoalAdvisorID,
+	)
+	defer func() {
+		status := "completed"
+		if resultErr != nil {
+			status = "failed"
+		}
+		body := pulseReviewResultMarkdown(
+			effectivePulseRunID,
+			reviewRunID,
+			pulsemodules.GoalAdvisorID,
+			status,
+			result,
+			time.Now(),
+		)
+		if err := RecordPulseReview(
+			ctx,
+			iwm.controller.GetWorkspacePath(),
+			pulsemodules.GoalAdvisorID,
+			reviewRunID,
+			effectivePulseRunID,
+			"",
+			body,
+		); err != nil {
+			if resultErr != nil {
+				resultErr = fmt.Errorf("%w; persist Goal Advisor review: %w", resultErr, err)
+			} else {
+				resultErr = fmt.Errorf("persist Goal Advisor review: %w", err)
+			}
+			return
+		}
+		if resultErr == nil {
+			iwm.controller.recordStepConcerns(ctx, pulsemodules.GoalAdvisorID, map[string]string{
+				ConcernPhaseReview: result,
+			})
+			result = strings.TrimSpace(result) + fmt.Sprintf(
+				"\n\nGoal Advisor review persisted in SQLite.\nreview_run_id: %s\nmodule: %s",
+				reviewRunID,
+				pulsemodules.GoalAdvisorID,
+			)
+		}
+	}()
+
 	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly)
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor advisor stage failed: %v", err), err

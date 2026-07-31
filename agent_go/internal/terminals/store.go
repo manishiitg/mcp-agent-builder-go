@@ -1468,7 +1468,7 @@ func (s *Store) reconcileAsyncSubAgentCompletionBatch(sessionID, content string,
 	changed := false
 	for _, completion := range completions {
 		status := strings.ToLower(strings.TrimSpace(completion.Status))
-		failed := status == "failed" || status == "canceled" || status == "cancelled"
+		failed := status == "failed" || status == "canceled" || status == "cancelled" //nolint:misspell // Accept both API spellings.
 
 		// Settle the lifecycle wrapper if its start event created one.
 		wrapperID := terminalIDFor(sessionID, strings.TrimSpace(completion.ExecutionID))

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -173,16 +174,46 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 		return 0, err
 	}
 	defer db.Close()
-	if _, err := db.ExecContext(ctx, runConcernsSchema); err != nil {
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
 		return 0, err
 	}
+	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	recorded, err := recordRunConcernLinesAt(
+		ctx, db, runFolder, groupName, stepID, phase, lines,
+		observedAt,
+	)
+	if err != nil {
+		return recorded, err
+	}
+	if err := recordPulseFindingDetailsAt(
+		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines,
+	); err != nil {
+		return recorded, err
+	}
+	return recorded, nil
+}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+func recordRunConcernLinesAt(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	runFolder, groupName, stepID, phase string,
+	lines []string,
+	observedAt string,
+) (int, error) {
+	if strings.TrimSpace(observedAt) == "" {
+		observedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	recorded := 0
 	for _, text := range lines {
 		fp := concernFingerprint(stepID, text)
+		previousStatus := ""
+		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
+			return recorded, err
+		}
 		// A concern that recurs after being marked resolved reopens: the fix did
 		// not hold, and that is strictly more important than the original report.
+		// A concern recurring while awaiting verification is the failed
+		// verification signal itself, so it also returns to open.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
@@ -195,10 +226,29 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 				last_seen_run = excluded.last_seen_run,
 				last_seen_at = excluded.last_seen_at,
 				seen_count = run_concerns.seen_count + 1,
-				status = CASE WHEN run_concerns.status = ? THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, now, runFolder, now, ConcernStatusOpen,
-			ConcernStatusResolved, ConcernStatusOpen)
+				status = CASE WHEN run_concerns.status IN (?, ?) THEN ? ELSE run_concerns.status END`,
+			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
+			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusOpen)
 		if err != nil {
+			return recorded, err
+		}
+		eventType := "observed_again"
+		switch previousStatus {
+		case "":
+			eventType = "filed"
+		case ConcernStatusResolved, ConcernStatusAwaitingVerification:
+			eventType = "reopened"
+		}
+		metadata, _ := json.Marshal(map[string]string{
+			"previous_status": previousStatus,
+			"phase":           phase,
+			"step_id":         stepID,
+		})
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			fp, runFolder, eventType, text, string(metadata), observedAt); err != nil {
 			return recorded, err
 		}
 		recorded++
@@ -222,9 +272,9 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status
 		FROM run_concerns
-		WHERE status IN (?, ?)
+		WHERE status IN (?, ?, ?, ?)
 		ORDER BY seen_count DESC, last_seen_at DESC
-		LIMIT ?`, ConcernStatusOpen, ConcernStatusAcknowledged, limit)
+		LIMIT ?`, ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, limit)
 	if err != nil {
 		// Absent table just means no concern has been raised yet.
 		if strings.Contains(strings.ToLower(err.Error()), "no such table") {

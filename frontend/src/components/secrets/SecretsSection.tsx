@@ -13,7 +13,7 @@ export default function SecretsSection() {
     if (globalSecrets.length === 0) {
       fetchGlobalSecrets()
     }
-  }, [])
+  }, [fetchGlobalSecrets, globalSecrets.length])
 
   const totalCount = secrets.length + globalSecrets.length
 
