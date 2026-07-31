@@ -27,16 +27,16 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    scheduler-issued Pulse run.
 4. Run every module this standalone review selects. Issue one independent
    `call_generic_agent` reviewer call per due module in parallel batches of at
-   most two. Never select only a "top 3" subset. Cover all selected modules in
+   most two. Do not truncate the due worklist. Cover all selected modules in
    the fewest consecutive batches. Every reviewer is read-only. Goal Advisor
    uses a separate read-only critic after its strategy draft.
 5. The current parent remains the only Pulse Fixer. Consolidate reviewer
    results, apply bounded safe fixes sequentially, verify them, process exact
    approved decisions where applicable, and update `builder/improve.html` once
    atomically with one explicitly attributed result card per due module.
-   Read-only maintenance-review results are **Signals / Kizuki**. Add Reflection
-   / Hansei for run interpretation, cadence, and answered questions; add
-   Improvements / Kaizen for verified Pulse Fixer work or Goal Advisor
+   Read-only maintenance-review results are **Issues and reviews**. Add
+   **Decisions and analysis** for run interpretation, cadence, and answered
+   questions; add **Fixes and improvements** for verified Pulse Fixer work or Goal Advisor
    proposals/decisions.
 6. Record every selected module's clean, changed, blocked, or failed outcome in
    `builder/improve.html`. A failed reviewer fails only its own module; continue

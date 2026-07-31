@@ -55,7 +55,7 @@ Do not call
 tools: this standalone command must not impersonate or complete an automatic
 Pulse run.
 
-Add one compact **Improvements / Kaizen** result card for the fixer batch using
+Add one compact **Fixes and improvements** result card for the fixer batch using
 `data-pulse-section="improvements"` and `data-module="pulse_fixer"`. Link it to
 the original Signal finding anchors and state what verification passed. Do not
 rewrite the read-only Signal cards as if those reviewers applied the fixes.

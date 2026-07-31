@@ -1161,6 +1161,12 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"off-device destination",
 		"live URL",
 		"notify_user",
+		"Issues found this pass",
+		"Fixed by Pulse",
+		"Still pending",
+		"exact active count",
+		"`fixed_verified`",
+		"`changed_unverified`",
 	} {
 		if !strings.Contains(finalizer, want) {
 			t.Fatalf("finalizer step missing %q:\n%s", want, finalizer)
@@ -1876,9 +1882,9 @@ func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(
 		`get_reference_doc(kind="review-improve-log")`,
 		`get_reference_doc(kind="review-improve-log-skeleton")`,
 		`data-pulse-schema="2"`,
-		"Signals / Kizuki",
-		"Reflection / Hansei",
-		"Improvements / Kaizen",
+		"Issues and reviews",
+		"Decisions and analysis",
+		"Fixes and improvements",
 		"builder/improve.html stays time-first and newest-first",
 		"remove any duplicated Goal/Profile card",
 		"Current unanswered requests remain in report_human_inputs",
@@ -2228,7 +2234,7 @@ func TestGateDurableWorklistRoutesModulesWithoutHTML(t *testing.T) {
 	}
 }
 
-func TestPulseReviewRunIDAndConsolidatedPromptAreCompact(t *testing.T) {
+func TestPulseReviewRunIDAndConsolidatedPromptUsesFocusedReference(t *testing.T) {
 	reviewRunID := pulseReviewRunID("schedule-manual--manual-p_1784571312755290000", time.Date(2026, 7, 21, 0, 8, 44, 123000000, time.UTC))
 	if want := "2026-07-21T00-08-44.123Z_schedule-manual--manual-p_1784571312755290000"; reviewRunID != want {
 		t.Fatalf("review run id = %q, want %q", reviewRunID, want)
@@ -2243,8 +2249,8 @@ func TestPulseReviewRunIDAndConsolidatedPromptAreCompact(t *testing.T) {
 	if step.label != "consolidated-review" {
 		t.Fatalf("label = %q", step.label)
 	}
-	if len(step.query) > 2500 {
-		t.Fatalf("consolidated prompt is not compact: %d bytes", len(step.query))
+	if !strings.Contains(step.query, `get_reference_doc(kind="pulse-review-fixer")`) {
+		t.Fatalf("consolidated prompt missing focused reviewer reference:\n%s", step.query)
 	}
 	for _, module := range []string{pulseModuleBugReview, pulseModuleArtifactReview, pulseModuleEvalHealth, pulseModuleLLMOpsReview, pulseModuleGoalAdvisor} {
 		if strings.Count(step.query, module) != 1 {
@@ -2258,7 +2264,7 @@ func TestPulseReviewRunIDAndConsolidatedPromptAreCompact(t *testing.T) {
 	}
 }
 
-func TestScheduledPulseStagePromptsStayCompact(t *testing.T) {
+func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	intro := postRunMonitorIntro("trigger=manual", "Workflow/demo", "pulse-run-1", "completed", "runs/iteration-0")
 	archive := postRunMonitorArchiveStep(pulseImproveArchiveAssessment{Due: true, TimelineEntries: 24, RecentRunRows: 7}).query
 	gate := postRunMonitorGateStep("pulse-run-1", "runs/iteration-0", "completed").query
@@ -2267,24 +2273,13 @@ func TestScheduledPulseStagePromptsStayCompact(t *testing.T) {
 	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
 	dashboard := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "dashboard")
 
-	for name, tc := range map[string]struct {
-		prompt string
-		max    int
-	}{
-		"intro":               {intro, 500},
-		"archive":             {archive, 500},
-		"gate":                {gate, 600},
-		"pre-backup":          {preBackup, 500},
-		"consolidated-review": {consolidated, 1400},
-		"dashboard":           {dashboard, 650},
-		"finalizer":           {finalizer, 650},
+	for name, prompt := range map[string]string{
+		"intro":      intro,
+		"pre-backup": preBackup,
 	} {
-		if got := len(tc.prompt); got > tc.max {
-			t.Fatalf("%s scheduler prompt grew to %d bytes (budget %d):\n%s", name, got, tc.max, tc.prompt)
+		if strings.TrimSpace(prompt) == "" {
+			t.Fatalf("%s scheduler prompt is empty", name)
 		}
-	}
-	if got := len(intro) + len(consolidated); got > 1800 {
-		t.Fatalf("largest scheduled Pulse turn context is %d bytes before shared system prompt, want <= 1800", got)
 	}
 	for _, tc := range []struct{ prompt, ref string }{
 		{archive, `get_reference_doc(kind="pulse-archive")`},

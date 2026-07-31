@@ -79,7 +79,7 @@ The scheduled message must say:
 If you find an old optimizer-mode schedule that clearly exists only for the previous Auto Improve / Goal Advisor loop:
 
 1. Disable it with `update_schedule(enabled=false)`; do not delete it unless the user asked.
-2. Record a short Improvement / Kaizen Decision card in `builder/improve.html` with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`: Goal Advisor moved into Pulse Gate; this old schedule is paused to avoid duplicate strategy passes.
+2. Record a short Fixes and improvements Decision card in `builder/improve.html` with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`: Goal Advisor moved into Pulse Gate; this old schedule is paused to avoid duplicate strategy passes.
 3. Leave manually-authored optimizer schedules alone when they are clearly for another custom job.
 
 ## Persistent log
@@ -87,9 +87,9 @@ If you find an old optimizer-mode schedule that clearly exists only for the prev
 Create or update `builder/improve.html`.
 
 - Keep the Goal only in `soul/soul.md`; do not seed or refresh a Goal/Profile card in the HTML.
-- Record a setup/change as a readable Improvement / Kaizen Decision card with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`.
+- Record a setup/change as a readable Fixes and improvements Decision card with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`.
 - Make clear that Pulse Gate will decide when deeper modules, including Goal Advisor, are due.
-- If nothing changed, record a short Reflection / Hansei confirmation only when it adds useful evidence; use `data-pulse-section="reflection"` and `data-module="run_summary"`.
+- If nothing changed, record a short Decisions and analysis confirmation only when it adds useful evidence; use `data-pulse-section="reflection"` and `data-module="run_summary"`.
 
 ## Final report
 

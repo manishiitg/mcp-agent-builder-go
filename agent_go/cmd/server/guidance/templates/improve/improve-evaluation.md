@@ -39,7 +39,7 @@ Focus on: {{.Focus}}.{{end}}
 PASS 0 - FRAMEWORK PRECHECK
 1. Read only matching eval-health entries, open findings, answered decisions, and referenced archive rows from `builder/improve.html`. If an archive row references an older eval semantic change that affects the current recommendation, read that archive file. Do not read unrelated cards or page formatting.
 2. Read `soul/soul.md` and extract the objective and success criteria. If those are missing or not checkable, return `blocked` and recommend `define-success`; Goal Advisor is not the setup path.
-3. Treat `soul/soul.md` as the Goal / Ikigai source of truth. `builder/improve.html` holds time-based Signal, Reflection, and Improvement history, not a duplicate Goal/Profile block.
+3. Treat `soul/soul.md` as the Goal source of truth. `builder/improve.html` holds time-based review, analysis, and improvement history, not a duplicate Goal/Profile block.
 
 PASS 1 - STRUCTURAL VALIDATION REVIEW
 1. Inspect `evaluation/evaluation_plan.json` and `evaluation/step_config.json`
@@ -138,9 +138,9 @@ When you finish, return:
 - what you recommend and what is safe for the Pulse Fixer to apply
 - any proposed rubric-change Decision entry
 
-The parent records every evaluation-health result as a **Signals / Kizuki** card
+The parent records every evaluation-health result as an **Issues and reviews** card
 using `data-pulse-section="signals"` and `data-module="eval_health"`. A later
-verified repair is a separate Improvements / Kaizen Pulse Fixer card.
+verified repair is a separate Fixes and improvements Pulse Fixer card.
 
 If you recommend a proposed but not-yet-applied eval change as an open finding, give it a short anchor id only so the parent can record it and a later decision can mark it resolved.
 

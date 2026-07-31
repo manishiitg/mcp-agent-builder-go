@@ -58,7 +58,8 @@ ROLE SEPARATION
   `relationship_to_current_experiment`, `why_not_incremental_repair`, and ordered findings/proposals. Every finding includes stable
   `finding_id`, `target_key`, severity, plain-language summary, exact evidence,
   bounded `recommended_fix`, verification, and `user_judgment_required` with
-  reason. Keep the packet within 3000 characters when Pulse invokes it.
+  reason. Keep narrative prose compact while retaining every evidence-backed
+  finding when Pulse invokes it.
 - The critic is also read-only. It returns `verdict=approve|revise|reject`, the
   claims and assumptions challenged, missing or contradictory evidence,
   downside/guardrail risk, overlap with an existing experiment or finding, and
@@ -88,7 +89,7 @@ OPENING
 3. Read answered human input from the scheduler-provided preface when present.
    A read-only reviewer reports the relevant answer and recommended disposition;
    only the parent may call `mark_human_input_consumed` and add/update one compact
-   Improvements / Kaizen question-and-answer outcome card owned by Goal Advisor. There is no active-question
+   Fixes and improvements question-and-answer outcome card owned by Goal Advisor. There is no active-question
    card in the HTML.
 4. Read `planning/plan.json`, `planning/changelog/`, and `evaluation/evaluation_plan.json`.
 5. Read `variables/variables.json` and scope evidence to the configured group names when provided.
@@ -352,7 +353,7 @@ Action:
 - keep the scope exactly to what the user approved; new evidence that makes the
   proposal unsafe or stale requires the stale path above, not a silent rebase
 - call `mark_human_input_consumed` with the concrete outcome after applying, rejecting as stale, or deferring
-- add or update a compact Improvements / Kaizen question-and-answer outcome card with `data-pulse-section="improvements"` and `data-module="goal_advisor"`, the actual answer, and the applied result
+- add or update a compact Fixes and improvements question-and-answer outcome card with `data-pulse-section="improvements"` and `data-module="goal_advisor"`, the actual answer, and the applied result
 - update the matching `.advisor-experiment` card in place to `data-status="running"`, preserve its stable experiment id, and retain the baseline, metric, guardrails, review checkpoint, and rollback condition
 
 2. `advisor_proposal`

@@ -152,7 +152,7 @@ func newDerivedPulseReviewIdentity(now time.Time, pulseRunID, todoID, module str
 }
 
 func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker string) string {
-	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep the complete response under 6000 characters and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
+	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
 		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
@@ -2277,7 +2277,7 @@ Run mode is the user-facing runtime surface, including Slack and WhatsApp routes
 1. **Do direct runtime work** when no workflow run is needed: use available tools plus workflow context to answer, look up, analyze, summarize, or take a small operational action. Before acting, ground in the generated skill, KB, and db state: `+"`learnings/_global/SKILL.md`"+` for HOW to operate, `+"`knowledgebase/context/`"+` and targeted `+"`knowledgebase/notes/`"+` for business context, and `+"`db/`"+` plus `+"`db/README.md`"+` for durable facts/results.
 2. **Run the workflow** for one configured group at a time with `+"`run_full_workflow(group_name=\"...\")`"+`.
 3. **Run a specific step or orphan utility step** with `+"`execute_step(step_id=\"...\", group_name=\"...\")`"+` when the user asks for a targeted action, retry, data check, or one-off investigation.
-4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with sqlite3), `+"`db/assets/`"+` references, report data, eval reports, timing/cost reviews, KB context/notes, learnings, saved scripts, and prior step results.
+4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with sqlite3), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
 5. **Inspect/debug execution** with `+"`list_executions`"+`, `+"`query_step`"+`, `+"`debug_step`"+`, and read-only review tools. Explain the issue and next action; do not mutate plan/config/learnings/KB/report/eval files in Run mode.
 
 ### Runtime context access
@@ -5405,282 +5405,288 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register review_plan tool: %v", err))
 	}
 
-	// Tool 7f3: review_workflow_timing — read-only review of runtime latency and speedup opportunities
-	if err := mcpAgent.RegisterCustomTool(
-		"review_workflow_timing",
-		"Start a background agent that reviews workflow runtime and step timing from actual run evidence, identifies the main latency bottlenecks, and recommends how to make the workflow faster without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
-		map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"focus": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional focus for the review, e.g., 'slowest step', 'tool latency', 'too many steps', 'merge opportunities', 'description ambiguity'.",
-				},
-				"iteration": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional iteration folder (e.g., 'iteration-3'). If omitted, the selected run folder is used when present; otherwise the reviewer finds the latest meaningful run evidence.",
-				},
-				"group_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional group/user subfolder within the iteration (e.g., 'saurabh'). Use together with iteration for grouped workflows.",
+	// Retired: cost and timing are now one agentic Ops Review. Keep the legacy
+	// implementations temporarily as dormant code, but do not expose separate
+	// tools that can bypass the consolidated review.
+	const registerRetiredCostTimingReviewers = false
+	if registerRetiredCostTimingReviewers {
+		// Tool 7f3: review_workflow_timing — retired in favor of /ops-review
+		if err := mcpAgent.RegisterCustomTool(
+			"review_workflow_timing",
+			"Start a background agent that reviews workflow runtime and step timing from actual run evidence, identifies the main latency bottlenecks, and recommends how to make the workflow faster without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
+			map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"focus": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional focus for the review, e.g., 'slowest step', 'tool latency', 'too many steps', 'merge opportunities', 'description ambiguity'.",
+					},
+					"iteration": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional iteration folder (e.g., 'iteration-3'). If omitted, the selected run folder is used when present; otherwise the reviewer finds the latest meaningful run evidence.",
+					},
+					"group_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional group/user subfolder within the iteration (e.g., 'saurabh'). Use together with iteration for grouped workflows.",
+					},
 				},
 			},
-		},
-		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			focus := ""
-			if val, ok := args["focus"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					focus = s
+			func(ctx context.Context, args map[string]interface{}) (string, error) {
+				focus := ""
+				if val, ok := args["focus"]; ok && val != nil {
+					if s, ok := val.(string); ok {
+						focus = s
+					}
 				}
-			}
-			targetRunFolder := ""
-			if iter, ok := args["iteration"]; ok && iter != nil {
-				if s, ok := iter.(string); ok && strings.TrimSpace(s) != "" {
-					targetRunFolder = strings.TrimSpace(s)
-					if gid, ok := args["group_name"]; ok && gid != nil {
-						if g, ok := gid.(string); ok && strings.TrimSpace(g) != "" {
-							targetRunFolder += "/" + strings.TrimSpace(g)
+				targetRunFolder := ""
+				if iter, ok := args["iteration"]; ok && iter != nil {
+					if s, ok := iter.(string); ok && strings.TrimSpace(s) != "" {
+						targetRunFolder = strings.TrimSpace(s)
+						if gid, ok := args["group_name"]; ok && gid != nil {
+							if g, ok := gid.(string); ok && strings.TrimSpace(g) != "" {
+								targetRunFolder += "/" + strings.TrimSpace(g)
+							}
 						}
 					}
 				}
-			}
-			if targetRunFolder == "" {
-				targetRunFolder = strings.TrimSpace(iwm.controller.selectedRunFolder)
-			}
+				if targetRunFolder == "" {
+					targetRunFolder = strings.TrimSpace(iwm.controller.selectedRunFolder)
+				}
 
-			execID := fmt.Sprintf("review-timing-%05d", time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
-			if ctxErr != nil {
-				return "Session was stopped — execution skipped", nil
-			}
+				execID := fmt.Sprintf("review-timing-%05d", time.Now().UnixNano()%100000)
+				execCtx, cancel, ctxErr := iwm.newExecContext()
+				if ctxErr != nil {
+					return "Session was stopped — execution skipped", nil
+				}
 
-			agentSessionID := fmt.Sprintf("workshop-review-timing-%d", time.Now().UnixNano())
-			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
+				agentSessionID := fmt.Sprintf("workshop-review-timing-%d", time.Now().UnixNano())
+				execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
 
-			exec := &WorkshopStepExecution{
-				ID:             execID,
-				StepID:         "review-workflow-timing",
-				AgentSessionID: agentSessionID,
-				Status:         WorkshopStepRunning,
-				cancel:         cancel,
-			}
-			iwm.stepRegistry.Register(exec)
+				exec := &WorkshopStepExecution{
+					ID:             execID,
+					StepID:         "review-workflow-timing",
+					AgentSessionID: agentSessionID,
+					Status:         WorkshopStepRunning,
+					cancel:         cancel,
+				}
+				iwm.stepRegistry.Register(exec)
 
-			if iwm.executionNotifier != nil {
-				iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
-					ID:                execID,
-					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
-					Name:              "Review Workflow Timing",
-					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
-					Cancel:            cancel,
-				})
-			}
-			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
+				if iwm.executionNotifier != nil {
+					iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
+						ID:                execID,
+						ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
+						Name:              "Review Workflow Timing",
+						Kind:              string(orchestrator_events.ExecutionKindSubAgent),
+						Cancel:            cancel,
+					})
+				}
+				execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
-			go func() {
-				var result string
-				var execErr error
-				eventBridge := iwm.controller.GetContextAwareBridge()
-				defer func() {
-					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
+				go func() {
+					var result string
+					var execErr error
+					eventBridge := iwm.controller.GetContextAwareBridge()
+					defer func() {
+						skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
+						if eventBridge != nil {
+							isCancelled := skipNotify || execCtx.Err() != nil
+							endEvent := &orchestrator_events.OrchestratorAgentEndEvent{
+								BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
+								AgentType:     "workshop-review-timing",
+								AgentName:     "Review Workflow Timing",
+								Success:       execErr == nil,
+							}
+							if execErr != nil {
+								if isCancelled {
+									endEvent.Result = fmt.Sprintf("Cancelled: %v", execErr)
+								} else {
+									endEvent.Result = fmt.Sprintf("Failed: %v", execErr)
+								}
+							} else {
+								endEvent.Result = result
+							}
+							eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
+								Type: orchestrator_events.OrchestratorAgentEnd, Timestamp: time.Now(),
+								Data: endEvent, CorrelationID: agentSessionID,
+							})
+						}
+						if !skipNotify && iwm.executionNotifier != nil {
+							iwm.executionNotifier.OnExecutionComplete(execID, "Review Workflow Timing", result, nil, execErr)
+						}
+					}()
+
 					if eventBridge != nil {
-						isCancelled := skipNotify || execCtx.Err() != nil
-						endEvent := &orchestrator_events.OrchestratorAgentEndEvent{
+						startEvent := &orchestrator_events.OrchestratorAgentStartEvent{
 							BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
 							AgentType:     "workshop-review-timing",
 							AgentName:     "Review Workflow Timing",
-							Success:       execErr == nil,
-						}
-						if execErr != nil {
-							if isCancelled {
-								endEvent.Result = fmt.Sprintf("Cancelled: %v", execErr)
-							} else {
-								endEvent.Result = fmt.Sprintf("Failed: %v", execErr)
-							}
-						} else {
-							endEvent.Result = result
 						}
 						eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-							Type: orchestrator_events.OrchestratorAgentEnd, Timestamp: time.Now(),
-							Data: endEvent, CorrelationID: agentSessionID,
+							Type: orchestrator_events.OrchestratorAgentStart, Timestamp: time.Now(),
+							Data: startEvent, CorrelationID: agentSessionID,
 						})
 					}
-					if !skipNotify && iwm.executionNotifier != nil {
-						iwm.executionNotifier.OnExecutionComplete(execID, "Review Workflow Timing", result, nil, execErr)
-					}
+
+					result, execErr = iwm.runReviewWorkflowTimingAgent(execCtx, targetRunFolder, focus)
 				}()
 
-				if eventBridge != nil {
-					startEvent := &orchestrator_events.OrchestratorAgentStartEvent{
-						BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
-						AgentType:     "workshop-review-timing",
-						AgentName:     "Review Workflow Timing",
-					}
-					eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-						Type: orchestrator_events.OrchestratorAgentStart, Timestamp: time.Now(),
-						Data: startEvent, CorrelationID: agentSessionID,
-					})
+				focusInfo := ""
+				if focus != "" {
+					focusInfo = fmt.Sprintf("\nFocus: %s", focus)
 				}
+				runInfo := ""
+				if targetRunFolder != "" {
+					runInfo = fmt.Sprintf("\nTarget run folder: %s", targetRunFolder)
+				}
+				logger.Info(fmt.Sprintf("⏱️ Workshop: review_workflow_timing agent started in background, execution_id=%q, target_run_folder=%q", execID, targetRunFolder))
+				return fmt.Sprintf("Workflow timing review agent started in background.\nexecution_id: %q%s%s\nYou will be automatically notified when it completes.", execID, runInfo, focusInfo), nil
+			},
+			"workflow",
+		); err != nil {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to register review_workflow_timing tool: %v", err))
+		}
 
-				result, execErr = iwm.runReviewWorkflowTimingAgent(execCtx, targetRunFolder, focus)
-			}()
-
-			focusInfo := ""
-			if focus != "" {
-				focusInfo = fmt.Sprintf("\nFocus: %s", focus)
-			}
-			runInfo := ""
-			if targetRunFolder != "" {
-				runInfo = fmt.Sprintf("\nTarget run folder: %s", targetRunFolder)
-			}
-			logger.Info(fmt.Sprintf("⏱️ Workshop: review_workflow_timing agent started in background, execution_id=%q, target_run_folder=%q", execID, targetRunFolder))
-			return fmt.Sprintf("Workflow timing review agent started in background.\nexecution_id: %q%s%s\nYou will be automatically notified when it completes.", execID, runInfo, focusInfo), nil
-		},
-		"workflow",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register review_workflow_timing tool: %v", err))
-	}
-
-	// Tool 7f4: review_workflow_costs — read-only review of cost drivers and reduction opportunities
-	if err := mcpAgent.RegisterCustomTool(
-		"review_workflow_costs",
-		"Start a background agent that reviews workflow token/cost data from actual run evidence, identifies the biggest cost drivers, and recommends how to reduce cost without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
-		map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"focus": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional focus for the review, e.g., 'expensive step', 'model tier', 'retry waste', 'evaluation cost', 'merge opportunities'.",
-				},
-				"iteration": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional iteration folder (e.g., 'iteration-3'). If omitted, the selected run folder is used when present; otherwise the reviewer finds the latest meaningful cost/run evidence.",
-				},
-				"group_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional group/user subfolder within the iteration (e.g., 'saurabh'). Use together with iteration for grouped workflows.",
+		// Tool 7f4: review_workflow_costs — retired in favor of /ops-review
+		if err := mcpAgent.RegisterCustomTool(
+			"review_workflow_costs",
+			"Start a background agent that reviews workflow token/cost data from actual run evidence, identifies the biggest cost drivers, and recommends how to reduce cost without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
+			map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"focus": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional focus for the review, e.g., 'expensive step', 'model tier', 'retry waste', 'evaluation cost', 'merge opportunities'.",
+					},
+					"iteration": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional iteration folder (e.g., 'iteration-3'). If omitted, the selected run folder is used when present; otherwise the reviewer finds the latest meaningful cost/run evidence.",
+					},
+					"group_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional group/user subfolder within the iteration (e.g., 'saurabh'). Use together with iteration for grouped workflows.",
+					},
 				},
 			},
-		},
-		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			focus := ""
-			if val, ok := args["focus"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					focus = s
+			func(ctx context.Context, args map[string]interface{}) (string, error) {
+				focus := ""
+				if val, ok := args["focus"]; ok && val != nil {
+					if s, ok := val.(string); ok {
+						focus = s
+					}
 				}
-			}
-			targetRunFolder := ""
-			if iter, ok := args["iteration"]; ok && iter != nil {
-				if s, ok := iter.(string); ok && strings.TrimSpace(s) != "" {
-					targetRunFolder = strings.TrimSpace(s)
-					if gid, ok := args["group_name"]; ok && gid != nil {
-						if g, ok := gid.(string); ok && strings.TrimSpace(g) != "" {
-							targetRunFolder += "/" + strings.TrimSpace(g)
+				targetRunFolder := ""
+				if iter, ok := args["iteration"]; ok && iter != nil {
+					if s, ok := iter.(string); ok && strings.TrimSpace(s) != "" {
+						targetRunFolder = strings.TrimSpace(s)
+						if gid, ok := args["group_name"]; ok && gid != nil {
+							if g, ok := gid.(string); ok && strings.TrimSpace(g) != "" {
+								targetRunFolder += "/" + strings.TrimSpace(g)
+							}
 						}
 					}
 				}
-			}
-			if targetRunFolder == "" {
-				targetRunFolder = strings.TrimSpace(iwm.controller.selectedRunFolder)
-			}
+				if targetRunFolder == "" {
+					targetRunFolder = strings.TrimSpace(iwm.controller.selectedRunFolder)
+				}
 
-			execID := fmt.Sprintf("review-costs-%05d", time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
-			if ctxErr != nil {
-				return "Session was stopped — execution skipped", nil
-			}
+				execID := fmt.Sprintf("review-costs-%05d", time.Now().UnixNano()%100000)
+				execCtx, cancel, ctxErr := iwm.newExecContext()
+				if ctxErr != nil {
+					return "Session was stopped — execution skipped", nil
+				}
 
-			agentSessionID := fmt.Sprintf("workshop-review-costs-%d", time.Now().UnixNano())
-			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
+				agentSessionID := fmt.Sprintf("workshop-review-costs-%d", time.Now().UnixNano())
+				execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
 
-			exec := &WorkshopStepExecution{
-				ID:             execID,
-				StepID:         "review-workflow-costs",
-				AgentSessionID: agentSessionID,
-				Status:         WorkshopStepRunning,
-				cancel:         cancel,
-			}
-			iwm.stepRegistry.Register(exec)
+				exec := &WorkshopStepExecution{
+					ID:             execID,
+					StepID:         "review-workflow-costs",
+					AgentSessionID: agentSessionID,
+					Status:         WorkshopStepRunning,
+					cancel:         cancel,
+				}
+				iwm.stepRegistry.Register(exec)
 
-			if iwm.executionNotifier != nil {
-				iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
-					ID:                execID,
-					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
-					Name:              "Review Workflow Costs",
-					Kind:              string(orchestrator_events.ExecutionKindSubAgent),
-					Cancel:            cancel,
-				})
-			}
-			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
+				if iwm.executionNotifier != nil {
+					iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
+						ID:                execID,
+						ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
+						Name:              "Review Workflow Costs",
+						Kind:              string(orchestrator_events.ExecutionKindSubAgent),
+						Cancel:            cancel,
+					})
+				}
+				execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+				execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
-			go func() {
-				var result string
-				var execErr error
-				eventBridge := iwm.controller.GetContextAwareBridge()
-				defer func() {
-					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
+				go func() {
+					var result string
+					var execErr error
+					eventBridge := iwm.controller.GetContextAwareBridge()
+					defer func() {
+						skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
+						if eventBridge != nil {
+							isCancelled := skipNotify || execCtx.Err() != nil
+							endEvent := &orchestrator_events.OrchestratorAgentEndEvent{
+								BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
+								AgentType:     "workshop-review-costs",
+								AgentName:     "Review Workflow Costs",
+								Success:       execErr == nil,
+							}
+							if execErr != nil {
+								if isCancelled {
+									endEvent.Result = fmt.Sprintf("Cancelled: %v", execErr)
+								} else {
+									endEvent.Result = fmt.Sprintf("Failed: %v", execErr)
+								}
+							} else {
+								endEvent.Result = result
+							}
+							eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
+								Type: orchestrator_events.OrchestratorAgentEnd, Timestamp: time.Now(),
+								Data: endEvent, CorrelationID: agentSessionID,
+							})
+						}
+						if !skipNotify && iwm.executionNotifier != nil {
+							iwm.executionNotifier.OnExecutionComplete(execID, "Review Workflow Costs", result, nil, execErr)
+						}
+					}()
+
 					if eventBridge != nil {
-						isCancelled := skipNotify || execCtx.Err() != nil
-						endEvent := &orchestrator_events.OrchestratorAgentEndEvent{
+						startEvent := &orchestrator_events.OrchestratorAgentStartEvent{
 							BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
 							AgentType:     "workshop-review-costs",
 							AgentName:     "Review Workflow Costs",
-							Success:       execErr == nil,
-						}
-						if execErr != nil {
-							if isCancelled {
-								endEvent.Result = fmt.Sprintf("Cancelled: %v", execErr)
-							} else {
-								endEvent.Result = fmt.Sprintf("Failed: %v", execErr)
-							}
-						} else {
-							endEvent.Result = result
 						}
 						eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-							Type: orchestrator_events.OrchestratorAgentEnd, Timestamp: time.Now(),
-							Data: endEvent, CorrelationID: agentSessionID,
+							Type: orchestrator_events.OrchestratorAgentStart, Timestamp: time.Now(),
+							Data: startEvent, CorrelationID: agentSessionID,
 						})
 					}
-					if !skipNotify && iwm.executionNotifier != nil {
-						iwm.executionNotifier.OnExecutionComplete(execID, "Review Workflow Costs", result, nil, execErr)
-					}
+
+					result, execErr = iwm.runReviewWorkflowCostsAgent(execCtx, targetRunFolder, focus)
 				}()
 
-				if eventBridge != nil {
-					startEvent := &orchestrator_events.OrchestratorAgentStartEvent{
-						BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
-						AgentType:     "workshop-review-costs",
-						AgentName:     "Review Workflow Costs",
-					}
-					eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-						Type: orchestrator_events.OrchestratorAgentStart, Timestamp: time.Now(),
-						Data: startEvent, CorrelationID: agentSessionID,
-					})
+				focusInfo := ""
+				if focus != "" {
+					focusInfo = fmt.Sprintf("\nFocus: %s", focus)
 				}
-
-				result, execErr = iwm.runReviewWorkflowCostsAgent(execCtx, targetRunFolder, focus)
-			}()
-
-			focusInfo := ""
-			if focus != "" {
-				focusInfo = fmt.Sprintf("\nFocus: %s", focus)
-			}
-			runInfo := ""
-			if targetRunFolder != "" {
-				runInfo = fmt.Sprintf("\nTarget run folder: %s", targetRunFolder)
-			}
-			logger.Info(fmt.Sprintf("💸 Workshop: review_workflow_costs agent started in background, execution_id=%q, target_run_folder=%q", execID, targetRunFolder))
-			return fmt.Sprintf("Workflow cost review agent started in background.\nexecution_id: %q%s%s\nYou will be automatically notified when it completes.", execID, runInfo, focusInfo), nil
-		},
-		"workflow",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register review_workflow_costs tool: %v", err))
+				runInfo := ""
+				if targetRunFolder != "" {
+					runInfo = fmt.Sprintf("\nTarget run folder: %s", targetRunFolder)
+				}
+				logger.Info(fmt.Sprintf("💸 Workshop: review_workflow_costs agent started in background, execution_id=%q, target_run_folder=%q", execID, targetRunFolder))
+				return fmt.Sprintf("Workflow cost review agent started in background.\nexecution_id: %q%s%s\nYou will be automatically notified when it completes.", execID, runInfo, focusInfo), nil
+			},
+			"workflow",
+		); err != nil {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to register review_workflow_costs tool: %v", err))
+		}
 	}
 
 	// Tool: review_step_code — background agent that checks if saved scripts match step descriptions

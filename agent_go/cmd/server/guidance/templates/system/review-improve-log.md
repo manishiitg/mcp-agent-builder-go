@@ -26,8 +26,8 @@ Advisor reviewers.
   ordered `findings`. Each finding carries a stable `finding_id`, `target_key`,
   `severity`, plain-language `summary`, exact `evidence`, bounded
   `recommended_fix`, `verification`, and `user_judgment_required` with a reason.
-  Include `next_check` for the module. When Pulse invokes the specialist, keep
-  the packet within 3000 characters without dropping evidence-backed findings.
+  Include `next_check` for the module. Return every evidence-backed finding;
+  keep prose compact without imposing a semantic character or finding limit.
 - After all selected specialists return, the parent validates evidence,
   deduplicates by `finding_id` and `target_key`, resolves conflicts, and applies
   only permitted bounded fixes. In scheduled Pulse it records terminal module
@@ -98,10 +98,10 @@ mobile as an afterthought.
 
 Every visible record has one owner in the Japanese-inspired review cycle:
 
-- **Goal — Ikigai:** purpose and success criteria. `soul/soul.md` is the source of truth and Runloop renders it directly. Do not copy a Goal/Profile card into `builder/improve.html`.
-- **Signals — Kizuki:** evidence-backed observations from read-only reviewers. State what was found, not what was fixed. Use `data-pulse-section="signals"` and that reviewer's canonical module id.
-- **Reflection — Hansei:** what the run means, cadence reasoning, assumptions challenged, and general Pulse/run question-and-answer outcomes. Use `data-pulse-section="reflection"`.
-- **Improvements — Kaizen:** verified bounded fixes from Pulse Fixer plus Goal Advisor proposals or decisions. Link each improvement to its Signal evidence and verification. Use `data-pulse-section="improvements"` with `pulse_fixer` or `goal_advisor`.
+- **Goal:** purpose and success criteria. `soul/soul.md` is the source of truth and Runloop renders it directly. Do not copy a Goal/Profile card into `builder/improve.html`.
+- **Issues and reviews:** evidence-backed observations from read-only reviewers. State what was found, not what was fixed. Use the stable compatibility attribute `data-pulse-section="signals"` and that reviewer's canonical module id.
+- **Decisions and analysis:** what the run means, cadence reasoning, assumptions challenged, and general Pulse/run question-and-answer outcomes. Use the stable compatibility attribute `data-pulse-section="reflection"`.
+- **Fixes and improvements:** verified bounded fixes from Pulse Fixer plus Goal Advisor proposals or decisions. Link each improvement to its review evidence and verification. Use `data-pulse-section="improvements"` with `pulse_fixer` or `goal_advisor`.
 
 `builder/improve.html` remains one newest-first chronological journal. The Pulse popup groups that same history by these attributes; do not create separate HTML files or duplicate the same narrative across sections.
 
@@ -237,7 +237,7 @@ The header verdicts are stable current-state elements, not timeline entries. Upd
 
 ### Goal source and progress
 
-`soul/soul.md` is the only durable Goal definition. Runloop's Goal / Ikigai tab renders it directly, so do not duplicate its objective or success criteria as a Goal/Profile card in `builder/improve.html`. The HTML may show time-bound **Goal progress** in Today's outcome, verdicts, Signal evidence, and Reflection entries, each stamped with its evidence run. `/define-success` establishes the goal; Pulse measures and reflects on it without copying the source document.
+`soul/soul.md` is the only durable Goal definition. Runloop's Goal tab renders it directly, so do not duplicate its objective or success criteria as a Goal/Profile card in `builder/improve.html`. The HTML may show time-bound **Goal progress** in Today's outcome, verdicts, review evidence, and analysis entries, each stamped with its evidence run. `/define-success` establishes the goal; Pulse measures and reflects on it without copying the source document.
 
 ### Signal tiles — grouped by verdict
 
@@ -443,7 +443,7 @@ Missing `#pulse-bug-verdict` or `#pulse-goal-verdict` alone does **not** require
 **Do NOT append your new entry into the old structure** — that produces good content in a stale, off-brand shell. Instead, **rewrite the entire document using `get_reference_doc(kind="review-improve-log-skeleton")`** as a one-time upgrade:
 
 1. Read the old file in full.
-2. Load `get_reference_doc(kind="review-improve-log-skeleton")` and write the skeleton fresh: header + verdict pills, status headline, Pulse coverage row, optional Assumptions challenged, the Today's outcome brief, collapsed operator details, filter bar, the recent-runs strip, the `<!-- LOG ENTRIES: newest first -->` anchor, the hidden recovery marker, and the archive section. Goal remains in `soul/soul.md`, rendered by Runloop's Goal / Ikigai tab.
+2. Load `get_reference_doc(kind="review-improve-log-skeleton")` and write the skeleton fresh: header + verdict pills, status headline, Pulse coverage row, optional Assumptions challenged, the Today's outcome brief, collapsed operator details, filter bar, the recent-runs strip, the `<!-- LOG ENTRIES: newest first -->` anchor, the hidden recovery marker, and the archive section. Goal remains in `soul/soul.md`, rendered by Runloop's Goal tab.
 3. Carry every **unresolved finding** and **still-relevant recent decision/run** forward as timeline **cards** (newest first), dropping the `<script>` JSON blocks and the `F-`/`I-` ids — write readable prose, give an open finding a short anchor id only.
 4. Delete any legacy `.md` (`execute_shell_command`) so nothing is duplicated.
 

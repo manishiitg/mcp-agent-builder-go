@@ -32,9 +32,11 @@ Every skip needs reason, evidence, and `next_check_at`, positive `cooldown_runs`
 or `next_check_after_run_id`. Name evidence that overrides cadence.
 Missing baseline means `baseline pending`, not healthy. Use bounded adaptive cadence.
 
-**Cap 3 reviewer modules per pass, not fixes.** If >3 are due, prioritize the
-oldest unresolved/unattempted backlog and defer the rest by 3-cap, never as
-clean. A selected module's Fixer may drain all safe retained findings.
+Select every module whose evidence says it is due. Do not defer an actionable
+module merely because other modules are also due. Deep reviewers run in
+backend-bounded batches, while the single Fixer remains sequential. When work
+must wait for a real evidence/user/external boundary, record that boundary
+instead of inventing a capacity cooldown.
 
 For an off-track material goal, use this escalation ladder:
 

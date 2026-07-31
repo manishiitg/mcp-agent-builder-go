@@ -25,7 +25,7 @@ The Goal Advisor loop evaluates strategy against this goal, so a vague or stale 
 - Ask: "Is this still what success means here? Anything to change, add, or drop?"
 - Push for checkable criteria: a threshold, observable outcome, required artifact, or explicit quality bar.
 - If `soul.md` has no success criteria, or they are vague/placeholder, stop and ask directly: "What does success look like for this workflow - what checkable outcomes tell you it is working?"
-- Write the confirmed objective and success criteria back to `soul.md`. It is the single source of truth rendered by Runloop's Goal / Ikigai tab and used by the Goal verdict.
+- Write the confirmed objective and success criteria back to `soul.md`. It is the single source of truth rendered by Runloop's Goal tab and used by the Goal verdict.
 - Keep only stable intent in `soul.md`: objective, checkable success criteria, and any constraint the user explicitly confirms as non-negotiable. Do not copy architecture, step design, provider/tool choices, implementation details, references, historical decisions, or agent-inferred assumptions into it. Those belong in the plan/config/changelog/learnings/knowledgebase and remain open to improvement.
 - If existing `soul.md` contains architecture or an agent-made assumption, do not silently treat it as authoritative. Surface the ambiguity as an assumption to challenge; preserve the current implementation in its proper artifact and ask only when deciding whether it is a genuine user constraint.
 
@@ -59,7 +59,7 @@ If `builder/improve.html` does not exist yet, create it from the Starter HTML sk
 
 Fill the skeleton:
 - Header: workflow name, type/oversight chips, and verdict pills. With no runs yet, set Bug = "Not measured" and Goal = "Not measured" (warn).
-- Add one dated **Reflection / Hansei** framework-setup card with `data-pulse-section="reflection"` and `data-module="run_summary"`. Summarize the confirmed operating model and why it fits; do not copy the Goal into the HTML.
+- Add one dated **Decisions and analysis** framework-setup card with `data-pulse-section="reflection"` and `data-module="run_summary"`. Summarize the confirmed operating model and why it fits; do not copy the Goal into the HTML.
 
 Leave signal tiles, recent-runs strip, the `<!-- LOG ENTRIES: newest first -->` anchor, and archive section in place. Do not invent values or runs.
 
@@ -96,7 +96,7 @@ You are auditing existing setup, not bootstrapping. Walk through these checks an
 - Flag success criteria with no eval coverage.
 - Flag eval steps that always pass, fail open on missing inputs, or do not inspect consequential run evidence.
 
-After STEP 5, record what you reviewed and recommended in `builder/improve.html` as a dated **Reflection / Hansei** Framework review entry (`data-pulse-section="reflection"`, `data-module="run_summary"`) so the audit trail survives the session.
+After STEP 5, record what you reviewed and recommended in `builder/improve.html` as a dated **Decisions and analysis** Framework review entry (`data-pulse-section="reflection"`, `data-module="run_summary"`) so the audit trail survives the session.
 
 If `builder/improve.html` is already long, compact it after the review:
 - keep the current header/verdicts, latest 10-20 timeline entries, and all open findings in `builder/improve.html`

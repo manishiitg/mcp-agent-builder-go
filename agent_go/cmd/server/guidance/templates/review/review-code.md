@@ -81,7 +81,7 @@ End with a cross-step summary: which steps are clean, which need work, which are
 
 PARENT CLOSE-OUT: after the complete packet returns, validate and deduplicate it
 against matching Bug Review findings in `builder/improve.html`. Then make one
-bounded newest-first log update containing one or more **Signals / Kizuki**
+bounded newest-first log update containing one or more **Issues and reviews**
 "Open finding" cards with `data-pulse-section="signals"` and
 `data-module="bug_review"`. Include all evidence-backed findings and mark them as
 REVIEW (recommend; do NOT apply). Do not make the specialist format HTML and do

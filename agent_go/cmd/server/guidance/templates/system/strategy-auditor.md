@@ -141,7 +141,7 @@ next_check: exact run/exposure/time/evidence boundary
 goal_advisor_handoff: diagnosis to use, or none
 ```
 
-Then list at most five ordered findings. Each finding has a stable `finding_id`,
+Then list every evidence-backed ordered finding. Each finding has a stable `finding_id`,
 one primary classification, severity, claim, causal mechanism, exact evidence
 paths/queries and values, confidence, competing explanation, impact on a named
 success criterion, and handoff. A `strategy_flaw` handoff describes the problem
