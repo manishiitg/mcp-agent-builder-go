@@ -59,6 +59,14 @@ const (
 	// ConcernPhaseReview covers Pulse reviewer artifacts. The "step" for these is
 	// the module name (bug_review, db_health, ...) rather than a plan step.
 	ConcernPhaseReview = "review"
+	// ConcernPhasePreValidation is filed by Go itself (SavePreValidationLog),
+	// not by an agent — there is no step turn to emit a CONCERNS: line, since a
+	// failing gate produces a repair turn, not a completion summary. Written at
+	// the moment a validation_schema check fails so a step whose schema demands
+	// an undocumented field, or rejects a legitimate null, surfaces as evidence
+	// even on a run where it eventually passed after repair and left no other
+	// trace. See ParseConcernLines and RecordRunConcerns.
+	ConcernPhasePreValidation = "prevalidation"
 )
 
 const (

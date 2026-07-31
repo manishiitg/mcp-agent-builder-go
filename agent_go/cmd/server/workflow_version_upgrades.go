@@ -364,6 +364,32 @@ How the keys get dropped: both fields were removed from the step-config struct, 
 
 Report: the steps that carried either retired field with their previous values (including "(absent — was agent mode)" where knowledgebase_write_method was missing on a KB-writing step), confirmation that a full rewrite removed the keys, the list of steps with KB write access but no contribution, and confirmation that no other field was modified. If no step carries either field and none grants KB write access, this is a no-op migration — say so explicitly and just bump the version.`,
 	},
+	{
+		from:  workflowContractKBWriteMethodRetiredVersion,
+		to:    workflowContractEvalVerdictSchemaVersion,
+		label: "upgrade-1.0.16",
+		query: `WORKFLOW VERSION UPGRADE v1.0.15 -> v1.0.16.
+
+This is a product-managed pre-execution migration. Do ONLY this eval-verdict-schema migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
+
+Goal: every eval step's own output already carries the real verdict — there is no separate scoring agent. Each eval step must write a numeric "score" field into its output_content (the extraction code reads obj["score"] literally; nothing else makes a verdict "captured"). Older eval plans predate this contract and use other shapes (e.g. "score_0_to_100", a legacy "eval_logic"/"pass_condition" structure, or no validation_schema at all), so their real scores are silently stuck on "No score captured" and never reach evaluation_report.json or the db.sqlite eval_results table report_health reads via window.report.query.
+
+If evaluation/evaluation_plan.json does not exist, this is a no-op — skip to the version bump.
+
+1. Read evaluation/evaluation_plan.json and evaluation/step_config.json. Call get_reference_doc(kind="evaluation-plan") for the current output contract: each step's own output_content should carry "score" (0-10), "max_score" (typically 10), "reasoning" or "pass_fail_reason" (either is accepted), and "evidence".
+2. For each eval step, inspect its description and validation_schema, and — if a prior real run exists — its actual output under evaluation/runs/iteration-0/.../execution/<step-id>/output_content.json, to judge whether it already emits a numeric "score" key. Steps that already do (on a 0-10 scale) need no change.
+3. For a step using an old 0-100 scale ("score_0_to_100" or similar), rewrite its description and validation_schema to emit "score" on a 0-10 scale (divide by 10, preserving relative strictness) rather than adding a second field alongside the old one.
+4. For a step using a wholly different mechanism (legacy eval_logic/pass_condition/severity, or any other bespoke shape with no "score" key), rewrite its description to instruct writing score/max_score/reasoning-or-pass_fail_reason/evidence directly into output_content, evaluating the exact same underlying checks/intent the step already performs. This changes what is emitted, not what is measured — do not alter the step's actual checks, thresholds, or pass/fail intent while doing this.
+5. Add or extend validation_schema json_checks so $.score (number) is required on every step; add $.max_score, and $.reasoning or $.pass_fail_reason, when the step doesn't already declare them. A step already correctly emitting evidence in its output but not declaring it in validation_schema is lower priority — extraction already falls back to pointing at output_content itself when no explicit evidence field exists, so only add an $.evidence check where the step genuinely has a distinct evidence value worth requiring.
+6. If evaluation_plan.json is a legacy top-level array, rewrite it to the canonical {"steps": [...]} object shape while making the other changes above (both parse identically today, but keep the file consistent with current authoring guidance).
+7. A leftover per-step "success_criteria" field is inert — the framework does not read it. Remove it while touching a step for another reason; do not treat its presence or absence as a validation error on its own, and do not touch steps that need no other change solely to strip it.
+8. Call validate_evaluation_plan and fix any errors before proceeding.
+9. Call run_full_evaluation(group_name="...") against one representative group to prove the rewritten steps produce a real "score" in their actual output, not just an updated schema. Read the resulting evaluation_report.json step_scores: every changed step's reasoning must no longer be the "No score captured — this eval step produced no output_content, or output_content had no score field." stub.
+10. Append one concise Pulse entry to builder/improve.html, if that file exists, listing which eval steps were migrated, which were already compliant, and the run_full_evaluation verification result (or why verification was skipped).
+11. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.16". Do not change schema_version, planning/plan.json, schedules, notifications, or publishing in this step.
+
+Report: which eval steps needed changes vs. were already compliant, the old-shape -> new-field mapping per changed step, validate_evaluation_plan result, run_full_evaluation verification result confirming real scores are now captured (or why it was skipped), and any blockers. If evaluation_plan.json does not exist or every step already emits a numeric "score", this is a no-op migration — say so explicitly and just bump the version.`,
+	},
 }
 
 func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {

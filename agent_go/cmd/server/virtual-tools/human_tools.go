@@ -417,7 +417,17 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		if dest == nil {
 			dest = &services.NotificationDestination{}
 		}
-		dest.Gmail = &services.GmailDest{Email: strings.Join(to, ", ")}
+		// Set the recipient WITHOUT replacing dest.Gmail. It already carries
+		// BlockedRecipients from workflow.json notifications.block_recipients,
+		// and assigning a fresh GmailDest here discarded that denylist — so the
+		// one argument an agent controls silently disabled the per-workflow block
+		// list, exactly when an agent is choosing its own recipients. Only the
+		// account-wide list survived, which is not what a workflow-scoped block
+		// is for.
+		if dest.Gmail == nil {
+			dest.Gmail = &services.GmailDest{}
+		}
+		dest.Gmail.Email = strings.Join(to, ", ")
 	}
 	// Optional one-off email denylist for this send, unioned with both the
 	// account-wide blocked list and the per-workflow workflow.json

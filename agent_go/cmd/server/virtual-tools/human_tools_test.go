@@ -594,3 +594,48 @@ func TestHandleNotifyUserEmailToOverridesDestination(t *testing.T) {
 		t.Fatal("expected Gmail notification")
 	}
 }
+
+// workflow.json notifications.block_recipients is a per-workflow denylist carried
+// on dest.Gmail. Supplying email_to used to assign a fresh GmailDest, discarding
+// it — so the one recipient argument an agent controls silently switched the
+// workflow's block list off, precisely when the agent was choosing its own
+// recipients. Only the account-wide list still applied.
+func TestEmailToKeepsWorkflowBlockedRecipients(t *testing.T) {
+	manager := services.GetNotificationManager()
+	ch := make(chan *services.NotificationDestination, 1)
+	connector := &testUserNotificationConnector{name: "gmail", ch: ch}
+	manager.RegisterConnector(connector)
+	t.Cleanup(func() {
+		manager.UnregisterConnector("gmail")
+	})
+
+	ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
+	ctx = context.WithValue(ctx, BotNotificationDestinationKey, &services.NotificationDestination{
+		UserID: "user-1",
+		Gmail: &services.GmailDest{
+			BlockedRecipients: []string{"blocked@example.com"},
+		},
+	})
+
+	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user": "FYI: done",
+		"email_to":         []interface{}{"ops@example.com"},
+	}); err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.Gmail == nil {
+			t.Fatalf("gmail destination = %#v, want a Gmail destination", dest)
+		}
+		if dest.Gmail.Email != "ops@example.com" {
+			t.Fatalf("gmail To = %q, want the explicit recipient", dest.Gmail.Email)
+		}
+		if len(dest.Gmail.BlockedRecipients) != 1 || dest.Gmail.BlockedRecipients[0] != "blocked@example.com" {
+			t.Fatalf("workflow denylist lost: %#v", dest.Gmail.BlockedRecipients)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Gmail notification")
+	}
+}

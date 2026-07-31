@@ -1,12 +1,10 @@
 package step_based_workflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -139,6 +137,29 @@ type StreakInfo struct {
 	Count int    `json:"count"`
 }
 
+// ErrScriptedHarnessRejection means the workspace API refused the execute
+// request, so main.py never started and produced no output at all.
+//
+// This is deliberately a distinct failure kind rather than "the script failed",
+// because the two demand opposite responses. A failed script is the relearn
+// path's whole purpose: the step agent is handed the source plus the error and
+// told to "fix the bug and rewrite it", and its rewrite is then saved back as
+// the canonical script. Feed a harness rejection into that path and the agent
+// is asked to explain an error its code did not cause, against a script it
+// cannot observe running. It complies, because the prompt presumes the script
+// is at fault and offers no branch for "the error is not yours".
+//
+// That is not hypothetical. One workflow concluded DB_PATH was missing; another
+// concluded Python's sqlite3 could not open the database and wrote a permanent
+// learning to shell out to the sqlite3 CLI instead. Neither script had executed
+// a line, and both rewrites were persisted over working code.
+//
+// So a rejection aborts the step instead. It is infrastructure being down, and
+// it surfaces through the ordinary step-failure notification the operator
+// already watches — not as a workflow concern, which Pulse Gate reads to choose
+// reviewers that could do nothing about it.
+var ErrScriptedHarnessRejection = errors.New("workspace refused to start the script")
+
 // ScriptedFastPathResult is returned by tryRunSavedScriptedScript.
 type ScriptedFastPathResult struct {
 	RanScript       bool   // true if a saved script was found and attempted
@@ -150,6 +171,11 @@ type ScriptedFastPathResult struct {
 	ValidationError string // output/pre-validation failure, if any
 	FailureReason   string // "execution_error", "validation_error", or "execution_and_validation_error"
 	ExistingScript  string // old script content (for LLM relearn prompt)
+	// HarnessFailure means the script never started (ErrScriptedHarnessRejection).
+	// Mutually exclusive with RanScript: nothing was executed, so there is no
+	// exit code, no output, and nothing for the LLM to repair.
+	HarnessFailure bool
+	HarnessError   string
 }
 
 // ScriptedFastPathDecision is what the saved-script attempt means for the rest
@@ -166,6 +192,10 @@ type ScriptedFastPathDecision struct {
 	// a script actually ran and failed — an untried script is a reuse case, not
 	// a failure, and must not be presented to the model as one.
 	PriorError string
+	// HarnessFailure aborts the step: the runtime refused to start the script,
+	// so neither the fast path nor the LLM fallback has anything to work with.
+	HarnessFailure bool
+	HarnessError   string
 }
 
 // decideScriptedFastPath maps a saved-script attempt onto the step's next move.
@@ -180,6 +210,10 @@ func decideScriptedFastPath(result *ScriptedFastPathResult) ScriptedFastPathDeci
 		return ScriptedFastPathDecision{}
 	}
 	switch {
+	case result.HarnessFailure:
+		// The script never started. Handing the LLM a script and an error it did
+		// not cause is how working code gets rewritten — abort instead.
+		return ScriptedFastPathDecision{HarnessFailure: true, HarnessError: result.HarnessError}
 	case result.RanScript && result.Success:
 		// Saved script executed and validated — skip the LLM entirely.
 		return ScriptedFastPathDecision{FastPathDone: true}
@@ -860,61 +894,45 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		ExtraEnv:         extraEnv,
 	}
 
-	jsonBody, err := json.Marshal(reqParams)
+	// Dispatch through the same client the agent's own execute_shell_command uses.
+	//
+	// This used to build and send its own request, which is how the two diverged:
+	// workspace.Client attaches X-Workspace-Token and X-User-ID, and this path
+	// attached neither, so /api/execute — the one token-protected route — rejected
+	// every scripted run. The agent could not see it. Its self-test went through
+	// the client and passed; only the controller's run failed, so the agent was
+	// told its working script was broken and duly "fixed" it.
+	//
+	// Keeping one door means a test run and a real run cannot disagree again.
+	if hcpo.WorkspaceClient == nil {
+		return "", -1, fmt.Errorf("%w: no workspace client configured", ErrScriptedHarnessRejection)
+	}
+	result, err := hcpo.WorkspaceClient.ExecuteShellCommand(ctx, reqParams)
 	if err != nil {
-		return "", -1, fmt.Errorf("marshal shell request: %w", err)
+		// Transport failure or a non-2xx status: the request never became a
+		// process, so this is the harness failing, not the script.
+		return "", -1, fmt.Errorf("%w: %w", ErrScriptedHarnessRejection, err)
 	}
 
-	apiURL := getWorkspaceAPIURL() + "/api/execute"
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "", -1, fmt.Errorf("create shell request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", -1, fmt.Errorf("workspace shell execute: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", -1, fmt.Errorf("read shell response: %w", err)
-	}
-
-	// Parse raw API response: {"success":..., "data":{"stdout":...,"stderr":...,"exit_code":...}, "error":...}
-	var apiResp struct {
-		Success bool   `json:"success"`
-		Error   string `json:"error"`
-		Data    struct {
-			Stdout   string `json:"stdout"`
-			Stderr   string `json:"stderr"`
-			ExitCode int    `json:"exit_code"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return "", -1, fmt.Errorf("parse shell response: %w (body: %s)", err, string(body))
-	}
-
-	combined := apiResp.Data.Stdout
-	if apiResp.Data.Stderr != "" {
+	combined := result.Stdout
+	if result.Stderr != "" {
 		if combined != "" {
 			combined += "\n"
 		}
-		combined += apiResp.Data.Stderr
+		combined += result.Stderr
 	}
-	exitCode = apiResp.Data.ExitCode
+	exitCode = result.ExitCode
 	hcpo.GetLogger().Info(fmt.Sprintf(
-		"🐍 [scripted_code] Direct script shell result | success=%t | exit_code=%d | api_error=%q | script=%s",
-		apiResp.Success,
+		"🐍 [scripted_code] Direct script shell result | exit_code=%d | api_error=%q | script=%s",
 		exitCode,
-		apiResp.Error,
+		result.Error,
 		mainPyAbsPath,
 	))
-	if !apiResp.Success && exitCode == 0 {
+	if result.Error != "" && exitCode == 0 {
+		// The API reported a failure but no process ever ran (exit 0 with an
+		// error is the shape of a rejected request, not a failed script).
 		exitCode = -1
-		execErr = fmt.Errorf("workspace API error: %s", apiResp.Error)
+		execErr = fmt.Errorf("%w: %s", ErrScriptedHarnessRejection, result.Error)
 	}
 	return combined, exitCode, execErr
 }
@@ -1042,6 +1060,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 	fastPathAgentCfgs := getAgentConfigs(step)
 	isLocked := fastPathAgentCfgs != nil && fastPathAgentCfgs.LockCode != nil && *fastPathAgentCfgs.LockCode
 
+	// A refused request is not a run. Return before pre-validation and before
+	// updateScriptedRunStats: recording it as a failure would inflate
+	// current_streak and lock_code_stats.consecutive_failures, which is what
+	// flips needs_review and argues for unlocking a script that never ran.
+	if errors.Is(execErr, ErrScriptedHarnessRejection) {
+		hcpo.GetLogger().Error(fmt.Sprintf(
+			"🚨 [scripted] Workspace refused to start main.py for step %d (%s) — the script did not run",
+			stepIndex+1, stepID), execErr)
+		return &ScriptedFastPathResult{
+			HarnessFailure: true,
+			HarnessError:   execErr.Error(),
+			ExitCode:       -1,
+			ExistingScript: existingScript,
+		}
+	}
+
 	if execErr != nil || exitCode != 0 {
 		var execErrMsg string
 		if execErr != nil {
@@ -1055,7 +1089,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 			hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, false, preValResults)
 			if hcpo.selectedRunFolder != "" {
 				preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-				SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step))
+				SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 			}
 		}
 		if preValResults != nil && preValResults.OverallPass {
@@ -1094,7 +1128,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 		hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, false, preValResults)
 		if hcpo.selectedRunFolder != "" {
 			preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-			SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step))
+			SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 		}
 	}
 	if preValResults != nil && !preValResults.OverallPass {

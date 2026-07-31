@@ -140,8 +140,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 	hcpo.GetLogger().Info("✅ Evaluation execution completed successfully")
 
 	// Build the evaluation report directly from individual eval step outputs.
-	// There is no final scoring agent; output_content remains the source of
-	// truth for each eval step.
+	// There is no final scoring agent; each eval step's own output_content is
+	// the source of truth for its score, and enrichEvaluationReportWithStepOutputs
+	// extracts it directly rather than combining scores across steps.
 	hcpo.GetLogger().Info("📊 Building evaluation report from step outputs")
 	report, err := hcpo.runEvaluationReportPhase(ctx, evaluationPlan, targetRunFolder, internalEvalRunFolder, skippedStepScores)
 	if err != nil {
@@ -172,10 +173,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) runEvaluationReportPhase(ctx context.
 		}
 		report.StepScores = append(report.StepScores, &EvaluationStepScore{
 			StepID:    step.ID,
-			Score:     0,
-			MaxScore:  0,
-			Reasoning: "Final scoring is disabled; this report preserves the eval step output for review.",
-			Evidence:  "Inspect output_content for the eval step's structured verdict and evidence.",
+			Reasoning: "No score captured — this eval step produced no output_content, or output_content had no score field.",
+			Evidence:  "No output_content found for this step.",
 		})
 	}
 	report.StepScores = append(report.StepScores, skippedStepScores...)
@@ -198,6 +197,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) runEvaluationReportPhase(ctx context.
 	}
 	if err := hcpo.persistEvaluationScoreLedger(ctx, report, targetRunFolder); err != nil {
 		return report, fmt.Errorf("failed to persist evaluation report ledger: %w", err)
+	}
+	if err := hcpo.persistEvalResultsToDB(ctx, report); err != nil {
+		// Best-effort: the JSON report and ledger above are already durable, so a
+		// db.sqlite write failure only loses this run's report-UI visibility, not data.
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to persist eval_results to db.sqlite: %v", err))
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf("📄 Evaluation report saved to internal path: %s", internalReportPath))
@@ -239,9 +243,76 @@ func (hcpo *StepBasedWorkflowOrchestrator) enrichEvaluationReportWithStepOutputs
 				continue
 			}
 			score.OutputContent = buildStepOutputContent(candidate, raw)
+			extractEvalVerdictFromOutputContent(score)
 			break
 		}
 	}
+}
+
+// extractEvalVerdictFromOutputContent reads score/max_score/reasoning/evidence
+// out of an eval step's own output_content — the step already writes them
+// per its validation_schema, so this is extraction, not scoring. Real eval
+// steps in production use "pass_fail_reason" for the explanation more often
+// than "reasoning" (the field name the authoring guidance names); accept
+// either, preferring pass_fail_reason since that is what real steps write.
+// A step whose output legitimately has no separate "evidence" key falls back
+// to pointing at output_content itself, since that file IS the evidence the
+// score was computed from — never leave the required Evidence field empty
+// just because the step didn't name one explicitly.
+func extractEvalVerdictFromOutputContent(score *EvaluationStepScore) {
+	if score == nil || score.OutputContent == nil || !score.OutputContent.IsJSON {
+		return
+	}
+	obj, ok := score.OutputContent.Content.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	scoreFound := false
+	if v, ok := evalNumberFromAny(obj["score"]); ok {
+		score.Score = v
+		scoreFound = true
+	}
+	if v, ok := evalNumberFromAny(obj["max_score"]); ok {
+		score.MaxScore = v
+	}
+
+	reasoning, hasReasoning := evalStringFromAny(obj["pass_fail_reason"])
+	if !hasReasoning || reasoning == "" {
+		reasoning, hasReasoning = evalStringFromAny(obj["reasoning"])
+	}
+	switch {
+	case hasReasoning && reasoning != "":
+		score.Reasoning = reasoning
+	case scoreFound:
+		score.Reasoning = "Score captured, but this eval step's output_content had no reasoning/pass_fail_reason text."
+	}
+
+	if evidence, ok := evalStringFromAny(obj["evidence"]); ok && evidence != "" {
+		score.Evidence = evidence
+	} else if scoreFound {
+		score.Evidence = fmt.Sprintf("See %s for the extracted facts this score was computed from.", score.OutputContent.FilePath)
+	}
+}
+
+// evalNumberFromAny narrows a decoded JSON value to an int score. JSON
+// numbers decode as float64, so this truncates — EvaluationStepScore.Score
+// is an int contract, and real eval steps write whole-number scores under
+// the "score" key itself (a separate fractional metric under a different
+// key, if a step has one, is left alone and simply not read here).
+func evalNumberFromAny(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	}
+	return 0, false
+}
+
+func evalStringFromAny(v interface{}) (string, bool) {
+	s, ok := v.(string)
+	return s, ok
 }
 
 func evaluationOutputContentCandidates(evalExecutionPath, stepFolder string, step *EvaluationStep) []string {

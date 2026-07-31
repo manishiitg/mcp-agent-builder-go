@@ -55,6 +55,12 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   .status .txt{color:var(--ink);font-weight:580;min-width:0;flex:1 1 220px}.status .when{margin-left:19px;flex-basis:100%;font:540 11px/1.35 var(--mono);color:var(--ink-3);white-space:normal}
   .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}
   .chip{font:520 12px/1 var(--sans);padding:6px 11px;border-radius:8px;background:var(--surface);border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap;overflow-wrap:normal;word-break:normal} .chip b{color:var(--ink);font-weight:600}
+  .coverage{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+  .covitem{display:inline-flex;align-items:center;gap:6px;font:560 11.5px/1 var(--sans);padding:6px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line-2);white-space:nowrap}
+  .covitem .dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-3)}
+  .covitem.ok .dot{background:var(--ok)} .covitem.warn .dot{background:var(--warn)} .covitem.bad .dot{background:var(--bad)} .covitem.pending .dot{background:var(--ink-3)}
+  .covitem .cl{color:var(--ink);font-weight:620}
+  .covitem .cd{color:var(--ink-3);font:540 10.5px/1 var(--mono);margin-left:1px}
   .brief{margin-top:16px;border:1px solid var(--line-2);border-radius:var(--r);background:linear-gradient(180deg,color-mix(in srgb,var(--surface-2) 72%,var(--surface)),var(--surface));box-shadow:var(--shadow);padding:14px}
   .brief-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;font:700 10.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
   .brief-h b{font:600 11px/1.2 var(--mono);letter-spacing:0;text-transform:none;color:var(--ink-2);white-space:nowrap}
@@ -123,6 +129,42 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   .outcome.ok{color:var(--ok)} .outcome.ok::before{content:"✓";background:var(--ok-bg)}
   .outcome.bad{color:var(--bad)} .outcome.bad::before{content:"✗";background:var(--bad-bg)}
   .outcome.flat{color:var(--warn)} .outcome.flat::before{content:"–";background:var(--warn-bg)}
+  /* DAY GROUP — a plain visual wrapper for one date's activity, NOT itself a
+     .run/.entry/.pulse-record. This matters structurally: the Pulse popup
+     (WorkflowToolbar's per-reviewer tabs) clones top-level .run/.entry
+     elements by their own data-module and explicitly SKIPS anything nested
+     inside another .run/.entry/.pulse-record. So every card that should be
+     individually findable in a reviewer's tab — the workflow run, each
+     module's finding, the Fixer's action — stays its OWN top-level .run or
+     .entry with its own correct data-date/data-kind/data-pulse-section/
+     data-module, exactly like today. .daygroup only adds a shared date
+     header and light visual grouping around those siblings; it never wraps
+     them in a combined card that would swallow their individual module tags. */
+  .daygroup{margin-bottom:14px}
+  .daygroup .daydate{font:700 10.5px/1 var(--mono);letter-spacing:.08em;color:var(--ink-3);margin:0 2px 7px}
+  /* .run normally gets its card look (border/radius/shadow) from the .runs
+     wrapper it used to always sit inside. Inside .daygroup there is no such
+     wrapper — .run sits directly beside fully self-contained .entry cards —
+     so give it the same self-contained treatment here, scoped to .daygroup
+     only, rather than changing the base .run rule other templates may still
+     rely on unwrapped-vs-wrapped elsewhere. */
+  .daygroup>.run{border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow);margin-bottom:8px}
+  .daygroup>.entry{margin-bottom:8px}
+  .daygroup>.entry:last-child,.daygroup>.run:last-child{margin-bottom:0}
+  /* Gate entry kind — the dispatch note for one Pulse pass: which modules ran
+     and why, which were skipped. Same entry contract as any other kind. */
+  .entry.gate::before{background:var(--decision)}
+  .entry.gate{border-color:color-mix(in srgb,var(--decision) 18%,var(--line-2))}
+  .tag.gate{background:var(--decision-bg);color:var(--decision)}
+  /* Per-reviewer generated-field detail, used inside a normal .entry (monitor,
+     open, agent, etc.) in place of (or alongside) the plain takeaway/impact
+     prose, when the module has structured fields worth showing directly
+     rather than only prose — e.g. bug_review's finding/evidence/classification/
+     recommended_fix, or cost_llm_time's cost/token/efficiency buckets. */
+  .modfields{margin-top:9px;padding-left:10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:4px}
+  .mf{display:flex;gap:8px;font:540 12px/1.5 var(--sans)}
+  .mf .mfk{flex:none;width:128px;font:600 10px/1.4 var(--mono);letter-spacing:.03em;color:var(--ink-3)}
+  .mf .mfv{color:var(--ink-2)}
   .archive{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);overflow:hidden;box-shadow:var(--shadow)}
   .arow{display:block;padding:13px 14px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink-2)} .arow:first-child{border-top:none} .arow b{color:var(--ink);font-weight:620} .arow .n{display:block;margin-top:4px;font:540 11px/1.35 var(--mono);color:var(--ink-3)}
   footer{margin-top:42px;padding-top:18px;border-top:1px solid var(--line);font:540 11.5px/1.5 var(--mono);color:var(--ink-3)}
@@ -175,6 +217,25 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <span class="chip">Last run <b>—</b></span>
   </div>
 
+  <!-- PULSE COVERAGE — always all 8 modules, always visible, even the clean/boring ones.
+       This is the proof-of-life row: it answers "is Pulse actually checking things" (real
+       dates from pulse_module_state, never a static claim) separately from "is each area
+       healthy" (the dot color, never blended into one score). Never hide a clean module —
+       silence must not look the same as never-checked. Read last_ran_at/last_result per
+       module from get_pulse_module_state; dot class ok|warn|bad|pending (pending = never
+       checked, use --ink-3, say "never checked" not a fabricated date). Update this row
+       every Pulse pass, in the same write as Today's outcome. -->
+  <div class="coverage" aria-label="Pulse coverage">
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Bug review</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Plan drift</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Stores health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Eval health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Report health</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Cost + time</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok"><span class="dot"></span><span class="cl">Steps &amp; setup</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem pending"><span class="dot"></span><span class="cl">Goal Advisor</span><span class="cd">never checked</span></div>
+  </div>
+
   <!-- ACTIVE ASSUMPTIONS CHALLENGED — render this block ONLY when a consequential assumption is actively limiting the workflow.
        Keep at most 3. An assumption is not an explicit user constraint. Remove resolved items from the top and record the outcome in the timeline.
   <div class="assumptions">
@@ -183,15 +244,20 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   </div>
   -->
 
-  <!-- TODAY'S OUTCOME — four short operator-summary cells. Keep this brief; details belong in Recent runs/timeline.
+  <!-- TODAY'S OUTCOME — five short operator-summary cells. Keep this brief; details belong in Recent runs/timeline.
        The heading says which run/date this summary reflects. If a cell carries an older metric, end its sentence with
-       "not measured this run · last measured run/date" instead of making the older value look current. -->
+       "not measured this run · last measured run/date" instead of making the older value look current.
+       "Fixed today" and "Open now" are ALWAYS both present, even when empty ("Nothing fixed this pass" /
+       "No open issues") — never merge them into one cell. A user scanning this row must be able to tell, from
+       color alone, what Pulse already resolved (green) vs what still needs attention (amber/red); see
+       "Fixed today is not Open now" below. -->
   <div class="brief">
     <div class="brief-h">Today's outcome <b><!-- as of run #— --></b></div>
     <div class="briefgrid">
       <div class="briefitem ok"><div class="k">Outcome</div><p><!-- what the workflow actually delivered --></p></div>
       <div class="briefitem"><div class="k">Goal progress</div><p><!-- movement against success criteria --></p></div>
-      <div class="briefitem warn"><div class="k">Issues &amp; fixes</div><p><!-- important issue/fix, or "No important issue" --></p></div>
+      <div class="briefitem ok"><div class="k">Fixed today</div><p><!-- what Pulse Fixer verified fixed this pass, or "Nothing fixed this pass" --></p></div>
+      <div class="briefitem warn"><div class="k">Open now</div><p><!-- what still needs attention, or "No open issues" --></p></div>
       <div class="briefitem"><div class="k">Next Pulse</div><p><!-- what will be checked next and why --></p></div>
     </div>
   </div>
@@ -239,6 +305,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <label>Kind <select id="filter-kind">
       <option value="all">All</option>
       <option value="run">Run</option>
+      <option value="gate">Gate</option>
       <option value="monitor">Monitor</option>
       <option value="maintenance">Maintenance</option>
       <option value="artifact">Artifact</option>
@@ -255,13 +322,48 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <div id="filter-count" class="filtercount">0 items</div>
   </div>
 
-  <div class="seclabel">Recent runs</div>
-  <div class="runs"><!-- one .run row per recent run. Metadata stays in row 1; the prose/evidence .note is row 2/full width.
-       Example:
-       <div class="run flag" data-date="2026-07-04" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">07-04</span><span class="st warn"><span class="d"></span>completed</span><span class="col">measure</span><span class="col"><b>Δ7d</b> -2</span><span class="ago">just now</span><span class="note">measure ran clean; regression still open; cost $2.02; backed up ✓ 3b1b357</span></div> --></div>
-
-  <div class="seclabel">Latest — newest first</div>
+  <div class="seclabel">Activity</div>
+  <!-- ACTIVITY — grouped by date, not two separate lists. Each date is one
+       .daygroup: a plain visual wrapper (NOT a .run/.entry/.pulse-record
+       itself — see the CSS comment above) holding what the workflow did that
+       day (.run) directly above what Pulse did about it that day, as
+       SEPARATE sibling .entry cards — one Gate dispatch note, one per module
+       that ran, one Fixer action. Each keeps its own individual data-module
+       so the Pulse popup (WorkflowToolbar's per-reviewer tabs, which clones
+       top-level .entry elements by data-module and skips anything nested
+       inside another .entry) can still find and show it under that
+       reviewer's own tab — do NOT combine multiple modules' findings into
+       one entry, that hides them from their own tab. Never create two
+       .daygroup blocks for the same date — if today's already exists, edit
+       it in place, inserting new module/Fixer entries into it. A day with a
+       workflow run but nothing due for Pulse still gets a Gate entry saying
+       so ("0 of 8 checked · all current, nothing due") rather than being
+       omitted — omitting it reads as "did Pulse even run," not "nothing
+       needed attention." Full semantics for .run and every entry kind below
+       are unchanged from before and covered in review-improve-log.md; this
+       section only adds the daygroup date wrapper and the "gate" kind. -->
   <!-- LOG ENTRIES: newest first -->
+  <!-- Example .daygroup with a real Pulse pass (2 modules, 1 with a finding).
+       Compare to the plain "day where nothing was due" example after it.
+  <div class="daygroup">
+    <div class="daydate">YYYY-MM-DD</div>
+    <div class="run" data-date="YYYY-MM-DD" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">MM-DD</span><span class="st ok"><span class="d"></span>completed</span><span class="col">…</span><span class="ago">just now</span></div>
+
+    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 8 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> bug_review, cost_llm_time — skipped the other 6 (recent clean reviews, no new evidence).</p><p class="meta"><b>Why bug_review:</b> plain-language trigger reason.</p></div>
+
+    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><div class="modfields"><div class="mf"><span class="mfk">Evidence</span><span class="mfv">exact evidence, not a path/id</span></div><div class="mf"><span class="mfk">Classification</span><span class="mfv">correctness_bug</span></div><div class="mf"><span class="mfk">Recommended fix</span><span class="mfv">plain-language bounded fix</span></div></div></div>
+
+    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="cost_llm_time"><div class="ehead"><span class="tag monitor">Cost / LLM / Time</span><span class="etitle">Clean</span><span class="when">…</span></div><div class="modfields"><div class="mf"><span class="mfk">Workflow execution</span><span class="mfv">$0.31 · 41k tokens · wall 4m12s</span></div></div></div>
+
+    <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">what was actually applied</span><span class="when">…</span></div><p class="takeaway">What was applied, or what's left open and why.</p></div>
+  </div>
+  A day where nothing was due — still gets a Gate entry, not silence:
+  <div class="daygroup">
+    <div class="daydate">YYYY-MM-DD</div>
+    <div class="run" data-date="YYYY-MM-DD" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">MM-DD</span><span class="st ok"><span class="d"></span>completed</span><span class="col">…</span><span class="ago">just now</span></div>
+    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">0 of 8 checked</span><span class="when">…</span></div><p class="takeaway">Reviewed evidence, found nothing new — every module still inside its clean-review interval.</p></div>
+  </div>
+  -->
   <!-- Insert each new entry card immediately below this anchor. Monitor/Open-finding/Decision/Artifact Review carry a
        <span class="kind bug">Bug</span> or <span class="kind goal">Goal</span> verdict chip when applicable, plus a
        <span class="worklabel bugfix">Bug fix</span>, <span class="worklabel improvement">Improvement</span>, <span class="worklabel advisor">Advisor idea</span>, <span class="worklabel artifact">Artifact drift</span>, <span class="worklabel report">Report fix</span>, <span class="worklabel eval">Eval fix</span>, <span class="worklabel cost">Cost/time</span>, <span class="worklabel maintenance">Maintenance</span>, <span class="worklabel backup">Backup/publish</span>, <span class="worklabel input">Needs input</span>, or <span class="worklabel manual">Manual</span> action chip when work was done/proposed. Card kinds:

@@ -307,14 +307,15 @@ func TestPulseGuidanceRequiresReviewedBaselineBeforeCadenceSkip(t *testing.T) {
 	}
 }
 
-func TestPulseGuidanceRequiresAuthoritativeHTMLAndVisibleFreshness(t *testing.T) {
+func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) {
 	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
 	if err != nil {
 		t.Fatalf("render post-run-monitor: %v", err)
 	}
 	for _, want := range []string{
-		"builder/improve.html` is the authoritative durable source",
-		"only the current machine-readable Gate/worklist/result cache",
+		"SQLite/runtime state is authoritative",
+		"`builder/improve.html` is the durable explanatory",
+		"HTML never overrides contradictory runtime state",
 		"not measured this run · last measured",
 		"Every skipped module must set at least one concrete next-check condition",
 		"what new evidence caused the override",
@@ -734,7 +735,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 
 func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 	cases := map[string][]string{
-		"design-plan":           {`data-pulse-section="signals"`, `data-module="goal_advisor"`, "never discard findings"},
+		"design-plan":           {`data-pulse-section="signals"`, "data-module` set per the attribution rule above", "never discard findings"},
 		"review-code":           {`data-pulse-section="signals"`, `data-module="bug_review"`, "every finding"},
 		"review-cost":           {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
 		"review-speed":          {`data-pulse-section="signals"`, `data-module="cost_llm_time"`, "every finding"},
@@ -1268,7 +1269,7 @@ func TestWorkflowPatternsUseCurrentRuntimeAndStoreContracts(t *testing.T) {
 }
 
 // The store freshness mechanism: Gate reads the code-owned _freshness ledgers and
-// marks learning_health / knowledgebase_health due on a confirmation-recency
+// marks stores_health due (for its learnings/KB dimensions) on a confirmation-recency
 // signal; the reviewer docs gain a re-verify -> demote pass and protect the
 // code-owned ledger from edits.
 func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {

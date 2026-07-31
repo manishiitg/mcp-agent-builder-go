@@ -3,7 +3,7 @@
 Use only for the scheduler's conditional `archive-improve-log` stage. This is a
 semantic history compaction pass, not a normal Pulse review or a format rewrite.
 
-`builder/improve.html` remains the authoritative current Pulse view. Preserve:
+`builder/improve.html` remains the canonical current explanatory view. Preserve:
 
 - the complete top dashboard, current metrics, and freshness labels;
 - every open finding, user rule, current note, unresolved/unconfirmed decision,

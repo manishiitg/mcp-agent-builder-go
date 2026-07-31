@@ -102,7 +102,7 @@ func TestPostRunMonitorArchiveStepPreservesCurrentTruthAndStagesWrites(t *testin
 	}
 	contract := string(raw)
 	for _, want := range []string{
-		"authoritative current Pulse view",
+		"canonical current explanatory view",
 		"latest 15 calendar days",
 		"strictly older than 15 calendar days",
 		"undated history is never",

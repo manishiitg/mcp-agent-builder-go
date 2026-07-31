@@ -16,7 +16,12 @@ waits for its synchronous result. The parent then validates and applies any
 bounded safe edit. Do not create a dedicated KB-maintenance agent or use
 `run_in_background` for this review.
 
-Return only: `module=knowledgebase_health`, `verdict`, `note_shape`, `next_check`,
+This checklist is one of three (learnings, knowledgebase, DB) the parent may
+load together in a single `stores_health` pass — see `post-run-monitor`. If so,
+this reviewer's output is one part of that combined packet, not a standalone
+result.
+
+Return only: `module=stores_health`, `verdict`, `note_shape`, `next_check`,
 and ordered `findings`. Every finding includes stable `finding_id`, `target_key`,
 severity, plain-language summary, precise `evidence`, a bounded
 `recommended_fix`, exact `verification`, and `user_judgment_required` with

@@ -7,11 +7,15 @@ result carries the entire contract: `pulse-archive`, `pulse-gate`,
 
 Pulse runs after a scheduled workflow run. It is not a fixed checklist. It is a small sequence with one mandatory intelligence turn:
 
-1. **Gate / Worklist** — read the evidence, update `builder/improve.html`, and call `record_pulse_worklist`.
+1. **Gate / Worklist** — read the evidence, update the explanatory `builder/improve.html` view, and call `record_pulse_worklist`.
 2. **Selected modules only** — the scheduler runs the modules Gate marked `due`.
 3. **One ordered finalizer turn** — dashboard/questions, backup, conditional publish, then notify. Each command records its own live/final status in `pulse_final_command_state`.
 
-`builder/improve.html` is the authoritative durable source for Pulse history, prior fixes, findings, cadence reasoning, and decisions. The workflow's `db/db.sqlite` table `pulse_module_state` is only the current machine-readable Gate/worklist/result cache used by the scheduler and Pulse popup; it must not replace or contradict the HTML history. Every Gate decision, cadence reason, and module outcome that matters later must also be recorded visibly in `builder/improve.html`.
+SQLite/runtime state is authoritative for scheduling, recovery, approvals, and
+new behavior. `builder/improve.html` is the durable explanatory projection, never
+the sole source for a machine action. Preserve its legacy recovery/Advisor state
+until replaced, but add no new state semantics. Project user-relevant outcomes
+without contradicting runtime state.
 
 When updating `builder/improve.html`, keep the first screen short and user-prioritized. Runloop renders pending **Needs your decision** requests above the HTML. The HTML then shows active **Assumptions challenged** only when consequential assumptions exist, followed by **Today's outcome**, goal progress, and recent activity. Signal tiles, cost/time, Maintenance Radar, and cadence may stay inside closed-by-default operator details, but raw evidence never appears in visible HTML. A hidden `#pulse-agent-handoff` marker may hold only compact interrupted-fix recovery state; it is not a visible Agent log and must not duplicate the report narrative. Do not duplicate the full latest-run Bug/Goal narrative at the top if the same details already appear in Recent runs or the timeline.
 
@@ -21,7 +25,9 @@ The scheduler uses a sliding inactivity timeout: 10 minutes without observable p
 
 ## Gate Contract
 
-Gate decides what the next Pulse modules should do. Read `builder/improve.html` as the primary historical source before using the SQLite cache for current scheduler state. It must call:
+Gate decides what the next Pulse modules should do. Read runtime facts first and
+HTML only for narrative context; HTML never overrides contradictory runtime state.
+Gate must call:
 
 - `get_pulse_module_state(workspace_path="<current workflow>")` before deciding.
 - `record_pulse_worklist(workspace_path="<current workflow>", pulse_run_id="<pulse session id>", decisions=[...])` exactly once before stopping.
@@ -148,8 +154,9 @@ sections below as domain and evidence guidance.
    modules into consecutive parallel batches of at most two reviewers, and
    issue each current batch's independent `call_generic_agent` calls in the
    same tool-call batch. Never rank the due worklist and run only a "top 3" or
-   other subset: `due` means the review must receive a terminal result in this
-   Pulse run. Run every batch without dropping a module. Use the cheapest tier
+   other subset: Gate already applied the per-pass cap when it built the
+   worklist, so anything still marked `due` must receive a terminal result in
+   this Pulse run. Run every batch without dropping a module. Use the cheapest tier
    that can judge each module reliably. Do not use `run_in_background`:
    the parent Pulse turn must remain
    active until reviewer calls return, so the fixed sequence cannot reach the
@@ -175,8 +182,10 @@ sections below as domain and evidence guidance.
    with compact finding ids and evidence pointers when more findings exist.
    A clean review must explicitly return an empty finding-id manifest. Never omit a
    correctness finding merely to satisfy the cap. Call `call_generic_agent`
-   directly as a tool. Never wrap it in `execute_shell_command`, curl, a
-   temporary script, a background process, or a polling loop. Pass the exact
+   directly where exposed as a tool; in coding-agent code-execution mode it is
+   not native, so its documented API bridge shell call is the supported
+   transport there. Either way never wrap it in a temporary script, background
+   process, or polling loop. Pass the exact
    scheduler-provided `pulse_run_id`, dated `review_run_id`, and module name on
    every call. Do not add a reviewer-specific
    completion marker to the instructions:
@@ -228,6 +237,11 @@ sections below as domain and evidence guidance.
    `data-pulse-run`, with every due module, finding ids, resolved conflict-map
    disposition, and status `pending`.
    No reviewer may mutate the workflow.
+   Before touching `builder/improve.html`, call
+   `get_reference_doc(kind="review-improve-log")` — every pass, not only when
+   creating the file. Its format rules cannot take effect on a pass that never
+   fetches them, and the file's current structure is not proof the contract
+   still matches it.
 7. Apply bounded fixes sequentially. Do not launch nested mutating maintenance
    agents such as `run_goal_advisor_review`; those would create multiple
    fixers. Load the read-only artifact and `improve-*` guidance as
@@ -345,7 +359,7 @@ the two-reviewer concurrency cap and persists one result file per module.
 
 ## Module Decisions
 
-Every decision needs a reason and evidence. Skips are useful only when they explain why work is not worth doing yet. Every skipped module must set at least one concrete next-check condition: `next_check_at`, `next_check_after_run_id`, or a positive `cooldown_runs`. Write that planned next check visibly in the Gate/Worklist entry in `builder/improve.html`; SQLite only mirrors it for the scheduler and popup.
+Every decision needs a reason and evidence. Skips are useful only when they explain why work is not worth doing yet. Every skipped module must set at least one concrete next-check condition: `next_check_at`, `next_check_after_run_id`, or a positive `cooldown_runs`. Record that condition authoritatively through `record_pulse_worklist`, then project it visibly in the Gate/Worklist entry in `builder/improve.html`.
 
 Cadence remains agentic. New evidence can override any earlier cooldown or next-check suggestion, but when Gate checks a module earlier than previously planned, its reason and the visible Gate entry must say what new evidence caused the override. Do not silently ignore the prior cadence.
 
@@ -409,9 +423,7 @@ Use these module names exactly:
 - `artifact_review`
 - `report_health`
 - `eval_health`
-- `learning_health`
-- `knowledgebase_health`
-- `db_health`
+- `stores_health`
 - `cost_llm_time`
 - `llm_ops_review`
 - `goal_advisor`
@@ -428,7 +440,14 @@ Mark due for real Bug findings:
 - compact evidence that a successful step may have chosen the wrong
   tool/source/route, used stale inputs, ignored returned evidence, or made an
   unsupported decision; this makes targeted trace review due, not a full-run
-  conversation audit
+  conversation audit. When the targeted trace confirms a wrong-tool-call or
+  retry-without-cause pattern, quote the step's own timing log
+  (`runs/<run_folder>/logs/<step-id>/execution/*-timing.json`) alongside the
+  finding — a wrong tool call that added 20 seconds and one that added 8
+  minutes are the same correctness bug but a different priority; the finding
+  is incomplete without that number when the log makes it available. Do not
+  open every step's timing log by default — only the step(s) the targeted
+  trace review already flagged.
 - a claimed state/config/status repair whose expected behavior is absent from
   the next applicable decision or run, or whose real runtime consumer and
   canonical store cannot be named. A successful write to a plausible table is
@@ -517,6 +536,13 @@ The Pulse Fixer records the review result and uses
 `mark_changelog_artifact_reviewed` for fully inspected entries. Artifact review
 remains report-only; it does not repair the reviewed artifacts in this module.
 
+This module is the sole dispatcher for `plan_change_backlog`-driven triggers
+across all six dimensions above. No other module weighs that backlog itself —
+each has its own independent triggers instead (freshness-recency, dashboard
+staleness, rubric gameability, etc.). This removes a duplicate due-decision
+that used to require each module to explicitly defer to this one for the
+same entries.
+
 ### report_health
 
 Mark due when the reporting dashboard is stale, misleading, broken, too text-heavy, not goal-oriented, or not using live persisted evidence correctly.
@@ -554,76 +580,56 @@ checklist. It returns bounded recommendations and verification steps. The Pulse
 Fixer applies safe correctness repairs, validates them, and records changed eval
 artifacts as an `Eval fix` in `builder/improve.html`.
 
-### learning_health
+### stores_health
 
-Mark due when workflow behavior changed or learning state may be stale:
+Covers three stores in one pass: learnings (HOW to run the task), the
+knowledgebase (domain facts), and db/db.sqlite (structured run state). All
+three share the same due-cadence mechanism (the general Reviewed-baseline
+rule, no special throttling), the same freshness-recency check shape, and the
+same bounded-fix authority — only the content domain differs — so one
+due-decision and one Fixer pass covers all three, each with its own small
+checklist inside.
 
-- plan or prompt changes affected step behavior
-- `learning_objective` no longer matches the step
-- `lock_learnings` should be cleared because guidance is stale
-- mature stable learnings should be locked with evidence
-- a run discovered reusable HOW-to knowledge worth capturing
-- selectors/API quirks changed
-- **freshness (confirmation recency):** `learnings/_global/` has content but
+Mark due on any of:
+
+- **Learnings**: plan or prompt changes affected step behavior;
+  `learning_objective` no longer matches the step; `lock_learnings` should be
+  cleared because guidance is stale; mature stable learnings should be locked
+  with evidence; a run discovered reusable HOW-to knowledge worth capturing;
+  selectors/API quirks changed.
+- **Knowledgebase**: KB notes or KB config are missing, duplicated, stale,
+  contradictory, or no longer aligned with the plan.
+- **DB**: schema, table contracts, upsert rules, report SQL, eval consumers,
+  or `db/README.md` no longer match current writers and readers; multiple
+  tables/files encode the same logical control state with unclear canonical
+  ownership or synchronization invariant; a claimed DB repair changed a store
+  the runtime decision path does not actually consume.
+- **freshness (confirmation recency), learnings and KB**: `learnings/_global/`
+  or `knowledgebase/notes/` has content but its own
   `_freshness.json.last_confirmed_run` is many runs / a long business interval
-  behind the current run — no current step re-confirms it, so the HOW-knowledge
-  may have silently gone stale even though nothing has contradicted it. Existing
-  learnings with **no** `_freshness.json` means there is no freshness baseline
-  yet; mark due to establish one. When fresh (recently confirmed this run or
-  last), record the confirmation cadence and skip with a next-check.
-- **unreviewed plan changes:** `get_pulse_module_state` returns
-  `plan_change_backlog` — plan-mod calls whose knock-on effects nobody has traced
-  yet. Learnings are one of the six dimensions those changes can rot. When entries
-  touch steps whose learnings exist, either mark this module due or leave it to
-  `artifact_review`, which covers the same ground across all six; do not mark both
-  due for the same entries.
+  behind the current run — no current step re-confirms it, so the content may
+  have silently gone stale even though nothing has contradicted it. A missing
+  `_freshness.json` beside existing content means no freshness baseline yet;
+  mark due to establish one. When fresh, record the confirmation cadence and
+  skip with a next-check.
 
-The read-only reviewer identifies stale learning content and lock/unlock changes.
-The Pulse Fixer applies bounded learning and step-config edits directly. Use
-absolute workspace paths in reviewer prompts and evidence. The generic read-only
-learning reviewer follows the `improve-learnings` guidance and never writes.
+Plan-change-driven drift — a recent edit leaving learnings, KB notes, or DB
+contracts stale — is `artifact_review`'s job exclusively (see its section
+above); this module does not also weigh `plan_change_backlog`.
 
-Load `assumption-audit`: reusable HOW must not preserve business policy, fixed strategy/architecture, or an unverified limitation as if it were permanent.
+The read-only reviewer follows `improve-learnings`, `improve-knowledge`, and
+`improve-database` as its three checklists. `knowledgebase/context` is
+user-owned runtime business context — read it for evidence, never rewrite it.
+The Pulse Fixer applies bounded learning/step-config edits, bounded KB
+note/config changes, and bounded DB contract fixes directly (never speculative
+row migrations), each independently verified, using absolute workspace paths
+in reviewer prompts and evidence.
 
-### knowledgebase_health
-
-Mark due when KB notes or KB config are missing, duplicated, stale, contradictory, or no longer aligned with the plan.
-
-Also mark due on a **freshness (confirmation recency)** signal: `knowledgebase/notes/`
-has content but `knowledgebase/_freshness.json.last_confirmed_run` is many runs / a
-long business interval behind the current run, so notes may have silently gone stale
-without any run contradicting them. A missing `_freshness.json` beside existing notes
-means no freshness baseline yet — mark due to establish one.
-
-Also weigh `plan_change_backlog` from `get_pulse_module_state`: plan changes whose
-knock-on effects have not been traced. KB notes are one of the six dimensions
-those changes can rot. Either mark this module due or leave it to
-`artifact_review`, which covers the same ground across all six; do not mark both
-due for the same entries.
-
-`knowledgebase/context` is user-owned runtime business context. Read it for
-evidence, but do not rewrite it. The read-only reviewer proposes precise note or
-config cleanup and the Pulse Fixer applies only bounded approved-safe changes
-directly. The generic reviewer follows the `improve-knowledge` guidance as a
-read-only checklist.
-
-Load `assumption-audit`: KB notes must distinguish durable domain evidence from beliefs copied out of the current plan. Surface material unresolved restrictions instead of multiplying them across notes.
-
-### db_health
-
-Mark due when DB schema, table contracts, upsert rules, report SQL, eval
-consumers, or `db/README.md` no longer match current writers and readers. Also
-mark it due when multiple tables/files encode the same logical control state
-and their canonical ownership or synchronization invariant is unclear, or when
-a claimed DB repair changed a store that the runtime decision path does not
-actually consume.
-
-The generic read-only reviewer scopes concrete DB contract/schema/report
-compatibility work. The Pulse Fixer applies bounded contract fixes directly and
-must not run speculative row migrations. The reviewer follows
-`improve-database` as a read-only checklist.
-
-Load `assumption-audit`: schemas and enums should not unnecessarily freeze one source, channel, entity, group, or tactic. Apply only bounded contract fixes; strategy/schema choices requiring business judgment stay challenged assumptions.
+Load `assumption-audit` for all three: reusable HOW must not preserve business
+policy, fixed strategy/architecture, or an unverified limitation as if it were
+permanent; KB notes must distinguish durable domain evidence from beliefs
+copied out of the current plan; schemas and enums should not unnecessarily
+freeze one source, channel, entity, group, or tactic.
 
 ### cost_llm_time
 
@@ -633,13 +639,19 @@ Read workflow execution cost, evaluation cost, builder/Pulse overhead, token usa
 
 For raw ledgers under `costs/execution/` and `costs/evaluation/`, preserve the full bucket identity: `date + scope + group_folder + run_folder`. The same step ID in two groups is two separate cost rows, not one combined step. Within each bucket and model, `by_model` is the authoritative LLM total and `by_step_and_model` is attribution detail already included in that total; never add the detail rows on top of `by_model`. Reconcile `unattributed = max(0, by_model - sum(by_step_and_model))` per model and label a positive remainder as unattributed/orchestrator cost. An explicit `workflow_orchestrator` step is normal attributed detail and must not be counted again as a remainder. If attributed detail exceeds its model total, report telemetry inconsistency instead of silently producing a larger total. A step present in execution logs with no LLM attribution can legitimately be a scripted/zero-LLM step; show it as zero when presenting complete step coverage, and do not call it missing unless its contract required an LLM call. Historical files with no step map remain unattributed; never present the run-folder name as if it were a plan step.
 
+When due, also sample the actual tool-call trace of one or two representative agentic steps — `runs/<run_folder>/logs/<step-id>/execution/*-conversation.json` — not to audit behavior (Bug Review/eval_health's job) but for two cost/time-specific patterns the aggregate ledgers cannot show: (1) redundant or wasteful tool-call patterns — identical calls repeated with the same arguments, several unbatched calls a single batched call could replace, retries with no failure driving them — record these as direct cost/time findings; (2) a step declared agentic whose actual tool-call sequence is deterministic and identical in shape across the sampled runs — record this as scriptability evidence for `llm_ops_review`'s design-plan Mode check rather than judging plan-design fitness yourself. Sampling a couple of representative runs is enough; do not open every run's full trace on every due pass, and only sample steps that are plausibly cost/time-material (per the ledger totals already read).
+
 Do not change model tiers, prompts, schedules, or agent allocation from this module. If model selection looks wrong, record it as evidence for `llm_ops_review`.
 
 ### llm_ops_review
 
-This is a low-frequency coaching pass, not telemetry and not Goal Advisor. Mark it due when it has never completed, its planned checkpoint arrives, resolved model/tier/fallback configuration changes, cost evidence suggests avoidable overkill, an answered `llm-ops-*` request is waiting, a prior Bug Review recorded `efficiency_or_coaching` trace evidence for follow-up, or publish/notify/backup/version readiness materially changes. Otherwise schedule a meaningful later checkpoint instead of running it every Pulse.
+This is a low-frequency coaching pass, not telemetry and not Goal Advisor. Mark it due when it has never completed, its planned checkpoint arrives, resolved model/tier/fallback configuration changes, cost evidence suggests avoidable overkill, an answered `llm-ops-*` request is waiting, a prior Bug Review recorded `efficiency_or_coaching` trace evidence for follow-up, publish/notify/backup/version readiness materially changes, or enough material step/schema/prevalidation changes have accumulated since the last plan-design check (or its own scheduled checkpoint arrives). Otherwise schedule a meaningful later checkpoint instead of running it every Pulse.
+
+**The plan-design sub-check has its own bootstrap trigger, separate from the module's general cost/tier history.** A workflow may already show a completed `llm_ops_review` entry from before this module owned plan-design hygiene (or from a cost/tier-only pass since). "It has never completed" must be read per checklist, not per module: scan `builder/improve.html` for a prior `data-module="llm_ops_review"` entry that actually applied the `design-plan` structural checklist (step-type fitness, prevalidation fitness, schema/description drift, or one of that doc's PART 2/6 findings) — a cost/tier/fallback-only entry does not count. If no such entry exists, treat the plan-design check as never-completed and mark the module due on the next Gate pass regardless of its general cooldown, so a scope expansion never silently inherits stale "already reviewed" cooldown from a narrower mandate the workflow was actually reviewed under.
 
 Inspect resolved provider/model/options/fallback configuration and actual step/eval tier use. Inventory every exact model pin in explicit workflow roles and planning/evaluation step config (`execution_llm`, `validation_llm`, and orchestrator overrides). Call `list_provider_models` once for each pinned provider and use its catalog plus `default_tier_models` as the authoritative current comparison. Classify a pin as unavailable/deprecated, still supported but different from the provider-owned role/tier default, or current. Never infer recency by sorting model names. Provider-profile workflows inherit current defaults and must not be reported as stale merely because their resolved model changed after an app update. Check whether high, medium, and low are configured and used sensibly; whether repeated low-risk validation, extraction, formatting, or summarization uses an unnecessarily expensive tier; whether eval/verification would benefit from provider diversity; whether Pulse and Maintenance models are sensible; and whether fallbacks exist. Also check report publishing/password protection, notification instructions/setup, backup status, and workflow-version readiness.
+
+This module also owns plan-design hygiene — engineering correctness, not strategy. Load `get_workflow_command_guidance(kind="design-plan")` as a read-only structural checklist and apply it to the current plan: step-type fitness (is each step the right type — scripted, message_sequence, routing, todo_task, orphan), prevalidation fitness (an unjustified or redundant `prevalidation` item that just restates the step's own final gate), schema/description drift (a `validation_schema` demanding a field the description never asks the agent to produce, or a non-nullable field the step's own branching logic can legitimately leave absent, forcing a fabricated value), and the rest of that doc's integrity checks and design lenses. Do not judge whether the plan's tactic is good — that is Goal Advisor's job; judge only whether the plan is built correctly given whatever tactic it already has. Findings here follow the same evidence-backed, bounded-fix-or-decision-request path as the rest of this module.
 
 Goal quality outranks tier savings. When any material success criterion is
 trustworthily below target, do not recommend lowering the model or reasoning tier
@@ -672,11 +684,10 @@ Mark due when strategic judgment is needed:
 - an active `.advisor-experiment` has an answer, reaches `data-review-after`,
   accumulates enough measurement evidence, becomes blocked/unblocked, or gains
   decisive contradictory evidence
-- a material plan structure, step-boundary, routing, store, validation, or
-  orchestration change landed since the last plan-design review
 - repeated goal misses, recurring bugs, or material cost/latency evidence suggest
-  the plan shape itself may be limiting outcomes
-- a previously recorded plan-design checkpoint has arrived
+  the plan shape itself may be limiting outcomes (this is a strategic-thesis
+  signal — whether the plan is *structurally well-built* is `llm_ops_review`'s
+  job, not this one; see that module)
 - the workflow may need an eval/report measurement change to judge success correctly
 - a material success criterion or active experiment is `Not measured`, and Goal
   Advisor must propose a bounded metric definition plus a normal `regular`
@@ -733,41 +744,22 @@ steps, evals, KB, learnings, DB, or reports. It must distinguish user-approved
 constraints from agent-created choices and maintain the top **Assumptions
 challenged** section when those choices may cap the goal.
 
-#### Conditional plan-design review
+When the current strategy appears capped, or repeated goal misses/bugs/cost
+evidence suggest the plan shape itself is limiting outcomes, Goal Advisor may
+propose `simplify`, `restructure`, or a bounded `experiment` — a materially
+different strategic shape, not a structural-hygiene fix (that is
+`llm_ops_review`'s job; a recurring problem *caused by* mistyped steps or drift
+routes there instead). Compare the current plan with at most two credible
+alternatives; state expected benefit, affected goal criterion, evidence, risk,
+migration/rollback shape, and how the change would be measured. The separate
+Goal Advisor critic must challenge whether the recommendation is actually
+better than the current plan, not merely different.
 
-When Gate evidence names a plan-design trigger, the read-only strategy reviewer
-must also load `get_workflow_command_guidance(kind="design-plan")` as a
-**read-only checklist**. The Goal Advisor module contract overrides that
-guidance's normal instruction to write review entries: the reviewer must not edit
-`builder/improve.html`, the plan, or any workspace file. This is not a second
-Pulse module and must not run on every Pulse.
-
-Use actual run, goal, eval, cost, latency, and failure evidence to judge whether
-the current plan is merely valid or is materially improvable. Review step
-boundaries/types, routing/orchestration, durable handoffs, DB/store ownership,
-validation, human gates, and agent-created architecture assumptions. Do not
-recommend a theoretically cleaner structure when observed reliability evidence
-shows it would be worse.
-
-Return exactly one plan-design disposition:
-
-- `keep` — current shape is appropriate; name the evidence and next checkpoint
-- `simplify` — same strategy and semantics with fewer/better boundaries
-- `restructure` — plan shape materially limits reliability, cost, latency, or
-  goal progress
-- `experiment` — a bounded alternative shape should be tested while preserving
-  the current baseline
-
-For `simplify`, `restructure`, or `experiment`, compare the current plan with at
-most two credible alternatives. State expected benefit, affected goal criterion,
-evidence, risk, migration/rollback shape, and how the change would be measured.
-The separate Goal Advisor critic must challenge whether the recommendation is
-actually better than the current plan.
-
-An active advisor experiment blocks a second competing experiment, but it does
-not block plan-design monitoring. During `measuring`, Goal Advisor may inspect
-whether plan structure, instrumentation, or implementation prevents the active
-experiment from receiving a fair test. It may recommend `keep` or a repair to
+An active advisor experiment blocks a second competing experiment. During
+`measuring`, Goal Advisor may inspect whether plan structure, instrumentation,
+or implementation prevents the active experiment from receiving a fair test —
+the same "no current bug, blocker, artifact drift, or plan drift" condition
+that governs experiment deferral above. It may recommend `keep` or a repair to
 the approved experiment, but must not create an unrelated bold idea. Material
 semantic or structural changes still require the existing decision-card flow;
 only an exact previously approved proposal may be applied by the Pulse Fixer.

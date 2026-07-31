@@ -85,7 +85,7 @@ The step-level `validation_schema` is the final gate when the step declares one.
 
 A `db` rule is the stronger gate: it checks the source of truth the next step and the report actually read, so a fabricated or stale "success" can't pass by writing a tidy file. A step with **no** `validation_schema` has no gate at all — it is accepted on the agent's word (the weakest possible proof). Give any step whose result matters a real schema, db-first.
 
-Add an explicit `prevalidation` item only when an intermediate artifact must pass before later work turns proceed. If the final configured item already validates the same step-level schema, the runtime does not add a duplicate final gate.
+**Prevalidation is now the exception, not the default.** The step-level `validation_schema` above is already enforced automatically as the final gate with same-conversation repair — that covers nearly every case on its own. Presume a sequence needs no `prevalidation` item at all. Add one only when you can name a later item in the SAME sequence that must not run unless an intermediate artifact already passed — guarding something costly or hard to undo (a paid tool call, a fan-out, an external side effect), not routine double-checking. If the final configured item already validates the same step-level schema, the runtime does not add a duplicate final gate, and a `prevalidation` item that just restates that schema is pure waste: it burns a repair turn on every run instead of catching anything a later item couldn't have caught by simply failing the final gate.
 
 ```json
 {

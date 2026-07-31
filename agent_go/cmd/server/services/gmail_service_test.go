@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -274,5 +275,54 @@ func TestGmailDenylistAllowsRecipientsByDefault(t *testing.T) {
 
 	if got, err := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "hint@example.com"}}); err != nil || got != "hint@example.com" {
 		t.Fatalf("hint = %q, err=%v, want hint@example.com", got, err)
+	}
+}
+
+// The notification settings popup reads this on every open. `gws auth status`
+// spawns a Node CLI and takes ~5.5s, so a synchronous read left the popup on a
+// spinner for that whole time even though every other field it needs is already
+// in memory. A cold read must return immediately and report Checking.
+func TestAuthStatusCachedNeverBlocksOnAColdRead(t *testing.T) {
+	g := &GmailService{gwsPath: "definitely-not-a-real-binary-xyz"}
+
+	start := time.Now()
+	st := g.AuthStatusCached()
+	elapsed := time.Since(start)
+
+	if !st.Checking {
+		t.Fatalf("cold read should report Checking, got %#v", st)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("cold read took %v — it must not wait on the subprocess", elapsed)
+	}
+}
+
+// A fresh cached result is served as-is, which is the whole point: opening the
+// popup twice must not pay for two subprocesses.
+func TestAuthStatusCachedServesFreshCache(t *testing.T) {
+	g := &GmailService{
+		authCache:    &GmailAuthStatus{Authenticated: true, HasGmailScope: true, GwsInstalled: true},
+		authCachedAt: time.Now(),
+	}
+	st := g.AuthStatusCached()
+	if !st.Authenticated || !st.HasGmailScope || st.Checking {
+		t.Fatalf("cached status not served: %#v", st)
+	}
+}
+
+// A stale cache still beats a pending badge: report the last known answer while
+// the refresh runs, rather than flipping the UI back to "checking".
+func TestAuthStatusCachedPrefersStaleOverPending(t *testing.T) {
+	g := &GmailService{
+		gwsPath:      "definitely-not-a-real-binary-xyz",
+		authCache:    &GmailAuthStatus{Authenticated: true, HasGmailScope: true},
+		authCachedAt: time.Now().Add(-2 * gmailAuthCacheTTL),
+	}
+	st := g.AuthStatusCached()
+	if st.Checking {
+		t.Fatal("a known previous answer should be shown while refreshing")
+	}
+	if !st.Authenticated {
+		t.Fatalf("stale status lost: %#v", st)
 	}
 }

@@ -17,14 +17,19 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    markers, changelog, eval/report/DB/KB/learnings state, human inputs, Chief of
    Staff recommendations, cost/tier signals, and the store freshness ledgers) and
    calls `record_pulse_worklist` exactly once with one `due|skipped` decision for
-   each of the ten modules (`bug_review`, `artifact_review`, `report_health`,
-   `eval_health`, `learning_health`, `knowledgebase_health`, `db_health`,
-   `cost_llm_time`, `llm_ops_review`, `goal_advisor`). Every skip carries a
-   next-check condition. Go enforces the complete-worklist rule so a module can't
-   silently disappear. Gate mutates nothing.
+   each of the eight modules (`bug_review`, `artifact_review`, `report_health`,
+   `eval_health`, `stores_health`, `cost_llm_time`, `llm_ops_review`,
+   `goal_advisor`). `stores_health` replaced the former separate
+   `learning_health` / `knowledgebase_health` / `db_health` modules, which
+   shared one due-cadence mechanism and one bounded-fix authority. Every skip
+   carries a next-check condition, and Gate applies a per-pass cap of three
+   due modules — anything beyond it is deferred with `next_check_after_run_id`
+   so it is guaranteed due on the next pass rather than dropped. Go enforces
+   the complete-worklist rule so a module can't silently disappear. Gate
+   mutates nothing.
 2. **Parallel read-only reviewers.** The scheduler dispatches only the `due`
    modules. Each is reviewed by an independent `call_generic_agent` reviewer
-   (batches of ≤4) that **only inspects and advises** — read-only tool allowlist,
+   (batches of ≤2) that **only inspects and advises** — read-only tool allowlist,
    empty write paths, no `builder/improve.html` writes. Each reviewer loads its
    own deep brief on demand (`pulse-bug-review`, `improve-*`, etc.), which keeps
    the frequent Gate turn lean.
@@ -48,7 +53,7 @@ boot sweep reconciles final commands stranded by a crash.
 `knowledgebase/_freshness.json`) records when each store — and each reference
 file / topic note — was last confirmed by a run, stamped by the runtime at the
 learnings/KB contribution turns (not LLM-maintained, so it can't desync). Gate
-marks `learning_health` / `knowledgebase_health` due on a confirmation-recency
+marks `stores_health` due on a confirmation-recency
 signal, and the reviewer re-verifies → refreshes / demotes / retires aging
 knowledge (never deletes on age alone). This adds a *time/decay* axis to what was
 previously only contradiction-driven staleness.

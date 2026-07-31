@@ -146,15 +146,23 @@ type StepOutputContent struct {
 	IsJSON   bool        `json:"is_json"`
 }
 
-// EvaluationStepScore is the per-step entry in evaluation_report.json.
-// The legacy score fields are retained only for old reports; new evaluation
-// runs treat output_content as the source of truth.
+// EvaluationStepScore is the per-step entry in evaluation_report.json. There
+// is no separate scoring agent: each eval step already writes its own real
+// score/max_score/reasoning (or, in real practice, "pass_fail_reason") into
+// its own output_content per the step's validation_schema, and this struct's
+// Score/MaxScore/Reasoning/Evidence fields are extracted directly from that
+// output_content — see extractEvalVerdictFromOutputContent. They are the
+// authoritative per-criterion verdict, not a legacy/placeholder value.
 // step_title and success_criteria are intentionally absent — UI consumers can
 // look them up by step_id from evaluation_plan.json (the plan is loaded next
 // to the report by the same API endpoint).
 type EvaluationStepScore struct {
-	StepID        string             `json:"step_id"`
-	Score         int                `json:"score,omitempty"`
+	StepID string `json:"step_id"`
+	// Score has no omitempty: a genuine score of exactly 0 (a confirmed total
+	// failure — a real, legitimate value) must serialize as "score": 0, not
+	// silently vanish and become indistinguishable from "no score captured".
+	// MaxScore keeps omitempty: a legitimate max_score is never actually 0.
+	Score         int                `json:"score"`
 	MaxScore      int                `json:"max_score,omitempty"`
 	Reasoning     string             `json:"reasoning"`
 	Evidence      string             `json:"evidence"`
@@ -163,16 +171,19 @@ type EvaluationStepScore struct {
 	OutputContent *StepOutputContent `json:"output_content,omitempty"`
 }
 
-// EvaluationReport captures eval step outputs for a target run. The aggregate
-// score fields are legacy-only; new reports omit them because there is no final
-// scoring agent.
+// EvaluationReport captures eval step outputs for a target run. There is
+// intentionally no combined/blended score across steps here (no
+// TotalScore/MaxPossibleScore/ScorePercentage) — per soul.md, each step
+// measures its own success criterion, and blending N independent criteria
+// into one number is lossy: a workflow could look fine on average while its
+// single most important criterion is failing, hidden inside the blend. Read
+// each StepScores entry on its own; a UI wanting an overall state should
+// apply a worst-case rule (any material criterion failing => overall short),
+// not a weighted average.
 type EvaluationReport struct {
-	TargetRunFolder  string                 `json:"target_run_folder"`
-	GeneratedAt      string                 `json:"generated_at"`
-	TotalScore       int                    `json:"total_score,omitempty"`
-	MaxPossibleScore int                    `json:"max_possible_score,omitempty"`
-	ScorePercentage  float64                `json:"score_percentage,omitempty"`
-	StepScores       []*EvaluationStepScore `json:"step_scores"`
+	TargetRunFolder string                 `json:"target_run_folder"`
+	GeneratedAt     string                 `json:"generated_at"`
+	StepScores      []*EvaluationStepScore `json:"step_scores"`
 }
 
 // EvaluationReportFileName is the filename the Go report phase writes the assembled

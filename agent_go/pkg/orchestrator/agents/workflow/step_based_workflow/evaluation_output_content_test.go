@@ -148,6 +148,129 @@ func TestEvaluationStepLoadsLegacyPreValidation(t *testing.T) {
 	}
 }
 
+// TestExtractEvalVerdictFromOutputContentUsesRealProductionShape proves
+// extraction against the actual shape found live in a real workflow run
+// (social-media, iteration-202, eval-workflow-success) rather than an
+// invented fixture: real eval steps use "pass_fail_reason", not the
+// "reasoning" key the authoring guidance names, and carry no separate
+// "evidence" key at all.
+func TestExtractEvalVerdictFromOutputContentUsesRealProductionShape(t *testing.T) {
+	raw := `{
+		"cdp_connected": true,
+		"follower_delta_7d": -2,
+		"score": 0.0,
+		"max_score": 10,
+		"pass_fail_reason": "Score 0.0/10. Top deductions: -4: follower_delta_7d declining (-2); -3: bot_detection_risk signal ACTIVE (unresolved, within 3 days)."
+	}`
+	score := &EvaluationStepScore{
+		StepID:        "eval-workflow-success",
+		OutputContent: buildStepOutputContent("evaluation/runs/iteration-202/default/execution/eval-workflow-success/output_content.json", raw),
+	}
+	extractEvalVerdictFromOutputContent(score)
+
+	if score.Score != 0 {
+		t.Fatalf("Score = %d, want 0", score.Score)
+	}
+	if score.MaxScore != 10 {
+		t.Fatalf("MaxScore = %d, want 10", score.MaxScore)
+	}
+	if score.Reasoning == "" || score.Reasoning == "No score captured — this eval step produced no output_content, or output_content had no score field." {
+		t.Fatalf("Reasoning not extracted from pass_fail_reason, got %q", score.Reasoning)
+	}
+	if score.Evidence == "" {
+		t.Fatal("Evidence should never be empty when a score was captured")
+	}
+	if score.Evidence != "See evaluation/runs/iteration-202/default/execution/eval-workflow-success/output_content.json for the extracted facts this score was computed from." {
+		t.Fatalf("Evidence fallback wrong: %q", score.Evidence)
+	}
+}
+
+// TestExtractEvalVerdictFromOutputContentPrefersExplicitReasoningAndEvidence
+// proves a step that DOES follow the authoring guidance literally (using
+// "reasoning"/"evidence" keys, per evaluation-plan.md) is read correctly too
+// — pass_fail_reason is preferred only when present, never required.
+func TestExtractEvalVerdictFromOutputContentPrefersExplicitReasoningAndEvidence(t *testing.T) {
+	raw := `{"score":8,"max_score":10,"reasoning":"8 of 10 checks passed.","evidence":"db/db.sqlite rows 1-8 verified against source."}`
+	score := &EvaluationStepScore{OutputContent: buildStepOutputContent("output_content.json", raw)}
+	extractEvalVerdictFromOutputContent(score)
+
+	if score.Score != 8 || score.MaxScore != 10 {
+		t.Fatalf("Score/MaxScore = %d/%d, want 8/10", score.Score, score.MaxScore)
+	}
+	if score.Reasoning != "8 of 10 checks passed." {
+		t.Fatalf("Reasoning = %q, want the explicit reasoning field", score.Reasoning)
+	}
+	if score.Evidence != "db/db.sqlite rows 1-8 verified against source." {
+		t.Fatalf("Evidence = %q, want the explicit evidence field, not the fallback", score.Evidence)
+	}
+}
+
+// TestExtractEvalVerdictFromOutputContentLeavesStubWhenNoScoreField proves a
+// step whose output genuinely carries no score field leaves the "not
+// captured" stub alone — 0 is never fabricated as a real score.
+func TestExtractEvalVerdictFromOutputContentLeavesStubWhenNoScoreField(t *testing.T) {
+	score := &EvaluationStepScore{
+		Reasoning:     "No score captured — this eval step produced no output_content, or output_content had no score field.",
+		Evidence:      "No output_content found for this step.",
+		OutputContent: buildStepOutputContent("output_content.json", `{"some_fact": 42, "another_fact": "value"}`),
+	}
+	extractEvalVerdictFromOutputContent(score)
+
+	if score.Score != 0 || score.MaxScore != 0 {
+		t.Fatalf("Score/MaxScore = %d/%d, want untouched 0/0 (no score field present)", score.Score, score.MaxScore)
+	}
+	if score.Reasoning != "No score captured — this eval step produced no output_content, or output_content had no score field." {
+		t.Fatalf("Reasoning stub was overwritten despite no score field being present: %q", score.Reasoning)
+	}
+	if score.Evidence != "No output_content found for this step." {
+		t.Fatalf("Evidence stub was overwritten despite no score field being present: %q", score.Evidence)
+	}
+}
+
+// TestExtractEvalVerdictFromOutputContentIgnoresNonJSONOutput proves a
+// non-JSON eval output (e.g. plain text) is safely skipped, not partially
+// parsed.
+func TestExtractEvalVerdictFromOutputContentIgnoresNonJSONOutput(t *testing.T) {
+	score := &EvaluationStepScore{OutputContent: buildStepOutputContent("output.txt", "plain result, not json")}
+	extractEvalVerdictFromOutputContent(score) // must not panic
+	if score.Score != 0 || score.Evidence != "" {
+		t.Fatalf("non-JSON output should leave score fields untouched, got Score=%d Evidence=%q", score.Score, score.Evidence)
+	}
+}
+
+// TestEvaluationStepScoreSerializesGenuineZeroScore reproduces a real
+// production report bug (EVAL-20260729-1, social-media): a step whose real,
+// legitimate verdict is a confirmed total failure — score 0 — had its "score"
+// key vanish entirely from evaluation_report.json because the field carried
+// `omitempty`, and Go's omitempty drops an int at its zero value. Once the
+// key is gone, a genuine "confirmed failing" is indistinguishable from "no
+// score captured", which is exactly the ambiguity extraction is meant to
+// remove. A real score of 0 must always serialize.
+func TestEvaluationStepScoreSerializesGenuineZeroScore(t *testing.T) {
+	score := &EvaluationStepScore{
+		StepID:    "eval-workflow-success",
+		Score:     0,
+		MaxScore:  10,
+		Reasoning: "Score 0.0/10. Confirmed failing on real evidence.",
+		Evidence:  "see output_content.json",
+	}
+	raw, err := json.Marshal(score)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode marshaled score: %v", err)
+	}
+	got, ok := decoded["score"]
+	if !ok {
+		t.Fatalf("expected \"score\" key to survive marshaling for a genuine 0, got %s", raw)
+	}
+	if got != float64(0) {
+		t.Fatalf("expected score 0, got %v", got)
+	}
+}
+
 func TestEvaluationStepMarshalsCanonicalValidationSchema(t *testing.T) {
 	step := &EvaluationStep{
 		ID:            "eval-result",

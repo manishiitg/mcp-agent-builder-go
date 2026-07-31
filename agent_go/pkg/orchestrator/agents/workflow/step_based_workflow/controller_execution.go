@@ -1618,6 +1618,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				hcpo.saveScriptedFastPathLog(ctx, stepIndex, artifactStepID, artifactStepPath, savedScriptPath, fastResult)
 			}
 			scriptedDecision := decideScriptedFastPath(fastResult)
+			// The workspace refused to start the script, so there is nothing to
+			// validate and nothing for the LLM to repair. Fail the step rather
+			// than falling through: the relearn path would tell the agent to fix
+			// a bug that does not exist and then persist its rewrite over working
+			// code. This is infrastructure, not workflow content — it belongs in
+			// the step-failure notification, not in the run's concerns.
+			if scriptedDecision.HarnessFailure {
+				return "", updatedContextFiles, fmt.Errorf(
+					"scripted step %q could not run: the workspace refused to start main.py, so it produced no output and its behavior is untested by this run. "+
+						"This is a harness/infrastructure failure, not a fault in the script — do not modify main.py in response to it. Underlying error: %s",
+					step.GetID(), scriptedDecision.HarnessError)
+			}
 			learnCodePriorScript = scriptedDecision.PriorScript
 			learnCodePriorError = scriptedDecision.PriorError
 			switch {
@@ -2340,7 +2352,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Persist pre-validation results for Pulse Bug Review and diagnostics.
 				if hcpo.selectedRunFolder != "" {
 					preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema)
+					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
 				}
 
 				// Build validation response based on pre-validation results

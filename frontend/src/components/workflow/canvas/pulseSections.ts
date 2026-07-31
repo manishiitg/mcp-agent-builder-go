@@ -19,14 +19,12 @@ export type PulseSectionDefinition = {
 
 export const PULSE_MODULE_COMMANDS: PulseCommandDefinition[] = [
   { id: 'bug_review', label: 'Bug review', description: 'Read-only reliability checks; Pulse Fixer applies safe fixes' },
-  { id: 'artifact_review', label: 'Artifact review', description: 'Plan-change artifact drift' },
+  { id: 'artifact_review', label: 'Artifact review', description: 'Plan-change artifact drift, across all six stores' },
   { id: 'report_health', label: 'Report health', description: 'Dashboard/report accuracy' },
   { id: 'eval_health', label: 'Eval health', description: 'Rubric and eval wiring quality' },
-  { id: 'learning_health', label: 'Learning health', description: 'Learning freshness and quality' },
-  { id: 'knowledgebase_health', label: 'Knowledge base', description: 'KB freshness and contradictions' },
-  { id: 'db_health', label: 'Database health', description: 'DB/schema/data quality checks' },
+  { id: 'stores_health', label: 'Stores health', description: 'Learnings, knowledge base, and database freshness/quality' },
   { id: 'cost_llm_time', label: 'Cost + time', description: 'Cost, model usage, and runtime telemetry' },
-  { id: 'llm_ops_review', label: 'LLM + operations', description: 'Model routing and workflow setup recommendations' },
+  { id: 'llm_ops_review', label: 'LLM + operations', description: 'Model routing, workflow setup, and plan-design hygiene recommendations' },
   { id: 'goal_advisor', label: 'Goal Advisor', description: 'Strategic review when goal evidence is weak' },
 ]
 
@@ -66,9 +64,7 @@ export const PULSE_SECTIONS: PulseSectionDefinition[] = [
       'artifact_review',
       'report_health',
       'eval_health',
-      'learning_health',
-      'knowledgebase_health',
-      'db_health',
+      'stores_health',
       'cost_llm_time',
       'llm_ops_review',
     ],
