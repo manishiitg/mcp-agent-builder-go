@@ -1,6 +1,9 @@
 package step_based_workflow
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func toolSet(names []string) map[string]bool {
 	set := make(map[string]bool, len(names))
@@ -90,5 +93,23 @@ func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
 		if !reviewer[reader] || !fixer[reader] {
 			t.Fatalf("%q must be readable by both roles", reader)
 		}
+	}
+}
+
+// TestDerivedReviewIdentityKeepsTheCallersPulseRun lets a standalone
+// /pulse-fixer reach the same fixer stage the scheduled path uses.
+//
+// A manual fixer already owns a pulse_run_id from begin_pulse_fixer_run and
+// must keep writing under it — its authority is bound to that exact run. If
+// deriving a review identity replaced that id, every lifecycle write from the
+// stage would be refused as a run mismatch.
+func TestDerivedReviewIdentityKeepsTheCallersPulseRun(t *testing.T) {
+	const owned = "manual-fixer--abc123"
+	effective, reviewRunID := newDerivedPulseReviewIdentity(time.Date(2026, 7, 31, 20, 15, 0, 0, time.UTC), owned, "fix-bug-review", "bug_review")
+	if effective != owned {
+		t.Fatalf("derived identity changed the caller's run id to %q; its authority is bound to %q", effective, owned)
+	}
+	if reviewRunID == "" || reviewRunID == owned {
+		t.Fatalf("review_run_id %q must be its own value, not empty and not the pulse run id", reviewRunID)
 	}
 }

@@ -40,8 +40,13 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   recipients, destinations, credentials, and broad plan changes require the
   existing exact approved human-input request. A free-form or unrelated answer
   is not approval.
-- Use normal direct plan/config/file/report/eval tools. Do not delegate mutation
-  to another agent and do not run an externally side-effecting workflow merely
+- Run the repair itself as one `call_generic_agent` with `role="fixer"` per
+  selected module, passing the `pulse_run_id` from `begin_pulse_fixer_run` and
+  that `module`; the backend derives the review identity. Start one at a time —
+  it is the single writer. This is the same stage scheduled Pulse uses, so a
+  manual run exercises the real path rather than a parallel one, and it runs on
+  the maintenance model tier instead of this chat turn's model. Do not apply
+  fixes inline here, and do not run an externally side-effecting workflow merely
   to verify a repair.
 - Run targeted side-effect-free validation after every change and accept it only
   under the `fix-verification` contract: verify the real runtime consumer reads

@@ -3564,6 +3564,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if module != "" && pulseRunID == "" && reviewRunID == "" && !looksLikeScheduledPulseReview {
 				pulseRunID, reviewRunID = newManualPulseReviewIdentity(time.Now(), todoID, module)
 			}
+			// A standalone /pulse-fixer already owns a pulse_run_id from
+			// begin_pulse_fixer_run and must keep writing under it, so it cannot
+			// take the branch above. Derive the review identity for it instead
+			// of making the caller invent one, so the manual and scheduled paths
+			// reach the same stage through the same arguments.
+			if module != "" && pulseRunID != "" && reviewRunID == "" {
+				_, reviewRunID = newDerivedPulseReviewIdentity(time.Now(), pulseRunID, todoID, module)
+			}
 			pulseMetadataCount := 0
 			for _, value := range []string{pulseRunID, reviewRunID, module} {
 				if value != "" {
