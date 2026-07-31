@@ -1294,7 +1294,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
 		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
-		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg))
+		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg), narrowAgentCfg)
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
 			prevRead = prevCfg.ReadPaths
@@ -1422,7 +1422,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			evaluationDBWrite = evalStep.DBWrite
 		}
 		dbAccess := resolveEffectiveDBAccess(agentConfigs, hcpo.isEvaluationMode, evaluationDBWrite)
-		folderGuardReadPaths, folderGuardWritePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess)
+		folderGuardReadPaths, folderGuardWritePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess, agentConfigs)
 
 		// Learn code mode: add code/ subdir to write paths so LLM can write main.py there
 		if isScriptedMode {

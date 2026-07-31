@@ -9,6 +9,7 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	orchestratoragents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
@@ -113,6 +114,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	if kbAccessAllowsWrite(kbAccessForGuard) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
+	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, skillStepConfig)
+	readPaths = common.DeduplicateStrings(readPaths)
 
 	// Add skill folder paths to read paths (skills are read-only)
 	effectiveSkills := GetEffectiveSkills(skillStepConfig, hcpo.BaseOrchestrator)
@@ -800,6 +803,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	if kbAccessAllowsWrite(kbAccess) {
 		fgWritePaths = append(fgWritePaths, filepath.Join(fgKnowledgebasePath, "notes"))
 	}
+	fgReadPaths = appendAdditionalWorkflowReadPaths(fgReadPaths, baseWorkspacePath, stepConfig)
+	fgReadPaths = common.DeduplicateStrings(fgReadPaths)
 
 	templateVars := map[string]string{
 		// Resolve variables in step metadata

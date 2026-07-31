@@ -411,6 +411,9 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.EnabledSkills != nil {
 		target.EnabledSkills = source.EnabledSkills
 	}
+	if source.AdditionalReadPaths != nil {
+		target.AdditionalReadPaths = source.AdditionalReadPaths
+	}
 	if source.DisableParallelToolExecution != nil {
 		target.DisableParallelToolExecution = source.DisableParallelToolExecution
 		logger.Info(fmt.Sprintf("🔧 Using step config (ID: %s) - disable_parallel_tool_execution: %v", stepID, *source.DisableParallelToolExecution))
@@ -438,6 +441,35 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.GlobalSkillObjective != "" {
 		target.GlobalSkillObjective = source.GlobalSkillObjective
 	}
+}
+
+// normalizeAdditionalReadPaths validates and canonicalizes read-only grants from
+// step_config.json. Entries are relative to the current workflow root. Absolute
+// paths and traversal are rejected so this escape hatch cannot expose another
+// workflow or the host filesystem.
+func normalizeAdditionalReadPaths(paths []string) ([]string, error) {
+	normalized := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, raw := range paths {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("additional_read_paths entry contains a NUL byte")
+		}
+		value = strings.ReplaceAll(value, `\`, "/")
+		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+		if filepath.IsAbs(value) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return nil, fmt.Errorf("additional_read_paths entry %q must be a workflow-relative path that stays inside the current workflow", raw)
+		}
+		if _, exists := seen[clean]; exists {
+			continue
+		}
+		seen[clean] = struct{}{}
+		normalized = append(normalized, clean)
+	}
+	return normalized, nil
 }
 
 // ApplyStepConfigFromFile loads step_config.json and applies matched config to the step.

@@ -72,6 +72,7 @@ func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(
 		"step-1", "eval-result", KBAccessNone, LearningsAccessNone,
 		resolveEffectiveDBAccess(nil, true, false),
+		nil,
 	)
 	dbPath := "Workflow/testing/db"
 	if !slices.Contains(readPaths, dbPath) {
@@ -79,6 +80,57 @@ func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	}
 	if slices.Contains(writePaths, dbPath) {
 		t.Fatalf("evaluation must not be able to write %q, got %v", dbPath, writePaths)
+	}
+}
+
+func TestExecutionFolderGuardAddsOnlySafeWorkflowRelativeReadPaths(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/testing")
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/test"}
+
+	config := &AgentConfigs{AdditionalReadPaths: []string{"variables", "reports/reference.json", "variables/"}}
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard(
+		"step-1", "reader", KBAccessNone, LearningsAccessNone, DBAccessRead, config,
+	)
+	for _, expected := range []string{"Workflow/testing/variables", "Workflow/testing/reports/reference.json"} {
+		if !slices.Contains(readPaths, expected) {
+			t.Fatalf("additional read grant %q missing from %v", expected, readPaths)
+		}
+		if slices.Contains(writePaths, expected) {
+			t.Fatalf("additional read grant %q unexpectedly widened writes: %v", expected, writePaths)
+		}
+	}
+
+	unsafe := &AgentConfigs{AdditionalReadPaths: []string{"../other-workflow"}}
+	unsafeReads, _ := hcpo.setupExecutionFolderGuard(
+		"step-1", "reader", KBAccessNone, LearningsAccessNone, DBAccessRead, unsafe,
+	)
+	for _, granted := range unsafeReads {
+		if strings.Contains(granted, "other-workflow") {
+			t.Fatalf("unsafe traversal was granted: %v", unsafeReads)
+		}
+	}
+}
+
+func TestNormalizeAdditionalReadPathsRejectsEscapeAndCanonicalizes(t *testing.T) {
+	got, err := normalizeAdditionalReadPaths([]string{" variables/ ", "reports/../variables", "reports/reference.json"})
+	if err != nil {
+		t.Fatalf("normalizeAdditionalReadPaths returned error: %v", err)
+	}
+	want := []string{"variables", "reports/reference.json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalized paths = %v, want %v", got, want)
+	}
+	for _, invalid := range [][]string{{"."}, {".."}, {"../outside"}, {"/tmp/outside"}, {`..\outside`}} {
+		if _, err := normalizeAdditionalReadPaths(invalid); err == nil {
+			t.Fatalf("normalizeAdditionalReadPaths(%v) accepted an unsafe path", invalid)
+		}
 	}
 }
 
@@ -413,6 +465,7 @@ func TestSetupExecutionFolderGuardHonorsLearningsAndKBNone(t *testing.T) {
 		KBAccessNone,
 		LearningsAccessNone,
 		DBAccessReadWrite,
+		nil,
 	)
 
 	forbiddenReads := []string{
@@ -458,6 +511,7 @@ func TestSetupExecutionFolderGuardGivesGenericReviewerWorkflowWideReadOnlyView(t
 		KBAccessRead,
 		LearningsAccessRead,
 		DBAccessRead,
+		nil,
 	)
 
 	if !slices.Contains(readPaths, "Workflow/testing") {
@@ -508,6 +562,7 @@ func TestSetupExecutionFolderGuardAddsOnlyConfiguredStores(t *testing.T) {
 		KBAccessReadWrite,
 		LearningsAccessRead,
 		DBAccessReadWrite,
+		nil,
 	)
 
 	for _, expected := range []string{
@@ -843,6 +898,7 @@ func TestExecutionFolderGuardGrantsPlanningReadNeverWrite(t *testing.T) {
 
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(
 		"step-1", "some-step", KBAccessNone, LearningsAccessNone, DBAccessReadWrite,
+		nil,
 	)
 	planningPath := "Workflow/testing/planning"
 	if !slices.Contains(readPaths, planningPath) {

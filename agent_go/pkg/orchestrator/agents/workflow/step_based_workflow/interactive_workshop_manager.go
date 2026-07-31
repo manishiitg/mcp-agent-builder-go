@@ -1045,6 +1045,16 @@ type WorkshopExecutionNotifier interface {
 	OnExecutionTerminated(execID, name string) // explicit cancellation via stop_step/stop_all
 }
 
+// registerWorkshopExecutionBeforeLaunch is intentionally synchronous. Async
+// workshop tools must make their live execution visible before returning the
+// execution_id to the parent agent; otherwise a scheduler can observe the
+// parent turn as idle before the child has entered the registry.
+func registerWorkshopExecutionBeforeLaunch(notifier WorkshopExecutionNotifier, start WorkshopExecutionStart) {
+	if notifier != nil {
+		notifier.OnExecutionStart(start)
+	}
+}
+
 // ServerAgentInfo is a lightweight snapshot of a server-tracked background agent.
 type ServerAgentInfo struct {
 	ID     string
@@ -3085,6 +3095,32 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				virtualtools.RegisterParentChat(agentSessionID, parentChat)
 			}
 
+			// Register the background execution before execute_step returns. The
+			// scheduler waits on the server-side execution registry after each
+			// scheduled workshop turn; registering from inside the goroutine left
+			// a race where the parent turn could go idle first and the scheduler
+			// would advance (or mark the whole schedule successful) while this
+			// step was still starting.
+			stepDisplayName := stepID
+			if iwm.controller.approvedPlan != nil {
+				if stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, stepID); stepInfo != nil {
+					stepDisplayName = stepInfo.Step.GetTitle()
+				}
+			}
+			if resolvedGroupName != "" {
+				stepDisplayName = fmt.Sprintf("%s [%s]", stepDisplayName, resolvedGroupName)
+			} else if groupName != "" {
+				stepDisplayName = fmt.Sprintf("%s [%s]", stepDisplayName, groupName)
+			}
+			registerWorkshopExecutionBeforeLaunch(iwm.executionNotifier, WorkshopExecutionStart{
+				ID:                execID,
+				ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
+				Name:              stepDisplayName,
+				Cancel:            cancel,
+			})
+			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
+			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
+
 			go func() {
 				if workflowSessionID != "" {
 					defer virtualtools.UnregisterParentChat(workflowSessionID)
@@ -3098,32 +3134,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if execOpts.Tier >= 1 && execOpts.Tier <= 3 {
 					execCtx = context.WithValue(execCtx, WorkshopTierOverrideKey, execOpts.Tier)
 				}
-
-				// Resolve step title and type for the wrapper event (use plan step if available)
-				stepDisplayName := stepID
-				if iwm.controller.approvedPlan != nil {
-					if stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, stepID); stepInfo != nil {
-						stepDisplayName = stepInfo.Step.GetTitle()
-					}
-				}
-				// Include group name in display name so notifications clearly identify which group they belong to
-				if resolvedGroupName != "" {
-					stepDisplayName = fmt.Sprintf("%s [%s]", stepDisplayName, resolvedGroupName)
-				} else if groupName != "" {
-					stepDisplayName = fmt.Sprintf("%s [%s]", stepDisplayName, groupName)
-				}
-
-				// Notify server layer so bgAgentRegistry tracks this execution (keeps frontend polling alive)
-				if iwm.executionNotifier != nil {
-					iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
-						ID:                execID,
-						ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
-						Name:              stepDisplayName,
-						Cancel:            cancel,
-					})
-				}
-				execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
-				execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
 
 				// Variables captured after execution for metadata
 				var isLockCode bool
@@ -4390,7 +4400,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"clear_fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_tier, servers, tools, enabled_custom_tools, enabled_skills, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, transport, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, db_access, review_notes, declared_execution_mode, declared_execution_mode_reason, global_skill_objective, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
+					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_tier, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, transport, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, db_access, review_notes, declared_execution_mode, declared_execution_mode_reason, global_skill_objective, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
 				},
 				"servers": map[string]interface{}{
 					"type":        "array",
@@ -4423,6 +4433,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "Skill folder names to enable for this step. Step execution only receives skills listed here; workflow-level selected skills are builder/workshop context and do not cascade into runtime steps. Use list_skills to see installed skills and get_workflow_config to see the workflow's currently selected skills for discovery/reference.",
+				},
+				"additional_read_paths": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Additional workflow-relative files or folders this step may READ, such as [\"variables\"] or [\"reports/reference.json\"]. Use only when the normal execution/db/KB/learnings paths do not cover a declared input. Paths are read-only and must remain inside the current workflow: absolute paths, '.', and '..' traversal are rejected. This never grants writes.",
 				},
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
@@ -4638,6 +4653,17 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						}
 					}
 					targetConfig.AgentConfigs.EnabledSkills = enabledSkills
+				}
+			}
+			if val, ok := args["additional_read_paths"]; ok && val != nil {
+				if arr, ok := val.([]interface{}); ok {
+					additionalReadPaths := make([]string, 0, len(arr))
+					for _, v := range arr {
+						if s, ok := v.(string); ok {
+							additionalReadPaths = append(additionalReadPaths, s)
+						}
+					}
+					targetConfig.AgentConfigs.AdditionalReadPaths = additionalReadPaths
 				}
 			}
 			if val, ok := args["knowledgebase_access"]; ok && val != nil {
@@ -4952,6 +4978,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if normalizeCodingAgentTmuxLifecycle(rawLifecycle) == "" {
 					errors = append(errors, fmt.Sprintf("coding_agent_tmux_lifecycle %q is not recognized. Valid values: \"close_on_completion\", \"keep_alive\".", rawLifecycle))
 				}
+			}
+			if normalizedPaths, normalizeErr := normalizeAdditionalReadPaths(targetConfig.AgentConfigs.AdditionalReadPaths); normalizeErr != nil {
+				errors = append(errors, normalizeErr.Error()+".")
+			} else {
+				targetConfig.AgentConfigs.AdditionalReadPaths = normalizedPaths
 			}
 			// 7. Validate KB access ↔ contribution consistency.
 			// When knowledgebase_access grants write, knowledgebase_contribution MUST be

@@ -131,11 +131,12 @@ func repoFile(t *testing.T, rel string) string {
 	return string(data)
 }
 
-// TestFrontendPulseSectionsMatchRegistry keeps the TypeScript module list in
-// sync. Go cannot own a TS constant, so this asserts parity by reading the
-// source. pulseSections.ts drives the Pulse popup's per-reviewer tabs: a
-// module missing here has no tab, and a stale module shows an empty one.
-func TestFrontendPulseSectionsMatchRegistry(t *testing.T) {
+// TestFrontendPulseModuleCommandsMatchRegistry keeps the TypeScript module list
+// in sync. Go cannot own a TS constant, so this asserts parity by reading the
+// source. The database-native Pulse workspace renders directly from
+// PULSE_MODULE_COMMANDS; the retired PULSE_SECTIONS tab grouping no longer
+// exists.
+func TestFrontendPulseModuleCommandsMatchRegistry(t *testing.T) {
 	src := repoFile(t, "frontend/src/components/workflow/canvas/pulseSections.ts")
 
 	commandBlock := regexp.MustCompile(`(?s)export const PULSE_MODULE_COMMANDS[^=]*=\s*\[(.*?)\]\s*\n`).FindStringSubmatch(src)
@@ -148,17 +149,7 @@ func TestFrontendPulseSectionsMatchRegistry(t *testing.T) {
 		commandIDs[match[1]] = true
 	}
 
-	sectionIDs := map[string]bool{}
-	moduleListPattern := regexp.MustCompile(`(?s)moduleIds:\s*\[([^\]]*)\]`)
-	quotedPattern := regexp.MustCompile(`'([^']+)'`)
-	for _, list := range moduleListPattern.FindAllStringSubmatch(src, -1) {
-		for _, match := range quotedPattern.FindAllStringSubmatch(list[1], -1) {
-			sectionIDs[match[1]] = true
-		}
-	}
-
 	assertExactModuleSet(t, "PULSE_MODULE_COMMANDS", commandIDs)
-	assertExactModuleSet(t, "PULSE_SECTIONS.moduleIds", sectionIDs)
 }
 
 func assertExactModuleSet(t *testing.T, surface string, got map[string]bool) {

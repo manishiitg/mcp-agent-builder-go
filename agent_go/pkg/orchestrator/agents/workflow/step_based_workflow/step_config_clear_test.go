@@ -36,6 +36,14 @@ func TestClearStepConfigField(t *testing.T) {
 			assertJSONGone: "selected_servers",
 		},
 		{
+			name:  "clears additional read paths",
+			field: "additional_read_paths",
+			prep: func(sc *StepConfig) {
+				sc.AgentConfigs = &AgentConfigs{AdditionalReadPaths: []string{"variables"}}
+			},
+			assertJSONGone: "additional_read_paths",
+		},
+		{
 			name:  "clears bool pointer (lock_learnings)",
 			field: "lock_learnings",
 			prep: func(sc *StepConfig) {
