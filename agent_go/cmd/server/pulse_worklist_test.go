@@ -349,6 +349,69 @@ func TestBeginPulseFixerRunSeedsOnlySelectedModules(t *testing.T) {
 	}
 }
 
+// TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns pins the difference
+// between a pass that is working on a module and one that died holding it.
+// social-media stranded five modules as due-with-no-result under a timed-out
+// pass, and a state-only check refused every /pulse-fixer attempt forever.
+func TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+
+	// Claim bug_review for another run and leave it unresolved, exactly as a
+	// pass that died mid-flight does: due, with no terminal result.
+	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleBugReview: {Due: true, Reason: "Owning pass selected this module."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "owning-pulse", decisions); err != nil {
+		t.Fatalf("record owning worklist: %v", err)
+	}
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get module states: %v", err)
+	}
+	claimed := false
+	for _, state := range states {
+		if state.Module == pulseModuleBugReview {
+			claimed = state.LastDecision == "due" && state.LastResult == "" && state.LastPulseRunID == "owning-pulse"
+		}
+	}
+	if !claimed {
+		t.Fatalf("precondition failed: bug_review is not an unresolved claim of owning-pulse")
+	}
+
+	_, executors, _ := createPulseWorklistTools()
+	begin := executors["begin_pulse_fixer_run"].(func(context.Context, map[string]interface{}) (string, error))
+	args := map[string]interface{}{
+		"workspace_path": workspacePath,
+		"modules":        []interface{}{pulseModuleBugReview},
+	}
+
+	// While the owning pass still holds authority, refuse.
+	releaseOwner := registerTrustedPulseSession("owning-session", "owning-pulse")
+	ctx := mcpexecutor.WithSessionID(context.Background(), "manual-fixer-session")
+	if _, err := begin(ctx, args); err == nil || !strings.Contains(err.Error(), "already belongs to unresolved Pulse run") {
+		t.Fatalf("live owning run was not protected: %v", err)
+	}
+
+	// Once that pass ends without resolving the module, the claim is abandoned
+	// and the fixer must be able to take it over.
+	releaseOwner()
+	raw, err := begin(ctx, args)
+	if err != nil {
+		t.Fatalf("abandoned run was not taken over: %v", err)
+	}
+	var payload struct {
+		PulseRunID string `json:"pulse_run_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.PulseRunID == "" {
+		t.Fatalf("decode begin result: raw=%s err=%v", raw, err)
+	}
+	if payload.PulseRunID == "owning-pulse" {
+		t.Fatalf("takeover reused the abandoned run id instead of starting its own")
+	}
+}
+
 func TestTemporaryPulseAuthorizationExpires(t *testing.T) {
 	sessionID := "expired-manual-fixer"
 	runID := "manual-fixer--expired"

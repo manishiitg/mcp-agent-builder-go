@@ -451,8 +451,15 @@ func recordStandalonePulseFixerModules(ctx context.Context, workspacePath, pulse
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+		// Refuse only a pass that is still running. An unresolved claim whose
+		// run no longer holds authority was abandoned, and leaving it
+		// untouchable strands the module permanently rather than protecting
+		// anything.
 		if err == nil && decision == "due" && strings.TrimSpace(result) == "" && activeRunID != pulseRunID {
-			return nil, fmt.Errorf("module %q already belongs to unresolved Pulse run %q", module, activeRunID)
+			if isTrustedPulseRunLive(activeRunID) {
+				return nil, fmt.Errorf("module %q already belongs to unresolved Pulse run %q", module, activeRunID)
+			}
+			log.Printf("[PULSE] standalone fixer taking over module %q from abandoned Pulse run %q", module, activeRunID)
 		}
 	}
 
