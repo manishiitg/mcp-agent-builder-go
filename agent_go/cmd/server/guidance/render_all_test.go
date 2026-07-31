@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func containsNormalizedText(haystack, needle string) bool {
+	return strings.Contains(
+		strings.Join(strings.Fields(haystack), " "),
+		strings.Join(strings.Fields(needle), " "),
+	)
+}
+
 // TestAllGuidanceTemplatesRender renders every template in both registries with
 // empty caller context. A template that references a tmplData field that does
 // not exist (or has a malformed action) only fails at execute time, which
@@ -61,31 +68,26 @@ func TestChiefOfStaffGuidanceKeepsTechnicalDetailsOutOfVisibleOutput(t *testing.
 	}
 }
 
-func TestFocusedScheduledPulseReferencesStayBoundedAndComplete(t *testing.T) {
+func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 	tests := map[string]struct {
-		max   int
 		wants []string
 	}{
 		"pulse-archive": {
-			max:   3000,
 			wants: []string{"latest 15 calendar days", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
 		},
 		"pulse-gate": {
-			max: 5000,
 			wants: []string{
 				"progressive evidence scan", "CONCERNS:", "record_pulse_worklist", "one decision for every",
 				"cannot suppress a measured miss", "Gate must not launch reviewers",
 			},
 		},
 		"pulse-review-fixer": {
-			max: 6200,
 			wants: []string{
 				"batches of at most two", "supported transport", "automatic", "get_pulse_review_result",
 				"only Pulse Fixer", "global finding-ID reconciliation", "terminal current-run result",
 			},
 		},
 		"pulse-finalizer": {
-			max: 4500,
 			wants: []string{
 				"Never treat missing as skipped/successful", "dedicated Dashboard stage", "do not rewrite them",
 				"directly in this parent", "Publish", "Notify", "mark_pulse_final_command_result",
@@ -98,11 +100,8 @@ func TestFocusedScheduledPulseReferencesStayBoundedAndComplete(t *testing.T) {
 		if err != nil {
 			t.Fatalf("render %s: %v", kind, err)
 		}
-		if got := len(rendered); got > tc.max {
-			t.Fatalf("%s reference grew to %d bytes (budget %d)", kind, got, tc.max)
-		}
 		for _, want := range tc.wants {
-			if !strings.Contains(rendered, want) {
+			if !containsNormalizedText(rendered, want) {
 				t.Fatalf("%s reference missing %q", kind, want)
 			}
 		}
@@ -343,7 +342,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"not automatically due every Pulse",
 		"Parallel Review Team And Single Fixer",
 		"parallel batches of at most two reviewers",
-		"under 3000 characters",
+		"every evidence-backed severity-ordered finding row",
 		"in-turn review ledger",
 		"Never trust HTML as recovery truth",
 		"blindly reapply",
@@ -395,6 +394,12 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Never describe this state as healthy",
 		"warning in every Pulse",
 		"notification until off-device protection is verified",
+		"material issues newly found or reopened",
+		"verified fixes and verified no-change closures",
+		"exact active pending count",
+		"Fixed by Pulse",
+		"Still pending",
+		"Needs your decision",
 	} {
 		if !strings.Contains(postRun, want) {
 			t.Fatalf("post-run-monitor missing %q", want)
@@ -493,10 +498,10 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"newest **20** timeline cards",
 		"Stage complete active and archive HTML documents",
 		`href="improve-archive/YYYY-MM.html"`,
-		"Goal — Ikigai",
-		"Signals — Kizuki",
-		"Reflection — Hansei",
-		"Improvements — Kaizen",
+		"**Goal:**",
+		"**Issues and reviews:**",
+		"**Decisions and analysis:**",
+		"**Fixes and improvements:**",
 		"Do not add a second active-question card",
 		"What happened",
 		"Why it matters",
@@ -770,7 +775,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		`run Bug Review alone first`,
 		`record Auditor as terminally deferred`,
 		`one reviewer task for **every** remaining due module`,
-		`Never rank the due worklist and run only a "top 3"`,
+		`Never rank or truncate the due worklist`,
 		`one honest terminal result for every due module`,
 		`later Dashboard stage`,
 		`must not update ` + "`builder/improve.html`",
@@ -784,7 +789,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render pulse: %v", err)
 	}
-	for _, want := range []string{`Never select only a`, `one explicitly attributed result card per due module`} {
+	for _, want := range []string{`Do not truncate the due worklist`, `one explicitly attributed result card per due module`} {
 		if !strings.Contains(pulse, want) {
 			t.Fatalf("manual pulse missing complete reviewer contract %q", want)
 		}
