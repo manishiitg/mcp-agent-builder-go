@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,6 +139,29 @@ func TestLoadOpenRunConcernsRanksByRecurrence(t *testing.T) {
 	}
 	if !strings.Contains(open[0].Text, "seen twice") {
 		t.Fatalf("most-recurring must rank first, got %q", open[0].Text)
+	}
+}
+
+func TestLoadOpenRunConcernsNegativeLimitReturnsCompleteBacklog(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	for i := 0; i < 63; i++ {
+		summary := fmt.Sprintf("CONCERNS: distinct backlog concern %02d", i)
+		if _, err := RecordRunConcerns(ctx, ws, "run", "g", "step-a", ConcernPhaseExecution, summary); err != nil {
+			t.Fatalf("record concern %d: %v", i, err)
+		}
+	}
+
+	preview, err := LoadOpenRunConcerns(ctx, ws, 25)
+	if err != nil {
+		t.Fatalf("load preview: %v", err)
+	}
+	complete, err := LoadOpenRunConcerns(ctx, ws, -1)
+	if err != nil {
+		t.Fatalf("load complete backlog: %v", err)
+	}
+	if len(preview) != 25 || len(complete) != 63 {
+		t.Fatalf("preview=%d complete=%d, want 25 and 63", len(preview), len(complete))
 	}
 }
 

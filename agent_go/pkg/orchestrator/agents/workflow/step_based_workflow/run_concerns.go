@@ -71,10 +71,11 @@ const (
 )
 
 const (
-	ConcernStatusOpen         = "open"
-	ConcernStatusAcknowledged = "acknowledged"
-	ConcernStatusResolved     = "resolved"
-	ConcernStatusRejected     = "rejected"
+	ConcernStatusOpen                   = "open"
+	ConcernStatusAcknowledged           = "acknowledged"
+	ConcernStatusExternalActionRequired = "external_action_required"
+	ConcernStatusResolved               = "resolved"
+	ConcernStatusRejected               = "rejected"
 )
 
 const concernLinePrefix = "CONCERNS:"
@@ -256,25 +257,29 @@ func recordRunConcernLinesAt(
 	return recorded, nil
 }
 
-// LoadOpenRunConcerns returns concerns still needing attention, most-recurring
-// first. Recurrence is the ranking signal: a contradiction reported on twelve
-// consecutive runs matters more than one seen once, and that ordering is not
-// derivable from anything else in the workflow today.
+// LoadOpenRunConcerns returns concerns still needing Pulse attention. A negative
+// limit returns the complete active backlog; zero preserves the bounded default
+// for callers that only need a preview.
 func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) ([]RunConcern, error) {
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		return nil, err
 	}
 	defer db.Close()
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 50
 	}
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+	query := `SELECT fingerprint, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status
 		FROM run_concerns
 		WHERE status IN (?, ?, ?, ?)
-		ORDER BY seen_count DESC, last_seen_at DESC
-		LIMIT ?`, ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, limit)
+		ORDER BY seen_count DESC, first_seen_at ASC, last_seen_at DESC`
+	args := []interface{}{ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		// Absent table just means no concern has been raised yet.
 		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
@@ -296,6 +301,46 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	return out, rows.Err()
 }
 
+// LoadExternallyOwnedRunConcerns returns findings Pulse has diagnosed as real
+// but cannot act on in this workflow. Reviewers receive these as a suppression
+// list; recurrence updates their audit history without putting them back in the
+// active Pulse queue.
+func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) ([]RunConcern, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
+			resolved_at, resolved_by, resolution_note
+		FROM run_concerns
+		WHERE status=?
+		ORDER BY last_seen_at DESC, first_seen_at ASC`, ConcernStatusExternalActionRequired)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunConcern
+	for rows.Next() {
+		var concern RunConcern
+		if err := rows.Scan(
+			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
+			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
+			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,
+			&concern.ResolutionNote,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, concern)
+	}
+	return out, rows.Err()
+}
+
 // ResolveRunConcern records a terminal judgement on a concern.
 //
 // Absence never resolves a concern: a report that stops appearing may just mean
@@ -305,7 +350,7 @@ func ResolveRunConcern(ctx context.Context, workspacePath, fingerprint, status, 
 	switch status {
 	case ConcernStatusAcknowledged, ConcernStatusResolved, ConcernStatusRejected:
 	default:
-		return fmt.Errorf("invalid concern status %q (want acknowledged, resolved, or rejected)", status)
+		return fmt.Errorf("invalid concern status %q", status)
 	}
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil {

@@ -248,6 +248,8 @@ func pulseReviewStatus(artifact string) string {
 	return ""
 }
 
+// LoadPulseReviewArtifacts returns every matching artifact when limit is
+// negative. Zero keeps the bounded default for preview/history callers.
 func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string, includeMarkdown bool, limit int) ([]PulseReviewArtifactRecord, error) {
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
@@ -257,7 +259,7 @@ func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string,
 	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
 		return nil, err
 	}
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 200
 	}
 	module = pulsemodules.Normalize(module)
@@ -286,8 +288,11 @@ func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string,
 			args = append(args, alias)
 		}
 	}
-	query += ` ORDER BY recorded_at DESC, _id DESC LIMIT ?`
-	args = append(args, limit)
+	query += ` ORDER BY recorded_at DESC, _id DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

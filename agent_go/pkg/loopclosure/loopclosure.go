@@ -213,7 +213,10 @@ func Evaluate(now, lastGatePass time.Time, inputs []HumanInput, concerns []Conce
 
 	for _, c := range concerns {
 		status := strings.ToLower(strings.TrimSpace(c.Status))
-		if status != "open" && status != "acknowledged" {
+		// Only unresolved work is recurrence evidence. Acknowledged findings
+		// have already been triaged; counting them here turns a deliberate
+		// deferral or external boundary into a fabricated stalled-loop signal.
+		if status != "open" {
 			continue
 		}
 		if c.SeenCount < cfg.ConcernRecurrenceThreshold {
@@ -413,7 +416,7 @@ func queryHumanInputs(ctx context.Context, db *sql.DB) ([]HumanInput, error) {
 func queryConcerns(ctx context.Context, db *sql.DB) ([]Concern, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT fingerprint, text, status, seen_count, last_seen_at
-		 FROM run_concerns WHERE status IN ('open','acknowledged')`)
+		 FROM run_concerns WHERE status='open'`)
 	if err != nil {
 		return nil, err
 	}

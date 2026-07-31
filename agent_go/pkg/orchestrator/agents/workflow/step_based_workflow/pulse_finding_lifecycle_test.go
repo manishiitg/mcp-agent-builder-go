@@ -401,3 +401,74 @@ func TestNoAttemptVerificationHistoryAccumulatesAcrossPulseRuns(t *testing.T) {
 		t.Fatalf("no-attempt verification history was overwritten: %+v", lifecycles)
 	}
 }
+
+func TestExternalActionRequiredLeavesActiveQueueAndStaysSuppressedOnRecurrence(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "bug_review"
+	concernText := "scheduler marks a truncated background run successful"
+	concern := filedReviewConcern(t, workspacePath, "pulse-external-1", module, concernText)
+
+	recordFindingDispositions(t, workspacePath, module, "pulse-external-1", []PulseFindingDisposition{{
+		Fingerprint:     concern.Fingerprint,
+		FindingID:       "HARNESS-SCHEDULER-1",
+		Disposition:     FindingDispositionExternalAction,
+		Summary:         "The defect is in the shared scheduler and has no workflow-level repair.",
+		ExternalOwner:   "platform",
+		ReasonCode:      "missing_platform_tool",
+		ReopenCondition: "scheduler completion detection changes or a platform repair tool becomes available",
+	}})
+
+	active, err := LoadOpenRunConcerns(ctx, workspacePath, -1)
+	if err != nil {
+		t.Fatalf("load active concerns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("externally owned finding remained active: %+v", active)
+	}
+	suppressed, err := LoadExternallyOwnedRunConcerns(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("load suppressed concerns: %v", err)
+	}
+	if len(suppressed) != 1 || suppressed[0].Fingerprint != concern.Fingerprint {
+		t.Fatalf("external finding was not suppressed: %+v", suppressed)
+	}
+
+	if _, err := RecordRunConcerns(
+		ctx, workspacePath, "pulse-external-2", "", module, ConcernPhaseReview,
+		"CONCERNS: "+concernText,
+	); err != nil {
+		t.Fatalf("record identical recurrence: %v", err)
+	}
+	active, err = LoadOpenRunConcerns(ctx, workspacePath, -1)
+	if err != nil {
+		t.Fatalf("reload active concerns: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("identical recurrence reopened external finding: %+v", active)
+	}
+	lifecycles, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+	if err != nil {
+		t.Fatalf("load external lifecycle: %v", err)
+	}
+	if len(lifecycles) != 1 || lifecycles[0].Status != ConcernStatusExternalActionRequired || lifecycles[0].SeenCount != 2 {
+		t.Fatalf("external lifecycle lost recurrence audit: %+v", lifecycles)
+	}
+	if lifecycles[0].ExternalOwner != "platform" ||
+		lifecycles[0].ReasonCode != "missing_platform_tool" ||
+		!strings.Contains(lifecycles[0].ReopenCondition, "scheduler") {
+		t.Fatalf("external ownership metadata missing: %+v", lifecycles[0])
+	}
+}
+
+func TestExternalActionRequiredNeedsOwnershipAndReopenBoundary(t *testing.T) {
+	err := validateFindingDisposition(PulseFindingDisposition{
+		Fingerprint: "fp",
+		FindingID:   "HARNESS-1",
+		Disposition: FindingDispositionExternalAction,
+		Summary:     "Outside workflow authority.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "external_owner, reason_code, and reopen_condition") {
+		t.Fatalf("incomplete external disposition was accepted: %v", err)
+	}
+}

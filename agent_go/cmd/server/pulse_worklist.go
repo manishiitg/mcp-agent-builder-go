@@ -1270,7 +1270,7 @@ func (api *StreamingAPI) handleGetPulseFindings(w http.ResponseWriter, r *http.R
 		return
 	}
 	findings, err := step_based_workflow.LoadPulseFindingLifecycles(
-		r.Context(), workspacePath, module, 200,
+		r.Context(), workspacePath, module, -1,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1280,6 +1280,7 @@ func (api *StreamingAPI) handleGetPulseFindings(w http.ResponseWriter, r *http.R
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
 		"findings": findings,
+		"total":    len(findings),
 	})
 }
 
@@ -1317,12 +1318,12 @@ func (api *StreamingAPI) handleGetPulseReviews(w http.ResponseWriter, r *http.Re
 		http.Error(w, fmt.Sprintf("module %q is not valid", module), http.StatusBadRequest)
 		return
 	}
-	artifacts, err := step_based_workflow.LoadPulseReviewArtifacts(r.Context(), workspacePath, module, false, 500)
+	artifacts, err := step_based_workflow.LoadPulseReviewArtifacts(r.Context(), workspacePath, module, false, -1)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts, "total": len(artifacts)})
 }
 
 func getPulseWorklistForRun(ctx context.Context, workspacePath, pulseRunID string) (map[string]PulseModuleState, bool, error) {
@@ -1431,7 +1432,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_pulse_module_state",
-			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus open concerns and read-only loop-closure facts. Use this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module, override the 3-module cap, or authorize a mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily. Close a real finding only through a verified finding_disposition; resolve_run_concern is limited to acknowledgment or rejection.",
+			Description: "Read the workflow-local Pulse module state from db/db.sqlite so Pulse Gate can decide what is due this run, plus the complete active concern backlog, externally owned suppressed concerns, and read-only loop-closure facts. Use this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module or authorize mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily. Close a real finding only through a verified finding_disposition; resolve_run_concern is limited to acknowledgment or rejection.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1478,7 +1479,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "mark_pulse_module_result",
-			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required. A fixed_verified finding needs a started attempt plus only passed post-change checks. changed_unverified needs an inconclusive check and remains open awaiting future evidence. A failed check reopens the concern. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for attempt/finding/run linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
+			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required. A fixed_verified finding needs a started attempt plus only passed post-change checks. changed_unverified needs an inconclusive check and remains open awaiting future evidence. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for attempt/finding/run linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1499,15 +1500,18 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 							"type":                 "object",
 							"additionalProperties": false,
 							"properties": map[string]interface{}{
-								"fingerprint":   map[string]interface{}{"type": "string"},
-								"finding_id":    map[string]interface{}{"type": "string"},
-								"attempt_id":    map[string]interface{}{"type": "string", "description": "Required for fixed_verified and changed_unverified."},
-								"disposition":   map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "blocked", "failed", "rejected"}},
-								"summary":       map[string]interface{}{"type": "string"},
-								"changed_files": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-								"before_refs":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-								"after_refs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-								"next_check":    map[string]interface{}{"type": "string"},
+								"fingerprint":      map[string]interface{}{"type": "string"},
+								"finding_id":       map[string]interface{}{"type": "string"},
+								"attempt_id":       map[string]interface{}{"type": "string", "description": "Required for fixed_verified and changed_unverified."},
+								"disposition":      map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "blocked", "external_action_required", "failed", "rejected"}},
+								"summary":          map[string]interface{}{"type": "string"},
+								"changed_files":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"before_refs":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"after_refs":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"next_check":       map[string]interface{}{"type": "string"},
+								"external_owner":   map[string]interface{}{"type": "string", "enum": []string{"platform", "user", "vendor", "workflow_owner"}, "description": "Required for external_action_required."},
+								"reason_code":      map[string]interface{}{"type": "string", "description": "Required stable reason such as missing_platform_tool, permission_boundary, vendor_issue, policy, or accepted_risk."},
+								"reopen_condition": map[string]interface{}{"type": "string", "description": "Required evidence/capability/user boundary that makes this actionable again."},
 								"verification": map[string]interface{}{
 									"type": "array",
 									"items": map[string]interface{}{
@@ -1624,9 +1628,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// deciding what is due, which is exactly when a recurring concern
 			// should influence that decision. Best-effort — a concerns read
 			// failure must not block the Gate from scheduling modules.
-			concerns, concernsErr := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, 25)
+			concerns, concernsErr := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, -1)
 			if concernsErr != nil {
 				log.Printf("[PULSE] get_pulse_module_state: open concerns unavailable for %s: %v", workspacePath, concernsErr)
+			}
+			suppressedConcerns, suppressedErr := step_based_workflow.LoadExternallyOwnedRunConcerns(ctx, workspacePath)
+			if suppressedErr != nil {
+				log.Printf("[PULSE] get_pulse_module_state: suppressed concerns unavailable for %s: %v", workspacePath, suppressedErr)
 			}
 			// Plan changes whose knock-on effects have not been traced yet. The
 			// changelog already records every plan-mod call and artifact_review
@@ -1647,14 +1655,18 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// when Gate records its worklist so its handling remains auditable.
 			loopClosure := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
 			payload, _ := json.Marshal(map[string]interface{}{
-				"modules":               states,
-				"open_concerns":         concerns,
-				"concerns_note":         "Step-raised concerns, most-recurring first. seen_count is how many runs reported the same thing; a high count is a stronger signal than a fresh one. Absence of a previously-seen concern does NOT mean it was fixed.",
-				"plan_change_backlog":   planBacklog,
-				"loop_closure":          loopClosure,
-				"loop_closure_note":     "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module, override the 3-module cap, or authorize a mutation. coverage_status must be verified before an empty findings list means clean.",
-				"module_review_history": reviewHistory,
-				"review_history_note":   "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
+				"modules":                  states,
+				"open_concerns":            concerns,
+				"open_concern_count":       len(concerns),
+				"concerns_note":            "Complete active backlog. seen_count is how many runs reported the same thing; absence is not evidence of a fix. Use severity, age, recurrence, ownership, and starvation—not recurrence alone—when selecting work.",
+				"suppressed_concerns":      suppressedConcerns,
+				"suppressed_concern_count": len(suppressedConcerns),
+				"suppressed_concerns_note": "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
+				"plan_change_backlog":      planBacklog,
+				"loop_closure":             loopClosure,
+				"loop_closure_note":        "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
+				"module_review_history":    reviewHistory,
+				"review_history_note":      "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 			})
 			return string(payload), nil
 		},

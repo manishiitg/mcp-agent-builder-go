@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -123,5 +124,31 @@ func TestLoadModuleReviewHistoryQuietWhenNeverUsed(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected no history, got %#v", got)
+	}
+}
+
+func TestLoadPulseReviewArtifactsNegativeLimitReturnsCompleteHistory(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	for i := 0; i < 27; i++ {
+		runID := fmt.Sprintf("pulse-%02d", i)
+		if err := RecordPulseReview(
+			ctx, ws, "bug_review", runID, runID, "",
+			fmt.Sprintf("## Verdict\nReview %02d completed.\n", i),
+		); err != nil {
+			t.Fatalf("record review %d: %v", i, err)
+		}
+	}
+
+	preview, err := LoadPulseReviewArtifacts(ctx, ws, "bug_review", false, 10)
+	if err != nil {
+		t.Fatalf("load preview: %v", err)
+	}
+	complete, err := LoadPulseReviewArtifacts(ctx, ws, "bug_review", false, -1)
+	if err != nil {
+		t.Fatalf("load complete history: %v", err)
+	}
+	if len(preview) != 10 || len(complete) != 27 {
+		t.Fatalf("preview=%d complete=%d, want 10 and 27", len(preview), len(complete))
 	}
 }

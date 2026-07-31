@@ -1045,7 +1045,7 @@ func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) 
 		t.Fatalf("loop_closure coverage = %#v, want %q", got, loopclosure.CoverageNotInstrumented)
 	}
 	note, _ := payload["loop_closure_note"].(string)
-	for _, required := range []string{"do not mandate a module", "override the 3-module cap", "coverage_status"} {
+	for _, required := range []string{"do not mandate a module", "authorize mutation", "coverage_status"} {
 		if !strings.Contains(note, required) {
 			t.Fatalf("loop_closure_note missing %q: %q", required, note)
 		}

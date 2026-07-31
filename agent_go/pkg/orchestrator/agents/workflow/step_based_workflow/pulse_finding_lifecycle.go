@@ -73,6 +73,7 @@ const (
 	FindingDispositionProposalOnly      = "proposal_only"
 	FindingDispositionAwaitingUser      = "awaiting_user"
 	FindingDispositionBlocked           = "blocked"
+	FindingDispositionExternalAction    = "external_action_required"
 	FindingDispositionFailed            = "failed"
 	FindingDispositionRejected          = "rejected"
 )
@@ -115,46 +116,53 @@ type PulseFindingVerification struct {
 }
 
 type PulseFindingDisposition struct {
-	Fingerprint  string                     `json:"fingerprint"`
-	FindingID    string                     `json:"finding_id"`
-	AttemptID    string                     `json:"attempt_id,omitempty"`
-	Disposition  string                     `json:"disposition"`
-	Summary      string                     `json:"summary"`
-	ChangedFiles []string                   `json:"changed_files,omitempty"`
-	BeforeRefs   []string                   `json:"before_refs,omitempty"`
-	AfterRefs    []string                   `json:"after_refs,omitempty"`
-	NextCheck    string                     `json:"next_check,omitempty"`
-	Verification []PulseFindingVerification `json:"verification,omitempty"`
+	Fingerprint     string                     `json:"fingerprint"`
+	FindingID       string                     `json:"finding_id"`
+	AttemptID       string                     `json:"attempt_id,omitempty"`
+	Disposition     string                     `json:"disposition"`
+	Summary         string                     `json:"summary"`
+	ChangedFiles    []string                   `json:"changed_files,omitempty"`
+	BeforeRefs      []string                   `json:"before_refs,omitempty"`
+	AfterRefs       []string                   `json:"after_refs,omitempty"`
+	NextCheck       string                     `json:"next_check,omitempty"`
+	ExternalOwner   string                     `json:"external_owner,omitempty"`
+	ReasonCode      string                     `json:"reason_code,omitempty"`
+	ReopenCondition string                     `json:"reopen_condition,omitempty"`
+	Verification    []PulseFindingVerification `json:"verification,omitempty"`
 }
 
 type PulseFindingEvent struct {
-	FindingID  string `json:"finding_id,omitempty"`
-	EventType  string `json:"event_type"`
-	Summary    string `json:"summary"`
-	PulseRunID string `json:"pulse_run_id,omitempty"`
-	AttemptID  string `json:"attempt_id,omitempty"`
-	RecordedAt string `json:"recorded_at"`
+	FindingID  string                 `json:"finding_id,omitempty"`
+	EventType  string                 `json:"event_type"`
+	Summary    string                 `json:"summary"`
+	PulseRunID string                 `json:"pulse_run_id,omitempty"`
+	AttemptID  string                 `json:"attempt_id,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	RecordedAt string                 `json:"recorded_at"`
 }
 
 type PulseFindingLifecycle struct {
-	Fingerprint    string                     `json:"fingerprint"`
-	FindingID      string                     `json:"finding_id,omitempty"`
-	Module         string                     `json:"module,omitempty"`
-	StepID         string                     `json:"step_id"`
-	Phase          string                     `json:"phase"`
-	GroupName      string                     `json:"group_name,omitempty"`
-	Text           string                     `json:"text"`
-	Status         string                     `json:"status"`
-	FirstSeenRun   string                     `json:"first_seen_run,omitempty"`
-	FirstSeenAt    string                     `json:"first_seen_at,omitempty"`
-	LastSeenRun    string                     `json:"last_seen_run,omitempty"`
-	LastSeenAt     string                     `json:"last_seen_at,omitempty"`
-	SeenCount      int                        `json:"seen_count"`
-	ResolutionNote string                     `json:"resolution_note,omitempty"`
-	Details        *PulseFindingDetails       `json:"details,omitempty"`
-	Attempts       []PulseFixAttempt          `json:"fix_attempts"`
-	Verification   []PulseFindingVerification `json:"verifications"`
-	Events         []PulseFindingEvent        `json:"events"`
+	Fingerprint     string                     `json:"fingerprint"`
+	FindingID       string                     `json:"finding_id,omitempty"`
+	Module          string                     `json:"module,omitempty"`
+	StepID          string                     `json:"step_id"`
+	Phase           string                     `json:"phase"`
+	GroupName       string                     `json:"group_name,omitempty"`
+	Text            string                     `json:"text"`
+	Status          string                     `json:"status"`
+	FirstSeenRun    string                     `json:"first_seen_run,omitempty"`
+	FirstSeenAt     string                     `json:"first_seen_at,omitempty"`
+	LastSeenRun     string                     `json:"last_seen_run,omitempty"`
+	LastSeenAt      string                     `json:"last_seen_at,omitempty"`
+	SeenCount       int                        `json:"seen_count"`
+	ResolutionNote  string                     `json:"resolution_note,omitempty"`
+	ExternalOwner   string                     `json:"external_owner,omitempty"`
+	ReasonCode      string                     `json:"reason_code,omitempty"`
+	ReopenCondition string                     `json:"reopen_condition,omitempty"`
+	Details         *PulseFindingDetails       `json:"details,omitempty"`
+	Attempts        []PulseFixAttempt          `json:"fix_attempts"`
+	Verification    []PulseFindingVerification `json:"verifications"`
+	Events          []PulseFindingEvent        `json:"events"`
 }
 
 type pulseFindingLifecycleDB interface {
@@ -211,6 +219,9 @@ func NormalizePulseFindingDisposition(disposition PulseFindingDisposition) Pulse
 	disposition.BeforeRefs = normalizedLifecycleStrings(disposition.BeforeRefs)
 	disposition.AfterRefs = normalizedLifecycleStrings(disposition.AfterRefs)
 	disposition.NextCheck = strings.TrimSpace(disposition.NextCheck)
+	disposition.ExternalOwner = strings.TrimSpace(disposition.ExternalOwner)
+	disposition.ReasonCode = strings.TrimSpace(disposition.ReasonCode)
+	disposition.ReopenCondition = strings.TrimSpace(disposition.ReopenCondition)
 	for index := range disposition.Verification {
 		verification := &disposition.Verification[index]
 		verification.Check = strings.TrimSpace(verification.Check)
@@ -362,7 +373,8 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		FindingDispositionFixedVerified: true, FindingDispositionVerifiedNoChange: true,
 		FindingDispositionChangedUnverified: true, FindingDispositionProposalOnly: true,
 		FindingDispositionAwaitingUser: true, FindingDispositionBlocked: true,
-		FindingDispositionFailed: true, FindingDispositionRejected: true,
+		FindingDispositionExternalAction: true, FindingDispositionFailed: true,
+		FindingDispositionRejected: true,
 	}
 	if !allowed[disposition.Disposition] {
 		return fmt.Errorf("finding %q has invalid disposition %q", disposition.FindingID, disposition.Disposition)
@@ -413,6 +425,15 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		if len(disposition.Verification) > 0 && failed == 0 {
 			return fmt.Errorf("failed finding %q with verification evidence requires a failed check", disposition.FindingID)
 		}
+	case FindingDispositionExternalAction:
+		if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
+			return fmt.Errorf("external_action_required finding %q requires external_owner, reason_code, and reopen_condition", disposition.FindingID)
+		}
+		switch disposition.ExternalOwner {
+		case "platform", "user", "vendor", "workflow_owner":
+		default:
+			return fmt.Errorf("external_action_required finding %q has invalid external_owner %q", disposition.FindingID, disposition.ExternalOwner)
+		}
 	}
 	return nil
 }
@@ -433,6 +454,8 @@ func lifecycleStatusForDisposition(disposition string) (status, eventType, resol
 		return ConcernStatusAcknowledged, "awaiting_user", ""
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
+	case FindingDispositionExternalAction:
+		return ConcernStatusExternalActionRequired, "external_action_required", "pulse"
 	default:
 		return ConcernStatusOpen, "updated", ""
 	}
@@ -525,7 +548,7 @@ func RecordPulseFindingDispositionsTx(
 
 		status, eventType, resolvedBy := lifecycleStatusForDisposition(disposition.Disposition)
 		resolvedAt := ""
-		if status == ConcernStatusResolved || status == ConcernStatusRejected {
+		if status == ConcernStatusResolved || status == ConcernStatusRejected || status == ConcernStatusExternalActionRequired {
 			resolvedAt = recordedAt
 		}
 		if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET
@@ -535,11 +558,14 @@ func RecordPulseFindingDispositionsTx(
 			return err
 		}
 		metadata, _ := json.Marshal(map[string]interface{}{
-			"disposition":   disposition.Disposition,
-			"changed_files": normalizedLifecycleStrings(disposition.ChangedFiles),
-			"before_refs":   normalizedLifecycleStrings(disposition.BeforeRefs),
-			"after_refs":    normalizedLifecycleStrings(disposition.AfterRefs),
-			"next_check":    strings.TrimSpace(disposition.NextCheck),
+			"disposition":      disposition.Disposition,
+			"changed_files":    normalizedLifecycleStrings(disposition.ChangedFiles),
+			"before_refs":      normalizedLifecycleStrings(disposition.BeforeRefs),
+			"after_refs":       normalizedLifecycleStrings(disposition.AfterRefs),
+			"next_check":       strings.TrimSpace(disposition.NextCheck),
+			"external_owner":   disposition.ExternalOwner,
+			"reason_code":      disposition.ReasonCode,
+			"reopen_condition": disposition.ReopenCondition,
 		})
 		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
 			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
@@ -599,6 +625,8 @@ func decodeLifecycleStrings(raw string) []string {
 // LoadPulseFindingLifecycles returns current issue state plus its complete fix
 // and verification history. A module filter includes reviewer concerns filed by
 // that module and any step concern linked to one of that module's fix attempts.
+// A negative limit returns every matching finding; zero uses the bounded default
+// for callers that explicitly want a preview.
 func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module string, limit int) ([]PulseFindingLifecycle, error) {
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
@@ -608,11 +636,11 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
 		return nil, err
 	}
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 100
 	}
 	module = strings.TrimSpace(module)
-	rows, err := db.QueryContext(ctx, `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count,
 			c.status, c.resolution_note, COALESCE(d.detail_json, '')
 		FROM run_concerns c
@@ -622,8 +650,13 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
 			WHERE af.fingerprint=c.fingerprint AND a.module=?
 		)
-		ORDER BY c.last_seen_at DESC, c.seen_count DESC
-		LIMIT ?`, module, module, module, limit)
+		ORDER BY c.last_seen_at DESC, c.seen_count DESC`
+	args := []interface{}{module, module, module}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -728,17 +761,30 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 		verificationRows.Close()
 
 		eventRows, err := db.QueryContext(ctx, `SELECT finding_id, event_type, summary, pulse_run_id, attempt_id,
-				recorded_at FROM pulse_finding_events
+				metadata_json, recorded_at FROM pulse_finding_events
 			WHERE fingerprint=? ORDER BY recorded_at DESC`, fingerprint)
 		if err != nil {
 			return nil, err
 		}
 		for eventRows.Next() {
 			var event PulseFindingEvent
+			var metadataJSON string
 			if err := eventRows.Scan(&event.FindingID, &event.EventType, &event.Summary, &event.PulseRunID,
-				&event.AttemptID, &event.RecordedAt); err != nil {
+				&event.AttemptID, &metadataJSON, &event.RecordedAt); err != nil {
 				eventRows.Close()
 				return nil, err
+			}
+			_ = json.Unmarshal([]byte(metadataJSON), &event.Metadata)
+			if out[index].Status == ConcernStatusExternalActionRequired && event.EventType == "external_action_required" {
+				if owner, ok := event.Metadata["external_owner"].(string); ok {
+					out[index].ExternalOwner = owner
+				}
+				if reason, ok := event.Metadata["reason_code"].(string); ok {
+					out[index].ReasonCode = reason
+				}
+				if condition, ok := event.Metadata["reopen_condition"].(string); ok {
+					out[index].ReopenCondition = condition
+				}
 			}
 			if out[index].FindingID == "" && event.FindingID != "" {
 				out[index].FindingID = event.FindingID
