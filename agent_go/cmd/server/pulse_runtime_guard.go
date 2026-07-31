@@ -117,12 +117,16 @@ func init() {
 //
 // Returns a release function. Delegation does not outlive the parent's own
 // grant: the child inherits the parent's expiry when it has one.
-func DelegateTrustedPulseSessionToChild(parentCtx context.Context, childSessionID, pulseRunID string) (func(), error) {
-	parentSessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(parentCtx))
+// The parent session id is passed in rather than read from a context. Tool
+// executors here run on a context derived from the long-lived workshop session,
+// not from the MCP request, so the request's session id is not present on it —
+// deriving it would silently find nothing and refuse every delegation.
+func DelegateTrustedPulseSessionToChild(parentSessionID, childSessionID, pulseRunID string) (func(), error) {
+	parentSessionID = strings.TrimSpace(parentSessionID)
 	childSessionID = strings.TrimSpace(childSessionID)
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if parentSessionID == "" {
-		return nil, fmt.Errorf("delegating Pulse write authority requires an active parent session")
+		return nil, fmt.Errorf("delegating Pulse write authority requires the calling session's id")
 	}
 	if childSessionID == "" || pulseRunID == "" {
 		return nil, fmt.Errorf("child session id and pulse_run_id are required")

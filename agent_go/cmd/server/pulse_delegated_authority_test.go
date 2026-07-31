@@ -18,8 +18,7 @@ func TestDelegatedPulseAuthorityCannotBeSelfGranted(t *testing.T) {
 	const runID = "schedule-cron--delegation"
 
 	// A session with no authority of its own cannot mint any.
-	reviewerCtx := mcpexecutor.WithSessionID(context.Background(), "workshop-review-1")
-	if _, err := DelegateTrustedPulseSessionToChild(reviewerCtx, "workshop-fixer-1", runID); err == nil ||
+	if _, err := DelegateTrustedPulseSessionToChild("workshop-review-1", "workshop-fixer-1", runID); err == nil ||
 		!strings.Contains(err.Error(), "does not hold Pulse write authority") {
 		t.Fatalf("unauthorized session was able to delegate: %v", err)
 	}
@@ -29,13 +28,13 @@ func TestDelegatedPulseAuthorityCannotBeSelfGranted(t *testing.T) {
 	parentCtx := mcpexecutor.WithSessionID(context.Background(), "schedule-cron--parent")
 
 	// A parent cannot delegate authority it does not hold for that run.
-	if _, err := DelegateTrustedPulseSessionToChild(parentCtx, "workshop-fixer-1", "some-other-run"); err == nil ||
+	if _, err := DelegateTrustedPulseSessionToChild("schedule-cron--parent", "workshop-fixer-1", "some-other-run"); err == nil ||
 		!strings.Contains(err.Error(), "does not hold Pulse write authority") {
 		t.Fatalf("parent delegated authority for a run it does not own: %v", err)
 	}
 
 	// The real path: the child can write for exactly this run.
-	release, err := DelegateTrustedPulseSessionToChild(parentCtx, "workshop-fixer-1", runID)
+	release, err := DelegateTrustedPulseSessionToChild("schedule-cron--parent", "workshop-fixer-1", runID)
 	if err != nil {
 		t.Fatalf("delegate to fixer child: %v", err)
 	}
@@ -64,9 +63,8 @@ func TestDelegatedPulseAuthorityCannotBeSelfGranted(t *testing.T) {
 func TestDelegatedPulseAuthorityInheritsParentExpiry(t *testing.T) {
 	const runID = "manual-fixer--bounded"
 	registerTemporaryTrustedPulseSession("manual-parent", runID, 40*time.Millisecond)
-	parentCtx := mcpexecutor.WithSessionID(context.Background(), "manual-parent")
 
-	release, err := DelegateTrustedPulseSessionToChild(parentCtx, "manual-fixer-child", runID)
+	release, err := DelegateTrustedPulseSessionToChild("manual-parent", "manual-fixer-child", runID)
 	if err != nil {
 		t.Fatalf("delegate bounded authority: %v", err)
 	}
@@ -92,9 +90,10 @@ func TestPulseWriteAuthorityDelegatorIsInstalled(t *testing.T) {
 	const runID = "schedule-cron--seam"
 	releaseParent := registerTrustedPulseSession("schedule-cron--seam-parent", runID)
 	defer releaseParent()
-	parentCtx := mcpexecutor.WithSessionID(context.Background(), "schedule-cron--seam-parent")
 
-	release, err := step_based_workflow.LendPulseWriteAuthorityForTest(parentCtx, "workshop-fixer-seam", runID)
+	release, err := step_based_workflow.LendPulseWriteAuthorityForTest(
+		"schedule-cron--seam-parent", "workshop-fixer-seam", runID,
+	)
 	if err != nil {
 		t.Fatalf("server init did not install the delegator: %v", err)
 	}
@@ -112,8 +111,19 @@ func TestExpiredParentCannotDelegate(t *testing.T) {
 	registerTemporaryTrustedPulseSession("stale-parent", runID, 10*time.Millisecond)
 	time.Sleep(30 * time.Millisecond)
 
-	parentCtx := mcpexecutor.WithSessionID(context.Background(), "stale-parent")
-	if _, err := DelegateTrustedPulseSessionToChild(parentCtx, "late-child", runID); err == nil {
+	if _, err := DelegateTrustedPulseSessionToChild("stale-parent", "late-child", runID); err == nil {
 		t.Fatal("expired parent was able to delegate write authority")
+	}
+}
+
+// TestDelegationRefusesAnEmptyParentSession pins the failure this signature
+// change fixed. Tool executors run on a context derived from the long-lived
+// workshop session, not the MCP request, so reading the caller's session id
+// from that context found nothing and refused every real delegation — the
+// fixer stage never started and the failure looked like a rejected identity.
+func TestDelegationRefusesAnEmptyParentSession(t *testing.T) {
+	if _, err := DelegateTrustedPulseSessionToChild("", "workshop-fixer-x", "run-x"); err == nil ||
+		!strings.Contains(err.Error(), "calling session's id") {
+		t.Fatalf("empty parent session was not refused clearly: %v", err)
 	}
 }

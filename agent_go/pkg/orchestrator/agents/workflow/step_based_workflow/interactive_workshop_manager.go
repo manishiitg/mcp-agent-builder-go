@@ -33,6 +33,7 @@ import (
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/agent/prompt"
 	baseevents "github.com/manishiitg/mcpagent/events"
+	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/mcpagent/mcpclient"
 	"github.com/manishiitg/mcpagent/observability"
@@ -3539,6 +3540,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			"required": []string{"todo_id", "instructions", "preferred_tier"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (toolResult string, toolErr error) {
+			// Capture the caller's MCP session id here, while it is still on the
+			// request context. Execution runs on a context derived from the
+			// long-lived workshop session instead, which does not carry it, so
+			// reading it later finds nothing. A fixer child's authority is lent
+			// from this session, so losing it refuses every delegation.
+			parentMCPSessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
 			todoID, _ := args["todo_id"].(string)
 			todoID = strings.TrimSpace(todoID)
 			if todoID == "" {
@@ -3711,7 +3718,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if attempt > 1 {
 					stageName += " - completion retry"
 				}
-				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, stageAccess, stagePulseRunID)
+				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, stageAccess, stagePulseRunID, parentMCPSessionID)
 				if runErr != nil {
 					if writeErr := persistFailure(runErr.Error()); writeErr != nil {
 						return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
@@ -9838,7 +9845,7 @@ func (iwm *InteractiveWorkshopManager) createUnattendedWorkshopAgentConfig(agent
 	return config
 }
 
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess, pulseRunID string) (string, error) {
+func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
 	logger := iwm.controller.GetLogger()
 	workspacePath := iwm.controller.GetWorkspacePath()
 	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
@@ -9918,7 +9925,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	// Fail closed: an unauthorized fixer would spend its whole analysis and
 	// possibly mutate files before that refusal.
 	if access == goalAdvisorStagePulseFixer {
-		releaseAuthority, err := lendPulseWriteAuthority(ctx, toolAgentSessionID, pulseRunID)
+		releaseAuthority, err := lendPulseWriteAuthority(parentSessionID, toolAgentSessionID, pulseRunID)
 		if err != nil {
 			return "", fmt.Errorf("start Pulse Fixer stage %q: %w", name, err)
 		}
@@ -10022,13 +10029,13 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		}
 	}()
 
-	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly, "")
+	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly, "", "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor advisor stage failed: %v", err), err
 	}
 
 	advisorForNextStage := truncateGoalAdvisorStageOutput(advisorResult)
-	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage), goalAdvisorStageReadOnly, "")
+	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage), goalAdvisorStageReadOnly, "", "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor critic stage failed: %v\n\nAdvisor draft:\n%s", err, advisorForNextStage), err
 	}
@@ -10045,7 +10052,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		finalizerAccess = goalAdvisorStageFinalizerApprovedMutation
 	}
 	finalizerPrompt := buildGoalAdvisorFinalizerInstruction(pulseRunID, focus, advisorForNextStage, criticForNextStage, approvedProposals, enablePlanMutationTools)
-	finalizerResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, "")
+	finalizerResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, "", "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor finalizer stage failed: %v\n\nAdvisor draft:\n%s\n\nCritic verdict:\n%s", err, advisorForNextStage, criticForNextStage), err
 	}

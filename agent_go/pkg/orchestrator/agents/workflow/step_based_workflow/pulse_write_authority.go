@@ -1,7 +1,6 @@
 package step_based_workflow
 
 import (
-	"context"
 	"fmt"
 	"sync"
 )
@@ -18,14 +17,14 @@ import (
 // a child that cannot be lent authority must not run as a writer at all.
 var (
 	pulseWriteAuthorityMu sync.RWMutex
-	delegatePulseWriteFn  func(parentCtx context.Context, childSessionID, pulseRunID string) (func(), error)
+	delegatePulseWriteFn  func(parentSessionID, childSessionID, pulseRunID string) (func(), error)
 )
 
 // SetPulseWriteAuthorityDelegator installs the server-side delegator. Passing
 // nil uninstalls it, which disables writer children rather than silently
 // letting them run unauthorized.
 func SetPulseWriteAuthorityDelegator(
-	delegate func(parentCtx context.Context, childSessionID, pulseRunID string) (func(), error),
+	delegate func(parentSessionID, childSessionID, pulseRunID string) (func(), error),
 ) {
 	pulseWriteAuthorityMu.Lock()
 	defer pulseWriteAuthorityMu.Unlock()
@@ -33,7 +32,7 @@ func SetPulseWriteAuthorityDelegator(
 }
 
 // pulseWriteAuthorityDelegator returns the installed delegator, if any.
-func pulseWriteAuthorityDelegator() func(context.Context, string, string) (func(), error) {
+func pulseWriteAuthorityDelegator() func(string, string, string) (func(), error) {
 	pulseWriteAuthorityMu.RLock()
 	defer pulseWriteAuthorityMu.RUnlock()
 	return delegatePulseWriteFn
@@ -42,8 +41,8 @@ func pulseWriteAuthorityDelegator() func(context.Context, string, string) (func(
 // LendPulseWriteAuthorityForTest exercises the installed delegator from
 // packages that can import this one, so the cross-package seam is covered by a
 // test that fails when the wiring is dropped rather than only at runtime.
-func LendPulseWriteAuthorityForTest(parentCtx context.Context, childSessionID, pulseRunID string) (func(), error) {
-	return lendPulseWriteAuthority(parentCtx, childSessionID, pulseRunID)
+func LendPulseWriteAuthorityForTest(parentSessionID, childSessionID, pulseRunID string) (func(), error) {
+	return lendPulseWriteAuthority(parentSessionID, childSessionID, pulseRunID)
 }
 
 // lendPulseWriteAuthority gives childSessionID the parent's authority for
@@ -52,12 +51,12 @@ func LendPulseWriteAuthorityForTest(parentCtx context.Context, childSessionID, p
 // It fails closed. A writer child that starts without authority would run its
 // whole analysis and then fail on its first state write, having already spent
 // the work and possibly mutated files — worse than not starting.
-func lendPulseWriteAuthority(parentCtx context.Context, childSessionID, pulseRunID string) (func(), error) {
+func lendPulseWriteAuthority(parentSessionID, childSessionID, pulseRunID string) (func(), error) {
 	delegate := pulseWriteAuthorityDelegator()
 	if delegate == nil {
 		return nil, fmt.Errorf("Pulse write authority delegation is not installed; cannot start a writer child")
 	}
-	release, err := delegate(parentCtx, childSessionID, pulseRunID)
+	release, err := delegate(parentSessionID, childSessionID, pulseRunID)
 	if err != nil {
 		return nil, err
 	}

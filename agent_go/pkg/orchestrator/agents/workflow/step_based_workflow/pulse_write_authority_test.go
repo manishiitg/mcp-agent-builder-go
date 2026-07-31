@@ -1,7 +1,6 @@
 package step_based_workflow
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ func TestLendPulseWriteAuthorityFailsClosedWhenUninstalled(t *testing.T) {
 	t.Cleanup(func() { SetPulseWriteAuthorityDelegator(original) })
 
 	SetPulseWriteAuthorityDelegator(nil)
-	if _, err := lendPulseWriteAuthority(context.Background(), "workshop-fixer-1", "run-1"); err == nil ||
+	if _, err := lendPulseWriteAuthority("parent-1", "workshop-fixer-1", "run-1"); err == nil ||
 		!strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("uninstalled delegator did not fail closed: %v", err)
 	}
@@ -27,20 +26,20 @@ func TestLendPulseWriteAuthorityPropagatesRefusalAndRelease(t *testing.T) {
 	t.Cleanup(func() { SetPulseWriteAuthorityDelegator(original) })
 
 	refusal := errors.New("session does not hold Pulse write authority for run \"run-1\"")
-	SetPulseWriteAuthorityDelegator(func(context.Context, string, string) (func(), error) {
+	SetPulseWriteAuthorityDelegator(func(string, string, string) (func(), error) {
 		return nil, refusal
 	})
-	if _, err := lendPulseWriteAuthority(context.Background(), "workshop-fixer-1", "run-1"); !errors.Is(err, refusal) {
+	if _, err := lendPulseWriteAuthority("parent-1", "workshop-fixer-1", "run-1"); !errors.Is(err, refusal) {
 		t.Fatalf("refusal was not propagated to the caller: %v", err)
 	}
 
 	released := false
 	var gotChild, gotRun string
-	SetPulseWriteAuthorityDelegator(func(_ context.Context, childSessionID, pulseRunID string) (func(), error) {
+	SetPulseWriteAuthorityDelegator(func(_, childSessionID, pulseRunID string) (func(), error) {
 		gotChild, gotRun = childSessionID, pulseRunID
 		return func() { released = true }, nil
 	})
-	release, err := lendPulseWriteAuthority(context.Background(), "workshop-fixer-1", "run-1")
+	release, err := lendPulseWriteAuthority("parent-1", "workshop-fixer-1", "run-1")
 	if err != nil {
 		t.Fatalf("lend authority: %v", err)
 	}
