@@ -2,7 +2,7 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
 
 ## Execution model
 
-- In Pulse, the parent passes this rendered checklist to one `call_generic_agent` reviewer in the consolidated parallel review batch.
+- In Pulse, the parent passes this rendered checklist to one independent `call_generic_agent` reviewer for the Artifact Review module.
 - Outside Pulse, the parent may call `call_generic_agent` once with this checklist as its instructions.
 - If you are already that generic reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
 - Otherwise launch exactly one reviewer with

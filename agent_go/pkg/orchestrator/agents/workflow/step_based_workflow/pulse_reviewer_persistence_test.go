@@ -123,3 +123,22 @@ func TestPulseReviewerSlotsEnforceMaximumTwo(t *testing.T) {
 		t.Fatalf("final peak concurrency = %d, want %d", got, pulseReviewerMaxConcurrency)
 	}
 }
+
+func TestPulseReviewerPersistenceContextSurvivesCallerCancellation(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	execCtx := context.WithValue(context.Background(), struct{ name string }{"review"}, "alive")
+
+	persistCtx, cancelPersist := pulseReviewerPersistenceContext(execCtx)
+	defer cancelPersist()
+
+	if requestCtx.Err() == nil {
+		t.Fatal("request context should be canceled")
+	}
+	if err := persistCtx.Err(); err != nil {
+		t.Fatalf("persistence context inherited unrelated request cancellation: %v", err)
+	}
+	if got := persistCtx.Value(struct{ name string }{"review"}); got != "alive" {
+		t.Fatalf("persistence context lost execution identity: %v", got)
+	}
+}

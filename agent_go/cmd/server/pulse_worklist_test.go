@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
@@ -287,6 +288,75 @@ func TestRecordPulseWorklistToolRequiresActiveScheduledRunID(t *testing.T) {
 	defer release()
 	if _, err := execute(ctx, map[string]interface{}{"pulse_run_id": "schedule-manual--different"}); err == nil || !strings.Contains(err.Error(), "logical Pulse run") {
 		t.Fatalf("mismatched run id error = %v", err)
+	}
+}
+
+func TestBeginPulseFixerRunSeedsOnlySelectedModules(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "older-pulse", completePulseWorklistDecisions(nil)); err != nil {
+		t.Fatalf("record older worklist: %v", err)
+	}
+
+	_, executors, _ := createPulseWorklistTools()
+	begin := executors["begin_pulse_fixer_run"].(func(context.Context, map[string]interface{}) (string, error))
+	ctx := mcpexecutor.WithSessionID(context.Background(), "manual-fixer-session")
+	raw, err := begin(ctx, map[string]interface{}{
+		"workspace_path": workspacePath,
+		"modules":        []interface{}{pulseModuleBugReview},
+	})
+	if err != nil {
+		t.Fatalf("begin fixer: %v", err)
+	}
+	var payload struct {
+		PulseRunID string `json:"pulse_run_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.PulseRunID == "" {
+		t.Fatalf("decode begin result: raw=%s err=%v", raw, err)
+	}
+	if err := validateTrustedPulseToolRunID(ctx, payload.PulseRunID); err != nil {
+		t.Fatalf("manual fixer run was not authorized: %v", err)
+	}
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get module states: %v", err)
+	}
+	for _, state := range states {
+		switch state.Module {
+		case pulseModuleBugReview:
+			if state.LastPulseRunID != payload.PulseRunID || state.LastDecision != "due" || state.LastResult != "" {
+				t.Fatalf("selected module was not opened for fixing: %+v", state)
+			}
+		case pulseModuleArtifactReview:
+			if state.LastPulseRunID != "older-pulse" {
+				t.Fatalf("unrelated module cadence was overwritten: %+v", state)
+			}
+		}
+	}
+	mark := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	if _, err := mark(ctx, map[string]interface{}{
+		"workspace_path": workspacePath,
+		"pulse_run_id":   payload.PulseRunID,
+		"module":         pulseModuleBugReview,
+		"result":         "done",
+		"reason":         "No selected finding required a change.",
+	}); err != nil {
+		t.Fatalf("finish manual fixer: %v", err)
+	}
+	if err := validateTrustedPulseToolRunID(ctx, payload.PulseRunID); err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("completed manual fixer retained write authority: %v", err)
+	}
+}
+
+func TestTemporaryPulseAuthorizationExpires(t *testing.T) {
+	sessionID := "expired-manual-fixer"
+	runID := "manual-fixer--expired"
+	release := registerTrustedPulseSessionUntil(sessionID, runID, time.Now().UTC().Add(-time.Second))
+	defer release()
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	if err := validateTrustedPulseToolRunID(ctx, runID); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired authorization error = %v", err)
 	}
 }
 

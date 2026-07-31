@@ -1123,7 +1123,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"never turns a maintenance handoff into the Goal Advisor outcome",
 		"Operational correctness issues such as",
 		"are handoffs to Bug Review, Eval Health, Report Health",
-		"The parent Pulse Fixer consolidates advisor and critic results",
+		"The parent Pulse Fixer reconciles advisor and critic results",
 		"mark_pulse_module_result",
 	} {
 		if !strings.Contains(goalAdvisor, want) {
@@ -2187,19 +2187,22 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "consolidated-review", "dashboard", "finalize"}
+	want := []string{"pre-backup", "bug-review", "llm-ops-review", "strategy-auditor", "goal-advisor", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("selected labels = %#v, want %#v", got, want)
 	}
-	for _, required := range []string{
-		`due_modules=["bug_review","llm_ops_review","strategy_auditor","goal_advisor"]`,
-		`get_reference_doc(kind="pulse-review-fixer")`,
-		"batches of at most two",
-		"get_pulse_review_result",
-		"SQLite-backed result",
-	} {
-		if !strings.Contains(steps[1].query, required) {
-			t.Fatalf("consolidated reviewer protocol missing %q", required)
+	for index, module := range []string{pulseModuleBugReview, pulseModuleLLMOpsReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
+		query := steps[index+1].query
+		for _, required := range []string{
+			`get_reference_doc(kind="pulse-review-fixer")`,
+			`module="` + module + `"`,
+			"Drain actionable saved findings before discovery",
+			"exactly one call_generic_agent",
+			"immediately apply or disposition",
+		} {
+			if !strings.Contains(query, required) {
+				t.Fatalf("independent reviewer/fixer protocol for %s missing %q: %s", module, required, query)
+			}
 		}
 	}
 }
@@ -2226,40 +2229,42 @@ func TestGateDurableWorklistRoutesModulesWithoutHTML(t *testing.T) {
 
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	if got, want := strings.Join(postRunStepLabels(steps), ","), "pre-backup,consolidated-review,dashboard,finalize"; got != want {
+	if got, want := strings.Join(postRunStepLabels(steps), ","), "pre-backup,report-health,dashboard,finalize"; got != want {
 		t.Fatalf("selected labels = %q, want %q", got, want)
 	}
-	if !strings.Contains(steps[1].query, `due_modules=["report_health"]`) {
+	if !strings.Contains(steps[1].query, `module="report_health"`) {
 		t.Fatalf("durable due module was not routed: %s", steps[1].query)
 	}
 }
 
-func TestPulseReviewRunIDAndConsolidatedPromptUsesFocusedReference(t *testing.T) {
+func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) {
 	reviewRunID := pulseReviewRunID("schedule-manual--manual-p_1784571312755290000", time.Date(2026, 7, 21, 0, 8, 44, 123000000, time.UTC))
 	if want := "2026-07-21T00-08-44.123Z_schedule-manual--manual-p_1784571312755290000"; reviewRunID != want {
 		t.Fatalf("review run id = %q, want %q", reviewRunID, want)
 	}
-	step := postRunMonitorConsolidatedReviewStep("pulse-run-1", reviewRunID, []string{
-		pulseModuleBugReview,
-		pulseModuleArtifactReview,
-		pulseModuleEvalHealth,
-		pulseModuleLLMOpsReview,
-		pulseModuleGoalAdvisor,
-	})
-	if step.label != "consolidated-review" {
+	step, ok := postRunMonitorIndependentModuleStep("pulse-run-1", reviewRunID, pulseModuleBugReview)
+	if !ok {
+		t.Fatal("bug review module step was not found")
+	}
+	if step.label != "bug-review" {
 		t.Fatalf("label = %q", step.label)
 	}
 	if !strings.Contains(step.query, `get_reference_doc(kind="pulse-review-fixer")`) {
-		t.Fatalf("consolidated prompt missing focused reviewer reference:\n%s", step.query)
+		t.Fatalf("independent prompt missing focused reviewer reference:\n%s", step.query)
 	}
-	for _, module := range []string{pulseModuleBugReview, pulseModuleArtifactReview, pulseModuleEvalHealth, pulseModuleLLMOpsReview, pulseModuleGoalAdvisor} {
-		if strings.Count(step.query, module) != 1 {
-			t.Fatalf("module %q should appear exactly once in compact prompt:\n%s", module, step.query)
+	for _, required := range []string{"complete active retained backlog", "do not launch a reviewer merely because", "never combine reviewers"} {
+		if !strings.Contains(step.query, required) {
+			t.Fatalf("independent prompt missing %q:\n%s", required, step.query)
 		}
 	}
-	for _, forbidden := range []string{"PULSE MODULE — BUG REVIEW", "PULSE MODULE — ARTIFACT REVIEW", "PULSE MODULE — EVAL HEALTH"} {
+	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — BUG REVIEW", "read-only reliability and exploratory QA review"} {
+		if !strings.Contains(step.query, required) {
+			t.Fatalf("independent prompt missing module brief %q", required)
+		}
+	}
+	for _, forbidden := range []string{"PULSE CONSOLIDATED REVIEW", "batches of at most two"} {
 		if strings.Contains(step.query, forbidden) {
-			t.Fatalf("compact prompt repeated module brief %q", forbidden)
+			t.Fatalf("independent prompt retained consolidated contract %q", forbidden)
 		}
 	}
 }
@@ -2269,7 +2274,10 @@ func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	archive := postRunMonitorArchiveStep(pulseImproveArchiveAssessment{Due: true, TimelineEntries: 24, RecentRunRows: 7}).query
 	gate := postRunMonitorGateStep("pulse-run-1", "runs/iteration-0", "completed").query
 	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
-	consolidated := postRunMonitorConsolidatedReviewStep("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", pulseModuleOrder).query
+	moduleStep, ok := postRunMonitorIndependentModuleStep("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", pulseModuleBugReview)
+	if !ok {
+		t.Fatal("bug review module step was not found")
+	}
 	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
 	dashboard := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "dashboard")
 
@@ -2284,7 +2292,7 @@ func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	for _, tc := range []struct{ prompt, ref string }{
 		{archive, `get_reference_doc(kind="pulse-archive")`},
 		{gate, `get_reference_doc(kind="pulse-gate")`},
-		{consolidated, `get_reference_doc(kind="pulse-review-fixer")`},
+		{moduleStep.query, `get_reference_doc(kind="pulse-review-fixer")`},
 		{dashboard, `get_reference_doc(kind="review-improve-log")`},
 		{finalizer, `get_reference_doc(kind="pulse-finalizer")`},
 	} {
@@ -2313,7 +2321,7 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleBugReview, pulseRunID, "done", "Clean review.", []string{"pulse/reviews/run/bug_review.md"}); err != nil {
 		t.Fatalf("mark bug review: %v", err)
 	}
-	if err := markUnresolvedPulseDueModules(ctx, workspacePath, pulseRunID, "failed", "Consolidated review did not finish"); err != nil {
+	if err := markUnresolvedPulseDueModules(ctx, workspacePath, pulseRunID, "failed", "Module stages did not finish"); err != nil {
 		t.Fatalf("mark unresolved: %v", err)
 	}
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
@@ -2429,7 +2437,7 @@ func TestSelectedPostRunMonitorModuleStepsFallsBackForPartialWorklist(t *testing
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "consolidated-review", "dashboard", "finalize"}
+	want := []string{"pre-backup", "bug-review", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}
@@ -2461,7 +2469,7 @@ func TestSelectedPostRunMonitorModuleStepsPartialWorklistKeepsDueGoalAdvisor(t *
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "consolidated-review", "dashboard", "finalize"}
+	want := []string{"pre-backup", "goal-advisor", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
+	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	htmlpkg "golang.org/x/net/html"
 )
@@ -399,6 +400,95 @@ func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, 
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	return states, nil
+}
+
+// recordStandalonePulseFixerModules opens only the explicitly selected modules
+// for a manual /pulse-fixer run. Unlike Gate's complete worklist write, it does
+// not rewrite cadence or results for unrelated modules.
+func recordStandalonePulseFixerModules(ctx context.Context, workspacePath, pulseRunID string, modules []string) ([]PulseModuleState, error) {
+	pulseWorklistRecordMu.Lock()
+	defer pulseWorklistRecordMu.Unlock()
+
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	if pulseRunID == "" {
+		return nil, fmt.Errorf("pulse_run_id is required")
+	}
+	if len(modules) == 0 {
+		return nil, fmt.Errorf("modules must not be empty")
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	seen := map[string]bool{}
+	canonical := make([]string, 0, len(modules))
+	for _, raw := range modules {
+		module := normalizePulseModule(raw)
+		if !validPulseModules[module] {
+			return nil, fmt.Errorf("module %q is not valid", raw)
+		}
+		if seen[module] {
+			return nil, fmt.Errorf("module %q appears more than once", module)
+		}
+		seen[module] = true
+		canonical = append(canonical, module)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for _, module := range canonical {
+		var activeRunID, decision, result string
+		err := tx.QueryRowContext(ctx, `SELECT last_pulse_run_id, last_decision, last_result
+			FROM pulse_module_state WHERE workspace_path = ? AND module = ?`, normalized, module).
+			Scan(&activeRunID, &decision, &result)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil && decision == "due" && strings.TrimSpace(result) == "" && activeRunID != pulseRunID {
+			return nil, fmt.Errorf("module %q already belongs to unresolved Pulse run %q", module, activeRunID)
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	evidenceJSON, _ := json.Marshal([]string{"explicit standalone /pulse-fixer backlog drain"})
+	for _, module := range canonical {
+		_, err := tx.ExecContext(ctx, `INSERT INTO pulse_module_state (
+				module, workspace_path, last_pulse_run_id, last_checked_at,
+				last_decision, last_reason, last_gate_decision, last_result,
+				last_result_reason, evidence_json, updated_at
+			) VALUES (?, ?, ?, ?, 'due', ?, 'due', '', '', ?, ?)
+			ON CONFLICT(workspace_path, module) DO UPDATE SET
+				last_pulse_run_id=excluded.last_pulse_run_id,
+				last_checked_at=excluded.last_checked_at,
+				last_decision='due',
+				last_reason=excluded.last_reason,
+				last_gate_decision='due',
+				last_result='',
+				last_result_reason='',
+				evidence_json=excluded.evidence_json,
+				updated_at=excluded.updated_at`,
+			module, normalized, pulseRunID, now, "explicit standalone /pulse-fixer backlog drain", string(evidenceJSON), now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	states := make([]PulseModuleState, 0, len(canonical))
+	for _, module := range canonical {
+		state, err := getPulseModuleStateByModule(ctx, db, normalized, module)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, *state)
 	}
 	return states, nil
 }
@@ -1395,6 +1485,28 @@ func scanPulseModuleState(row pulseModuleScanner) (*PulseModuleState, error) {
 
 func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[string]string) {
 	moduleEnum := append([]string(nil), pulseModuleOrder...)
+	beginFixerTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "begin_pulse_fixer_run",
+			Description: "Begin an explicit standalone /pulse-fixer lifecycle run for existing SQLite-backed findings. Use only after get_pulse_module_state and only for modules whose retained backlog the user asked to fix. This does not run Gate or reviewers, does not alter unrelated module cadence, and refuses to take over a module already due in an unresolved Pulse run. It returns the pulse_run_id required by start_pulse_fix_attempt and mark_pulse_module_result.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+					"modules": map[string]interface{}{
+						"type":        "array",
+						"minItems":    1,
+						"uniqueItems": true,
+						"items":       map[string]interface{}{"type": "string", "enum": moduleEnum},
+						"description": "Owning modules for the existing findings selected from get_pulse_module_state.",
+					},
+				},
+				"required": []string{"workspace_path", "modules"},
+			}),
+		},
+	}
 	recordTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -1437,6 +1549,22 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+				},
+				"required": []string{"workspace_path"},
+			}),
+		},
+	}
+	findingBacklogTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "get_pulse_finding_backlog",
+			Description: "Read the durable SDLC-style Pulse finding backlog from db/db.sqlite, including each finding's current lifecycle state, fix attempts, verification history, stable fingerprint/finding identity, and external-action disposition. Use this after get_pulse_module_state when reviewing, deduplicating, or running /pulse-fixer; never use Dashboard HTML as the source of truth.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+					"module":         map[string]interface{}{"type": "string", "enum": moduleEnum, "description": "Optional owning module filter. Omit to load the complete backlog."},
 				},
 				"required": []string{"workspace_path"},
 			}),
@@ -1556,6 +1684,27 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	}
 
 	executors := map[string]interface{}{
+		"begin_pulse_fixer_run": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			sessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
+			if sessionID == "" {
+				return "", fmt.Errorf("begin_pulse_fixer_run requires an active workshop session")
+			}
+			modules := stringSliceFromToolArg(args["modules"])
+			pulseRunID := fmt.Sprintf("manual-fixer--%s-%d", time.Now().UTC().Format("20060102T150405Z"), time.Now().UTC().UnixNano())
+			states, err := recordStandalonePulseFixerModules(ctx, workspacePath, pulseRunID, modules)
+			if err != nil {
+				return "", err
+			}
+			registerTemporaryTrustedPulseSession(sessionID, pulseRunID, 2*time.Hour)
+			payload, _ := json.Marshal(map[string]interface{}{
+				"status":       "started",
+				"pulse_run_id": pulseRunID,
+				"modules":      states,
+				"expires_in":   "2h",
+			})
+			return string(payload), nil
+		},
 		"record_pulse_worklist": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
 			pulseRunID, _ := args["pulse_run_id"].(string)
@@ -1670,6 +1819,24 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			})
 			return string(payload), nil
 		},
+		"get_pulse_finding_backlog": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			module, _ := args["module"].(string)
+			module = normalizePulseModule(module)
+			if module != "" && !validPulseModules[module] {
+				return "", fmt.Errorf("module %q is not valid", module)
+			}
+			findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+			if err != nil {
+				return "", err
+			}
+			payload, _ := json.Marshal(map[string]interface{}{
+				"findings": findings,
+				"total":    len(findings),
+				"note":     "Durable finding, attempt, verification, and disposition history. Match stable target/claim/evidence and reuse existing identity before filing or fixing.",
+			})
+			return string(payload), nil
+		},
 		"mark_pulse_module_result": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
 			pulseRunID, _ := args["pulse_run_id"].(string)
@@ -1710,6 +1877,21 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if err != nil {
 				return "", err
 			}
+			if strings.HasPrefix(pulseRunID, "manual-fixer--") {
+				worklist, exists, readErr := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
+				if readErr == nil && exists {
+					complete := true
+					for _, selected := range worklist {
+						if strings.TrimSpace(selected.LastResult) == "" {
+							complete = false
+							break
+						}
+					}
+					if complete {
+						releaseTrustedPulseSessionForRun(ctx, pulseRunID)
+					}
+				}
+			}
 			payload, _ := json.Marshal(map[string]interface{}{"status": "updated", "module": state})
 			return string(payload), nil
 		},
@@ -1731,8 +1913,10 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		},
 	}
 	categories := map[string]string{
+		"begin_pulse_fixer_run":           "workflow",
 		"record_pulse_worklist":           "workflow",
 		"get_pulse_module_state":          "workflow",
+		"get_pulse_finding_backlog":       "workflow",
 		"start_pulse_fix_attempt":         "workflow",
 		"mark_pulse_module_result":        "workflow",
 		"mark_pulse_final_command_result": "workflow",
@@ -1769,7 +1953,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Concern %s marked %s.", fingerprint, status), nil
 	}
 
-	return []llmtypes.Tool{recordTool, stateTool, startFixTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
+	return []llmtypes.Tool{beginFixerTool, recordTool, stateTool, findingBacklogTool, startFixTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
 }
 
 func pulseFixFindingRefsFromToolArg(raw interface{}) ([]step_based_workflow.PulseFixFindingRef, error) {

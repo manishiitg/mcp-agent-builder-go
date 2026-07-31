@@ -155,7 +155,8 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_module_state for this workflow and compare every candidate with the complete active and suppressed backlog. Match by stable target/component, behavioral claim, and evidence boundary — not wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload and fingerprint identity; put changed evidence in the Markdown detail instead of creating reworded duplicate prose. Do not rediscover an unchanged suppressed/external finding. Report a compact manifest containing every emitted finding ID, target key, backlog classification, and matched fingerprint (or `new`).\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract += "LIFECYCLE HISTORY: call get_pulse_finding_backlog for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
 	completionFooter := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker in the review brief. Only after the complete review is written, emit this exact final line and nothing after it:\n%s", marker)
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + completionFooter
@@ -225,6 +226,19 @@ func acquirePulseReviewerSlot(ctx context.Context, slots chan struct{}) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// pulseReviewerPersistenceContext keeps the durable reviewer receipt attached
+// to the child execution identity, but not to the HTTP/MCP request that started
+// it. Coding-agent bridges may legitimately detach or time out that outer
+// request while the tracked reviewer continues. Using the request context for
+// the final SQLite write turned completed reviews into "context canceled" and
+// prevented the Fixer from ever seeing them.
+func pulseReviewerPersistenceContext(execCtx context.Context) (context.Context, context.CancelFunc) {
+	if execCtx == nil {
+		execCtx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(execCtx), 30*time.Second)
 }
 
 func normalizeWorkshopBuilderRunFolder(runFolder string) string {
@@ -1411,7 +1425,9 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// dynamic Pulse worklist/result state.
 	pulseState := []string{
 		"get_pulse_module_state",
+		"get_pulse_finding_backlog",
 		"get_pulse_review_result",
+		"begin_pulse_fixer_run",
 		"record_pulse_worklist",
 		"start_pulse_fix_attempt",
 		"mark_pulse_module_result",
@@ -1585,6 +1601,7 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
 		"get_report_plan", "validate_report_plan", "preview_report_render",
+		"get_pulse_module_state", "get_pulse_finding_backlog",
 	}
 }
 
@@ -3573,7 +3590,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					return nil
 				}
 				body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "failed", message, time.Now())
-				return RecordPulseReview(ctx, workspacePath, module, reviewRunID, pulseRunID, "", body)
+				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
+				defer persistCancel()
+				return RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body)
 			}
 
 			var incompleteErr error
@@ -3601,7 +3620,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						return completed, nil
 					}
 					body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", completed, time.Now())
-					if writeErr := RecordPulseReview(ctx, workspacePath, module, reviewRunID, pulseRunID, "", body); writeErr != nil {
+					persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
+					defer persistCancel()
+					if writeErr := RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body); writeErr != nil {
 						return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
 					}
 					// File the review's CONCERNS: lines through the same Go-side path
@@ -3609,7 +3630,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					// review records becomes visible as recurrence. The Markdown stored
 					// in SQLite remains the full evidence; this is only its trackable
 					// lifecycle index.
-					iwm.controller.recordStepConcerns(ctx, module, map[string]string{
+					iwm.controller.recordStepConcerns(persistCtx, module, map[string]string{
 						ConcernPhaseReview: completed,
 					})
 					// Log that this reviewer ran and what it concluded. Without it,

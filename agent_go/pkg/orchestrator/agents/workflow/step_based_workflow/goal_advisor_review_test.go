@@ -95,6 +95,12 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 		"pulse_review_log:run:eval_health",
 		"store in SQLite",
 		"do not write a file",
+		"BACKLOG RECONCILIATION",
+		"get_pulse_module_state",
+		"get_pulse_finding_backlog",
+		"existing_unchanged",
+		"reuse the exact existing CONCERNS payload",
+		"matched fingerprint",
 		"STRUCTURED HARNESS ISSUES",
 		"PULSE_FINDING_JSON:",
 		"never executed by the UI",
@@ -114,6 +120,9 @@ func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing
 		assertToolListContains(t, readOnly, tool)
 		assertToolListContains(t, proposal, tool)
 		assertToolListContains(t, approved, tool)
+	}
+	for _, tool := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
+		assertToolListContains(t, readOnly, tool)
 	}
 
 	for _, tool := range []string{"diff_patch_workspace_file", "create_human_input_request", "upsert_report_widget"} {

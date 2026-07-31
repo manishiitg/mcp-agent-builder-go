@@ -1,12 +1,13 @@
-## Pulse consolidated review and single fixer
+## Pulse independent backlog review and module fixer
 
-Use only after Gate. The scheduler supplies due modules, Pulse run ID, and dated
-review run ID. This parent owns all unresolved due modules.
+Use only after Gate. The scheduler supplies one due module, Pulse run ID, and
+dated review run ID. This parent owns that module until it has one terminal
+result.
 
-Read module/worklist state and saved SQLite reviewer results. On recovery inspect
+Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
 reapply partial work. Preserve `changed_unverified` until its evidence boundary.
-For each due module, load and revalidate the complete active retained backlog;
+For the due module, load and revalidate the complete active retained backlog;
 do not merely emit fresh findings. Also load `suppressed_concerns`: an unchanged
 externally owned fingerprint is not a new finding, while materially changed
 evidence/target identity is a reopen candidate. Record every evidence-backed
@@ -22,14 +23,25 @@ outcome-bearing checkpoint. Otherwise run Auditor. Strategy Auditor runs before 
 launch Advisor only for an actionable diagnosis or its own
 answered-decision/experiment checkpoint.
 
-Create each remaining **READ-ONLY REVIEW** task in consecutive batches of at most two
-`call_generic_agent` calls. In coding-agent mode, use its documented API
-bridge shell call; shell/curl is the supported transport. Never use background
-agents, sleep, or polling. If the outer call backgrounds, stop and await the
-automatic notification. Pass exact `pulse_run_id`, dated `review_run_id`, and
-module. The backend stores its complete Markdown directly in SQLite; call
-`get_pulse_review_result` with that review run and module before fixing.
-Reviewer failure fails only its module.
+The scheduler invokes this contract once per due module, in module order. This
+stage owns only the supplied module. First inspect its current-run result,
+active retained backlog, answered decisions, awaiting-verification work, and
+any already-saved reviewer result. Drain actionable retained work before doing
+more discovery. Do not launch a reviewer merely because the module is due: if
+the saved review and lifecycle evidence are sufficient to apply or verify a
+bounded fix, do that now.
+
+When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
+make exactly one `call_generic_agent` call for this module. Never combine
+reviewers in one shell command, run curl in the background, use `&`/`wait`, or
+wait for another module. In coding-agent mode, use the documented API bridge
+shell transport without imposing a short shell timeout on the reviewer. If the
+outer bridge call backgrounds, stop and await its automatic notification.
+Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
+its complete Markdown directly in SQLite; call `get_pulse_review_result` with
+that review run and module before fixing. Immediately process a successful
+result; do not wait for any other reviewer. Reviewer failure is a terminal
+`Review incomplete` result for this module only and cannot block later modules.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response contract:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
@@ -57,12 +69,17 @@ queue and suppresses unchanged rediscovery while keeping it visible on the
 external-action board. `blocked` remains for retryable/current blockers;
 `awaiting_user` remains in the decision queue.
 
-Deduplicate findings and map conflicts by target. Resolve by explicit user
+Deduplicate findings before filing: match stable target/component, behavioral
+claim, and evidence boundary against active and suppressed findings. Reuse the
+existing fingerprint and exact `CONCERNS:` payload for unchanged or newly
+evidenced instances, and record the new evidence in the immutable review body.
+Create a new finding only for a genuinely different target/claim, or reopen one
+whose recorded reopen condition is now satisfied. Then map conflicts by target. Resolve by explicit user
 constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-Then the same parent becomes the only Pulse Fixer. Apply safe fixes sequentially.
+Then the same parent becomes the only Pulse Fixer for this module. Apply safe fixes sequentially.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `fix-verification`; old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
@@ -86,7 +103,7 @@ summary, attempt id when changed, changed files, and exact verification objects.
 Verification verdict is exactly `passed`, `failed`, or `inconclusive`.
 `fixed_verified` closes only with passed post-change proof;
 `changed_unverified` remains awaiting verification; failed proof reopens it.
-Perform global finding-ID reconciliation and require a terminal current-run result for each before
+Perform module finding-ID reconciliation and require a terminal current-run result before
 claiming completion. Keep technical proof in SQLite review and lifecycle rows. Record a
 reviewer failure as `Review incomplete`, without a conclusion or unsupported
 change.

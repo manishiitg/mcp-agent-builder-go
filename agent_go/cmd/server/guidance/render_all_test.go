@@ -83,8 +83,8 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-review-fixer": {
 			wants: []string{
-				"batches of at most two", "supported transport", "automatic", "get_pulse_review_result",
-				"only Pulse Fixer", "global finding-ID reconciliation", "terminal current-run result",
+				"exactly one", "saved review and lifecycle evidence", "automatic notification", "get_pulse_review_result",
+				"only Pulse Fixer for this module", "terminal current-run result", "cannot block later modules",
 			},
 		},
 		"pulse-finalizer": {
@@ -149,11 +149,16 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 		},
 		"pulse-fixer": {
 			"STANDALONE PULSE FIXER",
-			"does not rerun Pulse Gate or launch review agents",
+			"does not rerun Pulse Gate",
+			"launch review agents",
+			"begin_pulse_fixer_run",
+			"get_pulse_module_state",
+			"get_pulse_finding_backlog",
+			"mark_pulse_module_result",
 			"post-change evidence boundary",
 			"changed_unverified",
 			"awaiting_next_valid_run",
-			"standalone command must not impersonate",
+			"Dashboard is a projection",
 		},
 	}
 
@@ -340,8 +345,8 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one ordered finalizer turn",
 		"mark_pulse_final_command_result",
 		"not automatically due every Pulse",
-		"Parallel Review Team And Single Fixer",
-		"parallel batches of at most two reviewers",
+		"Independent Review/Fix Stages And One Sequential Writer",
+		"existing unchanged, existing with new evidence, reopened, or genuinely",
 		"every evidence-backed severity-ordered finding row",
 		"in-turn review ledger",
 		"Never trust HTML as recovery truth",
@@ -349,12 +354,12 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"fixed_verified",
 		"must not update `builder/improve.html`",
 		"dedicated Dashboard prevents competing",
-		"conflict map grouped by target key",
+		"Build a conflict map",
 		"explicit user-approved decisions and constraints",
 		"mark only the affected",
 		"finding-id manifest",
 		"give every finding exactly one evidence-backed",
-		"global finding-ID reconciliation",
+		"module's finding IDs",
 		"Do not claim",
 		"approval revalidation",
 		"Unrelated drift",
@@ -363,9 +368,9 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"only passed post-change proof",
 		"changed_unverified",
 		"awaiting_next_valid_run",
-		"Do not use `run_in_background`",
+		"use `run_in_background`",
 		"READ-ONLY REVIEW",
-		"parent becomes the only **Pulse Fixer**",
+		"parent becomes this module's only **Pulse Fixer**",
 		"does not launch",
 		"`run_goal_advisor_review`",
 		"backend independently enforces",
@@ -774,8 +779,8 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	for _, want := range []string{
 		`run Bug Review alone first`,
 		`record Auditor as terminally deferred`,
-		`one reviewer task for **every** remaining due module`,
-		`Never rank or truncate the due worklist`,
+		`one independently terminal stage per due module`,
+		`later modules`,
 		`one honest terminal result for every due module`,
 		`later Dashboard stage`,
 		`must not update ` + "`builder/improve.html`",
@@ -789,7 +794,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render pulse: %v", err)
 	}
-	for _, want := range []string{`Do not truncate the due worklist`, `one explicitly attributed result card per due module`} {
+	for _, want := range []string{`Run every module this standalone review selects`, `Process modules independently`, `one explicitly attributed result card per due module`} {
 		if !strings.Contains(pulse, want) {
 			t.Fatalf("manual pulse missing complete reviewer contract %q", want)
 		}
@@ -837,7 +842,6 @@ func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 		"improve-evaluation":    {`data-pulse-section="signals"`, `data-module="eval_health"`},
 		"define-success":        {`data-pulse-section="reflection"`, `data-module="run_summary"`, "do not copy the Goal"},
 		"pulse-setup":           {`data-pulse-section="improvements"`, `data-module="pulse_fixer"`, "do not seed or refresh a Goal/Profile card"},
-		"pulse-fixer":           {`data-pulse-section="improvements"`, `data-module="pulse_fixer"`},
 		"strategy-auditor":      {`data-pulse-section="signals"`, `data-module="strategy_auditor"`, "Do not launch `/goal-advisor` automatically"},
 		"goal-advisor":          {`data-pulse-section="improvements"`, `data-module="goal_advisor"`, "do not duplicate the pending question"},
 	}

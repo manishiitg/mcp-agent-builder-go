@@ -41,7 +41,7 @@ Advisor reviewers.
 - Interactive vs unattended: a standalone `/review-*` command runs in a live chat
   with the user present, so its coordinator turn MAY ask the user a direct question
   in that same chat and wait for the reply -- this is how a bounded fix gets a quick
-  yes/no. The scheduled Pulse consolidated-review stage runs with nobody watching
+  yes/no. Scheduled Pulse module review/fix stages run with nobody watching
   chat; there, the parent Fixer must NEVER ask a direct question -- a question asked
   into an unattended chat is never answered and silently stalls the run. It must use
   `create_human_input_request` instead, which is durable and surfaces to the user

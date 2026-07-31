@@ -32,11 +32,20 @@ Every skip needs reason, evidence, and `next_check_at`, positive `cooldown_runs`
 or `next_check_after_run_id`. Name evidence that overrides cadence.
 Missing baseline means `baseline pending`, not healthy. Use bounded adaptive cadence.
 
-Select every module whose evidence says it is due. Do not defer an actionable
-module merely because other modules are also due. Deep reviewers run in
-backend-bounded batches, while the single Fixer remains sequential. When work
-must wait for a real evidence/user/external boundary, record that boundary
-instead of inventing a capacity cooldown.
+Backlog drainage outranks broad discovery. When active findings, answered
+decisions, unfinished fix attempts, or awaiting-verification work exist, select
+the owning modules to drain that work and require them to use retained evidence
+before launching another reviewer. Still select Bug Review for a new failed or
+suspicious run so a new P0 cannot hide behind the backlog. Defer discovery-only
+health/advisory reviews whose artifacts and evidence did not materially change;
+give each an exact backlog-drained, artifact-change, or next-valid-run check.
+Do not repeatedly spend a pass rediscovering unchanged findings.
+
+Select every module with actionable repair/verification work or genuinely new
+trigger evidence. Module stages are independent and sequential: one failed or
+hung reviewer must not block fixes from saved evidence or any later module.
+When work must wait for a real evidence/user/external boundary, record that
+boundary instead of inventing a capacity cooldown.
 
 For an off-track material goal, use this escalation ladder:
 
