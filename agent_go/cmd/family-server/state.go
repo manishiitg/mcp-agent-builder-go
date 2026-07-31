@@ -71,6 +71,14 @@ type familyState struct {
 	// week.go) — parent-configurable settings, same lifecycle as PulseConfig
 	// above, not a log. Powers the "This Week" view's busy/free-time display.
 	Schedule ChildSchedule `json:"schedule,omitempty"`
+
+	// FastMode swaps every turn (parent, child, WhatsApp, Pulse) from its
+	// normal tuned model to the provider's cheaper/faster low tier (see
+	// model_tier.go's lowTierModelID) — latency over depth, the opposite
+	// tradeoff Child Mode itself deliberately moved away from (see child.go's
+	// own comment on why it stopped using a low tier by default). Off by
+	// default so nobody gets a quietly worse model without asking for it.
+	FastMode bool `json:"fast_mode,omitempty"`
 }
 
 // ScheduleEntry is one recurring weekly commitment — school, tuition, a

@@ -221,6 +221,9 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message, destDir string) (sa
 		dl = m.AudioMessage
 		isVoice = true
 		name = "wa-voice-" + evt.Info.ID + extForMime(m.AudioMessage.GetMimetype(), ".ogg")
+	case m.VideoMessage != nil:
+		dl = m.VideoMessage
+		name = "wa-" + evt.Info.ID + extForMime(m.VideoMessage.GetMimetype(), ".mp4")
 	default:
 		return false, "", ""
 	}
@@ -789,6 +792,8 @@ func extForMime(mime, def string) string {
 		return ".pdf"
 	case strings.Contains(mime, "ogg"):
 		return ".ogg"
+	case strings.Contains(mime, "mp4"):
+		return ".mp4"
 	default:
 		return def
 	}
@@ -918,6 +923,41 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	// it drives a turn just like normal — and is NEVER child-routed, even in
 	// child mode, since it's genuinely meant to converse, not attach a photo.
 	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt, destDir)
+
+	// A photo or video (never a document or voice note) gets a visible card in
+	// the desktop chat transcript the instant it's saved — independent of
+	// whatever else happens with any caption text below — so "did a photo/
+	// video arrive" is visible on screen, not just inferred from Quill's
+	// reply. Lands in whichever conversation the file itself landed in: the
+	// child's activity when routed there, otherwise the shared parent
+	// conversation (including the child-mode-but-no-activity-open fallback,
+	// where the file already fell back to the parent inbox).
+	if gotMedia && savedPath != "" && (evt.Message.ImageMessage != nil || evt.Message.VideoMessage != nil) {
+		mediaTool := "photo"
+		if evt.Message.VideoMessage != nil {
+			mediaTool = "video"
+		}
+		if inChildMode && childActivityDir != "" {
+			appendToolMessageToConversation("child", childActivityDir, enginedetect.ChatMessage{Role: "tool", Tool: mediaTool, Path: savedPath})
+		} else {
+			appendToolMessageToConversation("parent", parentConversationID, enginedetect.ChatMessage{Role: "tool", Tool: mediaTool, Path: savedPath})
+		}
+	}
+
+	// A voice note whose transcription failed (STT worker down/timed out) or
+	// was disabled otherwise vanishes from the desktop's point of view —
+	// WhatsApp still gets some ack below, but nothing on screen explained
+	// why nothing happened. This card surfaces that failure in the same
+	// transcript a successfully-transcribed voice note lands in (see the
+	// "🎙️ I heard: ..." path further down), with the raw audio still
+	// playable so it isn't lost even though it couldn't be read aloud as text.
+	if gotMedia && savedPath != "" && evt.Message.AudioMessage != nil && voiceText == "" {
+		if inChildMode && childActivityDir != "" {
+			appendToolMessageToConversation("child", childActivityDir, enginedetect.ChatMessage{Role: "tool", Tool: "voice_failed", Path: savedPath})
+		} else {
+			appendToolMessageToConversation("parent", parentConversationID, enginedetect.ChatMessage{Role: "tool", Tool: "voice_failed", Path: savedPath})
+		}
+	}
 
 	if inChildMode && gotMedia && voiceText == "" {
 		stateMu.Lock()
@@ -1092,43 +1132,30 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 // the SAME shared "parent" conversation, so it never needs to know which
 // account triggered it.
 func (w *waBot) runTurn(text string) (string, error) {
-	agentTurnMu.Lock()
-	defer agentTurnMu.Unlock()
-
 	stateMu.Lock()
 	s := loadState()
 	stateMu.Unlock()
 	if s.Engine == "" {
 		return "", fmt.Errorf("no learning engine selected")
 	}
-	provider, ok := engineToProvider(s.Engine)
-	if !ok {
+	if _, ok := engineToProvider(s.Engine); !ok {
 		return "", fmt.Errorf("engine %q has no provider mapping", s.Engine)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-	defer cancel()
 
 	// WhatsApp joins the SINGLE parent conversation (same file + same warm tmux
 	// session as the web chat and Pulse) so Quill has one unified memory across
 	// every channel — a message on WhatsApp continues the same thread as the web.
 	convID := parentConversationID
-	workDir := filepath.Join(familyDataDir(), "workspace")
 
-	// Build the full history like the web chat does. In resume mode Ask sends
-	// only the newest message (the coding agent restores prior context from its
-	// warm tmux, or its `--resume` session store after a restart via the loaded
-	// SessionHandle) — so the older messages here are for the persisted transcript
-	// / UI, not re-sent to the model. WhatsApp has no frontend to supply the
-	// thread, so we load it from the persisted file (the UI's source of truth).
+	// WhatsApp has no frontend to supply the thread, so build it from the
+	// persisted file (the UI's source of truth) — the web chat gets its
+	// messages from the request instead, but both end up calling
+	// runParentTurn with the same shape: full history including the newest
+	// message, exactly as it should be persisted.
 	existing, _ := loadStoredConversation("parent", convID)
-	prior := existing.Messages
-	history := make([]agentsession.Message, 0, len(prior)+1)
-	for _, m := range prior {
-		if m.Role == "user" || m.Role == "assistant" {
-			history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
-		}
-	}
+	messages := append([]enginedetect.ChatMessage(nil), existing.Messages...)
+	messages = append(messages, enginedetect.ChatMessage{Role: "user", Text: text})
+
 	// Drained once, right here, so whichever real turn comes next — this one —
 	// is told PLAINLY that file(s) are waiting, instead of leaving it to notice
 	// on its own via the system prompt's general "check inbox" habit (which
@@ -1145,85 +1172,15 @@ func (w *waBot) runTurn(text string) (string, error) {
 	// the stored/visible message stays clean). Because the tmux session is shared
 	// with the web chat, the base system prompt may be the web one; this keeps
 	// replies phone-appropriate regardless.
-	history = append(history, agentsession.Message{Role: "user", Text: text + "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did." + uploadNote + ")"})
+	hint := "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did." + uploadNote + ")"
 
-	// Persist the parent's message the INSTANT the turn starts (not just at
-	// completion) — same fix as the web chat path (see persistNewMessages'
-	// own doc comment): otherwise a steer landing mid-turn, or simply this
-	// snapshot going stale relative to disk, could get silently overwritten
-	// by fallback []enginedetect.ChatMessage built once here at turn start.
-	fallback := append([]enginedetect.ChatMessage(nil), prior...)
-	fallback = append(fallback, enginedetect.ChatMessage{Role: "user", Text: text})
-	persistNewMessages("parent", convID, fallback)
-	persistFull := func(reply string) {
-		persistConversationReply("parent", convID, fallback, reply)
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
+	resp := runParentTurn(ctx, s, convID, messages, hint)
+	if resp.Error != "" {
+		return "", fmt.Errorf("%s", resp.Error)
 	}
-
-	var sentFilesMu sync.Mutex
-	var sentFiles []string
-
-	sess, err := agentsession.New(ctx, agentsession.Config{
-		Provider: provider,
-		// Was unset here — the ONE parent-session construction site missing it
-		// (chat.go and pulse.go both pin this same tier). Confirmed live: a
-		// WhatsApp turn logged "model=high" for codex-cli with nobody having
-		// asked for that, which is just whatever the underlying library
-		// defaults to when ModelID is left empty — not a real, deliberate
-		// choice. Pinned to match every other surface of this same
-		// conversation, so which channel a message arrives on never changes
-		// which model answers it.
-		ModelID:         mediumTierModelID(provider),
-		ReasoningEffort: "high",
-		WorkingDir:      workDir,
-		// Same base persona as the web chat — it's one unified conversation, so
-		// the prompt shouldn't fork by channel; WhatsApp formatting is the per-turn
-		// hint appended to the message above.
-		SystemPrompt: parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
-		// Stable SessionID = the single parent conversation, so the SAME warm
-		// tmux session is used across turns AND channels within this process.
-		// SessionHandle restores the coding agent's `--resume` state across
-		// restarts (loaded from disk) so context survives a restart — the
-		// AgentWorks mechanism. Ask sends only the newest message; the CLI
-		// reconstructs history from its own session store.
-		SessionID:                 convID,
-		SessionHandle:             loadSessionHandle("parent", convID, provider),
-		BridgeRoutingInstructions: bridgeRoutingInstructions(),
-		// The ONE canonical parent manifest (parent_tools.go). This surface shares
-		// the SAME warm "parent" session as web chat and Pulse, so it must not
-		// register a narrower set — whichever surface starts the session would
-		// otherwise decide everyone's capabilities. Signals this channel can't
-		// render (suggestion buttons, the file-open pane) are simply dropped via
-		// nil sinks; the tools themselves stay registered and callable.
-		Tools: withLiveStatus("parent:"+convID, parentTools(s.Engine, parentChildLabel(s.Child), parentToolSinks{
-			onSentFile: func(path string) {
-				sentFilesMu.Lock()
-				sentFiles = append(sentFiles, path)
-				sentFilesMu.Unlock()
-			},
-		})),
-	})
-	if err != nil {
-		persistFull(friendlyTurnError(err))
-		return "", err
-	}
-	defer sess.Close()
-
-	// Register this turn as steerable too — it's the same "parent" conversation
-	// id as the web chat, so a follow-up the parent sends there while this
-	// WhatsApp-originated turn is still running can be injected live (see
-	// steer.go) instead of only ever queuing.
-	registerActiveTurn(convID, sess.Agent())
-	defer clearActiveTurn()
-
-	reply, err := sess.Ask(ctx, history)
-	if err != nil {
-		persistFull(friendlyTurnError(err))
-		return "", err
-	}
-	saveSessionHandle("parent", convID, sess.Handle())
-	reply = appendSentFileLinks(reply, sentFiles)
-	persistFull(reply)
-	return reply, nil
+	return resp.Reply, nil
 }
 
 // --- HTTP routes ---------------------------------------------------------

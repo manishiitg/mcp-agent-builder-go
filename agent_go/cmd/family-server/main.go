@@ -32,17 +32,18 @@ func main() {
 	// has to remember to set.
 	os.Setenv("NATIVE_WORKSPACE", "true")
 
-	// Opt into real content streaming for codex-cli's and cursor-cli's
-	// persistent-interactive (tmux) sessions — off by default in
-	// mcpagent/multi-llm-provider-go (codex tails its JSONL rollout file;
-	// cursor polls its own sqlite store.db — same idea, different source).
-	// Without these, agentsession.Config.StreamCallback never fires and every
-	// turn falls back to "reply only available once the whole turn finishes",
-	// exactly like before streaming existed — which is also why tool-call
-	// events never appear mid-turn for that provider (they ride the same
-	// transcript tailer as the text stream).
-	os.Setenv("CODEX_CLI_STREAM_TRANSCRIPT", "1")
-	os.Setenv("CURSOR_CLI_STREAM_TRANSCRIPT", "1")
+	// Real mid-turn content streaming (assistant TEXT, not just tool-call
+	// observability — those are separate: EnableStreaming covers tool calls
+	// and is auto-on for every coding-agent provider regardless) used to be
+	// believed to be an env-var opt-in here (CODEX_CLI_STREAM_TRANSCRIPT=1,
+	// CURSOR_CLI_STREAM_TRANSCRIPT=1) — confirmed dead: nothing in mcpagent or
+	// multi-llm-provider-go ever read those names, so agentsession.Config.
+	// StreamCallback never actually fired (ttft=none on every real turn,
+	// confirmed live). The real API is a CallOption (e.g.
+	// codexcli.WithStreamTranscript(true)), which mcpagent now appends
+	// automatically whenever a StreamCallback is registered (see
+	// mcpagent/agent/coding_agent_integrations.go's StreamingCallback check) —
+	// nothing to set here anymore.
 
 	// Give every interactive coding-agent tmux session ITS OWN naming
 	// namespace, distinct from multi-llm-provider-go's shared "mlp-*" default
@@ -157,6 +158,13 @@ func main() {
 		handleGetChildSchedule(w, r)
 	})
 	mux.HandleFunc("/api/week", handleGetWeek)
+	mux.HandleFunc("/api/fast-mode", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handleSetFastMode(w, r)
+			return
+		}
+		handleGetFastMode(w, r)
+	})
 	mux.HandleFunc("/api/workspace/tree", handleWorkspaceTree)
 	mux.HandleFunc("/api/workspace/file", handleWorkspaceFile)
 	mux.HandleFunc("/api/workspace/raw", handleWorkspaceRaw)

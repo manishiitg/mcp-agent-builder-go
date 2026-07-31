@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -19,30 +18,15 @@ type uploadResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// saveCurrentUpload writes a small pointer file naming the exact path of a
-// child's just-uploaded photo — the SAME pattern as current-activity.json
-// for handoffs. A prompt instruction telling the child agent to proactively
-// list their activity folder for a new upload proved unreliable in testing
-// (the model kept defaulting to checking the wrong folder instead); pointing
-// it at one specific, deterministic file to read removes the guessing entirely.
-func saveCurrentUpload(rel string) { saveCurrentUploadWithNote(rel, "") }
+// saveCurrentUpload queues the exact path of a child's just-uploaded photo —
+// see appendCurrentUpload (child_upload.go) for the queueing rationale.
+func saveCurrentUpload(rel string) { appendCurrentUpload(rel, "") }
 
-// saveCurrentUploadWithNote is the same pointer, plus an optional short note
+// saveCurrentUploadWithNote is the same, plus an optional short note
 // alongside the file — e.g. a parent's WhatsApp caption sent with the photo
 // ("she got confused on Q5"), which pendingChildUploadSuffix folds into what
 // it hands the next real turn.
-func saveCurrentUploadWithNote(rel, note string) {
-	abs, ok := resolveWorkspacePath("current-upload.json")
-	if !ok {
-		return
-	}
-	_ = os.MkdirAll(filepath.Dir(abs), 0o700)
-	b, _ := json.Marshal(struct {
-		Path string `json:"path"`
-		Note string `json:"note,omitempty"`
-	}{Path: rel, Note: note})
-	_ = os.WriteFile(abs, b, 0o600)
-}
+func saveCurrentUploadWithNote(rel, note string) { appendCurrentUpload(rel, note) }
 
 // safeName sanitizes an uploaded filename to its base, no traversal.
 func safeName(name string) string {

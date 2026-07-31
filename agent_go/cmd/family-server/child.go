@@ -211,14 +211,16 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		},
 	}
 
+	// Created BEFORE the mutex so trace.locked() below can see how long this
+	// turn actually waited behind another one — see turntrace.go's own comment.
+	trace := newTurnTrace("child", s.Engine)
 	// Serialize on the shared agent-turn lock (parent + child share global MCP env).
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
+	trace.locked()
 
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
-
-	trace := newTurnTrace("child", s.Engine)
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider: provider,
@@ -238,7 +240,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// never reach the *-KEY.md answer keys, other activities, or the parent's
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
-		ModelID:         mediumTierModelID(provider),
+		ModelID:         selectedModelID(s.FastMode, provider),
 		ReasoningEffort: "high",
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),

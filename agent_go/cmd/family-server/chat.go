@@ -423,16 +423,44 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	childLabel := parentChildLabel(s.Child)
-
-	provider, ok := engineToProvider(s.Engine)
-	if !ok {
+	if _, ok := engineToProvider(s.Engine); !ok {
 		// Fall back to the plain-completion path for engines not yet wired into
 		// the agentsession runtime.
 		fallbackParentMessage(w, r, s, req)
 		return
 	}
 
+	// The viewer-path context note is model-facing only — never persisted,
+	// same reasoning as WhatsApp's own phone-formatting hint (see runParentTurn).
+	hint := ""
+	if vp := strings.TrimSpace(req.ViewerPath); vp != "" {
+		hint = "\n\n(The parent currently has \"" + filepath.Base(vp) + "\" open on the right side of their screen — you can naturally reference what's showing there, e.g. \"I see you're looking at...\", without needing them to describe it.)"
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
+	defer cancel()
+	resp := runParentTurn(ctx, s, req.ConversationID, req.Messages, hint)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// runParentTurn runs one turn of the SINGLE shared parent↔Quill conversation
+// — the extracted, shared core used by BOTH the web chat handler
+// (handleParentMessage) and any WhatsApp-triggered turn (waBot.runTurn),
+// mirroring runChildTurn's own extraction (child.go) for the identical
+// reason: logic that lives in only ONE of two otherwise-equivalent call
+// sites silently drifts from the other over time. Confirmed live before this
+// refactor: WhatsApp's copy had no turn-latency tracing at all, no per-turn
+// model-tier/experiment-transport pinning, and never retroactively redacted
+// a secret typed for the first time over WhatsApp — three real gaps that
+// existed purely because the logic was duplicated instead of shared, not
+// because WhatsApp turns are supposed to behave any differently.
+//
+// messages is the FULL history for this turn, including the newest message,
+// exactly as it should be persisted. extraModelOnlyHint, if non-empty, is
+// appended to the model-facing copy of the last message but is NEVER
+// persisted — e.g. WhatsApp's phone-formatting reminder, or the web's
+// viewer-path context note.
+func runParentTurn(ctx context.Context, s familyState, convID string, messages []enginedetect.ChatMessage, extraModelOnlyHint string) parentMessageResponse {
 	workDir := filepath.Join(familyDataDir(), "workspace")
 	_ = os.MkdirAll(workDir, 0o700)
 
@@ -441,7 +469,21 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	// current the instant a steer (see steer.go) might land mid-turn, rather
 	// than only becoming complete once this turn's own completion path
 	// reloads it (see persistConversationReply's own doc comment).
-	persistNewMessages("parent", req.ConversationID, req.Messages)
+	persistNewMessages("parent", convID, messages)
+
+	provider, ok := engineToProvider(s.Engine)
+	if !ok {
+		reply, err := enginedetect.Chat(ctx, s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule), messages)
+		if err != nil {
+			msg := friendlyTurnError(err)
+			persistConversationReply("parent", convID, messages, msg)
+			return parentMessageResponse{Error: msg}
+		}
+		persistConversationReply("parent", convID, messages, reply)
+		return parentMessageResponse{Reply: reply}
+	}
+
+	childLabel := parentChildLabel(s.Child)
 
 	// Recorder captures custom-tool invocations for the response.
 	var evMu sync.Mutex
@@ -470,17 +512,16 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	var sugMu sync.Mutex
 	var suggestions []suggestion
 
+	// Created BEFORE the mutex so trace.locked() below can see how long this
+	// turn actually waited behind another one — see turntrace.go's own comment.
+	trace := newTurnTrace("parent", s.Engine)
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
-	defer cancel()
-
-	trace := newTurnTrace("parent", s.Engine)
+	trace.locked()
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:        provider,
-		ModelID:         mediumTierModelID(provider),
+		ModelID:         selectedModelID(s.FastMode, provider),
 		ReasoningEffort: "high",
 		WorkingDir:      workDir,
 		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
@@ -490,18 +531,18 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		// disk), so context survives a restart without replaying the transcript —
 		// the AgentWorks mechanism. Ask sends only the newest message; the CLI
 		// reconstructs history from its own session store.
-		SessionID:                 req.ConversationID,
-		SessionHandle:             loadSessionHandle("parent", req.ConversationID, provider),
+		SessionID:                 convID,
+		SessionHandle:             loadSessionHandle("parent", convID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
 		Transport:                 experimentCodingAgentTransport(),
 		StreamCallback: func(text string) {
 			trace.delta()
-			statusHubs.publishDelta("parent:"+req.ConversationID, text)
+			statusHubs.publishDelta("parent:"+convID, text)
 		},
 		// The ONE canonical parent manifest (parent_tools.go) — identical across
 		// web chat, WhatsApp, and Pulse, because all of them share this same
 		// warm "parent" session.
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+req.ConversationID, trace, withLiveStatus("parent:"+req.ConversationID,
+		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+convID, trace, withLiveStatus("parent:"+convID,
 			parentTools(s.Engine, childLabel, parentToolSinks{
 				onEvent: func(ev toolEvent) {
 					evMu.Lock()
@@ -534,26 +575,24 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		trace.finish("", err)
 		msg := friendlyTurnError(err)
-		persistConversationReply("parent", req.ConversationID, req.Messages, msg)
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
-		return
+		persistConversationReply("parent", convID, messages, msg)
+		return parentMessageResponse{Error: msg}
 	}
 	trace.sessionReady(sess.Resumed())
 	defer sess.Close() // per-turn agent only; shared bridge + warm tmux persist
 
-	history := make([]agentsession.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
+	history := make([]agentsession.Message, 0, len(messages))
+	for _, m := range messages {
 		history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
 	}
-	if vp := strings.TrimSpace(req.ViewerPath); vp != "" && len(history) > 0 {
-		last := &history[len(history)-1]
-		last.Text += "\n\n(The parent currently has \"" + filepath.Base(vp) + "\" open on the right side of their screen — you can naturally reference what's showing there, e.g. \"I see you're looking at...\", without needing them to describe it.)"
+	if extraModelOnlyHint != "" && len(history) > 0 {
+		history[len(history)-1].Text += extraModelOnlyHint
 	}
 
 	// Register this turn as steerable for its whole duration, so a follow-up
-	// message the parent sends while it's still running can be injected live
-	// (see steer.go) instead of only ever being queued for afterward.
-	registerActiveTurn(req.ConversationID, sess.Agent())
+	// message sent on ANY channel while it's still running can be injected
+	// live (see steer.go) instead of only ever being queued for afterward.
+	registerActiveTurn(convID, sess.Agent())
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)
@@ -563,20 +602,19 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		// silently vanish from the transcript, and any background work the agent
 		// already completed before the deadline (e.g. inbox files it already
 		// filed) must not look like it never happened. Reload-then-append (not
-		// req.Messages directly) so a message steered in mid-turn isn't lost.
+		// messages directly) so a message steered in mid-turn isn't lost.
 		msg := friendlyTurnError(err)
-		persistConversationReply("parent", req.ConversationID, req.Messages, msg)
+		persistConversationReply("parent", convID, messages, msg)
 		newSecretMu.Lock()
 		newVals := append([]string(nil), newSecretValues...)
 		newSecretMu.Unlock()
-		retroactivelyRedactStoredConversation("parent", req.ConversationID, newVals)
+		retroactivelyRedactStoredConversation("parent", convID, newVals)
 		debugMu.Lock()
 		debugOut := append([]debugToolCall(nil), debugCalls...)
 		debugMu.Unlock()
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg, DebugCalls: debugOut})
-		return
+		return parentMessageResponse{Error: msg, DebugCalls: debugOut}
 	}
-	saveSessionHandle("parent", req.ConversationID, sess.Handle())
+	saveSessionHandle("parent", convID, sess.Handle())
 
 	evMu.Lock()
 	out := append([]toolEvent(nil), events...)
@@ -584,20 +622,23 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	sugMu.Lock()
 	sug := append([]suggestion(nil), suggestions...)
 	sugMu.Unlock()
-	reply = appendSentFileLinks(reply, sentFiles)
-	// Reload-then-append (not req.Messages directly) so a message the parent
-	// steered in mid-turn — appended to disk by handleParentSteer while this
-	// turn was still running — makes it into the final saved transcript
-	// instead of being overwritten by this handler's own stale snapshot.
-	persistConversationReply("parent", req.ConversationID, req.Messages, reply)
+	sentFilesMu.Lock()
+	sentFilesOut := append([]string(nil), sentFiles...)
+	sentFilesMu.Unlock()
+	reply = appendSentFileLinks(reply, sentFilesOut)
+	// Reload-then-append (not messages directly) so a message steered in mid-
+	// turn — appended to disk by handleParentSteer while this turn was still
+	// running — makes it into the final saved transcript instead of being
+	// overwritten by this call's own stale snapshot.
+	persistConversationReply("parent", convID, messages, reply)
 	newSecretMu.Lock()
 	newVals := append([]string(nil), newSecretValues...)
 	newSecretMu.Unlock()
-	retroactivelyRedactStoredConversation("parent", req.ConversationID, newVals)
+	retroactivelyRedactStoredConversation("parent", convID, newVals)
 	debugMu.Lock()
 	debugOut := append([]debugToolCall(nil), debugCalls...)
 	debugMu.Unlock()
-	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, DebugCalls: debugOut})
+	return parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, DebugCalls: debugOut}
 }
 
 // fallbackParentMessage runs the legacy plain-completion path (no bridge tools)

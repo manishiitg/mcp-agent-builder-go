@@ -141,6 +141,20 @@ func appendUserMessageToConversation(scope, id, text string) {
 	persistConversation(scope, id, full)
 }
 
+// appendToolMessageToConversation durably records a non-text UI event (e.g. a
+// photo received over WhatsApp) the instant it happens — independent of
+// whether any real agent turn ever runs for it — so the desktop transcript
+// can show it even when nothing else about the conversation changes. Mirrors
+// appendUserMessageToConversation's reload-append-write-under-lock shape.
+func appendToolMessageToConversation(scope, id string, msg enginedetect.ChatMessage) {
+	convFileMu.Lock()
+	defer convFileMu.Unlock()
+	existing, _ := loadStoredConversation(scope, id)
+	full := append([]enginedetect.ChatMessage(nil), existing.Messages...)
+	full = append(full, msg)
+	persistConversation(scope, id, full)
+}
+
 // persistNewMessages durably records the message that kicks off a turn the
 // INSTANT it starts — not just at completion — so the on-disk transcript is
 // a genuinely append-only log from the moment a turn begins, before any
