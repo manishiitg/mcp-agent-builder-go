@@ -37,6 +37,7 @@ import {
   Info,
   LockKeyhole,
   Maximize2,
+  Mic,
   Minimize2,
   Music,
   Presentation,
@@ -51,6 +52,7 @@ import {
   Sparkles,
   Star,
   Sun,
+  Zap,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -91,6 +93,29 @@ const PARENT_HISTORY_PAGE_SIZE = 40
 function autoGrowTextarea(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + 'px'
+}
+
+// Several WhatsApp photos sent together arrive as consecutive 'photo' tool
+// messages — grouped here into one row so they render side by side (a
+// horizontal strip) instead of one full-width block per photo stacked
+// vertically. indexOffset carries visibleParentMessages' windowing offset
+// (see hiddenParentCount) through to the original message's stable index.
+type PhotoRenderGroup<T> = { kind: 'photos'; paths: string[] } | { kind: 'msg'; msg: T; index: number }
+function groupConsecutivePhotos<T extends { role: string; tool?: string; path?: string }>(messages: T[], indexOffset = 0): PhotoRenderGroup<T>[] {
+  const groups: PhotoRenderGroup<T>[] = []
+  messages.forEach((m, idx) => {
+    if (m.role === 'tool' && m.tool === 'photo' && m.path) {
+      const last = groups[groups.length - 1]
+      if (last && last.kind === 'photos') {
+        last.paths.push(m.path)
+      } else {
+        groups.push({ kind: 'photos', paths: [m.path] })
+      }
+      return
+    }
+    groups.push({ kind: 'msg', msg: m, index: indexOffset + idx })
+  })
+  return groups
 }
 
 // The child/file viewer iframe is deliberately sandbox="allow-scripts" with
@@ -1103,6 +1128,7 @@ export default function LearningApp() {
   // across "load more" clicks (which shift every relative index) instead of
   // remounting everything already on screen.
   const hiddenParentCount = parentMessages.length - visibleParentMessages.length
+  const parentRenderGroups = groupConsecutivePhotos(visibleParentMessages, hiddenParentCount)
   // Before actually switching into Child Mode, ask the parent whether to
   // continue Myra's existing conversation or start a brand-new one — handing
   // off an activity often means "just carry on the same chat", not a fresh
@@ -1127,7 +1153,20 @@ export default function LearningApp() {
   // turn start; replaced by a persisted debug_summary message (WITH results,
   // from the final response) once the turn completes — see sendChildMessage.
   const [childLiveToolCalls, setChildLiveToolCalls] = useState<DebugToolCall[]>([])
+  // Live status/tool calls for a turn on THIS activity that this tab did NOT
+  // start itself (e.g. WhatsApp's @child routing running runChildTurn) — the
+  // ambient subscription effect below is what actually populates these; see
+  // its own comment for why a second, separate stream/state pair is needed
+  // rather than reusing childLiveStatus/childLiveToolCalls.
+  const [childRemoteStatus, setChildRemoteStatus] = useState('')
+  const [childRemoteToolCalls, setChildRemoteToolCalls] = useState<DebugToolCall[]>([])
   const [liveToolCalls, setLiveToolCalls] = useState<DebugToolCall[]>([])
+  // Live status/tool calls for a parent-conversation turn THIS tab did NOT
+  // start (e.g. a real WhatsApp message running w.runTurn) — see the ambient
+  // subscription effect below, mirroring Child Mode's own childRemoteStatus/
+  // childRemoteToolCalls.
+  const [remoteStatus, setRemoteStatus] = useState('')
+  const [remoteToolCalls, setRemoteToolCalls] = useState<DebugToolCall[]>([])
   const menuOpen = useParentChatStore((s) => s.menuOpen)
   const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1175,11 +1214,6 @@ export default function LearningApp() {
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pendingConvUpdate, setPendingConvUpdate] = useState<StoredMsg[] | null>(null)
-  // Same idea as pendingConvUpdate, for Child Mode — an @child WhatsApp
-  // message (or any other background write to this activity's own
-  // conversation.json) can land while she's got the screen open, with
-  // nothing else telling this tab to know. See the polling effect below.
-  const [pendingChildConvUpdate, setPendingChildConvUpdate] = useState<StoredMsg[] | null>(null)
   // Messages the parent typed while a turn was still processing — sent one at
   // a time as the current turn finishes (see the drain effect). Shown as
   // "queued" bubbles so they know it's coming.
@@ -1198,6 +1232,7 @@ export default function LearningApp() {
   const resumedRef = useRef(false)
   const childResumedRef = useRef(false)
   const childMessages = useChildChatStore((s) => s.childMessages)
+  const childRenderGroups = groupConsecutivePhotos(childMessages)
   const setChildMessages = useChildChatStore((s) => s.setChildMessages)
   const childSending = useChildChatStore((s) => s.childSending)
   const setChildSending = useChildChatStore((s) => s.setChildSending)
@@ -1608,6 +1643,34 @@ export default function LearningApp() {
     return () => { cancelled = true }
   }, [screen, settingsOpen, pulsePopoverOpen])
 
+  // Fast Mode — whether every turn (parent, child, WhatsApp, Pulse) uses the
+  // provider's cheap/fast low tier instead of the normal tuned model (see
+  // model_tier.go's selectedModelID). Same load-on-Settings-open pattern as
+  // Pulse config above.
+  const [fastMode, setFastMode] = useState(false)
+  const [savingFastMode, setSavingFastMode] = useState(false)
+  useEffect(() => {
+    if (screen !== 'parent' && screen !== 'tutor' && !settingsOpen) return
+    let cancelled = false
+    fetch(`${FAMILY_API}/api/fast-mode`)
+      .then((r) => r.json())
+      .then((d: { enabled: boolean }) => { if (!cancelled) setFastMode(!!d.enabled) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [screen, settingsOpen])
+
+  const toggleFastMode = (enabled: boolean) => {
+    setFastMode(enabled)
+    setSavingFastMode(true)
+    fetch(`${FAMILY_API}/api/fast-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+      .catch(() => {})
+      .finally(() => setSavingFastMode(false))
+  }
+
   // Voice tier catalog — loaded whenever Settings opens. Cheap (a sysctl read
   // plus two LookPath calls), so it's refetched each time rather than cached:
   // installing a model elsewhere should be reflected on the next open.
@@ -1766,10 +1829,64 @@ export default function LearningApp() {
   // specific conversation/point in time it was detected for.
   useEffect(() => { setPendingConvUpdate(null) }, [conversationId])
 
-  // Child Mode's own version of the polling above — same reasoning
-  // (pendingConvUpdate's own comment), just watching the CURRENT activity's
-  // own conversation.json instead of conversations/parent.json, and gated on
-  // being in the tutor screen with a bound activity rather than 'parent'.
+  // sendingRef mirrors `sending` for the ambient effect below without being
+  // in its dependency array — see childSendingRef's own comment for why.
+  const sendingRef = useRef(sending)
+  useEffect(() => { sendingRef.current = sending }, [sending])
+
+  // Ambient live-status subscription for the parent conversation — mirrors
+  // Child Mode's own ambient effect (see its comment for the full
+  // rationale): sendParentText already opens its OWN /api/parent/status
+  // stream around this tab's own fetch, but a turn started elsewhere (a real
+  // WhatsApp message running w.runTurn, or Pulse) publishes to the exact
+  // same per-conversation-id topic with nobody here subscribed to catch it.
+  // This stays open for as long as the parent screen is showing, not just
+  // around this tab's own send.
+  useEffect(() => {
+    if (screen !== 'parent' || !conversationId) return
+    const source = new EventSource(`${FAMILY_API}/api/parent/status?conversation_id=${encodeURIComponent(conversationId)}`)
+    let idleTimer: number | undefined
+    const armIdleReset = () => {
+      if (idleTimer) window.clearTimeout(idleTimer)
+      idleTimer = window.setTimeout(() => {
+        setRemoteStatus('')
+        setRemoteToolCalls([])
+      }, 45000)
+    }
+    source.onmessage = (ev) => {
+      if (sendingRef.current) return
+      try {
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        if (parsed.type === 'status') {
+          setRemoteStatus(parsed.text ?? '')
+          armIdleReset()
+        } else if (parsed.type === 'tool_call' && parsed.tool) {
+          setRemoteToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+          armIdleReset()
+        }
+      } catch { /* ignore malformed event */ }
+    }
+    return () => {
+      source.close()
+      if (idleTimer) window.clearTimeout(idleTimer)
+    }
+  }, [screen, conversationId])
+
+  // The browser's own send supersedes any stale remote indicator.
+  useEffect(() => {
+    if (sending) {
+      setRemoteStatus('')
+      setRemoteToolCalls([])
+    }
+  }, [sending])
+
+  // Child Mode's own version of the polling above — watches the CURRENT
+  // activity's own conversation.json instead of conversations/parent.json,
+  // gated on being in the tutor screen with a bound activity rather than
+  // 'parent'. Unlike the parent side, this applies new messages directly
+  // rather than surfacing a "tap to refresh" banner first — a child waiting
+  // on a WhatsApp-routed reply shouldn't have to notice and tap a banner to
+  // see it; the auto-scroll effect above already brings it into view.
   useEffect(() => {
     const dir = childActivity?.dir
     if (screen !== 'tutor' || !dir) return
@@ -1782,7 +1899,12 @@ export default function LearningApp() {
           const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
           const fresh = c.messages || []
           if (fresh.length > childMessages.length) {
-            setPendingChildConvUpdate(fresh)
+            setChildMessages(fresh.map(toParentMsg))
+            // Whatever remote turn was running (see the ambient live-status
+            // effect below) has now clearly finished and persisted — drop its
+            // indicator rather than let it linger until the idle timeout.
+            setChildRemoteStatus('')
+            setChildRemoteToolCalls([])
           }
         })
         .catch(() => {})
@@ -1790,9 +1912,73 @@ export default function LearningApp() {
     return () => window.clearInterval(id)
   }, [screen, childActivity?.dir, childSending, childMessages.length])
 
-  // Clear any pending Child Mode "new update" banner whenever the bound
-  // activity changes — same reasoning as the parent's own clear-on-switch.
-  useEffect(() => { setPendingChildConvUpdate(null) }, [childActivity?.dir])
+  // childSendingRef mirrors childSending for the ambient effect below without
+  // being in its dependency array — re-subscribing the SSE connection every
+  // time a send starts/stops would risk missing an event in the reconnect gap.
+  const childSendingRef = useRef(childSending)
+  useEffect(() => { childSendingRef.current = childSending }, [childSending])
+
+  // Ambient live-status subscription for Child Mode: sendChildText/
+  // sendChildKickoff already open their OWN /api/child/status stream around
+  // this tab's own fetch, so live tool calls show up when SHE sends a
+  // message. But the exact same SSE topic (see status_stream.go's
+  // withLiveStatus/statusHub — a plain per-conversation-id pub/sub with no
+  // concept of "who's listening") is published to by ANY turn on this
+  // activity, including one WhatsApp's @child routing runs via runChildTurn
+  // while nobody here is looking. Without a subscription open at THAT
+  // moment, those events are silently dropped (no listener), which is
+  // exactly why tool calls never showed up for a WhatsApp-triggered turn
+  // before this effect existed. This one stays open for as long as the tutor
+  // screen is showing this activity, not just around this tab's own send.
+  useEffect(() => {
+    const dir = childActivity?.dir
+    if (screen !== 'tutor' || !dir) return
+    const source = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(dir)}`)
+    let idleTimer: number | undefined
+    const armIdleReset = () => {
+      if (idleTimer) window.clearTimeout(idleTimer)
+      // No event on the wire for a while — assume the remote turn finished
+      // and we simply missed (or there wasn't) a clean final signal, so this
+      // indicator never gets stuck showing forever.
+      idleTimer = window.setTimeout(() => {
+        setChildRemoteStatus('')
+        setChildRemoteToolCalls([])
+      }, 45000)
+    }
+    source.onmessage = (ev) => {
+      // Events from THIS tab's own send are already shown via
+      // childLiveStatus/childLiveToolCalls (see sendChildText) — skip here so
+      // the same tool call never renders twice.
+      if (childSendingRef.current) return
+      try {
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        if (parsed.type === 'status') {
+          setChildRemoteStatus(parsed.text ?? '')
+          armIdleReset()
+        } else if (parsed.type === 'tool_call' && parsed.tool) {
+          setChildRemoteToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+          armIdleReset()
+        }
+      } catch { /* ignore malformed event */ }
+    }
+    // Deliberately no onerror handler that closes the connection — the
+    // browser's own EventSource auto-reconnects on a transient drop, and this
+    // subscription is meant to stay up for as long as the screen does.
+    return () => {
+      source.close()
+      if (idleTimer) window.clearTimeout(idleTimer)
+    }
+  }, [screen, childActivity?.dir])
+
+  // The browser's own send supersedes any stale remote indicator — clear it
+  // the moment a real send starts here, same reasoning as clearing it once
+  // fresh messages are polled in above.
+  useEffect(() => {
+    if (childSending) {
+      setChildRemoteStatus('')
+      setChildRemoteToolCalls([])
+    }
+  }, [childSending])
 
   // Drain the send queue: once the current turn finishes, send the next queued
   // message. One at a time, in order — so the transcript stays well-formed and
@@ -2048,7 +2234,7 @@ export default function LearningApp() {
       threadEndRef.current?.scrollIntoView({ behavior: streamingReply ? 'auto' : 'smooth', block: 'end' })
     })
     return () => cancelAnimationFrame(id)
-  }, [parentMessages, sending, screen, streamingReply, queue])
+  }, [parentMessages, sending, screen, streamingReply, queue, remoteStatus, remoteToolCalls])
 
   // Same, for the child's own thread — this had no auto-scroll at all before,
   // so new replies (and the "thinking" indicator) could land below the fold
@@ -2061,7 +2247,7 @@ export default function LearningApp() {
       childThreadEndRef.current?.scrollIntoView({ behavior: childStreamingReply ? 'auto' : 'smooth', block: 'end' })
     })
     return () => cancelAnimationFrame(id)
-  }, [childMessages, childSending, screen, childStreamingReply, childQueue])
+  }, [childMessages, childSending, screen, childStreamingReply, childQueue, childRemoteStatus, childRemoteToolCalls])
 
   // Cycle a usable "how to use the chat" tip in the thinking indicator instead
   // of a bare "thinking…" — resets and restarts each time a new turn begins,
@@ -2400,10 +2586,6 @@ export default function LearningApp() {
     const next: ParentMsg[] = [...(base ?? childMessages), { role: 'user', text }]
     setChildMessages(next)
     setChildInput('')
-    // Drop any pending "new update" banner — same reasoning as the parent's
-    // own send (sendParentText's comment): her own send supersedes it, and
-    // applying the stale pre-send snapshot would wipe out what she just typed.
-    setPendingChildConvUpdate(null)
     setChildSending(true)
     setChildLiveStatus('')
     setChildStreamingReply('')
@@ -2643,11 +2825,13 @@ export default function LearningApp() {
 
   const onPickFiles = () => fileInputRef.current?.click()
 
-  const onFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0) return
+  // Shared by the file picker (onFilesSelected) AND pasting an image directly
+  // into the composer (onParentComposerPaste) — same upload, same tool-card
+  // result, just two different ways of getting File objects.
+  const uploadParentFiles = (files: File[]) => {
+    if (files.length === 0) return Promise.resolve()
     setUploading(true)
-    const jobs = Array.from(files).map((f) => {
+    const jobs = files.map((f) => {
       const fd = new FormData()
       fd.append('file', f)
       fd.append('scope', 'parent')
@@ -2656,15 +2840,39 @@ export default function LearningApp() {
         .then((data: { name?: string; error?: string }) => ({ name: data.name || f.name, error: data.error }))
         .catch(() => ({ name: f.name, error: 'upload failed' }))
     })
-    Promise.all(jobs)
+    return Promise.all(jobs)
       .then((results) => {
         const cards: ParentMsg[] = results.map((r) => ({ role: 'tool', tool: r.error ? 'upload_error' : 'upload', name: r.name }))
         setParentMessages((cur) => [...cur, ...cards])
       })
-      .finally(() => {
-        setUploading(false)
-        if (fileInputRef.current) fileInputRef.current.value = ''
-      })
+      .finally(() => setUploading(false))
+  }
+
+  const onFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (!files || files.length === 0) return
+    uploadParentFiles(Array.from(files)).finally(() => {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    })
+  }
+
+  // A screenshot or copied image pasted straight into the composer (Cmd/Ctrl+V)
+  // uploads immediately, same as picking it via the attach button — only
+  // intercepts the paste when the clipboard actually holds image data, so a
+  // normal text paste is completely unaffected.
+  const onParentComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items) return
+    const imageFiles: File[] = []
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const f = item.getAsFile()
+        if (f) imageFiles.push(f)
+      }
+    }
+    if (imageFiles.length === 0) return
+    event.preventDefault()
+    uploadParentFiles(imageFiles)
   }
 
   const childFileInputRef = useRef<HTMLInputElement>(null)
@@ -2672,16 +2880,17 @@ export default function LearningApp() {
 
   const onPickChildFiles = () => childFileInputRef.current?.click()
 
-  // A photo of the child's own work — lands directly in their current
-  // activity folder (their own sandbox) so Quill can see it immediately with
-  // no parent approval step. Auto-triggers a turn afterward (as if the child
-  // said so) since a kid won't reliably know to say "look at this" right
-  // after picking a photo.
-  const onChildFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0) return
+  // Shared by the file picker (onChildFilesSelected) AND pasting an image
+  // directly into the composer (onChildComposerPaste). A photo of the
+  // child's own work — lands directly in their current activity folder
+  // (their own sandbox) so Quill can see it immediately with no parent
+  // approval step. Auto-triggers a turn afterward (as if the child said so)
+  // since a kid won't reliably know to say "look at this" right after
+  // picking/pasting a photo.
+  const uploadChildFiles = (files: File[]) => {
+    if (files.length === 0) return Promise.resolve()
     setChildUploading(true)
-    const jobs = Array.from(files).map((f) => {
+    const jobs = files.map((f) => {
       const fd = new FormData()
       fd.append('file', f)
       fd.append('scope', 'child')
@@ -2690,7 +2899,7 @@ export default function LearningApp() {
         .then((data: { name?: string; error?: string }) => ({ name: data.name || f.name, error: data.error }))
         .catch(() => ({ name: f.name, error: 'upload failed' }))
     })
-    Promise.all(jobs)
+    return Promise.all(jobs)
       .then((results) => {
         const cards: ParentMsg[] = results.map((r) => ({ role: 'tool', tool: r.error ? 'upload_error' : 'upload', name: r.name }))
         const ok = results.some((r) => !r.error)
@@ -2698,10 +2907,30 @@ export default function LearningApp() {
         setChildMessages(next)
         if (ok) sendChildText('I just uploaded a photo of my work — can you take a look?', next)
       })
-      .finally(() => {
-        setChildUploading(false)
-        if (childFileInputRef.current) childFileInputRef.current.value = ''
-      })
+      .finally(() => setChildUploading(false))
+  }
+
+  const onChildFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (!files || files.length === 0) return
+    uploadChildFiles(Array.from(files)).finally(() => {
+      if (childFileInputRef.current) childFileInputRef.current.value = ''
+    })
+  }
+
+  const onChildComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items) return
+    const imageFiles: File[] = []
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const f = item.getAsFile()
+        if (f) imageFiles.push(f)
+      }
+    }
+    if (imageFiles.length === 0) return
+    event.preventDefault()
+    uploadChildFiles(imageFiles)
   }
 
   if (booting) {
@@ -2905,6 +3134,8 @@ export default function LearningApp() {
                       if (!d?.content) return
                       const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
                       setParentMessages((c.messages || []).map(toParentMsg))
+                      setRemoteStatus('')
+                      setRemoteToolCalls([])
                     })
                     .catch(() => {})
                 }}
@@ -2929,11 +3160,53 @@ export default function LearningApp() {
                   Load {Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE)} earlier message{Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE) === 1 ? '' : 's'}
                 </button>
               )}
-              {visibleParentMessages.map((m, idx) => {
-                const i = hiddenParentCount + idx
+              {parentRenderGroups.map((g, gi) => {
+                if (g.kind === 'photos') {
+                  return (
+                    <div key={`photos-${gi}`} className="fl-msg is-agent">
+                      <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
+                      <div className="fl-msg-col">
+                        <div className="fl-photo-row">
+                          {g.paths.map((p, pi) => {
+                            const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`
+                            return (
+                              <a key={pi} href={rawUrl} target="_blank" rel="noopener noreferrer" className="fl-photocard">
+                                <img src={rawUrl} alt="Photo received on WhatsApp" loading="lazy" />
+                              </a>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+                const { msg: m, index: i } = g
                 if (m.role === 'tool') {
                   if (m.tool === 'debug_summary') {
                     return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
+                  }
+                  if (m.tool === 'video' && m.path) {
+                    const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`
+                    return (
+                      <div key={i} className="fl-msg is-agent">
+                        <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
+                        <div className="fl-msg-col">
+                          <video className="fl-videocard" src={rawUrl} controls preload="metadata" />
+                        </div>
+                      </div>
+                    )
+                  }
+                  if (m.tool === 'voice_failed' && m.path) {
+                    const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`
+                    return (
+                      <div key={i} className="fl-msg is-agent">
+                        <span className="fl-msg-avatar is-sun"><Mic size={16} /></span>
+                        <div className="fl-msg-col">
+                          <div className="fl-toolcard is-error"><Mic size={15} /> <span>Voice note received — couldn’t transcribe it</span></div>
+                          <audio className="fl-audiocard" src={rawUrl} controls preload="metadata" />
+                        </div>
+                      </div>
+                    )
                   }
                   if (m.tool === 'upload' || m.tool === 'upload_error') {
                     const bad = m.tool === 'upload_error'
@@ -2996,6 +3269,18 @@ export default function LearningApp() {
                 )
               })}
 
+              {!sending && (remoteStatus || remoteToolCalls.length > 0) && (
+                <div className="fl-msg is-agent">
+                  <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
+                  <div className="fl-msg-col">
+                    <div className="fl-thinking">
+                      <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />
+                      <span>{remoteStatus ? `Quill is: ${remoteStatus}… (from WhatsApp)` : 'Working on a message sent from WhatsApp…'}</span>
+                    </div>
+                    <ToolCallSummary calls={remoteToolCalls} />
+                  </div>
+                </div>
+              )}
               {sending && (
                 <div className="fl-msg is-agent">
                   <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
@@ -3039,6 +3324,17 @@ export default function LearningApp() {
             <form className="fl-composer" onSubmit={sendParentMessage}>
               <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf" onChange={onFilesSelected} style={{ display: 'none' }} />
               <button className="composer-icon" type="button" aria-label="Attach a photo or PDF" onClick={onPickFiles} disabled={uploading}><Paperclip size={19} /></button>
+              <button
+                type="button"
+                className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                aria-label="Fast mode"
+                aria-pressed={fastMode}
+                title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                onClick={() => toggleFastMode(!fastMode)}
+                disabled={savingFastMode}
+              >
+                <Zap size={19} />
+              </button>
               <MicButton
                 onText={(text) => setFocusInput((cur) => (cur ? `${cur} ${text}` : text))}
                 disabled={uploading}
@@ -3051,6 +3347,7 @@ export default function LearningApp() {
                 value={focusInput}
                 rows={1}
                 onChange={(event) => { setFocusInput(event.target.value); autoGrowTextarea(event.target) }}
+                onPaste={onParentComposerPaste}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault()
@@ -3824,6 +4121,18 @@ export default function LearningApp() {
                     </div>
                   )}
 
+                  <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
+                  <p className="fl-note">Trades depth for speed — a cheaper, faster model answers every chat (web, WhatsApp, and Pulse check-ins) instead of the usual one. Good for quick questions; turn it off again for anything that needs careful judgment.</p>
+                  <label className="fl-pulse-config-row">
+                    <input
+                      type="checkbox"
+                      checked={fastMode}
+                      disabled={savingFastMode}
+                      onChange={(e) => toggleFastMode(e.target.checked)}
+                    />
+                    <span>Use fast mode</span>
+                  </label>
+
                   <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
 
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Secrets</p>
@@ -3939,34 +4248,42 @@ export default function LearningApp() {
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
-              {pendingChildConvUpdate && (
-                <button
-                  type="button"
-                  className="fl-new-update-banner"
-                  onClick={() => {
-                    // Re-fetch on tap rather than applying the snapshot from
-                    // when the banner appeared — same reasoning as the
-                    // parent banner's own click handler.
-                    setPendingChildConvUpdate(null)
-                    const dir = childActivity?.dir
-                    if (!dir) return
-                    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${dir}/conversation.json`)}`)
-                      .then((r) => r.json())
-                      .then((d) => {
-                        if (!d?.content) return
-                        const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
-                        setChildMessages((c.messages || []).map(toParentMsg))
-                      })
-                      .catch(() => {})
-                  }}
-                >
-                  <RefreshCw size={14} /> New update — tap to refresh
-                </button>
-              )}
               <div className="fl-child-thread" aria-label="Tutor conversation">
-                {childMessages.map((m, i) => (
-                  m.role === 'tool' && m.tool === 'debug_summary' ? (
+                {childRenderGroups.map((g, gi) => (
+                  g.kind === 'photos' ? (
+                    <div key={`photos-${gi}`} className="fl-tmsg is-tutor">
+                      <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
+                      <div className="fl-photo-row">
+                        {g.paths.map((p, pi) => (
+                          <a
+                            key={pi}
+                            href={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="fl-photocard"
+                          >
+                            <img src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`} alt="Photo received on WhatsApp" loading="lazy" />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (() => {
+                    const { msg: m, index: i } = g
+                    return m.role === 'tool' && m.tool === 'debug_summary' ? (
                     <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
+                  ) : m.role === 'tool' && m.tool === 'video' && m.path ? (
+                    <div key={i} className="fl-tmsg is-tutor">
+                      <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
+                      <video className="fl-videocard" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`} controls preload="metadata" />
+                    </div>
+                  ) : m.role === 'tool' && m.tool === 'voice_failed' && m.path ? (
+                    <div key={i} className="fl-tmsg is-tutor">
+                      <span className="fl-tmsg-avatar"><Mic size={16} /></span>
+                      <div className="fl-msg-col">
+                        <div className="fl-toolcard is-error"><Mic size={15} /> <span>Voice note received — couldn’t transcribe it</span></div>
+                        <audio className="fl-audiocard" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`} controls preload="metadata" />
+                      </div>
+                    </div>
                   ) : m.role === 'tool' && (m.tool === 'upload' || m.tool === 'upload_error') ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
@@ -4011,7 +4328,20 @@ export default function LearningApp() {
                       <span className="fl-tmsg-avatar is-child">{initial}</span>
                     </div>
                   )
+                  })()
                 ))}
+                {!childSending && (childRemoteStatus || childRemoteToolCalls.length > 0) && (
+                  <div className="fl-tmsg is-tutor">
+                    <span className="fl-tmsg-avatar"><Sun size={20} /></span>
+                    <div className="fl-tbubble-col">
+                      <div className="fl-thinking">
+                        <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />
+                        <span>{childRemoteStatus ? `Quill is: ${childRemoteStatus}… (from WhatsApp)` : 'Working on a message sent from WhatsApp…'}</span>
+                      </div>
+                      <ToolCallSummary calls={childRemoteToolCalls} />
+                    </div>
+                  </div>
+                )}
                 {childSending && (
                   <div className="fl-tmsg is-tutor">
                     <span className="fl-tmsg-avatar"><Sun size={20} /></span>
@@ -4050,6 +4380,7 @@ export default function LearningApp() {
                   value={childInput}
                   rows={1}
                   onChange={(e) => { setChildInput(e.target.value); autoGrowTextarea(e.target) }}
+                  onPaste={onChildComposerPaste}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()

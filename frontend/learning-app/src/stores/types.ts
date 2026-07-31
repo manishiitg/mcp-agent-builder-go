@@ -48,8 +48,8 @@ export type VoiceStatus = {
   stt_tiers: VoiceTier[]
   tts_tiers: VoiceTier[]
 }
-export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; toolCalls?: DebugToolCall[] }
-export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string }
+export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string; toolCalls?: DebugToolCall[] }
+export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string }
 
 export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[]; size?: number }
 
@@ -78,5 +78,5 @@ export type Activity = {
 // event) into what the UI renders — so reloading a conversation replays star
 // moments exactly where they happened, not just the surrounding text.
 export function toParentMsg(m: StoredMsg): ParentMsg {
-  return { role: m.role as ParentMsg['role'], text: m.text, tool: m.tool, stars: m.stars, reason: m.reason, source: m.source, html: m.html }
+  return { role: m.role as ParentMsg['role'], text: m.text, tool: m.tool, stars: m.stars, reason: m.reason, source: m.source, html: m.html, path: m.path }
 }
