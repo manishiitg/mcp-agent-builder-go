@@ -3530,6 +3530,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "string",
 					"description": "Exact canonical Pulse module name. Pass it with scheduled IDs, or alone to let the backend create standalone run identities and persist the review.",
 				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"reviewer", "fixer"},
+					"description": "Defaults to reviewer: read-only, returns findings, changes nothing. Use fixer to run this module's bounded repair as a stage agent instead of applying fixes inline in this turn — it runs on the maintenance model tier rather than this turn's model, and is lent Pulse write authority for this run only. Requires pulse_run_id, review_run_id, and module. Run at most one fixer at a time: it is the single writer.",
+				},
 			},
 			"required": []string{"todo_id", "instructions", "preferred_tier"},
 		},
@@ -3569,6 +3574,21 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "", fmt.Errorf("scheduled Pulse reviews require pulse_run_id, review_run_id, and module together; standalone reviews pass module alone and keep scheduler identity fields out of reviewer instructions")
 			}
 			isPulseReview := pulseMetadataCount == 3
+
+			// role=fixer runs the module's Fixer as a stage agent instead of
+			// inline in the parent turn. The parent's model is pinned for its
+			// whole turn, so an inline Fixer mutates on whatever tier the parent
+			// got — weaker than the reviewers on codex. A stage runs on
+			// selectMaintenanceLLM, the reviewer tier.
+			stageAccess := goalAdvisorStageReadOnly
+			stagePulseRunID := ""
+			if role, _ := args["role"].(string); strings.EqualFold(strings.TrimSpace(role), "fixer") {
+				if !isPulseReview {
+					return "", fmt.Errorf("role=fixer requires pulse_run_id, review_run_id, and module together")
+				}
+				stageAccess = goalAdvisorStagePulseFixer
+				stagePulseRunID = pulseRunID
+			}
 			var resultPath string
 			if isPulseReview {
 				var pathErr error
@@ -3677,10 +3697,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if isPulseReview {
 					stageName = "Pulse reviewer - " + todoID
 				}
+				if stageAccess == goalAdvisorStagePulseFixer {
+					stageName = "Pulse fixer - " + todoID
+				}
 				if attempt > 1 {
 					stageName += " - completion retry"
 				}
-				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, goalAdvisorStageReadOnly, "")
+				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, stageAccess, stagePulseRunID)
 				if runErr != nil {
 					if writeErr := persistFailure(runErr.Error()); writeErr != nil {
 						return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)

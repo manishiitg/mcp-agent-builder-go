@@ -79,7 +79,13 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-Then the same parent becomes the only Pulse Fixer for this module. Apply safe fixes sequentially.
+Then start the only Pulse Fixer for this module as one `call_generic_agent` with
+`role="fixer"`, passing this run's `pulse_run_id`, a fresh `review_run_id`, and
+`module`. Never run two at once: it is the single writer. Do not apply fixes
+inline in this turn — a scheduled turn's model is pinned for its whole life, so
+an inline fixer mutates on a weaker tier than the reviewers that only read. The
+stage runs on the maintenance tier and is lent write authority for this run
+alone. It applies safe fixes sequentially.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `fix-verification`; old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
