@@ -30,6 +30,8 @@ function findingStatus(status: string): { label: string; className: string } {
       return { label: 'Closed', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
     case 'rejected':
       return { label: 'Rejected', className: 'border-border bg-muted text-muted-foreground' }
+    case 'external_action_required':
+      return { label: 'External action', className: 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300' }
     case 'fixing':
       return { label: 'Fixing', className: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300' }
     case 'awaiting_verification':
@@ -39,6 +41,12 @@ function findingStatus(status: string): { label: string; className: string } {
     default:
       return { label: 'Open', className: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' }
   }
+}
+
+function isFindingClosed(status: string): boolean {
+  return status === 'resolved'
+    || status === 'rejected'
+    || status === 'external_action_required'
 }
 
 function verificationTone(verification: PulseFindingVerification) {
@@ -73,7 +81,7 @@ export function PulseFindingLifecycle({
   className?: string
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycleRecord[]>([])
-  const [filter, setFilter] = useState<'active' | 'closed' | 'all'>('active')
+  const [filter, setFilter] = useState<'active' | 'terminal' | 'all'>('active')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -102,11 +110,11 @@ export function PulseFindingLifecycle({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, refresh)
   }, [load])
 
-  const activeCount = findings.filter((finding) => finding.status !== 'resolved' && finding.status !== 'rejected').length
-  const closedCount = findings.length - activeCount
+  const activeCount = findings.filter((finding) => !isFindingClosed(finding.status)).length
+  const terminalCount = findings.length - activeCount
   const visibleFindings = useMemo(() => findings.filter((finding) => {
-    const closed = finding.status === 'resolved' || finding.status === 'rejected'
-    if (filter === 'closed') return closed
+    const closed = isFindingClosed(finding.status)
+    if (filter === 'terminal') return closed
     if (filter === 'active') return !closed
     return true
   }), [filter, findings])
@@ -145,7 +153,7 @@ export function PulseFindingLifecycle({
         <div className="inline-flex items-center rounded-md border bg-background p-0.5" aria-label="Filter findings">
           {([
             ['active', 'Active', activeCount],
-            ['closed', 'Closed', closedCount],
+            ['terminal', 'Terminal', terminalCount],
             ['all', 'All', findings.length],
           ] as const).map(([id, text, count]) => (
             <button
@@ -201,6 +209,23 @@ export function PulseFindingLifecycle({
                   {finding.resolution_note && (
                     <div className="mt-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
                       {finding.resolution_note}
+                    </div>
+                  )}
+                  {finding.status === 'external_action_required' && (
+                    <div className="mt-2 rounded-md border border-violet-500/20 bg-violet-500/[0.05] px-3 py-2 text-xs leading-5">
+                      <div className="font-semibold text-violet-700 dark:text-violet-300">
+                        Owned by {finding.external_owner?.replaceAll('_', ' ') || 'an external owner'}
+                      </div>
+                      {finding.reason_code && (
+                        <div className="mt-0.5 text-muted-foreground">
+                          Reason: {finding.reason_code.replaceAll('_', ' ')}
+                        </div>
+                      )}
+                      {finding.reopen_condition && (
+                        <div className="mt-0.5 text-muted-foreground">
+                          Reopen when: {finding.reopen_condition}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

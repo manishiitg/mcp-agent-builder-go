@@ -50,14 +50,23 @@ describe('PulseModuleInspector data summaries', () => {
           { check: 'old attempt', verdict: 'failed' },
         ],
       }),
+      finding({
+        fingerprint: 'external',
+        status: 'external_action_required',
+        seen_count: 5,
+        external_owner: 'platform',
+        reason_code: 'missing_plan_editor',
+        reopen_condition: 'A compatible plan-editing tool becomes available.',
+      }),
     ])
 
     expect(summary).toMatchObject({
-      total: 4,
+      total: 5,
       open: 1,
       fixing: 1,
       awaitingVerification: 1,
       closed: 1,
+      externalAction: 1,
       recurring: 1,
       harnessIssues: 0,
       attempts: 1,

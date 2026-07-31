@@ -81,7 +81,10 @@ function finalCommandLabel(state?: PulseFinalCommandState): string {
 
 function FindingStatus({ finding }: { finding: PulseFindingLifecycle }) {
   const closed = isPulseFindingClosed(finding.status)
-  const tone = closed
+  const external = finding.status === 'external_action_required'
+  const tone = external
+    ? 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'
+    : closed
     ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
     : finding.status === 'fixing'
       ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
@@ -90,7 +93,7 @@ function FindingStatus({ finding }: { finding: PulseFindingLifecycle }) {
         : 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'
   return (
     <span className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold capitalize ${tone}`}>
-      {closed ? 'closed' : readable(finding.status)}
+      {external ? 'external action' : closed ? 'closed' : readable(finding.status)}
     </span>
   )
 }
@@ -326,7 +329,7 @@ export function PulseWorkspace({
         </div>
       )}
 
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5">
         <Metric
           label="Needs action"
           value={summary.open}
@@ -350,6 +353,12 @@ export function PulseWorkspace({
           value={summary.closed}
           detail={`${summary.passedChecks} passed verification${summary.passedChecks === 1 ? '' : 's'}`}
           tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+        />
+        <Metric
+          label="External action"
+          value={summary.externalAction}
+          detail="diagnosed and suppressed from Pulse retries"
+          tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
         />
       </section>
 
@@ -471,6 +480,11 @@ export function PulseWorkspace({
                   </span>
                   {module.recurring > 0 && (
                     <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{module.recurring} recurring</span>
+                  )}
+                  {module.externalAction > 0 && (
+                    <span className="text-[9px] font-medium text-violet-700 dark:text-violet-300">
+                      {module.externalAction} external
+                    </span>
                   )}
                 </div>
                 <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-foreground">

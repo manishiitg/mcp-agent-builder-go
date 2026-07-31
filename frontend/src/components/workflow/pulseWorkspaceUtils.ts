@@ -16,6 +16,7 @@ export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
   fixing: number
   awaitingVerification: number
   closed: number
+  externalAction: number
   recurring: number
   latestReview: PulseReviewRecord | null
 }
@@ -66,8 +67,15 @@ export function buildPulseWorkspaceModuleSummaries(
       )).length,
       fixing: moduleFindings.filter((finding) => finding.status === 'fixing').length,
       awaitingVerification: moduleFindings.filter((finding) => finding.status === 'awaiting_verification').length,
-      closed: moduleFindings.filter((finding) => isPulseFindingClosed(finding.status)).length,
-      recurring: moduleFindings.filter((finding) => finding.seen_count > 1).length,
+      closed: moduleFindings.filter((finding) => (
+        isPulseFindingClosed(finding.status)
+        && finding.status !== 'external_action_required'
+      )).length,
+      externalAction: moduleFindings.filter((finding) => finding.status === 'external_action_required').length,
+      recurring: moduleFindings.filter((finding) => (
+        finding.seen_count > 1
+        && finding.status !== 'external_action_required'
+      )).length,
       latestReview: latestReviewByModule.get(definition.id) || null,
     }
   })

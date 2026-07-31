@@ -53,6 +53,7 @@ describe('Pulse workspace model', () => {
         finding('bug_review', 'fixing'),
         finding('bug_review', 'awaiting_verification'),
         finding('bug_review', 'resolved'),
+        finding('bug_review', 'external_action_required', 5),
       ],
       [
         review('bug_review', '2026-07-31T10:00:00Z'),
@@ -61,11 +62,12 @@ describe('Pulse workspace model', () => {
     )
 
     expect(summaries[0]).toMatchObject({
-      findings: 4,
+      findings: 5,
       active: 1,
       fixing: 1,
       awaitingVerification: 1,
       closed: 1,
+      externalAction: 1,
       recurring: 1,
     })
     expect(summaries[0].latestReview?.recorded_at).toBe('2026-07-31T10:00:00Z')

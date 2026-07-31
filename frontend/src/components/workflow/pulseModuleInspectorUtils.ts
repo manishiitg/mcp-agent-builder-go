@@ -9,6 +9,7 @@ export type PulseModuleSummary = {
   fixing: number
   awaitingVerification: number
   closed: number
+  externalAction: number
   recurring: number
   harnessIssues: number
   attempts: number
@@ -24,7 +25,9 @@ export type PulseModuleActivity = PulseFindingEvent & {
 }
 
 export function isPulseFindingClosed(status: string): boolean {
-  return status === 'resolved' || status === 'rejected'
+  return status === 'resolved'
+    || status === 'rejected'
+    || status === 'external_action_required'
 }
 
 export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseModuleSummary {
@@ -34,6 +37,7 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     fixing: 0,
     awaitingVerification: 0,
     closed: 0,
+    externalAction: 0,
     recurring: 0,
     harnessIssues: 0,
     attempts: 0,
@@ -42,11 +46,12 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     inconclusiveChecks: 0,
   }
   findings.forEach((finding) => {
-    if (isPulseFindingClosed(finding.status)) summary.closed++
+    if (finding.status === 'external_action_required') summary.externalAction++
+    else if (isPulseFindingClosed(finding.status)) summary.closed++
     else if (finding.status === 'fixing') summary.fixing++
     else if (finding.status === 'awaiting_verification') summary.awaitingVerification++
     else summary.open++
-    if (finding.seen_count > 1) summary.recurring++
+    if (finding.seen_count > 1 && finding.status !== 'external_action_required') summary.recurring++
     if (finding.details?.issue_kind === 'harness_issue') summary.harnessIssues++
     summary.attempts += finding.fix_attempts.length
     finding.verifications.forEach((verification) => {

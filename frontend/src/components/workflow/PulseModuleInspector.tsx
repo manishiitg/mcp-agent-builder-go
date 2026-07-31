@@ -257,7 +257,7 @@ export function PulseModuleInspector({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
             <MetricCard
               label="Needs action"
               value={summary.open}
@@ -285,6 +285,12 @@ export function PulseModuleInspector({
               value={summary.closed}
               detail={`${summary.passedChecks} passed · ${summary.failedChecks} failed`}
               tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+            />
+            <MetricCard
+              label="External action"
+              value={summary.externalAction}
+              detail="suppressed from Pulse retries"
+              tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
             />
           </div>
 

@@ -487,6 +487,7 @@ export interface PulseFindingEvent {
   summary: string
   pulse_run_id?: string
   attempt_id?: string
+  metadata?: Record<string, unknown>
   recorded_at: string
 }
 
@@ -534,6 +535,9 @@ export interface PulseFindingLifecycle {
   last_seen_at?: string
   seen_count: number
   resolution_note?: string
+  external_owner?: string
+  reason_code?: string
+  reopen_condition?: string
   details?: PulseFindingDetails
   fix_attempts: PulseFixAttempt[]
   verifications: PulseFindingVerification[]
@@ -542,6 +546,7 @@ export interface PulseFindingLifecycle {
 
 export interface PulseFindingsResponse {
   success: boolean
+  total?: number
   findings: PulseFindingLifecycle[]
   error?: string
 }
@@ -563,6 +568,7 @@ export interface PulseReviewRecord {
 
 export interface PulseReviewsResponse {
   success: boolean
+  total?: number
   reviews: PulseReviewRecord[]
   error?: string
 }
