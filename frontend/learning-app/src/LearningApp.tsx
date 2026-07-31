@@ -167,6 +167,23 @@ function dateTimeLabel(iso?: string): string {
   return new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
+// dateOnlyKey/dateOnlyLabel back the Workspace tab's "group by date" view —
+// key groups by calendar day (local time, so late-evening activities don't
+// slip into the next day's group), label is what's actually shown as the
+// section heading.
+function dateOnlyKey(iso?: string): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ''
+  return new Date(t).toLocaleDateString('en-CA')
+}
+function dateOnlyLabel(iso?: string): string {
+  if (!iso) return 'Undated'
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return 'Undated'
+  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
 // activityMode turns an activity's teaching_mode into the one word a parent
 // actually cares about when scanning their library: is this something she'll
 // be taught, something she'll practise, or something she's being tested on?
@@ -1481,6 +1498,8 @@ export default function LearningApp() {
   const setChildTreeRefreshKey = useChildChatStore((s) => s.setChildTreeRefreshKey)
   const filesSubjectFilter = useWorkspaceStore((s) => s.filesSubjectFilter)
   const setFilesSubjectFilter = useWorkspaceStore((s) => s.setFilesSubjectFilter)
+  const filesGroupBy = useWorkspaceStore((s) => s.filesGroupBy)
+  const setFilesGroupBy = useWorkspaceStore((s) => s.setFilesGroupBy)
   const treeNodes = useWorkspaceStore((s) => s.treeNodes)
   const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
   const activities = useWorkspaceStore((s) => s.activities)
@@ -3802,6 +3821,18 @@ export default function LearningApp() {
                         </div>
                       )
                     })
+                    // "By date" groups the SAME relevant/filtered activity set
+                    // by calendar day instead of subject/topic — most-recent
+                    // day first, activities within a day newest-first too.
+                    const byDate = new Map<string, Activity[]>()
+                    relevant.forEach((a) => {
+                      const key = dateOnlyKey(a.created_at)
+                      if (!byDate.has(key)) byDate.set(key, [])
+                      byDate.get(key)!.push(a)
+                    })
+                    const dateGroups = Array.from(byDate.entries()).sort((a, b) => b[0].localeCompare(a[0]))
+                    dateGroups.forEach(([, acts]) => acts.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')))
+
                     return (
                       <div className="fl-workspace">
                         {subjectsList.length > 0 && (
@@ -3825,7 +3856,25 @@ export default function LearningApp() {
                             ))}
                           </div>
                         )}
-                        {bySubject.size === 0 && unplaced.length === 0 ? (
+                        <div className="fl-ws-groupby" role="group" aria-label="Group activities by">
+                          <button type="button" className={filesGroupBy === 'subject' ? 'is-active' : ''} onClick={() => setFilesGroupBy('subject')}>By subject</button>
+                          <button type="button" className={filesGroupBy === 'date' ? 'is-active' : ''} onClick={() => setFilesGroupBy('date')}>By date</button>
+                        </div>
+                        {filesGroupBy === 'date' ? (
+                          dateGroups.length === 0 ? (
+                            <p className="fl-note">Nothing here yet. Ask Quill to make study material or a test.</p>
+                          ) : (
+                            dateGroups.map(([key, acts]) => (
+                              <section key={key || 'undated'} className="fl-ws-subject">
+                                <h3 className="fl-ws-subject-name">
+                                  {dateOnlyLabel(acts[0]?.created_at)}
+                                  <span>{acts.length}</span>
+                                </h3>
+                                <div className="fl-ws-topic">{renderActivities(acts)}</div>
+                              </section>
+                            ))
+                          )
+                        ) : bySubject.size === 0 && unplaced.length === 0 ? (
                           <p className="fl-note">Nothing here yet. Ask Quill to make study material or a test.</p>
                         ) : (
                           <>

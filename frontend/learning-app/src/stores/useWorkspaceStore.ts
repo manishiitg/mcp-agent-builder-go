@@ -34,6 +34,10 @@ interface WorkspaceState {
   setWsRefreshKey: (v: SetStateAction<number>) => void
   filesSubjectFilter: string
   setFilesSubjectFilter: (v: SetStateAction<string>) => void
+  // The Files/Workspace tab defaults to grouping by subject → topic; 'date'
+  // instead sorts every activity into one flat, most-recent-first list.
+  filesGroupBy: 'subject' | 'date'
+  setFilesGroupBy: (v: SetStateAction<'subject' | 'date'>) => void
   // Every activity (<Subject>/<Topic>/<slug>/activity.json) — the Files tab
   // groups these by their own subject/topic, no path-parsing needed.
   activities: Activity[]
@@ -67,6 +71,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   setWsRefreshKey: (v) => set((s) => ({ wsRefreshKey: resolveSetState(v, s.wsRefreshKey) })),
   filesSubjectFilter: '',
   setFilesSubjectFilter: (v) => set((s) => ({ filesSubjectFilter: resolveSetState(v, s.filesSubjectFilter) })),
+  filesGroupBy: 'subject',
+  setFilesGroupBy: (v) => set((s) => ({ filesGroupBy: resolveSetState(v, s.filesGroupBy) })),
   activities: [],
   setActivities: (v) => set((s) => ({ activities: resolveSetState(v, s.activities) })),
 }))
