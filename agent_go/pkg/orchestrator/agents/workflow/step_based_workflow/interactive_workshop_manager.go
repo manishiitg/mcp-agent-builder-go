@@ -1543,6 +1543,20 @@ const (
 	goalAdvisorStageReadOnly goalAdvisorStageAccess = iota
 	goalAdvisorStageFinalizerProposal
 	goalAdvisorStageFinalizerApprovedMutation
+	// goalAdvisorStagePulseFixer runs the Pulse Fixer as a stage agent rather
+	// than as the parent turn.
+	//
+	// The parent's model is fixed for its whole scheduled turn, and for a
+	// coding-CLI provider that model is pinned when the CLI process starts — so
+	// while the Fixer *is* the parent it cannot have its own tier. Scheduled
+	// Pulse therefore reviewed on the stronger model and mutated on the weaker
+	// one. A stage agent is a separate process on selectMaintenanceLLM, the
+	// same tier the reviewers use, which puts the mutating step on at least the
+	// reasoning of the step that only read.
+	//
+	// This stays a single sequential writer: one fixer per module, holding
+	// delegated Pulse write authority for exactly one run.
+	goalAdvisorStagePulseFixer
 )
 
 func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
@@ -1570,6 +1584,34 @@ func goalAdvisorFinalizerProposalToolAgentAllowedToolNames() []string {
 	return goalAdvisorCommonMutationToolAgentAllowedToolNames()
 }
 
+// pulseFixerStageToolAgentAllowedToolNames is the Fixer's surface: the bounded
+// mutation tools it needs to repair a workflow, plus the lifecycle writers that
+// record what it did.
+//
+// It deliberately omits record_pulse_worklist and mark_pulse_final_command_result.
+// A fixer stage must not decide which modules are due or declare a Pulse
+// finished — those stay with Gate and the finalizer, so a fixer child cannot
+// impersonate a complete pass. It also omits create_plan and the step add/delete
+// tools: reshaping the plan is a Goal Advisor decision under explicit approval,
+// not something a bounded repair reaches for.
+func pulseFixerStageToolAgentAllowedToolNames() []string {
+	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
+	tools = append(tools,
+		// Bounded repair of what a review actually found.
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
+		"update_step_config", "update_validation_schema", "validate_evaluation_plan",
+		"update_variable", "update_workflow_config",
+
+		// Durable finding lifecycle: read the backlog, open an attempt before
+		// mutating, then record one honest disposition per finding.
+		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
+		"start_pulse_fix_attempt", "mark_pulse_module_result", "resolve_run_concern",
+		"mark_changelog_artifact_reviewed",
+	)
+	return tools
+}
+
 func goalAdvisorFinalizerApprovedToolAgentAllowedToolNames() []string {
 	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
 	tools = append(tools,
@@ -1589,9 +1631,29 @@ func goalAdvisorFinalizerApprovedToolAgentAllowedToolNames() []string {
 	return tools
 }
 
+// goalAdvisorReadOnlyToolAgentAllowedToolNames is the reviewer surface.
+//
+// "Read-only" here is a contract these agents are held to by their briefs, not
+// a property the tool list establishes. It never was: execute_shell_command is
+// registered with no path parameters, so the folder guard has nothing to
+// validate and cannot stop `sqlite3 db/db.sqlite "UPDATE ..."` or a shell
+// redirect into a workflow file. Only diff_patch_workspace_file is actually
+// filtered when write paths are empty.
+//
+// Narrowing the rest of the list therefore bought the appearance of enforcement
+// rather than enforcement, while creating a failure mode that has shipped twice
+// here: guidance instructs an agent to call a tool it was never given, and the
+// call fails silently. So the list is not the boundary and is not maintained as
+// one.
+//
+// The boundaries that are real and stay real: Pulse write authority is keyed by
+// session id, so a reviewer cannot record module results, open fix attempts, or
+// close findings even holding those tools — it was never lent authority. That
+// is what keeps one writer per Pulse run.
 func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 	return []string{
-		// Evidence gathering only; FolderGuard is also configured read-only.
+		// Evidence gathering. Reviewers are told to read, not write; the shell
+		// is general-purpose and that instruction is what bounds it.
 		"execute_shell_command", "read_image", "generate_text_llm", "search_web_llm",
 
 		// Guidance/reference docs are mandatory for the advisor and critic playbooks.
@@ -1601,7 +1663,12 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
 		"get_report_plan", "validate_report_plan", "preview_report_render",
-		"get_pulse_module_state", "get_pulse_finding_backlog",
+
+		// Backlog reconciliation. A reviewer must classify each candidate
+		// against what is already tracked, so it needs to read the lifecycle —
+		// including saved reviews, which is how it tells a recurrence from a
+		// genuinely new finding.
+		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
 	}
 }
 
@@ -2052,11 +2119,20 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 }
 
 func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSession(config *agents.OrchestratorAgentConfig, agentKind string, readPaths []string, writePaths []string) func() {
+	_, cleanup := iwm.configureWorkshopToolAgentSessionWithID(config, agentKind, readPaths, writePaths)
+	return cleanup
+}
+
+// configureWorkshopToolAgentSessionWithID also returns the MCP session id the
+// child's tool calls will actually carry. Callers that must key something on
+// that identity — Pulse write authority is keyed by session id — need the real
+// value, which is derived here and is not the agentKind passed in.
+func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSessionWithID(config *agents.OrchestratorAgentConfig, agentKind string, readPaths []string, writePaths []string) (string, func()) {
 	toolAgentSessionID := iwm.setupWorkshopToolAgentSession(agentKind, readPaths, writePaths)
 	config.MCPSessionID = toolAgentSessionID
 	config.FolderGuardReadPaths = readPaths
 	config.FolderGuardWritePaths = writePaths
-	return func() {
+	return toolAgentSessionID, func() {
 		common.ClearSessionShellConfig(toolAgentSessionID)
 	}
 }
@@ -3604,7 +3680,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if attempt > 1 {
 					stageName += " - completion retry"
 				}
-				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, goalAdvisorStageReadOnly)
+				result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, reviewerInstruction, goalAdvisorStageReadOnly, "")
 				if runErr != nil {
 					if writeErr := persistFailure(runErr.Error()); writeErr != nil {
 						return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
@@ -9731,7 +9807,7 @@ func (iwm *InteractiveWorkshopManager) createUnattendedWorkshopAgentConfig(agent
 	return config
 }
 
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess) (string, error) {
+func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess, pulseRunID string) (string, error) {
 	logger := iwm.controller.GetLogger()
 	workspacePath := iwm.controller.GetWorkspacePath()
 	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
@@ -9761,6 +9837,13 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	case goalAdvisorStageFinalizerApprovedMutation:
 		writePaths = workshopWritePaths(workspacePath)
 		allowedToolNames = goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
+	case goalAdvisorStagePulseFixer:
+		writePaths = workshopWritePaths(workspacePath)
+		allowedToolNames = pulseFixerStageToolAgentAllowedToolNames()
+	}
+
+	if access == goalAdvisorStagePulseFixer && strings.TrimSpace(pulseRunID) == "" {
+		return "", fmt.Errorf("a Pulse Fixer stage requires the pulse_run_id it is writing for")
 	}
 
 	// Agent creation temporarily mutates controller folder-guard and bridge state.
@@ -9792,7 +9875,24 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	config.UseCodeExecutionMode = false
 	config.EnableParallelToolExecution = true
 	config.ServerNames = []string{mcpclient.NoServers}
-	defer iwm.configureWorkshopToolAgentSession(config, stageAgentIdentity, readPaths, writePaths)()
+	toolAgentSessionID, releaseToolAgentSession := iwm.configureWorkshopToolAgentSessionWithID(config, stageAgentIdentity, readPaths, writePaths)
+	defer releaseToolAgentSession()
+
+	// A fixer stage writes Pulse state, and authority is keyed by the session id
+	// its tool calls actually carry — which setupWorkshopToolAgentSession
+	// derives, and is not stageAgentIdentity. Lending to the wrong identity
+	// would authorize a session that never makes a call and leave the real child
+	// refused on its first lifecycle write.
+	//
+	// Fail closed: an unauthorized fixer would spend its whole analysis and
+	// possibly mutate files before that refusal.
+	if access == goalAdvisorStagePulseFixer {
+		releaseAuthority, err := lendPulseWriteAuthority(ctx, toolAgentSessionID, pulseRunID)
+		if err != nil {
+			return "", fmt.Errorf("start Pulse Fixer stage %q: %w", name, err)
+		}
+		defer releaseAuthority()
+	}
 
 	toolsToRegister, executorsToUse := filterWorkspaceToolsByName(iwm.controller.WorkspaceTools, iwm.controller.WorkspaceToolExecutors, allowedToolNames)
 	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
@@ -9891,13 +9991,13 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		}
 	}()
 
-	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly)
+	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly, "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor advisor stage failed: %v", err), err
 	}
 
 	advisorForNextStage := truncateGoalAdvisorStageOutput(advisorResult)
-	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage), goalAdvisorStageReadOnly)
+	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage), goalAdvisorStageReadOnly, "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor critic stage failed: %v\n\nAdvisor draft:\n%s", err, advisorForNextStage), err
 	}
@@ -9914,7 +10014,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		finalizerAccess = goalAdvisorStageFinalizerApprovedMutation
 	}
 	finalizerPrompt := buildGoalAdvisorFinalizerInstruction(pulseRunID, focus, advisorForNextStage, criticForNextStage, approvedProposals, enablePlanMutationTools)
-	finalizerResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess)
+	finalizerResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor finalizer stage failed: %v\n\nAdvisor draft:\n%s\n\nCritic verdict:\n%s", err, advisorForNextStage, criticForNextStage), err
 	}
