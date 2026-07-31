@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -94,6 +95,13 @@ func validateTrustedPulseToolRunID(ctx context.Context, requestedRunID string) e
 		return fmt.Errorf("pulse_run_id %q does not match this session's logical Pulse run %q", requestedRunID, trusted.runID)
 	}
 	return nil
+}
+
+// init installs the delegator on the orchestrator side. Authority lives here,
+// but children are spawned in step_based_workflow, which cannot import this
+// package — cmd/server imports it, so the dependency runs one way only.
+func init() {
+	step_based_workflow.SetPulseWriteAuthorityDelegator(DelegateTrustedPulseSessionToChild)
 }
 
 // DelegateTrustedPulseSessionToChild lends one child execution the parent's

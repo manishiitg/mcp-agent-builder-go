@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -80,6 +81,28 @@ func TestDelegatedPulseAuthorityInheritsParentExpiry(t *testing.T) {
 	if err := validateTrustedPulseToolRunID(childCtx, runID); err == nil ||
 		!strings.Contains(err.Error(), "expired") {
 		t.Fatalf("delegated child outlived the parent's bounded window: %v", err)
+	}
+}
+
+// TestPulseWriteAuthorityDelegatorIsInstalled guards the cross-package seam.
+// Authority lives here; children are spawned in step_based_workflow, which
+// cannot import this package. If the init wiring is dropped, writer children
+// stop being possible and the only symptom is a fail-closed error at spawn.
+func TestPulseWriteAuthorityDelegatorIsInstalled(t *testing.T) {
+	const runID = "schedule-cron--seam"
+	releaseParent := registerTrustedPulseSession("schedule-cron--seam-parent", runID)
+	defer releaseParent()
+	parentCtx := mcpexecutor.WithSessionID(context.Background(), "schedule-cron--seam-parent")
+
+	release, err := step_based_workflow.LendPulseWriteAuthorityForTest(parentCtx, "workshop-fixer-seam", runID)
+	if err != nil {
+		t.Fatalf("server init did not install the delegator: %v", err)
+	}
+	defer release()
+
+	childCtx := mcpexecutor.WithSessionID(context.Background(), "workshop-fixer-seam")
+	if err := validateTrustedPulseToolRunID(childCtx, runID); err != nil {
+		t.Fatalf("authority delegated through the seam did not authorize the child: %v", err)
 	}
 }
 
