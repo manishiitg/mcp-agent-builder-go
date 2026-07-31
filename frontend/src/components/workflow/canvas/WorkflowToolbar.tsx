@@ -49,6 +49,7 @@ import WorkflowPublishPopup from '../WorkflowPublishPopup'
 import { getPublishDotClass, formatPublishStateLabel } from '../publishStatus'
 import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
 import { PulseWorkspace } from '../PulseWorkspace'
+import PulseLoopClosureNotice from '../PulseLoopClosureNotice'
 import { formatNotificationStateLabel, getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
@@ -152,89 +153,6 @@ function getPulseFinalCommandStatus(state?: PulseFinalCommandState): { label: st
 function pulseStatusNeedsAttention(status: string): boolean {
   const normalized = status.trim().toLowerCase().replace(/^last\s+/, '')
   return ['failed', 'blocked', 'timed out', 'timed_out', 'changed', 'due'].includes(normalized)
-}
-
-function pulseLoopClosureKindLabel(kind: string): string {
-  switch (kind) {
-    case 'answer_not_applied':
-      return 'Answer not applied'
-    case 'decision_waiting_on_user':
-      return 'Decision waiting'
-    case 'concern_keeps_recurring':
-      return 'Recurring concern'
-    default:
-      return 'Stalled loop'
-  }
-}
-
-function PulseLoopClosureNotice({ observation }: { observation: PulseShadowSignalObservation | null }) {
-  if (!observation) return null
-  const findings = observation.signals || []
-  const coverageVerified = observation.coverage_status === 'verified'
-  if (findings.length === 0 && coverageVerified) return null
-
-  return (
-    <section
-      className="mb-4 overflow-hidden rounded-lg border border-amber-500/30 bg-amber-500/[0.07]"
-      aria-label="Stalled Pulse loops"
-    >
-      <div className="flex items-start gap-3 px-3 py-3 sm:px-4">
-        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground">
-              {findings.length > 0
-                ? `${findings.length} stalled loop${findings.length === 1 ? '' : 's'} need follow-through`
-                : 'Loop-closure evidence is incomplete'}
-            </h3>
-            <span className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-              coverageVerified
-                ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                : 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-            }`}>
-              {observation.coverage_status.replaceAll('_', ' ')}
-            </span>
-          </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Read-only evidence observed {formatPulseTimestamp(observation.observed_at) || 'during the latest Pulse'}.
-            Pulse may weigh it with other facts; it does not force a repair or bypass approval.
-          </p>
-          {!coverageVerified && observation.coverage_reason && (
-            <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-amber-800/80 dark:text-amber-200/80" title={observation.coverage_reason}>
-              Coverage: {observation.coverage_reason}
-            </p>
-          )}
-        </div>
-      </div>
-      {findings.length > 0 && (
-        <div className="divide-y divide-amber-500/15 border-t border-amber-500/20">
-          {findings.slice(0, 4).map((finding, index) => (
-            <div key={`${finding.kind}-${finding.id || index}`} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:px-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
-                    {pulseLoopClosureKindLabel(finding.kind)}
-                  </span>
-                  <span className="truncate text-xs font-medium text-foreground">{finding.subject}</span>
-                </div>
-                <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground" title={finding.evidence}>
-                  {finding.detail}
-                </p>
-              </div>
-              <span className="whitespace-nowrap text-[10px] font-medium text-muted-foreground">
-                {finding.age_days > 0 ? `${finding.age_days}d old` : 'today'}
-              </span>
-            </div>
-          ))}
-          {findings.length > 4 && (
-            <div className="px-3 py-2 text-[11px] font-medium text-muted-foreground sm:px-4">
-              +{findings.length - 4} more retained in Pulse evidence
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  )
 }
 
 interface WorkflowToolbarProps {

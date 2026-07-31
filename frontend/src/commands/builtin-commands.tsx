@@ -209,7 +209,7 @@ export const builtinCommands: CommandDefinition[] = [
   },
   {
     command: 'pulse-fixer',
-    description: 'Apply and verify safe fixes from existing Pulse review findings',
+    description: 'Apply and verify safe fixes from the existing Pulse backlog',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
