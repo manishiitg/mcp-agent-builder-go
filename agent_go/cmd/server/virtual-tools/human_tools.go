@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -228,26 +227,11 @@ func gmailEnabled() bool {
 	return false
 }
 
-// htmlTagRe deterministically matches a real HTML start/end tag: "<" immediately
-// followed by a known tag name (optional "/" for a closing tag), then a tag
-// delimiter (space, "/", or ">"). Requiring the name right after "<" — with no
-// space — means prose like "a < b", "score <3", or "x<y" never matches, while
-// "<p>", "<div ...>", "<br/>", "</body>", "<!doctype html>" do.
-var htmlTagRe = regexp.MustCompile(`(?is)<(?:!doctype\s+html|/?(?:html|head|body|div|span|table|thead|tbody|tr|td|th|p|h[1-6]|br|hr|ul|ol|li|a|img|strong|em|b|i|u|style|center|font|pre|blockquote))[\s/>]`)
-
-// looksLikeHTML reports whether a string contains real HTML markup. Used to
-// rescue HTML from the retired email_body argument for compatibility with old
-// scheduled prompts and persisted agent sessions.
-func looksLikeHTML(s string) bool {
-	return htmlTagRe.MatchString(s)
-}
-
 // gmailContentFromArgs builds the per-channel Gmail content from notify_user
 // tool args, or (nil, nil) if no email-specific fields were provided. Returns an
 // error (surfaced to the agent) when a referenced file can't be read.
 func gmailContentFromArgs(args map[string]interface{}) (*services.GmailContent, error) {
 	subject, _ := args["email_subject"].(string)
-	body, _ := args["email_body"].(string)
 	html, _ := args["email_html"].(string)
 	cc := emailListFromArg(args["email_cc"])
 
@@ -261,14 +245,6 @@ func gmailContentFromArgs(args map[string]interface{}) (*services.GmailContent, 
 		html = string(data)
 	}
 
-	// Backward compatibility: old callers may still send the retired
-	// email_body argument. If it contains HTML and no explicit email_html was
-	// given, render it as HTML rather than exposing raw markup.
-	if strings.TrimSpace(html) == "" && looksLikeHTML(body) {
-		html = body
-		body = ""
-	}
-
 	var attachments []string
 	if raw, ok := args["email_attachments"].([]interface{}); ok {
 		for _, a := range raw {
@@ -277,13 +253,12 @@ func gmailContentFromArgs(args map[string]interface{}) (*services.GmailContent, 
 			}
 		}
 	}
-	if strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" && strings.TrimSpace(html) == "" && len(attachments) == 0 && len(cc) == 0 {
+	if strings.TrimSpace(subject) == "" && strings.TrimSpace(html) == "" && len(attachments) == 0 && len(cc) == 0 {
 		return nil, nil
 	}
 	return &services.GmailContent{
 		Subject:     strings.TrimSpace(subject),
 		CC:          cc,
-		Body:        body,
 		HTMLBody:    html,
 		Attachments: attachments,
 	}, nil

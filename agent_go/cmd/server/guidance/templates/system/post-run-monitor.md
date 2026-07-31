@@ -158,10 +158,9 @@ sections below as domain and evidence guidance.
    Create one reviewer task for **every** remaining due module. Partition them
    into consecutive parallel batches of at most two reviewers, and
    issue each current batch's independent `call_generic_agent` calls in the
-   same tool-call batch. Never rank the due worklist and run only a "top 3" or
-   other subset: Gate already applied the per-pass cap when it built the
-   worklist, so anything still marked `due` must receive a terminal result in
-   this Pulse run. Run every batch without dropping a module. Use the cheapest tier
+   same tool-call batch. Never rank or truncate the due worklist: anything
+   marked `due` must receive a terminal result in this Pulse run. Run every
+   batch without dropping a module. Use the cheapest tier
    that can judge each module reliably. Do not use `run_in_background`:
    the parent Pulse turn must remain
    active until reviewer calls return, so the fixed sequence cannot reach the
@@ -178,15 +177,12 @@ sections below as domain and evidence guidance.
    Explicitly forbid file edits, config or plan changes, publishing,
    notification, user questions, mutation tools, `builder/improve.html` writes,
    and `mark_pulse_module_result`.
-   Keep each response under 3000 characters and avoid narrative recaps and wide
-   tables. Require this compact response shape: one-line verdict; at most five
-   severity-ordered finding rows containing stable finding id, target key (file,
+   Avoid narrative recaps and wide tables. Require this compact response shape:
+   one-line verdict; every evidence-backed severity-ordered finding row
+   containing stable finding id, target key (file,
    step, table, metric, contract, or configuration area), plain-language claim,
-   evidence pointer, bounded fix, verification, and user-judgment flag/reason;
-   and an overflow count
-   with compact finding ids and evidence pointers when more findings exist.
-   A clean review must explicitly return an empty finding-id manifest. Never omit a
-   correctness finding merely to satisfy the cap. Call `call_generic_agent`
+   evidence pointer, bounded fix, verification, and user-judgment flag/reason.
+   A clean review must explicitly return an empty finding-id manifest. Call `call_generic_agent`
    directly where exposed as a tool; in coding-agent code-execution mode it is
    not native, so its documented API bridge shell call is the supported
    transport there. Either way never wrap it in a temporary script, background
@@ -218,10 +214,10 @@ sections below as domain and evidence guidance.
    different thesis, its relationship to the active strategy experiment, and
    why incremental repair is insufficient. Maintenance or instrumentation alone
    is never a valid Goal Advisor result.
-6. After each reviewer batch returns, compress it into an in-turn review ledger
-   of at most 1000 characters per module while retaining every finding id,
-   target key, severity, evidence pointer, recommended action, verification, and
-   user-judgment flag. Do not repeat raw reviewer prose in later reasoning.
+6. After each reviewer batch returns, build a structured in-turn review ledger
+   retaining every finding id, target key, severity, evidence pointer,
+   recommended action, verification, and user-judgment flag. Do not repeat
+   narrative reviewer prose in later reasoning.
    After all batches return, consolidate and deduplicate the ledger. Build a
    conflict map grouped by target key before any mutation. Merge compatible
    recommendations. Resolve incompatible recommendations in this order:
@@ -282,8 +278,8 @@ sections below as domain and evidence guidance.
    artifacts, human-input state, changelog review state, or module state. It
    must not update `builder/improve.html` or `builder/card.health.html`. Record
    one honest terminal result for every due module with enough plain-language
-   outcome data for the later Dashboard stage to render Signals, Reflection,
-   and verified Improvements. Keep exact technical evidence in SQLite-backed
+   outcome data for the later Dashboard stage to render Issues and reviews,
+   Decisions and analysis, and verified Fixes and improvements. Keep exact technical evidence in SQLite-backed
    reviewer results and structured Pulse state. Before stopping, perform one global finding-ID reconciliation
    across reviewer manifests, canonical dispositions, and
    terminal module results. Do not claim Pulse completed while any finding id
@@ -297,6 +293,11 @@ sections below as domain and evidence guidance.
     replace a failed reviewer by improvising its deep audit in the parent; mark
     the module failed or blocked with the exact reviewer error and continue the
     independent safe modules.
+    For a real finding outside workflow authority, use
+    `external_action_required` with `external_owner`, stable `reason_code`, and
+    a concrete `reopen_condition`. This removes it from the active Pulse queue
+    and suppresses unchanged rediscovery. Keep retryable blockers as `blocked`
+    and user-owned decisions as `awaiting_user`.
 11. Return one concise combined result. The normal Pulse finalizer performs
     backup, publish, and the single user notification only after all due module
     results exist.
@@ -305,7 +306,7 @@ Read-only behavior is enforced by reviewer prompts, a read-only tool allowlist,
 and empty reviewer write paths. The single-fixer rule prevents concurrent
 workflow-state writes; the dedicated Dashboard prevents competing
 `improve.html` writers. The backend independently enforces the two-reviewer
-concurrency cap and persists one result file per module.
+concurrency cap and persists one complete SQLite reviewer result per module.
 
 ## Module Decisions
 
@@ -841,7 +842,11 @@ Do not ask only in email or raw chat. Runloop renders the structured request fir
 
 ## Finalizer And Notifications
 
-Pulse sends one summary every run unless the user's `soul/soul.md ## Notifications` section explicitly says not to notify.
+Pulse sends one summary every run unless the workflow's structured notification
+configuration disables that channel. `workflow.json` is canonical: apply
+`capabilities.notifications`, the Pulse summary channel settings, recipient
+blocks, and `exclude_channels`. Never infer notification preferences from
+`soul/soul.md`.
 Enabled account-level notification channels (for example Gmail) are inherited automatically and count as enabled for this workflow. Do not skip notification merely because the workflow has no dedicated Slack webhook, and do not write a redundant Gmail setting into `workflow.json`.
 
 Before finalizing, read `get_pulse_module_state` and confirm every module marked
@@ -867,12 +872,27 @@ last even after an earlier command failed.
 The notify turn should include:
 
 - Bug and Goal state
-- modules that ran and modules that skipped
-- important changes/fixes/proposals
-- user questions created
+- modules that ran, their conclusions, and modules that skipped or failed
+- material issues newly found or reopened during this pass
+- verified fixes and verified no-change closures completed by the Pulse Fixer
+- changes still awaiting verification; never call these fixed
+- the exact active pending count after the pass and the highest-priority
+  current/retained pending issues, with blocker, owner, and next checkpoint
+- user questions created and what each answer unblocks
 - backup/publish status
 - dashboard URL when publish is live
 - cost/time summary, including missing or unpriced buckets
+
+Build this from current-run module/reviewer records plus finding lifecycle and
+human-input state in SQLite-backed tools, not from dashboard prose. A module
+result of `changed` is not itself proof that its findings were fixed. Only
+`fixed_verified` or `verified_no_change` with passing evidence belongs under
+**Fixed by Pulse**. Put `changed_unverified`, failed verification, open,
+acknowledged, fixing, awaiting-verification, blocked, proposal-only, and
+awaiting-user items under **Still pending** or **Needs your decision**. Report
+the top five pending issues plus the remaining count when the backlog is long.
+Explicitly say when no material issues were found, but never describe an
+uncompleted review as clean.
 
 Backup protection must be stated plainly. Read `backup/status.json` and the
 configured destinations, not only whether the latest Git command succeeded. If
@@ -887,6 +907,10 @@ each run.
 
 When Gmail/email is available, default to rich email: set `email_subject` and
 one compact, inline-styled `email_html` body on the same `notify_user` call.
+Use readable sections for **Pulse verdict**, **Reviews completed**, **Issues
+found this pass**, **Fixed by Pulse**, **Still pending**, **Needs your
+decision**, and **Operations**. Omit an empty decision section, but do not omit
+the issues/fixes/pending outcome: state “none” where that is the truthful result.
 Do not produce a separate plain email body; `message_for_user` is the automatic
 fallback. Use `email_to` only when the user's preference replaces the default
 To recipient. Use `email_cc` only when requested.
