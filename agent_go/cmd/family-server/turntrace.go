@@ -30,21 +30,33 @@ import (
 //
 // Emits ONE summary line per turn, e.g.:
 //
-//	[TURN] parent engine=cursor-cli session=cold total=124310ms setup=8102ms ttft=none first_tool=41208ms(execute_shell_command) tools=3 reply=980ch err=<nil>
+//	[TURN] parent engine=cursor-cli session=cold queued=0ms total=124310ms setup=8102ms ttft=none first_tool=41208ms(execute_shell_command) tools=3 reply=980ch err=<nil>
 //
-// Reading it: a large `setup` means session/CLI startup, not the model. `ttft`
-// (time to first streamed character) separates "the model is slow" from "we
-// can't see output until the end" — `ttft=none` means no streaming arrived at
-// all this turn, which is itself the finding (see the pi-cli note in
-// docs/backlog.md). `first_tool` shows how long before the agent did anything
-// observable.
+// Reading it: a nonzero `queued` means this turn sat waiting for agentTurnMu
+// — another turn (any surface: web chat, a WhatsApp message, Pulse) was
+// already running when this one arrived, since every turn process-wide is
+// serialized through that one mutex. This is a REAL, previously invisible
+// source of "it feels slow": a family actively using WhatsApp, the web app,
+// and a Pulse check-in around the same time will queue behind each other
+// even though nothing about the model itself got slower. A large `setup`
+// instead means session/CLI startup, not the model. `ttft` (time to first
+// streamed character) separates "the model is slow" from "we can't see
+// output until the end" — `ttft=none` means no streaming arrived at all this
+// turn, which is itself the finding (see the pi-cli note in
+// docs/backlog.md). `first_tool` shows how long before the agent did
+// anything observable. All of setup/ttft/first_tool/total are measured from
+// `start` (when the turn was first accepted, i.e. BEFORE the queue wait) —
+// so `total` is the genuine end-to-end number a user actually experienced,
+// and `queued` explains how much of it was someone else's turn, not this one's.
 type turnTrace struct {
 	surface string // parent | child | pulse — which surface drove this turn
 	engine  string
 	start   time.Time
 
 	mu            sync.Mutex
-	setup         time.Duration // until the session was ready to Ask
+	queued        time.Duration // time spent waiting for agentTurnMu before this turn could even begin
+	lockedOnce    bool
+	setup         time.Duration // until the session was ready to Ask (measured from start, includes queued)
 	resumed       bool
 	ttft          time.Duration // until the first streamed delta
 	sawDelta      bool
@@ -64,6 +76,23 @@ func newTurnTrace(surface, engine string) *turnTrace {
 		start:   time.Now(),
 		byTool:  map[string]int{},
 	}
+}
+
+// locked marks agentTurnMu having just been acquired for this turn — call it
+// the instant after agentTurnMu.Lock() returns. Everything between the
+// trace's own creation (which must happen BEFORE the Lock() call, not after)
+// and this call was pure queue wait behind some other turn.
+func (t *turnTrace) locked() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lockedOnce {
+		return
+	}
+	t.lockedOnce = true
+	t.queued = time.Since(t.start)
 }
 
 // sessionReady marks agentsession.New having returned, and whether it resumed an
@@ -150,8 +179,8 @@ func (t *turnTrace) finish(reply string, err error) {
 	if t.firstToolName != "" {
 		firstTool = ms(t.firstTool) + "(" + t.firstToolName + ")"
 	}
-	log.Printf("[TURN] %s engine=%s session=%s total=%s setup=%s ttft=%s first_tool=%s tools=%d [%s] reply=%dch err=%v",
-		t.surface, t.engine, session, ms(time.Since(t.start)), ms(t.setup),
+	log.Printf("[TURN] %s engine=%s session=%s queued=%s total=%s setup=%s ttft=%s first_tool=%s tools=%d [%s] reply=%dch err=%v",
+		t.surface, t.engine, session, ms(t.queued), ms(time.Since(t.start)), ms(t.setup),
 		ttft, firstTool, t.tools, t.toolBreakdown(), len([]rune(reply)), err)
 }
 

@@ -185,6 +185,13 @@ func shellTool() agentsession.Tool {
 				// it runs in this process, not in the CLI, so switching engine
 				// in Settings cannot weaken it.
 				StrictAllowlist: true,
+				// Network, opted in for skills/backup/SKILL.md's `hf upload` —
+				// a real, accepted tradeoff (see AllowNetwork's own doc
+				// comment): every secret this shell has via env could in
+				// principle now be sent anywhere, not just wherever backup
+				// intends. Parent-only, deliberately — the child's own shell
+				// (below) does NOT get this.
+				AllowNetwork: true,
 			}
 			cmd, cleanup, err := iso.ExecuteIsolated(cctx, command, nil)
 			if err != nil {

@@ -149,6 +149,13 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-toolcard.is-upload svg { color: #3f6fb0; }
 .fl-toolcard.is-error { border-color: #f3c9c3; background: #fdecea; color: #c0463b; }
 .fl-toolcard.is-error svg { color: #c0463b; }
+.fl-photo-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.fl-photocard { display: block; width: fit-content; max-width: 220px; border-radius: 12px; overflow: hidden; border: 1px solid #dde4ee; box-shadow: 0 1px 3px rgba(20, 30, 50, .08); }
+.fl-photo-row .fl-photocard { max-width: 130px; }
+.fl-photocard img { display: block; width: 100%; max-height: 220px; object-fit: cover; }
+.fl-photo-row .fl-photocard img { max-height: 130px; }
+.fl-videocard { display: block; width: 100%; max-width: 260px; max-height: 260px; border-radius: 12px; border: 1px solid #dde4ee; box-shadow: 0 1px 3px rgba(20, 30, 50, .08); background: #000; }
+.fl-audiocard { display: block; width: 100%; max-width: 280px; margin-top: 6px; height: 32px; }
 .pin-hint { margin: 16px 0 0; color: #5b6c87; font-size: var(--text-secondary); line-height: 1.5; }
 .pin-error { display: inline-flex; align-items: center; gap: 8px; color: #c0463b; }
 .setup-footer .pin-error svg { color: #c0463b; }
@@ -182,6 +189,8 @@ html, body, #root { margin: 0; height: 100%; }
 .parent-quick-actions button:hover { border-color: #6fa6d6; background: #f3f9ff; color: var(--heading); }
 .composer-icon, .composer-send { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 11px; background: transparent; color: #5f708d; cursor: pointer; }
 .composer-icon:hover { background: #edf2f8; color: var(--heading); }
+.composer-icon.is-active { background: #fef3c7; color: #b45309; }
+.composer-icon.is-active:hover { background: #fde68a; color: #92400e; }
 .composer-send { background: var(--yellow); color: var(--heading); }
 .composer-send:disabled { background: #e8edf3; color: #9aa7b8; cursor: default; }
 .tool-label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 999px; background: #e9f8ef; color: #167347; font-size: var(--text-caption); font-weight: 700; letter-spacing: .02em; }
@@ -265,7 +274,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-zoom-btn.is-on { width: auto; padding: 0 7px; border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-zoom-badge { font-size: 10px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px); }
-.fl-composer { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
+.fl-composer { position: relative; display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
 .fl-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
 .fl-menu { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 21; min-width: 232px; padding: 6px; border: 1px solid #e0d7c5; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); display: flex; flex-direction: column; gap: 2px; }
@@ -705,6 +714,10 @@ details[open] > .fl-tree-dir .fl-tree-icon.is-open { display: block; }
 .fl-subject-bar button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: #5f708d; font: inherit; font-size: var(--text-caption); font-weight: 650; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
 .fl-subject-bar button:hover { border-color: #b9c6d8; color: var(--heading); }
 .fl-subject-bar button.is-active { background: var(--navy); border-color: var(--navy); color: #fff; }
+.fl-ws-groupby { display: flex; gap: 6px; margin: -8px 0 16px; }
+.fl-ws-groupby button { padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: #5f708d; font: inherit; font-size: var(--text-caption); font-weight: 600; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.fl-ws-groupby button:hover { border-color: #b9c6d8; color: var(--heading); }
+.fl-ws-groupby button.is-active { background: var(--surface-2); border-color: var(--heading); color: var(--heading); }
 
 .fl-ws-subject { margin-bottom: 26px; }
 .fl-ws-subject-name { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--heading); font-size: 12px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
@@ -1182,4 +1195,51 @@ audio.fl-viewer-media { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) { .fl-mic-live-dot { animation: none; } }
 .fl-mic-live-label { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #ffd479; }
 .fl-mic-live-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-secondary); line-height: 1.4; }
+
+/* "This Week" tab — recurring schedule + real activity log + Veracross deadlines, see week.go */
+.fl-week { display: flex; flex-direction: column; gap: 14px; }
+.fl-week-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fl-week-nav-btn { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 6px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-nav-btn:hover { background: var(--surface-2); }
+.fl-week-range { display: flex; align-items: center; gap: 8px; font-weight: 800; color: var(--heading); font-size: var(--text-secondary); }
+.fl-week-badge { background: var(--yellow); color: #5a4200; font-size: var(--text-caption); font-weight: 800; padding: 2px 9px; border-radius: 999px; }
+
+.fl-week-deadlines { border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px 14px; background: var(--surface-2); }
+.fl-week-deadline-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--text-secondary); color: var(--ink); border-top: 1px dashed var(--line); }
+.fl-week-deadline-row:first-of-type { border-top: 0; }
+.fl-week-deadline-kind { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: #2b5a8a; }
+.fl-week-deadline-kind.is-test { background: #ffe3df; color: #a2372a; }
+.fl-week-deadline-title { flex: 1 1 auto; font-weight: 700; }
+.fl-week-deadline-subject { color: var(--muted, #6b7690); font-size: var(--text-caption); }
+.fl-week-deadline-date { flex: 0 0 auto; color: var(--muted, #6b7690); font-size: var(--text-caption); font-weight: 700; }
+
+/* auto-fill (not a fixed 7-column grid, and not a VIEWPORT media query —
+   this is a fixed-width side drawer, independent of window width, so a
+   max-width breakpoint never fires no matter how narrow the drawer itself
+   renders) wraps to fewer, wider columns and more rows whenever the drawer
+   is its normal ~560-590px width, favoring vertical space over cramming all
+   7 days into one unreadably narrow row. */
+.fl-week-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.fl-week-day { border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-height: 180px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+.fl-week-day.is-today { border-color: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 201, 27, .3); }
+.fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 4px; }
+.fl-week-day-head strong { font-size: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+.fl-week-day-head span { font-size: var(--text-subheading); font-weight: 800; }
+.fl-week-day-free { margin: 4px 0 0; color: var(--muted, #93a0b8); font-size: var(--text-secondary); font-style: italic; }
+.fl-week-block { font-size: var(--text-secondary); line-height: 1.4; padding: 8px 10px; border-radius: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-week-block.is-busy { background: var(--surface-2); color: var(--muted, #6b7690); border: 1px dashed var(--line); }
+.fl-week-block.is-activity { background: var(--mint-soft); color: #1f7a52; font-weight: 700; }
+.fl-week-block.is-deadline { background: var(--blue-soft); color: #2b5a8a; font-weight: 700; }
+.fl-week-block.is-deadline.is-test { background: #ffe3df; color: #a2372a; }
+
+.fl-week-edit-schedule { align-self: flex-start; border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 16px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-edit-schedule:hover { background: var(--surface-2); }
+.fl-week-editor { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; }
+.fl-week-editor-row { display: grid; grid-template-columns: 1fr 100px 100px 1.4fr auto; gap: 8px; align-items: center; }
+@media (max-width: 640px) { .fl-week-editor-row { grid-template-columns: 1fr 1fr; } }
+.fl-week-editor-row select, .fl-week-editor-row input { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: var(--text-secondary); background: var(--surface); color: var(--ink); }
+.fl-week-editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.fl-week-editor-spacer { flex: 1 1 auto; }
+.fl-week-editor-actions button { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
+.fl-week-editor-save { background: var(--yellow) !important; color: #5a4200 !important; border-color: var(--yellow) !important; }
 .fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }

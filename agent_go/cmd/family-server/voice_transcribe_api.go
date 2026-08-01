@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -72,4 +73,28 @@ func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"text": text})
+}
+
+// POST /api/voice/warm — fire-and-forget: starts loading Parakeet into the
+// persistent worker's memory if it isn't warm already. The frontend calls
+// this the MOMENT recording starts, not after it ends, so a cold worker
+// (unloaded after voiceWorkerIdleTimeout — see voice_worker.go — 15 minutes
+// of no voice use) pays its load cost while the parent is still talking
+// instead of on their first live-preview tick, where it previously showed up
+// as several seconds of dead air with no captions and no visible reason why.
+func handleVoiceWarm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if sharedVoiceWorker.IsWarm(parakeetModel) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "warm"})
+		return
+	}
+	go func() {
+		if err := warmParakeet(context.Background()); err != nil {
+			log.Printf("[voice] on-demand warm-up failed: %v", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "warming"})
 }

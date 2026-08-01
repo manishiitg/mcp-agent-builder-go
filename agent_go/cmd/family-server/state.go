@@ -66,6 +66,35 @@ type familyState struct {
 	// because the tiers have entirely different voice catalogs: picking
 	// "Aman" only means something for the built-in Mac voices.
 	VoiceChoices map[string]string `json:"voice_choices,omitempty"`
+
+	// Schedule is the child's recurring weekly class/commitment schedule (see
+	// week.go) — parent-configurable settings, same lifecycle as PulseConfig
+	// above, not a log. Powers the "This Week" view's busy/free-time display.
+	Schedule ChildSchedule `json:"schedule,omitempty"`
+
+	// FastMode swaps every turn (parent, child, WhatsApp, Pulse) from its
+	// normal tuned model to the provider's cheaper/faster low tier (see
+	// model_tier.go's lowTierModelID) — latency over depth, the opposite
+	// tradeoff Child Mode itself deliberately moved away from (see child.go's
+	// own comment on why it stopped using a low tier by default). Off by
+	// default so nobody gets a quietly worse model without asking for it.
+	FastMode bool `json:"fast_mode,omitempty"`
+}
+
+// ScheduleEntry is one recurring weekly commitment — school, tuition, a
+// sports practice, anything that recurs on the same day/time every week.
+type ScheduleEntry struct {
+	Day   string `json:"day"`   // "Monday".."Sunday"
+	Start string `json:"start"` // "08:00", 24h local time
+	End   string `json:"end"`   // "14:30"
+	Label string `json:"label"` // "School", "Football practice", etc.
+}
+
+// ChildSchedule is the parent-configurable recurring weekly schedule. A
+// struct (not a bare slice) so it can grow additional fields later without
+// an incompatible JSON shape change.
+type ChildSchedule struct {
+	Entries []ScheduleEntry `json:"entries,omitempty"`
 }
 
 // PulseConfig is the parent-configurable settings for the Pulse background
@@ -88,6 +117,14 @@ type PulseConfig struct {
 	// SchoolPortalURL is the legacy single-portal field, kept so older saved
 	// state still parses; folded into the effective site list (see Sites()).
 	SchoolPortalURL string `json:"school_portal_url,omitempty"`
+	// PreferredHour (0-23, LOCAL time) anchors runs to roughly this hour of
+	// day instead of whatever wall-clock moment the cadence happens to land
+	// on — "every 24h" alone can drift to any time depending on when Pulse
+	// last happened to fire (a restart, a deferred run, etc.). Only applied
+	// when PreferredHourSet is true: 0 is a valid hour (midnight), so a bare
+	// int can't tell "midnight" from "never configured."
+	PreferredHour    int  `json:"preferred_hour,omitempty"`
+	PreferredHourSet bool `json:"preferred_hour_set,omitempty"`
 }
 
 // Sites returns the effective de-duplicated list of websites to check —

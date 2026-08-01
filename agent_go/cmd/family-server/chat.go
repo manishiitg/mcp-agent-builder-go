@@ -57,7 +57,7 @@ func currentDateTimeLine() string {
 	return "Right now it is " + now.Format("Monday, January 2, 2006, 3:04 PM") + " (" + now.Format("2006-01-02") + ") in the family's local time zone.\n"
 }
 
-func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) string {
+func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig, schedule ChildSchedule) string {
 	name := "your child"
 	who := name
 	if child != nil {
@@ -90,6 +90,13 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 	parentLabelNudge := ""
 	if strings.TrimSpace(parentLabel) == "" {
 		parentLabelNudge = "IMPORTANT — you don't yet know what to call the parent when you talk ABOUT them to " + name + " (e.g. \"your mom set this up for you\" vs \"your dad\" vs a name like \"Priya\"). Early on — the same moment you're gathering the child's grade/board is a natural time — warmly ask something like \"quick one so I can talk about you naturally with " + name + " — should I say mom, dad, or something else?\" and save the answer with set_parent_label. Don't block other work on this; ask once, naturally, and move on.\n"
+	}
+	scheduleNudge := ""
+	if len(schedule.Entries) == 0 {
+		scheduleNudge = "You don't yet know " + name + "'s recurring weekly schedule (school hours, tuition, sports practice) — " +
+			"this powers the parent's \"This Week\" view, showing her free study time around these commitments. If the " +
+			"conversation is about planning, study time, or when she's free, ask about her class schedule and save what " +
+			"you learn with set_child_schedule. Not urgent otherwise — no need to interrupt an unrelated conversation for it.\n"
 	}
 	// Configured connectors the parent may reference in normal conversation
 	// (not just during Pulse) — e.g. "did the school email anything?" or "check
@@ -138,10 +145,10 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- MARKING: when the parent asks you to mark her work, write ONLY the verdict onto her page — \"Correct\" / \"Not quite\" beside that question, nothing more. NEVER write the right answer, a corrected value, or a worked solution onto a child-facing page, even while marking it wrong, and even if the parent's request sounds like it wants that: it silently converts her practice page into an answer sheet, and she may well reopen it before re-attempting. The solution belongs in the answer key, which is yours. Put what she should do differently in your reply to the parent instead, and offer to build a fresh practice activity on the questions she missed.\n" +
 		"- If material or handwriting is unclear, say so and ask for a clearer photo.\n" +
 		"\n" +
-		"YOUR TOOLS — set_child_profile, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
+		"YOUR TOOLS — set_child_profile, set_child_schedule, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
 		"- If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here and can never write. Never conclude the workspace is read-only or that something needs enabling — execute_shell_command (or diff_patch_workspace_file for a precise edit) is what writes.\n" +
 		"- Secrets: the parent saves credentials in Settings → Secrets, or states one and you call set_secret (never a value you guessed). Remove one with delete_secret by its exact saved name — call list_secrets first if you're not sure of it, and ask rather than guess if nothing matches. list_secrets returns names only. A saved value reaches execute_shell_command as $SECRET_<NAME>, usable there directly. It ALSO works inside agent_browser's fill/type args — write the literal $SECRET_<NAME> placeholder as the value and the real credential is substituted server-side before it reaches the browser; you never see it. NEVER print, echo, or include a secret's value anywhere, and never ask the parent to type it themselves if it's already saved. If a login fails (2FA, a CAPTCHA, an unfamiliar-device prompt), stop and say so rather than retrying blind.\n" +
-		"- PDF on WhatsApp, only when explicitly asked: agent_browser's \"pdf\" command to export into the activity folder, then send_whatsapp_file with that path.\n" +
+		"- PDF on WhatsApp, only when explicitly asked: agent_browser's \"pdf\" command to export into the activity folder (or reports/ for the academic map or progress report), then send_whatsapp_file with that path.\n" +
 		"\n" +
 		"YOUR WORKSPACE — read and write these directly:\n" +
 		"- <Subject>/<Topic>/<activity-slug>/ — every piece of child-facing content you make lives in its own self-contained ACTIVITY folder: the content files, its activity.json manifest, any <name>-KEY.md answer key, and (once she starts) her own conversation.json and attempts/.\n" +
@@ -172,11 +179,13 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig) str
 		"- teach-coding — read FIRST, alongside the above, when the topic is coding; the right approach differs sharply by age.\n" +
 		"- discover-something-new — a fun, off-syllabus curiosity activity.\n" +
 		"- create-progress-report, create-academic-map — the two pages in reports/.\n" +
-		"- publish, notify — sharing and alerting. Backing up the workspace is the parent's own responsibility (manual export/copy) — you have no backup capability, and must not claim otherwise or offer to \"back it up\" for them.\n" +
+		"- publish, notify — sharing and alerting.\n" +
+		"- backup — pushes the workspace to the parent's OWN private Hugging Face Hub dataset repo, the one destination this family uses. Only when the parent asks (or you're following up on a Pulse reminder they've agreed to) — never on your own initiative mid-conversation.\n" +
 		"Everything child-facing is designed, self-contained, STATIC HTML per skills/_shared/html-design.md. A \"quick\" or \"short\" request changes the number of questions, never the format.\n" +
 		connectorNote +
 		childInfoNudge +
-		parentLabelNudge
+		parentLabelNudge +
+		scheduleNudge
 }
 
 // childInterestsNote reads memory/interests.md server-side and returns its
@@ -414,16 +423,44 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	childLabel := parentChildLabel(s.Child)
-
-	provider, ok := engineToProvider(s.Engine)
-	if !ok {
+	if _, ok := engineToProvider(s.Engine); !ok {
 		// Fall back to the plain-completion path for engines not yet wired into
 		// the agentsession runtime.
 		fallbackParentMessage(w, r, s, req)
 		return
 	}
 
+	// The viewer-path context note is model-facing only — never persisted,
+	// same reasoning as WhatsApp's own phone-formatting hint (see runParentTurn).
+	hint := ""
+	if vp := strings.TrimSpace(req.ViewerPath); vp != "" {
+		hint = "\n\n(The parent currently has \"" + filepath.Base(vp) + "\" open on the right side of their screen — you can naturally reference what's showing there, e.g. \"I see you're looking at...\", without needing them to describe it.)"
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
+	defer cancel()
+	resp := runParentTurn(ctx, s, req.ConversationID, req.Messages, hint)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// runParentTurn runs one turn of the SINGLE shared parent↔Quill conversation
+// — the extracted, shared core used by BOTH the web chat handler
+// (handleParentMessage) and any WhatsApp-triggered turn (waBot.runTurn),
+// mirroring runChildTurn's own extraction (child.go) for the identical
+// reason: logic that lives in only ONE of two otherwise-equivalent call
+// sites silently drifts from the other over time. Confirmed live before this
+// refactor: WhatsApp's copy had no turn-latency tracing at all, no per-turn
+// model-tier/experiment-transport pinning, and never retroactively redacted
+// a secret typed for the first time over WhatsApp — three real gaps that
+// existed purely because the logic was duplicated instead of shared, not
+// because WhatsApp turns are supposed to behave any differently.
+//
+// messages is the FULL history for this turn, including the newest message,
+// exactly as it should be persisted. extraModelOnlyHint, if non-empty, is
+// appended to the model-facing copy of the last message but is NEVER
+// persisted — e.g. WhatsApp's phone-formatting reminder, or the web's
+// viewer-path context note.
+func runParentTurn(ctx context.Context, s familyState, convID string, messages []enginedetect.ChatMessage, extraModelOnlyHint string) parentMessageResponse {
 	workDir := filepath.Join(familyDataDir(), "workspace")
 	_ = os.MkdirAll(workDir, 0o700)
 
@@ -432,7 +469,21 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	// current the instant a steer (see steer.go) might land mid-turn, rather
 	// than only becoming complete once this turn's own completion path
 	// reloads it (see persistConversationReply's own doc comment).
-	persistNewMessages("parent", req.ConversationID, req.Messages)
+	persistNewMessages("parent", convID, messages)
+
+	provider, ok := engineToProvider(s.Engine)
+	if !ok {
+		reply, err := enginedetect.Chat(ctx, s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule), messages)
+		if err != nil {
+			msg := friendlyTurnError(err)
+			persistConversationReply("parent", convID, messages, msg)
+			return parentMessageResponse{Error: msg}
+		}
+		persistConversationReply("parent", convID, messages, reply)
+		return parentMessageResponse{Reply: reply}
+	}
+
+	childLabel := parentChildLabel(s.Child)
 
 	// Recorder captures custom-tool invocations for the response.
 	var evMu sync.Mutex
@@ -461,38 +512,37 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	var sugMu sync.Mutex
 	var suggestions []suggestion
 
+	// Created BEFORE the mutex so trace.locked() below can see how long this
+	// turn actually waited behind another one — see turntrace.go's own comment.
+	trace := newTurnTrace("parent", s.Engine)
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
-	defer cancel()
-
-	trace := newTurnTrace("parent", s.Engine)
+	trace.locked()
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:        provider,
-		ModelID:         mediumTierModelID(provider),
+		ModelID:         selectedModelID(s.FastMode, provider),
 		ReasoningEffort: "high",
 		WorkingDir:      workDir,
-		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		// Stable SessionID = the conversation id, so the SAME warm tmux session
 		// is reused across turns within this process. SessionHandle restores the
 		// coding agent's own `--resume` state across process restarts (loaded from
 		// disk), so context survives a restart without replaying the transcript —
 		// the AgentWorks mechanism. Ask sends only the newest message; the CLI
 		// reconstructs history from its own session store.
-		SessionID:                 req.ConversationID,
-		SessionHandle:             loadSessionHandle("parent", req.ConversationID, provider),
+		SessionID:                 convID,
+		SessionHandle:             loadSessionHandle("parent", convID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
 		Transport:                 experimentCodingAgentTransport(),
 		StreamCallback: func(text string) {
 			trace.delta()
-			statusHubs.publishDelta("parent:"+req.ConversationID, text)
+			statusHubs.publishDelta("parent:"+convID, text)
 		},
 		// The ONE canonical parent manifest (parent_tools.go) — identical across
 		// web chat, WhatsApp, and Pulse, because all of them share this same
 		// warm "parent" session.
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+req.ConversationID, trace, withLiveStatus("parent:"+req.ConversationID,
+		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+convID, trace, withLiveStatus("parent:"+convID,
 			parentTools(s.Engine, childLabel, parentToolSinks{
 				onEvent: func(ev toolEvent) {
 					evMu.Lock()
@@ -525,26 +575,24 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		trace.finish("", err)
 		msg := friendlyTurnError(err)
-		persistConversationReply("parent", req.ConversationID, req.Messages, msg)
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg})
-		return
+		persistConversationReply("parent", convID, messages, msg)
+		return parentMessageResponse{Error: msg}
 	}
 	trace.sessionReady(sess.Resumed())
 	defer sess.Close() // per-turn agent only; shared bridge + warm tmux persist
 
-	history := make([]agentsession.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
+	history := make([]agentsession.Message, 0, len(messages))
+	for _, m := range messages {
 		history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
 	}
-	if vp := strings.TrimSpace(req.ViewerPath); vp != "" && len(history) > 0 {
-		last := &history[len(history)-1]
-		last.Text += "\n\n(The parent currently has \"" + filepath.Base(vp) + "\" open on the right side of their screen — you can naturally reference what's showing there, e.g. \"I see you're looking at...\", without needing them to describe it.)"
+	if extraModelOnlyHint != "" && len(history) > 0 {
+		history[len(history)-1].Text += extraModelOnlyHint
 	}
 
 	// Register this turn as steerable for its whole duration, so a follow-up
-	// message the parent sends while it's still running can be injected live
-	// (see steer.go) instead of only ever being queued for afterward.
-	registerActiveTurn(req.ConversationID, sess.Agent())
+	// message sent on ANY channel while it's still running can be injected
+	// live (see steer.go) instead of only ever being queued for afterward.
+	registerActiveTurn(convID, sess.Agent())
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)
@@ -554,20 +602,19 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 		// silently vanish from the transcript, and any background work the agent
 		// already completed before the deadline (e.g. inbox files it already
 		// filed) must not look like it never happened. Reload-then-append (not
-		// req.Messages directly) so a message steered in mid-turn isn't lost.
+		// messages directly) so a message steered in mid-turn isn't lost.
 		msg := friendlyTurnError(err)
-		persistConversationReply("parent", req.ConversationID, req.Messages, msg)
+		persistConversationReply("parent", convID, messages, msg)
 		newSecretMu.Lock()
 		newVals := append([]string(nil), newSecretValues...)
 		newSecretMu.Unlock()
-		retroactivelyRedactStoredConversation("parent", req.ConversationID, newVals)
+		retroactivelyRedactStoredConversation("parent", convID, newVals)
 		debugMu.Lock()
 		debugOut := append([]debugToolCall(nil), debugCalls...)
 		debugMu.Unlock()
-		writeJSON(w, http.StatusOK, parentMessageResponse{Error: msg, DebugCalls: debugOut})
-		return
+		return parentMessageResponse{Error: msg, DebugCalls: debugOut}
 	}
-	saveSessionHandle("parent", req.ConversationID, sess.Handle())
+	saveSessionHandle("parent", convID, sess.Handle())
 
 	evMu.Lock()
 	out := append([]toolEvent(nil), events...)
@@ -575,20 +622,23 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 	sugMu.Lock()
 	sug := append([]suggestion(nil), suggestions...)
 	sugMu.Unlock()
-	reply = appendSentFileLinks(reply, sentFiles)
-	// Reload-then-append (not req.Messages directly) so a message the parent
-	// steered in mid-turn — appended to disk by handleParentSteer while this
-	// turn was still running — makes it into the final saved transcript
-	// instead of being overwritten by this handler's own stale snapshot.
-	persistConversationReply("parent", req.ConversationID, req.Messages, reply)
+	sentFilesMu.Lock()
+	sentFilesOut := append([]string(nil), sentFiles...)
+	sentFilesMu.Unlock()
+	reply = appendSentFileLinks(reply, sentFilesOut)
+	// Reload-then-append (not messages directly) so a message steered in mid-
+	// turn — appended to disk by handleParentSteer while this turn was still
+	// running — makes it into the final saved transcript instead of being
+	// overwritten by this call's own stale snapshot.
+	persistConversationReply("parent", convID, messages, reply)
 	newSecretMu.Lock()
 	newVals := append([]string(nil), newSecretValues...)
 	newSecretMu.Unlock()
-	retroactivelyRedactStoredConversation("parent", req.ConversationID, newVals)
+	retroactivelyRedactStoredConversation("parent", convID, newVals)
 	debugMu.Lock()
 	debugOut := append([]debugToolCall(nil), debugCalls...)
 	debugMu.Unlock()
-	writeJSON(w, http.StatusOK, parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, DebugCalls: debugOut})
+	return parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, DebugCalls: debugOut}
 }
 
 // fallbackParentMessage runs the legacy plain-completion path (no bridge tools)
@@ -596,7 +646,7 @@ func handleParentMessage(w http.ResponseWriter, r *http.Request) {
 func fallbackParentMessage(w http.ResponseWriter, r *http.Request, s familyState, req parentMessageRequest) {
 	workDir := filepath.Join(familyDataDir(), "workspace")
 	_ = os.MkdirAll(workDir, 0o700)
-	reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse), req.Messages)
+	reply, err := enginedetect.Chat(r.Context(), s.Engine, "", workDir, parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule), req.Messages)
 	if err != nil {
 		writeJSON(w, http.StatusOK, parentMessageResponse{Error: friendlyTurnError(err)})
 		return

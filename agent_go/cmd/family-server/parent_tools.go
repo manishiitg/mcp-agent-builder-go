@@ -93,6 +93,7 @@ func parentChildLabel(child *Child) string {
 func parentTools(engine, childLabel string, sinks parentToolSinks) []agentsession.Tool {
 	return []agentsession.Tool{
 		setChildProfileTool(sinks),
+		setChildScheduleTool(sinks),
 		setParentLabelTool(sinks),
 		openFileTool(sinks),
 		openActivityTool(sinks),
@@ -166,6 +167,78 @@ func setChildProfileTool(sinks parentToolSinks) agentsession.Tool {
 			seedWorkspace(saved) // keep memory/child-profile.json (read by skills) in sync
 			sinks.event(toolEvent{Tool: "set_child_profile", Name: saved.Name, Grade: saved.Grade, Board: saved.Board})
 			return fmt.Sprintf(`{"status":"ok","name":%q,"grade":%q,"board":%q}`, saved.Name, saved.Grade, saved.Board), nil
+		},
+	}
+}
+
+// setChildScheduleTool lets Quill capture the child's recurring weekly
+// commitments (school hours, tuition, sports practice — anything on the same
+// day/time every week) as the parent mentions them in conversation. ADDS to
+// the existing schedule rather than replacing it, so the parent can state
+// facts incrementally across separate conversations without the model
+// needing to reconstruct and resend the whole week each time (the direct
+// "This Week" schedule editor handles wholesale replace/remove instead).
+func setChildScheduleTool(sinks parentToolSinks) agentsession.Tool {
+	return agentsession.Tool{
+		Name: "set_child_schedule",
+		Description: "Save one or more recurring weekly commitments to the child's schedule — school hours, tuition, sports " +
+			"practice, anything that happens on the same day/time every week — once the parent tells you. ADDS to the " +
+			"existing schedule (never replaces it), so call this again for each new fact as it comes up rather than trying " +
+			"to restate the whole week at once. Powers the parent's \"This Week\" view, showing her free study time around " +
+			"these commitments — ask about her class schedule if it's still empty and the conversation is about planning " +
+			"or study time.",
+		Category: "family_tools",
+		Params: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"entries": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"day":   map[string]interface{}{"type": "string", "description": "e.g. Monday"},
+							"start": map[string]interface{}{"type": "string", "description": "24h local time, e.g. 08:00"},
+							"end":   map[string]interface{}{"type": "string", "description": "24h local time, e.g. 14:30"},
+							"label": map[string]interface{}{"type": "string", "description": "e.g. School, Football practice"},
+						},
+						"required": []string{"day", "start", "end", "label"},
+					},
+				},
+			},
+			"required": []string{"entries"},
+		},
+		Handler: func(_ context.Context, args map[string]interface{}) (string, error) {
+			raw, _ := args["entries"].([]interface{})
+			var added []ScheduleEntry
+			for _, item := range raw {
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				day := strings.TrimSpace(fmt.Sprint(m["day"]))
+				start := strings.TrimSpace(fmt.Sprint(m["start"]))
+				end := strings.TrimSpace(fmt.Sprint(m["end"]))
+				label := strings.TrimSpace(fmt.Sprint(m["label"]))
+				if day == "" || start == "" || end == "" || label == "" {
+					continue
+				}
+				added = append(added, ScheduleEntry{Day: day, Start: start, End: end, Label: label})
+			}
+			if len(added) == 0 {
+				return "", fmt.Errorf("no valid entries provided — each needs day, start, end, and label")
+			}
+			stateMu.Lock()
+			cur := loadState()
+			cur.Schedule.Entries = append(cur.Schedule.Entries, added...)
+			err := saveState(cur)
+			sched := cur.Schedule
+			stateMu.Unlock()
+			if err != nil {
+				return "", fmt.Errorf("failed to save schedule: %w", err)
+			}
+			mirrorChildSchedule(sched) // keep memory/child-schedule.json (read by skills) in sync
+			sinks.event(toolEvent{Tool: "set_child_schedule"})
+			return fmt.Sprintf(`{"status":"ok","added":%d,"total_entries":%d}`, len(added), len(sched.Entries)), nil
 		},
 	}
 }

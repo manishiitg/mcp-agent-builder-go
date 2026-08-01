@@ -117,7 +117,7 @@ func installMlxVoiceEnv() {
 		// Warm the Kokoro checkpoint (~312MB) into the persistent worker's
 		// memory — this is what makes the FIRST "read this aloud" instant
 		// instead of hanging on an unannounced download AND a cold model load.
-		if _, err := sharedVoiceWorker.call(map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
+		if _, err := sharedVoiceWorker.call(ctx, map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
 			setErr(fmt.Errorf("could not finish setting up the voice: %w", err))
 			return
 		}

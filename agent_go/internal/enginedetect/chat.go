@@ -36,6 +36,11 @@ type ChatMessage struct {
 	// proactive Quill note rather than a reply to something the parent said.
 	// Empty for ordinary replies.
 	Source string `json:"source,omitempty"`
+	// Path is set when Role == "tool" and Tool == "photo" — a workspace-
+	// relative path to an image (e.g. one just received over WhatsApp) that
+	// the UI renders inline via /api/workspace/raw, so it shows up in the
+	// transcript even though it arrived from a channel other than this screen.
+	Path string `json:"path,omitempty"`
 }
 
 // Chat runs a single agent turn for the given engine over the supplied

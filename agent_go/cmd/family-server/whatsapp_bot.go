@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -187,11 +188,18 @@ func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filenam
 // download or transcription just degrades gracefully (any accompanying text
 // still gets handled normally; a voice note that fails to transcribe still
 // gets saved and silently acknowledged, same as an image/document).
-// savedPath is the workspace-relative path of what's left in inbox/ after this
-// call, or "" when nothing remains there (download failed, or a voice note
-// was transcribed and its audio removed) — the caller uses it to tell the
-// NEXT real turn what's waiting, see waBot.noteUpload.
-func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceText string, savedPath string) {
+// savedPath is the workspace-relative path of what's left after this call
+// (inside destDir, or "" when nothing remains there — download failed, or a
+// voice note was transcribed and its audio removed) — the caller uses it to
+// tell the NEXT real turn what's waiting, see waBot.noteUpload.
+//
+// destDir is workspace-relative; "" defaults to "inbox" (the normal parent
+// path). A caller that recognized an "@child" mention (see
+// extractChildMention) passes the child's current activity dir instead, so
+// the attachment lands where the child's own turn will actually look for it
+// (via pendingChildUploadSuffix), not in the shared inbox no child turn ever
+// reads from.
+func (a *waAccount) ingestWhatsAppMedia(evt *events.Message, destDir string) (saved bool, voiceText string, savedPath string) {
 	m := evt.Message
 	if m == nil {
 		return false, "", ""
@@ -213,6 +221,9 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 		dl = m.AudioMessage
 		isVoice = true
 		name = "wa-voice-" + evt.Info.ID + extForMime(m.AudioMessage.GetMimetype(), ".ogg")
+	case m.VideoMessage != nil:
+		dl = m.VideoMessage
+		name = "wa-" + evt.Info.ID + extForMime(m.VideoMessage.GetMimetype(), ".mp4")
 	default:
 		return false, "", ""
 	}
@@ -228,7 +239,10 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message) (saved bool, voiceT
 	}
 
 	name = sanitizeInboxName(name)
-	relDir := "inbox"
+	relDir := strings.TrimSpace(destDir)
+	if relDir == "" {
+		relDir = "inbox"
+	}
 	absDir := filepath.Join(familyDataDir(), "workspace", relDir)
 	if err := os.MkdirAll(absDir, 0o700); err != nil {
 		log.Printf("[whatsapp] inbox mkdir failed: %v", err)
@@ -679,11 +693,13 @@ func (w *waBot) connectedAccounts() []*waAccount {
 }
 
 // sendWhatsAppFileTool lets the parent-mode agent hand over a test or study
-// guide as a real PDF attachment on WhatsApp, instead of only describing it
-// in text — e.g. "send me the fractions test as a PDF on WhatsApp". Scoped to
-// files inside an activity folder only (not an answer key elsewhere, not any
-// arbitrary file) — those stay off WhatsApp — and only sends to linked
-// accounts' own self-chats (SendDocumentToAllSelf) — never a third party.
+// guide — or the academic map / progress report — as a real PDF attachment
+// on WhatsApp, instead of only describing it in text — e.g. "send me the
+// fractions test as a PDF on WhatsApp", or Pulse attaching the progress
+// report to its own automated check-in. Scoped to files inside an activity
+// folder OR reports/ only (not an answer key elsewhere, not any arbitrary
+// file) — those stay off WhatsApp — and only sends to linked accounts' own
+// self-chats (SendDocumentToAllSelf) — never a third party.
 // onSent, when non-nil, is called with the workspace-relative path of each
 // file successfully sent — so the caller (a web-chat or WhatsApp turn) can
 // append a real, clickable reference to the persisted reply afterward. The
@@ -693,11 +709,13 @@ func (w *waBot) connectedAccounts() []*waAccount {
 func sendWhatsAppFileTool(onSent func(path string)) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "send_whatsapp_file",
-		Description: "Send a test or study material file to the parent as a real PDF attachment on their own WhatsApp " +
-			"(their linked \"message yourself\" chat) — only call this when the parent explicitly asks for a file/PDF over " +
-			"WhatsApp. The file must already exist as a PDF (use agent_browser: open the file, then run its \"pdf\" command " +
-			"to export a PDF into the same folder, e.g. <Subject>/<Topic>/<activity>/<name>.pdf, before calling this). " +
-			"Requires WhatsApp to be linked (Connectors → WhatsApp) — if it's not, tell the parent to link it there first.",
+		Description: "Send a test, study material file, academic map, or progress report to the parent as a real PDF " +
+			"attachment on their own WhatsApp (their linked \"message yourself\" chat) — only call this when the parent " +
+			"explicitly asks for a file/PDF over WhatsApp, or (Pulse only) as part of an automated check-in that has " +
+			"genuinely new progress to show. The file must already exist as a PDF (use agent_browser: open the file, then " +
+			"run its \"pdf\" command to export a PDF into the same folder — e.g. <Subject>/<Topic>/<activity>/<name>.pdf for " +
+			"an activity, or reports/<name>.pdf for the academic map or progress report — before calling this). Requires " +
+			"WhatsApp to be linked (Connectors → WhatsApp) — if it's not, tell the parent to link it there first.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -716,8 +734,12 @@ func sendWhatsAppFileTool(onSent func(path string)) agentsession.Tool {
 			if !strings.HasSuffix(strings.ToLower(rel), ".pdf") {
 				return "", fmt.Errorf("path must be a .pdf file")
 			}
-			if findActivityForPath(rel) == "" {
-				return "", fmt.Errorf("send_whatsapp_file only sends files inside an activity folder")
+			// reports/ (the academic map, the progress report) is parent-facing
+			// summary content, same as any activity's own files — deliberately
+			// distinct from an answer key or anything else that stays off
+			// WhatsApp, which live elsewhere and are NOT covered by this rule.
+			if findActivityForPath(rel) == "" && !strings.HasPrefix(strings.Trim(rel, "/"), "reports/") {
+				return "", fmt.Errorf("send_whatsapp_file only sends files inside an activity folder or reports/")
 			}
 			abs, ok := resolveWorkspacePath(rel)
 			if !ok {
@@ -770,6 +792,8 @@ func extForMime(mime, def string) string {
 		return ".pdf"
 	case strings.Contains(mime, "ogg"):
 		return ".ogg"
+	case strings.Contains(mime, "mp4"):
+		return ".mp4"
 	default:
 		return def
 	}
@@ -784,6 +808,31 @@ func sanitizeInboxName(name string) string {
 		name = "wa-attachment"
 	}
 	return name
+}
+
+// childMentionRe / parentMentionRe match "@child"/"@parent" as whole words,
+// case-insensitive, so "@childhood" or "email@childcare.com" don't
+// false-positive. These are MODE SWITCHES (see whatsapp_routing.go), not
+// per-message tags: sending "@child" once puts every later image message
+// into the child's current activity until "@parent" switches back.
+var childMentionRe = regexp.MustCompile(`(?i)@child\b`)
+var parentMentionRe = regexp.MustCompile(`(?i)@parent\b`)
+
+// extractModeSwitch checks for an "@child"/"@parent" mode-switch keyword
+// anywhere in the text and returns the caption with it stripped out — e.g.
+// "@child she got stuck on Q5" -> ("she got stuck on Q5", "child"). "" for
+// mode means no switch keyword was present. Whitespace left behind by
+// removing the keyword is collapsed so the remaining text reads naturally
+// either way (the keyword was at the start, the end, or mid-sentence).
+func extractModeSwitch(text string) (rest string, mode string) {
+	switch {
+	case childMentionRe.MatchString(text):
+		return strings.Join(strings.Fields(childMentionRe.ReplaceAllString(text, " ")), " "), waRoutingModeChild
+	case parentMentionRe.MatchString(text):
+		return strings.Join(strings.Fields(parentMentionRe.ReplaceAllString(text, " ")), " "), waRoutingModeParent
+	default:
+		return text, ""
+	}
 }
 
 func extractWhatsAppMessageText(m *waProto.Message) string {
@@ -816,15 +865,193 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 	text := extractWhatsAppMessageText(evt.Message)
 
-	// An image or document attachment: save it straight into the inbox and
-	// stop there — only text messages ever reach the agent. A bare attachment
-	// with no caption just gets acknowledged (👀) below and never starts a
-	// turn; the file waits in the inbox, NAMED in w.pendingUploads, until the
-	// next real turn — which gets told about it explicitly (see below), not
-	// left to notice it on its own. A voice note is the exception: its local
+	// "@child"/"@parent" flip a PERSISTENT routing mode (see
+	// whatsapp_routing.go) rather than tagging just this one message — once
+	// switched, every later image attachment goes to that target until
+	// switched back, so snapping several photos in a row doesn't need the
+	// keyword retyped each time.
+	if rest, switchTo := extractModeSwitch(text); switchTo != "" {
+		setWaRoutingMode(switchTo)
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		label := parentChildLabel(s.Child)
+		var confirmation string
+		if switchTo == waRoutingModeChild {
+			title := ""
+			if dir := currentActivityDir(); dir != "" {
+				if act, ok := loadActivity(dir); ok && act.Title != "" {
+					title = act.Title
+				}
+			}
+			if title != "" {
+				confirmation = fmt.Sprintf("Switched to child mode — photos now go to %q. Send @parent to switch back.", title)
+			} else {
+				confirmation = "Switched to child mode — photos will go to " + label + "'s activity once one is open. Send @parent to switch back."
+			}
+		} else {
+			confirmation = "Back to our conversation — photos come to me again."
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "🔀")
+		if acct.client != nil {
+			_ = acct.sendTextWithRetry(info.Chat, confirmation, 2, 15*time.Second, "whatsapp mode switch")
+		}
+		text = rest // whatever text (if any) is left after stripping the keyword, e.g. "@child she got Q5 wrong"
+	}
+
+	// Where an attachment in THIS message lands: the child's current
+	// activity if we're currently in child mode, otherwise the shared parent
+	// inbox — unchanged default behavior.
+	destDir := ""
+	var childActivityDir string
+	inChildMode := loadWaRoutingMode() == waRoutingModeChild
+	if inChildMode {
+		childActivityDir = currentActivityDir()
+		if childActivityDir != "" {
+			destDir = childActivityDir
+		}
+	}
+
+	// An image or document attachment: save it straight into the inbox (or,
+	// in child mode, the child's current activity folder) and stop there —
+	// only text messages ever reach the agent. A bare attachment with no
+	// caption just gets acknowledged (👀) below and never starts a turn; the
+	// file waits in the inbox, NAMED in w.pendingUploads, until the next real
+	// turn — which gets told about it explicitly (see below), not left to
+	// notice it on its own. A voice note is the exception: its local
 	// transcript (see ingestWhatsAppMedia) stands in for typed text below, so
-	// it drives a turn just like normal.
-	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt)
+	// it drives a turn just like normal — and is NEVER child-routed, even in
+	// child mode, since it's genuinely meant to converse, not attach a photo.
+	gotMedia, voiceText, savedPath := acct.ingestWhatsAppMedia(evt, destDir)
+
+	// A photo or video (never a document or voice note) gets a visible card in
+	// the desktop chat transcript the instant it's saved — independent of
+	// whatever else happens with any caption text below — so "did a photo/
+	// video arrive" is visible on screen, not just inferred from Quill's
+	// reply. Lands in whichever conversation the file itself landed in: the
+	// child's activity when routed there, otherwise the shared parent
+	// conversation (including the child-mode-but-no-activity-open fallback,
+	// where the file already fell back to the parent inbox).
+	if gotMedia && savedPath != "" && (evt.Message.ImageMessage != nil || evt.Message.VideoMessage != nil) {
+		mediaTool := "photo"
+		if evt.Message.VideoMessage != nil {
+			mediaTool = "video"
+		}
+		if inChildMode && childActivityDir != "" {
+			appendToolMessageToConversation("child", childActivityDir, enginedetect.ChatMessage{Role: "tool", Tool: mediaTool, Path: savedPath})
+		} else {
+			appendToolMessageToConversation("parent", parentConversationID, enginedetect.ChatMessage{Role: "tool", Tool: mediaTool, Path: savedPath})
+		}
+	}
+
+	// A voice note whose transcription failed (STT worker down/timed out) or
+	// was disabled otherwise vanishes from the desktop's point of view —
+	// WhatsApp still gets some ack below, but nothing on screen explained
+	// why nothing happened. This card surfaces that failure in the same
+	// transcript a successfully-transcribed voice note lands in (see the
+	// "🎙️ I heard: ..." path further down), with the raw audio still
+	// playable so it isn't lost even though it couldn't be read aloud as text.
+	if gotMedia && savedPath != "" && evt.Message.AudioMessage != nil && voiceText == "" {
+		if inChildMode && childActivityDir != "" {
+			appendToolMessageToConversation("child", childActivityDir, enginedetect.ChatMessage{Role: "tool", Tool: "voice_failed", Path: savedPath})
+		} else {
+			appendToolMessageToConversation("parent", parentConversationID, enginedetect.ChatMessage{Role: "tool", Tool: "voice_failed", Path: savedPath})
+		}
+	}
+
+	if inChildMode && gotMedia && voiceText == "" {
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		label := parentChildLabel(s.Child)
+		if childActivityDir == "" {
+			// destDir was left "" above, so the attachment already fell back
+			// to the shared inbox — not lost, just not where it needs to be.
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "You're in child mode, but there's no activity open right now, so I couldn't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity")
+			}
+			return
+		}
+		if savedPath == "" {
+			return // download failed — ingestWhatsAppMedia already logged why
+		}
+		saveCurrentUploadWithNote(savedPath, strings.TrimSpace(text))
+		title := childActivityDir
+		if act, ok := loadActivity(childActivityDir); ok && act.Title != "" {
+			title = act.Title
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "✅")
+		if acct.client != nil {
+			_ = acct.sendTextWithRetry(info.Chat, fmt.Sprintf("Added to %q — I'll look at it as soon as %s is back in that activity.", title, label), 2, 15*time.Second, "child photo confirmation")
+		}
+		return
+	}
+
+	// A genuinely typed message (not a voice transcript — those always stay
+	// on the parent path, see above) sent while in child mode goes to the
+	// CHILD's own conversation and runs a real turn there via runChildTurn —
+	// otherwise a follow-up like "can you review these answers" would reach
+	// the parent conversation instead, which has no idea a photo was just
+	// added to the child's activity (confirmed live: exactly this happened
+	// before this branch existed).
+	if inChildMode && strings.TrimSpace(text) != "" && voiceText == "" {
+		stateMu.Lock()
+		s := loadState()
+		stateMu.Unlock()
+		if s.Engine == "" || s.Child == nil {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "Setup isn't complete yet, so I can't run this in child mode.", 2, 15*time.Second, "child mode setup incomplete")
+			}
+			return
+		}
+		dir := currentActivityDir()
+		if dir == "" {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			if acct.client != nil {
+				_ = acct.sendTextWithRetry(info.Chat, "There's no activity open right now, so I can't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity text")
+			}
+			return
+		}
+
+		// Same live-steer-first pattern as the parent path above: if a child
+		// turn is already running for this exact activity, inject this
+		// message into it rather than only ever queuing behind agentTurnMu.
+		if trySteer(context.Background(), dir, text) {
+			appendUserMessageToConversation("child", dir, text)
+			acct.react(info.Chat, info.Sender, info.ID, "↩️")
+			return
+		}
+
+		acct.react(info.Chat, info.Sender, info.ID, "👀")
+		longRunDone := make(chan struct{})
+		go func() {
+			select {
+			case <-longRunDone:
+			case <-time.After(12 * time.Second):
+				acct.react(info.Chat, info.Sender, info.ID, "⏳")
+			}
+		}()
+
+		existing, _ := loadStoredConversation("child", dir)
+		history := append(append([]enginedetect.ChatMessage(nil), existing.Messages...), enginedetect.ChatMessage{Role: "user", Text: text})
+		resp := runChildTurn(context.Background(), s, dir, history)
+		close(longRunDone)
+		if resp.Error != "" {
+			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			log.Printf("[whatsapp] child-mode turn failed: %s", resp.Error)
+			return
+		}
+		acct.react(info.Chat, info.Sender, info.ID, "") // clear the ack — the reply is the completion signal
+		if acct.client != nil {
+			if err := acct.sendTextWithRetry(info.Chat, resp.Reply, 3, 30*time.Second, "child mode reply"); err != nil {
+				acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+			}
+		}
+		return
+	}
+
 	if strings.TrimSpace(text) == "" && voiceText != "" {
 		text = "🎙️ " + voiceText
 		// Confirm what was actually heard right away, decoupled from the real
@@ -905,43 +1132,30 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 // the SAME shared "parent" conversation, so it never needs to know which
 // account triggered it.
 func (w *waBot) runTurn(text string) (string, error) {
-	agentTurnMu.Lock()
-	defer agentTurnMu.Unlock()
-
 	stateMu.Lock()
 	s := loadState()
 	stateMu.Unlock()
 	if s.Engine == "" {
 		return "", fmt.Errorf("no learning engine selected")
 	}
-	provider, ok := engineToProvider(s.Engine)
-	if !ok {
+	if _, ok := engineToProvider(s.Engine); !ok {
 		return "", fmt.Errorf("engine %q has no provider mapping", s.Engine)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-	defer cancel()
 
 	// WhatsApp joins the SINGLE parent conversation (same file + same warm tmux
 	// session as the web chat and Pulse) so Quill has one unified memory across
 	// every channel — a message on WhatsApp continues the same thread as the web.
 	convID := parentConversationID
-	workDir := filepath.Join(familyDataDir(), "workspace")
 
-	// Build the full history like the web chat does. In resume mode Ask sends
-	// only the newest message (the coding agent restores prior context from its
-	// warm tmux, or its `--resume` session store after a restart via the loaded
-	// SessionHandle) — so the older messages here are for the persisted transcript
-	// / UI, not re-sent to the model. WhatsApp has no frontend to supply the
-	// thread, so we load it from the persisted file (the UI's source of truth).
+	// WhatsApp has no frontend to supply the thread, so build it from the
+	// persisted file (the UI's source of truth) — the web chat gets its
+	// messages from the request instead, but both end up calling
+	// runParentTurn with the same shape: full history including the newest
+	// message, exactly as it should be persisted.
 	existing, _ := loadStoredConversation("parent", convID)
-	prior := existing.Messages
-	history := make([]agentsession.Message, 0, len(prior)+1)
-	for _, m := range prior {
-		if m.Role == "user" || m.Role == "assistant" {
-			history = append(history, agentsession.Message{Role: m.Role, Text: m.Text})
-		}
-	}
+	messages := append([]enginedetect.ChatMessage(nil), existing.Messages...)
+	messages = append(messages, enginedetect.ChatMessage{Role: "user", Text: text})
+
 	// Drained once, right here, so whichever real turn comes next — this one —
 	// is told PLAINLY that file(s) are waiting, instead of leaving it to notice
 	// on its own via the system prompt's general "check inbox" habit (which
@@ -958,85 +1172,15 @@ func (w *waBot) runTurn(text string) (string, error) {
 	// the stored/visible message stays clean). Because the tmux session is shared
 	// with the web chat, the base system prompt may be the web one; this keeps
 	// replies phone-appropriate regardless.
-	history = append(history, agentsession.Message{Role: "user", Text: text + "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did." + uploadNote + ")"})
+	hint := "\n\n(Replying over WhatsApp on the phone — keep it short and plain text: no markdown, headings, or file paths. IMPORTANT: there is no screen/panel here — calling open_file does NOT show the parent anything, it's a silent no-op on this channel. NEVER say \"I've opened it\" or \"it's ready and open\" here — that's only true on the web app. Instead, either describe what's in the file directly in your reply, or if the parent wants the actual file, use send_whatsapp_file to send it as a real PDF attachment (export to PDF via agent_browser first if it isn't one already). If the message above starts with 🎙️, that prefix means it's a LOCAL, ON-DEVICE TRANSCRIPT of a voice note the parent just sent — the text after it is genuinely what they said, already fully readable by you. Respond directly to its content exactly as you would a typed message; do NOT say you can't listen to or process voice/audio messages — you just did." + uploadNote + ")"
 
-	// Persist the parent's message the INSTANT the turn starts (not just at
-	// completion) — same fix as the web chat path (see persistNewMessages'
-	// own doc comment): otherwise a steer landing mid-turn, or simply this
-	// snapshot going stale relative to disk, could get silently overwritten
-	// by fallback []enginedetect.ChatMessage built once here at turn start.
-	fallback := append([]enginedetect.ChatMessage(nil), prior...)
-	fallback = append(fallback, enginedetect.ChatMessage{Role: "user", Text: text})
-	persistNewMessages("parent", convID, fallback)
-	persistFull := func(reply string) {
-		persistConversationReply("parent", convID, fallback, reply)
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
+	resp := runParentTurn(ctx, s, convID, messages, hint)
+	if resp.Error != "" {
+		return "", fmt.Errorf("%s", resp.Error)
 	}
-
-	var sentFilesMu sync.Mutex
-	var sentFiles []string
-
-	sess, err := agentsession.New(ctx, agentsession.Config{
-		Provider: provider,
-		// Was unset here — the ONE parent-session construction site missing it
-		// (chat.go and pulse.go both pin this same tier). Confirmed live: a
-		// WhatsApp turn logged "model=high" for codex-cli with nobody having
-		// asked for that, which is just whatever the underlying library
-		// defaults to when ModelID is left empty — not a real, deliberate
-		// choice. Pinned to match every other surface of this same
-		// conversation, so which channel a message arrives on never changes
-		// which model answers it.
-		ModelID:         mediumTierModelID(provider),
-		ReasoningEffort: "high",
-		WorkingDir:      workDir,
-		// Same base persona as the web chat — it's one unified conversation, so
-		// the prompt shouldn't fork by channel; WhatsApp formatting is the per-turn
-		// hint appended to the message above.
-		SystemPrompt: parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
-		// Stable SessionID = the single parent conversation, so the SAME warm
-		// tmux session is used across turns AND channels within this process.
-		// SessionHandle restores the coding agent's `--resume` state across
-		// restarts (loaded from disk) so context survives a restart — the
-		// AgentWorks mechanism. Ask sends only the newest message; the CLI
-		// reconstructs history from its own session store.
-		SessionID:                 convID,
-		SessionHandle:             loadSessionHandle("parent", convID, provider),
-		BridgeRoutingInstructions: bridgeRoutingInstructions(),
-		// The ONE canonical parent manifest (parent_tools.go). This surface shares
-		// the SAME warm "parent" session as web chat and Pulse, so it must not
-		// register a narrower set — whichever surface starts the session would
-		// otherwise decide everyone's capabilities. Signals this channel can't
-		// render (suggestion buttons, the file-open pane) are simply dropped via
-		// nil sinks; the tools themselves stay registered and callable.
-		Tools: withLiveStatus("parent:"+convID, parentTools(s.Engine, parentChildLabel(s.Child), parentToolSinks{
-			onSentFile: func(path string) {
-				sentFilesMu.Lock()
-				sentFiles = append(sentFiles, path)
-				sentFilesMu.Unlock()
-			},
-		})),
-	})
-	if err != nil {
-		persistFull(friendlyTurnError(err))
-		return "", err
-	}
-	defer sess.Close()
-
-	// Register this turn as steerable too — it's the same "parent" conversation
-	// id as the web chat, so a follow-up the parent sends there while this
-	// WhatsApp-originated turn is still running can be injected live (see
-	// steer.go) instead of only ever queuing.
-	registerActiveTurn(convID, sess.Agent())
-	defer clearActiveTurn()
-
-	reply, err := sess.Ask(ctx, history)
-	if err != nil {
-		persistFull(friendlyTurnError(err))
-		return "", err
-	}
-	saveSessionHandle("parent", convID, sess.Handle())
-	reply = appendSentFileLinks(reply, sentFiles)
-	persistFull(reply)
-	return reply, nil
+	return resp.Reply, nil
 }
 
 // --- HTTP routes ---------------------------------------------------------

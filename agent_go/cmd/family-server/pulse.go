@@ -107,7 +107,13 @@ func pulseChecks(s familyState) []pulseCheck {
 				"guessing. Before finishing, update memory/browser-notes.md with anything you learned this run that will save time next check-in — " +
 				"a menu path, a section that turned out to be a dead end, a login quirk. Keep it SHORT (a few lines per site, not a transcript of the " +
 				"visit) and edit your own existing entry for that site rather than appending a new one each time, so the file stays a compact, " +
-				"current cheat sheet instead of growing forever." + pulseReplyRules,
+				"current cheat sheet instead of growing forever. " +
+				"Also rewrite memory/school-deadlines.json with the CURRENT real picture of assignments/tests and their due dates you just saw across " +
+				"the site(s) — this powers the parent's \"This Week\" view, so it needs real structured data, not prose. Fully rewrite the whole file " +
+				"each time (same convention as browser-notes.md/preferences.md: the current real picture, not an accumulating log) — drop anything no " +
+				"longer listed on the site (submitted, past its window, removed) rather than leaving it sitting there stale. Shape: " +
+				"{\"deadlines\":[{\"title\":\"...\",\"subject\":\"...\",\"due_date\":\"YYYY-MM-DD\",\"kind\":\"assignment|test\"}],\"updated_at\":\"...\"}. " +
+				"Only include items with a real, known due date — skip anything where the site didn't give you one rather than guessing." + pulseReplyRules,
 		})
 	}
 
@@ -127,6 +133,17 @@ func pulseChecks(s familyState) []pulseCheck {
 			"her own activity conversations, and update it in place if a genuine interest (or clear disinterest) signal isn't already captured. This " +
 			"powers skills/discover-something-new/SKILL.md, which the parent can ask for anytime (\"make her something fun this weekend\"). " +
 			"Tell the parent in one short line what (if anything) you noted." + pulseReplyRules,
+	})
+
+	checks = append(checks, pulseCheck{
+		trigger: "Automated check-in — backing up the workspace",
+		instruction: "This is an automated Pulse check-in, focused ONLY on backup. Read skills/backup/SKILL.md and follow it exactly, " +
+			"including its rule that the FIRST (repo-creating) backup must be attended — this is an automated cycle with no parent " +
+			"present, so if it isn't set up yet (or backup/status.json has never shown a verified success), just note ONCE that " +
+			"it isn't set up, don't repeat that note if you already said it recently, and stop. If it IS already set up and " +
+			"verified, run a real backup per the skill (check the token, skip-if-unchanged, upload excluding archive/, write " +
+			"status.json). Tell the parent in one short line what happened, or say nothing new-worthy if it was skipped as " +
+			"unchanged." + pulseReplyRules,
 	})
 
 	_ = engine
@@ -250,7 +267,13 @@ func runPulseOnce(ctx context.Context, force bool) error {
 			"it) so the email reads as organized sections, not one dense paragraph. If truly nothing meaningful happened " +
 			"across every check this cycle, still call notify_user with one short, honest line saying so — never skip the " +
 			"call itself; it's the parent's only signal this cycle ran at all. Afterward, report the outcome honestly in " +
-			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't.",
+			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't. " +
+			"If (and only if) the progress report actually gained genuinely new content THIS cycle — not just a re-save of " +
+			"the same picture — a WhatsApp-only parent still can't just click it open the way a parent using the app can, " +
+			"so also hand them the real document: export reports/progress.html to a PDF via agent_browser's \"pdf\" command " +
+			"(into reports/progress.pdf) and send it with send_whatsapp_file, a short caption naming what's new and what " +
+			"she should prepare for next. Skip this entirely on a cycle where nothing genuinely changed — a PDF resent every " +
+			"five minutes with no new content is noise, not help.",
 	}
 	reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, notifyCheck)
 	if err != nil {
@@ -295,10 +318,10 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:                  provider,
-		ModelID:                   mediumTierModelID(provider),
+		ModelID:                   selectedModelID(s.FastMode, provider),
 		ReasoningEffort:           "high",
 		WorkingDir:                filepath.Join(familyDataDir(), "workspace"),
-		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse),
+		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		SessionID:                 convID,
 		SessionHandle:             loadSessionHandle("parent", convID, provider),
 		BridgeRoutingInstructions: bridgeRoutingInstructions(),
@@ -343,6 +366,14 @@ func startPulseTicker(ctx context.Context) {
 					due = time.Since(last) >= s.Pulse.cadence()
 				}
 			}
+			// The cadence alone says "enough time has passed"; PreferredHour
+			// additionally holds off until the local clock has actually
+			// reached that hour, so a daily cadence lands around the same
+			// time each day instead of drifting to whenever the cadence
+			// window happens to elapse (a restart, a deferred run, etc.).
+			if due && s.Pulse.PreferredHourSet {
+				due = time.Now().Hour() >= s.Pulse.PreferredHour
+			}
 			if !due {
 				continue
 			}
@@ -358,10 +389,12 @@ func startPulseTicker(ctx context.Context) {
 // --- HTTP routes ---------------------------------------------------------
 
 type pulseConfigResponse struct {
-	Enabled      bool     `json:"enabled"`
-	CadenceHours int      `json:"cadence_hours"`
-	LastRunAt    string   `json:"last_run_at,omitempty"`
-	WatchSites   []string `json:"watch_sites,omitempty"`
+	Enabled          bool     `json:"enabled"`
+	CadenceHours     int      `json:"cadence_hours"`
+	LastRunAt        string   `json:"last_run_at,omitempty"`
+	WatchSites       []string `json:"watch_sites,omitempty"`
+	PreferredHour    int      `json:"preferred_hour"`
+	PreferredHourSet bool     `json:"preferred_hour_set"`
 }
 
 func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
@@ -369,7 +402,14 @@ func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
 	if hours <= 0 {
 		hours = 24
 	}
-	return pulseConfigResponse{Enabled: p.Enabled, CadenceHours: hours, LastRunAt: p.LastRunAt, WatchSites: p.Sites()}
+	return pulseConfigResponse{
+		Enabled:          p.Enabled,
+		CadenceHours:     hours,
+		LastRunAt:        p.LastRunAt,
+		WatchSites:       p.Sites(),
+		PreferredHour:    p.PreferredHour,
+		PreferredHourSet: p.PreferredHourSet,
+	}
 }
 
 // pulseRunMu prevents two manual "run now" triggers overlapping — a real
@@ -429,6 +469,11 @@ type setPulseConfigRequest struct {
 	Enabled      *bool     `json:"enabled,omitempty"`
 	CadenceHours *int      `json:"cadence_hours,omitempty"`
 	WatchSites   *[]string `json:"watch_sites,omitempty"`
+	// PreferredHour (0-23) and PreferredHourSet are independent so the
+	// frontend can toggle "use a specific time" off without losing the hour
+	// value the parent had picked, and back on without them re-entering it.
+	PreferredHour    *int  `json:"preferred_hour,omitempty"`
+	PreferredHourSet *bool `json:"preferred_hour_set,omitempty"`
 }
 
 // POST /api/pulse/config — partial update; only provided fields change.
@@ -459,6 +504,12 @@ func handleSetPulseConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Pulse.WatchSites = cleaned
 		s.Pulse.SchoolPortalURL = "" // fully replaced by the generic list; drop the legacy single value
+	}
+	if req.PreferredHour != nil && *req.PreferredHour >= 0 && *req.PreferredHour <= 23 {
+		s.Pulse.PreferredHour = *req.PreferredHour
+	}
+	if req.PreferredHourSet != nil {
+		s.Pulse.PreferredHourSet = *req.PreferredHourSet
 	}
 	err := saveState(s)
 	stateMu.Unlock()
