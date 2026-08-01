@@ -193,6 +193,13 @@ export function PulseWorkspace({
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
   const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
+  // Distinct from selectedModule on purpose. selectedModule always holds a
+  // value because the inspector below needs something to render, and an effect
+  // re-picks a default whenever it is empty — so using it to filter the list
+  // meant Clear filter showed everything for one frame and then snapped back to
+  // one module as that effect re-fired. This is only ever set by an explicit
+  // click, and cleared means cleared.
+  const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -291,7 +298,7 @@ export function PulseWorkspace({
         // Selecting a module narrows this list too, so the module grid and the
         // findings list are two views of one selection rather than two lists
         // that ignore each other.
-        .filter((finding) => !selectedModule || finding.module === selectedModule)
+        .filter((finding) => !moduleFilter || finding.module === moduleFilter)
         .sort((a, b) => {
         const statusPriority = (finding: PulseFindingLifecycle) => (
           finding.status === 'open' ? 3 : finding.status === 'awaiting_verification' ? 2 : 1
@@ -304,7 +311,7 @@ export function PulseWorkspace({
       // clicking a count is to see everything it counted.
       return focus === 'all' ? matched.slice(0, 25) : matched
     },
-    [findings, focus, selectedModule],
+    [findings, focus, moduleFilter],
   )
   const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
 
@@ -487,19 +494,19 @@ export function PulseWorkspace({
             <div>
               <h3 className="text-sm font-semibold text-foreground">
                 {FOCUS_TITLES[focus]}
-                {selectedModule && (
+                {moduleFilter && (
                   <span className="ml-1.5 font-normal text-muted-foreground">
-                    in {moduleSummaries.find((m) => m.id === selectedModule)?.label || selectedModule}
+                    in {moduleSummaries.find((m) => m.id === moduleFilter)?.label || moduleFilter}
                   </span>
                 )}
               </h3>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{FOCUS_HINTS[focus]}</p>
             </div>
             <div className="flex items-center gap-2">
-              {(focus !== 'all' || selectedModule) && (
+              {(focus !== 'all' || moduleFilter) && (
                 <button
                   type="button"
-                  onClick={() => { setFocus('all'); setSelectedModule(null) }}
+                  onClick={() => { setFocus('all'); setModuleFilter(null) }}
                   className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
                 >
                   Clear filter
@@ -610,7 +617,7 @@ export function PulseWorkspace({
               <button
                 key={module.id}
                 type="button"
-                onClick={() => setSelectedModule(module.id)}
+                onClick={() => { setSelectedModule(module.id); setModuleFilter(module.id) }}
                 aria-pressed={active}
                 className={`min-w-0 bg-background p-3 text-left transition-colors hover:bg-muted/40 ${active ? 'ring-2 ring-inset ring-primary/50' : ''}`}
               >
