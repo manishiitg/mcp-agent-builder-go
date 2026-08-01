@@ -26,6 +26,7 @@ import { SoulViewer } from './SoulViewer'
 import { PulseModuleInspector } from './PulseModuleInspector'
 import {
   buildPulseModuleActivity,
+  acknowledgedReason,
   isPulseFindingClosed,
   summarizePulseModule,
 } from './pulseModuleInspectorUtils'
@@ -98,23 +99,74 @@ function FindingStatus({ finding }: { finding: PulseFindingLifecycle }) {
   )
 }
 
+/** Which slice of the backlog the findings list is showing. */
+type PulseFocus = 'all' | 'awaiting_user' | 'open' | 'blocked' | 'fixing' | 'awaiting_verification' | 'closed'
+
+const FOCUS_TITLES: Record<PulseFocus, string> = {
+  all: 'Needs attention',
+  awaiting_user: 'Waiting on you',
+  open: 'Pulse can fix these',
+  blocked: 'Blocked',
+  fixing: 'Being fixed now',
+  awaiting_verification: 'Waiting for proof',
+  closed: 'Closed',
+}
+
+const FOCUS_HINTS: Record<PulseFocus, string> = {
+  all: 'Open findings across every review module',
+  awaiting_user: 'Each one needs a decision only you can make',
+  open: 'Queued for a fixer; nothing is blocking them',
+  blocked: 'Diagnosed, but Pulse has no action available',
+  fixing: 'A fixer holds these right now',
+  awaiting_verification: 'Changed, but not proven until the next valid run',
+  closed: 'Resolved, rejected, or handed to another owner',
+}
+
 function Metric({
   label,
   value,
   detail,
   tone,
+  focus,
+  activeFocus,
+  onFocus,
 }: {
   label: string
   value: number
   detail: string
   tone: string
+  focus?: PulseFocus
+  activeFocus?: PulseFocus
+  onFocus?: (focus: PulseFocus) => void
 }) {
-  return (
-    <div className={`rounded-xl border p-3 ${tone}`}>
+  const body = (
+    <>
       <div className="text-[10px] font-semibold uppercase tracking-wide opacity-75">{label}</div>
       <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
       <div className="mt-0.5 text-[10px] opacity-75">{detail}</div>
-    </div>
+    </>
+  )
+  if (!focus || !onFocus) {
+    return <div className={`rounded-xl border p-3 ${tone}`}>{body}</div>
+  }
+  const selected = activeFocus === focus
+  // A count with nothing behind it should not look clickable — the empty list
+  // it opens says less than the zero already does.
+  const empty = value === 0
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      disabled={empty}
+      onClick={() => onFocus(selected ? 'all' : focus)}
+      className={`rounded-xl border p-3 text-left transition ${tone} ${
+        empty
+          ? 'cursor-default opacity-60'
+          : 'cursor-pointer hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current'
+      } ${selected ? 'ring-2 ring-current' : ''}`}
+    >
+      {body}
+    </button>
   )
 }
 
@@ -140,6 +192,7 @@ export function PulseWorkspace({
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
   const [selectedModule, setSelectedModule] = useState<string | null>(null)
+  const [focus, setFocus] = useState<PulseFocus>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -210,17 +263,41 @@ export function PulseWorkspace({
     [finalCommandStates],
   )
   const attentionFindings = useMemo(
-    () => findings
-      .filter((finding) => !isPulseFindingClosed(finding.status))
-      .sort((a, b) => {
+    () => {
+      const matchesFocus = (finding: PulseFindingLifecycle) => {
+        switch (focus) {
+          case 'all':
+            return !isPulseFindingClosed(finding.status)
+          case 'closed':
+            return isPulseFindingClosed(finding.status)
+          case 'fixing':
+            return finding.status === 'fixing'
+          case 'awaiting_verification':
+            return finding.status === 'awaiting_verification'
+          case 'awaiting_user':
+            return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'awaiting_user'
+          case 'blocked':
+            return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'blocked'
+          case 'open':
+            return finding.status !== 'acknowledged'
+              ? finding.status === 'open'
+              : acknowledgedReason(finding) === 'other'
+          default:
+            return true
+        }
+      }
+      const matched = findings.filter(matchesFocus).sort((a, b) => {
         const statusPriority = (finding: PulseFindingLifecycle) => (
           finding.status === 'open' ? 3 : finding.status === 'awaiting_verification' ? 2 : 1
         )
         const priority = statusPriority(b) - statusPriority(a)
         return priority || (b.last_seen_at || '').localeCompare(a.last_seen_at || '')
       })
-      .slice(0, 6),
-    [findings],
+      // Unfiltered stays a preview; a chosen slice shows the whole slice,
+      // because the point of clicking a count is to see what it counted.
+      return focus === 'all' ? matched.slice(0, 6) : matched
+    },
+    [findings, focus],
   )
   const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
 
@@ -339,36 +416,54 @@ export function PulseWorkspace({
       <section className="grid grid-cols-2 gap-2 lg:grid-cols-6">
         <Metric
           label="Needs you"
+          focus="awaiting_user"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.awaitingUser}
           detail={summary.awaitingUser > 0 ? 'waiting on your decision' : 'nothing waiting on you'}
           tone="border-fuchsia-500/25 bg-fuchsia-500/5 text-fuchsia-700 dark:text-fuchsia-300"
         />
         <Metric
           label="Pulse can fix"
+          focus="open"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.open}
           detail={summary.recurring > 0 ? `${summary.recurring} seen before` : 'queued for a fixer'}
           tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
         />
         <Metric
           label="Blocked"
+          focus="blocked"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.blocked}
           detail="no action available to Pulse"
           tone="border-slate-500/25 bg-slate-500/5 text-slate-700 dark:text-slate-300"
         />
         <Metric
           label="Being fixed"
+          focus="fixing"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.fixing}
           detail={`${summary.attempts} total attempt${summary.attempts === 1 ? '' : 's'}`}
           tone="border-sky-500/25 bg-sky-500/5 text-sky-700 dark:text-sky-300"
         />
         <Metric
           label="Needs proof"
+          focus="awaiting_verification"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.awaitingVerification}
           detail={`${summary.inconclusiveChecks} inconclusive check${summary.inconclusiveChecks === 1 ? '' : 's'}`}
           tone="border-amber-500/25 bg-amber-500/5 text-amber-700 dark:text-amber-300"
         />
         <Metric
           label="Closed"
+          focus="closed"
+          activeFocus={focus}
+          onFocus={setFocus}
           value={summary.closed + summary.externalAction}
           detail={summary.externalAction > 0
             ? `${summary.passedChecks} verified · ${summary.externalAction} handed off`
@@ -383,12 +478,23 @@ export function PulseWorkspace({
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Needs attention</h3>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">Open findings across every review module</p>
+              <h3 className="text-sm font-semibold text-foreground">{FOCUS_TITLES[focus]}</h3>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{FOCUS_HINTS[focus]}</p>
             </div>
-            <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground">
-              {attentionFindings.length} shown
-            </span>
+            <div className="flex items-center gap-2">
+              {focus !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setFocus('all')}
+                  className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
+                >
+                  Clear filter
+                </button>
+              )}
+              <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+                {attentionFindings.length} shown
+              </span>
+            </div>
           </div>
           {attentionFindings.length === 0 ? (
             <div className="flex min-h-40 flex-col items-center justify-center px-6 py-8 text-center">
