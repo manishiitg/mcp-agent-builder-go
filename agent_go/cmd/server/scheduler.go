@@ -956,7 +956,26 @@ func (s *SchedulerService) reconciledScheduleRunStatus(run *ScheduleRunEntry, no
 	case "running":
 		return "", "", false
 	case "completed":
-		return "success", "", true
+		// A scheduled run is many sequential turns sharing one session, and
+		// between them the session reads "completed" — the previous turn is
+		// done, the next has not started. Finalizing here called the whole run
+		// a success while it was on turn 1 of 10.
+		//
+		// rtslatency's 2026-07-31 02:30 run was recorded success/84,599 ms with
+		// completed_at 84 seconds after start, while the log shows turns 2-5
+		// running for another hour and turn 6 still going when the process shut
+		// down. Once stamped, the record never corrected itself, so every run
+		// killed by a restart also read as successful and the workflow looked
+		// healthy while its digest had not shipped since 2026-07-29.
+		//
+		// This reconciler exists to clean up runs the scheduler abandoned, and
+		// it cannot tell "between turns" from "finished". Success is the
+		// scheduler's verdict to record when its own turn loop ends. Past the
+		// grace window an abandoned run is reported interrupted, never success.
+		if now.Sub(run.StartedAt) <= scheduleRunAbandonedAfter {
+			return "", "", false
+		}
+		return "error", "interrupted: scheduler never recorded a terminal result", true
 	case "stopped", "dismissed":
 		return "stopped", fmt.Sprintf("session ended with status %s", session.Status), true
 	case "error", "failed", "inactive":
@@ -965,6 +984,12 @@ func (s *SchedulerService) reconciledScheduleRunStatus(run *ScheduleRunEntry, no
 		return "", "", false
 	}
 }
+
+// scheduleRunAbandonedAfter bounds how long a run may sit between turns before
+// the reconciler treats it as abandoned. It must exceed a real run: rtslatency's
+// healthy runs take 45 minutes to 2.5 hours, so a shorter window would finalize
+// live work as interrupted.
+var scheduleRunAbandonedAfter = 6 * time.Hour
 
 func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, runs []ScheduleRunEntry) ScheduleRuntimeState {
 	var filtered []ScheduleRunEntry
