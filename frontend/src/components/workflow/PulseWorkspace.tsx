@@ -286,18 +286,25 @@ export function PulseWorkspace({
             return true
         }
       }
-      const matched = findings.filter(matchesFocus).sort((a, b) => {
+      const matched = findings
+        .filter(matchesFocus)
+        // Selecting a module narrows this list too, so the module grid and the
+        // findings list are two views of one selection rather than two lists
+        // that ignore each other.
+        .filter((finding) => !selectedModule || finding.module === selectedModule)
+        .sort((a, b) => {
         const statusPriority = (finding: PulseFindingLifecycle) => (
           finding.status === 'open' ? 3 : finding.status === 'awaiting_verification' ? 2 : 1
         )
         const priority = statusPriority(b) - statusPriority(a)
         return priority || (b.last_seen_at || '').localeCompare(a.last_seen_at || '')
       })
-      // Unfiltered stays a preview; a chosen slice shows the whole slice,
-      // because the point of clicking a count is to see what it counted.
-      return focus === 'all' ? matched.slice(0, 6) : matched
+      // Unfiltered shows enough to scan a real backlog rather than a
+      // six-item teaser; a chosen slice shows all of it, because the point of
+      // clicking a count is to see everything it counted.
+      return focus === 'all' ? matched.slice(0, 25) : matched
     },
-    [findings, focus],
+    [findings, focus, selectedModule],
   )
   const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
 
@@ -478,14 +485,21 @@ export function PulseWorkspace({
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">{FOCUS_TITLES[focus]}</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                {FOCUS_TITLES[focus]}
+                {selectedModule && (
+                  <span className="ml-1.5 font-normal text-muted-foreground">
+                    in {moduleSummaries.find((m) => m.id === selectedModule)?.label || selectedModule}
+                  </span>
+                )}
+              </h3>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{FOCUS_HINTS[focus]}</p>
             </div>
             <div className="flex items-center gap-2">
-              {focus !== 'all' && (
+              {(focus !== 'all' || selectedModule) && (
                 <button
                   type="button"
-                  onClick={() => setFocus('all')}
+                  onClick={() => { setFocus('all'); setSelectedModule(null) }}
                   className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
                 >
                   Clear filter
@@ -507,11 +521,25 @@ export function PulseWorkspace({
               {attentionFindings.map((finding) => {
                 const module = moduleSummaries.find((item) => item.id === finding.module)
                 return (
-                  <button
-                    type="button"
+                  // A div, not a button: browsers suppress text selection inside
+                  // buttons, and these rows carry the exact paths, fields and
+                  // ids you need to paste elsewhere. The click still opens the
+                  // module, but only when it was a click rather than the end of
+                  // a drag-select.
+                  <div
                     key={finding.fingerprint}
-                    onClick={() => finding.module && setSelectedModule(finding.module)}
-                    className="block w-full px-4 py-3 text-left transition-colors hover:bg-muted/40"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if ((window.getSelection()?.toString() || '').length > 0) return
+                      if (finding.module) setSelectedModule(finding.module)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      if (finding.module) setSelectedModule(finding.module)
+                    }}
+                    className="block w-full cursor-pointer select-text px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[10px] font-semibold text-primary">{module?.label || finding.module || 'Review'}</span>
@@ -523,11 +551,11 @@ export function PulseWorkspace({
                         </span>
                       )}
                     </div>
-                    <div className="mt-1.5 line-clamp-2 text-xs leading-5 text-foreground">{finding.text}</div>
+                    <div className="mt-1.5 whitespace-pre-wrap break-words text-xs leading-5 text-foreground">{finding.text}</div>
                     <div className="mt-1 text-[10px] text-muted-foreground">
                       {finding.finding_id || finding.fingerprint} · {formatDate(finding.last_seen_at)}
                     </div>
-                  </button>
+                  </div>
                 )
               })}
             </div>
