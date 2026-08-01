@@ -2202,31 +2202,54 @@ Not that verification is weak — that many fixes need a real producing run to
 prove, and those runs were not completing. The failure is upstream in the
 pipeline, not in how fixes are checked.
 
-### The case against this decision
+### Why self-verification is sound here: two classes of fix
 
-Recorded because the evidence is thinner than the conclusion, and the next
-reader should see both sides rather than only the verdict.
+The 10/13 split is not caution. It is two genuinely different kinds of fix, and
+the Fixer separates them correctly.
 
-**"Zero reopened" may mean "zero re-checked."** This is the serious objection. A
-finding reopens only if a later reviewer looks at that area again and re-reports
-it. Reviewers are capped at five findings and their focus varies per pass, so a
-broken fix may simply never be re-examined. Nothing in the data distinguishes a
-fix that held from one nobody revisited. The decision above treats non-recurrence
-as evidence of holding; it is also consistent with absence of looking.
+**Fixes provable at the time.** Data and logic corrections, where the evidence
+already exists. Every `fixed_verified` check is of this kind:
 
-**Ten samples decide nothing.** Zero failures in ten would occur roughly a fifth
-of the time even at a 15% true failure rate.
+```
+Replayed new gate against all 96 rows in latency_daily_by_language: identical output
+Re-SELECT latency_daily_by_language day=2026-07-31: low_traffic=0, turn_count=51, matches
+action_queue stored counters equal counts derived from actions array
+retired run_activity_log rejects every mutation through the canonical consumer path
+```
 
-Two weaker objections were tested and do not hold. The Fixer might be claiming
-only the trivially provable and deferring everything hard, which would produce
-the same perfect record — but the checks behind `fixed_verified` are deterministic
-replays against real data, full-table re-runs, re-SELECT confirmation and
-consumer-path tests, not weak proofs. And it might be choosing an easy exam for
-itself, but those checks are not easy exams.
+Replay corrected logic over existing rows, re-read the row, exercise the consumer
+path. No workflow run is required because nothing new has to be produced. These
+are proofs, not claims.
 
-What would settle it is coverage data: whether reviewers actually re-examine the
-areas where fixes were claimed. Absent that, this decision rests on a small
-sample and an unproven assumption, and should be held loosely.
+**Fixes that cannot be proven without a run.** Change a step description so a
+collector writes a new column and nothing can verify it until that collector
+runs. These are the 13, correctly recorded `changed_unverified` with reason
+`awaiting_next_valid_run`.
+
+An independent verifier adds nothing to either class. For the first, the proof is
+already deterministic. For the second, a verifier is as unable to produce the
+missing run as the Fixer is.
+
+### The case against, and what survives it
+
+**"Zero reopened" may mean "zero re-checked."** This was the serious objection,
+and the two-class distinction largely answers it: recurrence was never the
+evidence for the 10. A deterministic replay over all 96 rows proves the fix at
+the moment it is made. Recurrence is a backstop for those, not their proof.
+
+**Ten samples decide nothing.** This survives. Zero failures in ten would occur
+roughly a fifth of the time even at a 15% true failure rate. The conclusion is
+right on current evidence and the evidence is small.
+
+Two objections were tested and do not hold. The Fixer is not claiming only the
+trivially provable — the checks above are not easy exams — and it is not choosing
+a soft exam for itself.
+
+### What the 13 unproven fixes actually indicate
+
+Not a verification-design problem. They are waiting on a producing run, and those
+runs were not completing. The fix is upstream in the pipeline, not in how fixes
+are checked.
 
 ### If this is proposed again
 
