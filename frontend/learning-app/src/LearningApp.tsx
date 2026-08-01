@@ -40,10 +40,7 @@ import {
   Minimize2,
   Music,
   Presentation,
-  PanelLeftClose,
-  PanelLeftOpen,
   Paperclip,
-  Plus,
   Printer,
   RefreshCw,
   Send,
@@ -64,7 +61,6 @@ import {
   usePinGateStore,
   toParentMsg,
   type Screen,
-  type DrawerTab,
   type ApiEngine,
   type ParentMsg,
   type StoredMsg,
@@ -144,17 +140,6 @@ function pres(id: string, fallbackName: string) {
 // Targeting grades 6–12, with 4–5 also offered.
 const GRADES = ['4', '5', '6', '7', '8', '9', '10', '11', '12']
 const BOARDS = ['CBSE', 'ICSE / ISC (CISCE)', 'State Board', 'NIOS', 'IB', 'Cambridge / IGCSE', 'Other', 'Not sure']
-
-// Convert an ISO timestamp into a short relative label for the rail.
-function relTime(iso: string): string {
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return ''
-  const s = Math.max(0, (Date.now() - t) / 1000)
-  if (s < 60) return 'Just now'
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 
 // Absolute date + time label for a package, e.g. "21 Jul 2026, 5:42 PM".
 function dateTimeLabel(iso?: string): string {
@@ -1109,7 +1094,7 @@ export default function LearningApp() {
       })
       .catch(() => { if (!cancelled) setEnginesState('error') })
     return () => { cancelled = true }
-  }, [])
+  }, [setEngine, setEngines, setEnginesState])
   const childName = useFamilyStore((s) => s.childName)
   const setChildName = useFamilyStore((s) => s.setChildName)
   const grade = useFamilyStore((s) => s.grade)
@@ -1258,6 +1243,8 @@ export default function LearningApp() {
 
   const wsRefreshKey = useWorkspaceStore((s) => s.wsRefreshKey)
   const setWsRefreshKey = useWorkspaceStore((s) => s.setWsRefreshKey)
+  const treeNodes = useWorkspaceStore((s) => s.treeNodes)
+  const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
   // Reflect the workspace file system in the drawer (materials the agent can
   // read). Refetches when entering the chat and after each upload/tool event.
   // The child's own conversation resume lives in a separate effect below,
@@ -1309,9 +1296,7 @@ export default function LearningApp() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [screen, parentMessages.length, wsRefreshKey])
-  const railOpen = useParentChatStore((s) => s.railOpen)
-  const setRailOpen = useParentChatStore((s) => s.setRailOpen)
+  }, [parentMessages.length, screen, setAllFiles, setParentMessages, setTreeNodes, setWsFiles, wsRefreshKey])
   const drawerOpen = true // right side always open
   const threadEndRef = useRef<HTMLDivElement>(null)
   const childThreadEndRef = useRef<HTMLDivElement>(null)
@@ -1477,7 +1462,7 @@ export default function LearningApp() {
       childViewerScrollRef.current[childViewerPath ?? ''] ?? 0,
       childZoom,
     ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [childViewerContent, childViewerFocus, childZoom, childViewerPath],
   )
   const setChildViewerContent = useChildChatStore((s) => s.setChildViewerContent)
@@ -1487,8 +1472,6 @@ export default function LearningApp() {
   const setFilesSubjectFilter = useWorkspaceStore((s) => s.setFilesSubjectFilter)
   const filesGroupBy = useWorkspaceStore((s) => s.filesGroupBy)
   const setFilesGroupBy = useWorkspaceStore((s) => s.setFilesGroupBy)
-  const treeNodes = useWorkspaceStore((s) => s.treeNodes)
-  const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
   const activities = useWorkspaceStore((s) => s.activities)
   const setActivities = useWorkspaceStore((s) => s.setActivities)
   const viewerPath = useWorkspaceStore((s) => s.viewerPath)
@@ -1555,7 +1538,7 @@ export default function LearningApp() {
       .then((d) => { if (!cancelled) setMapHtml(d.content ?? '') })
       .catch(() => { if (!cancelled) setMapHtml('') })
     return () => { cancelled = true }
-  }, [drawerTab, mapRefreshKey])
+  }, [drawerTab, mapRefreshKey, setMapHtml])
 
   // Load the real, agent-generated reports/progress.html for the Progress tab
   // — a single living document, rendered directly (not a link the parent has
@@ -1568,7 +1551,7 @@ export default function LearningApp() {
       .then((d) => { if (!cancelled) setProgressHtml(d.content ?? '') })
       .catch(() => { if (!cancelled) setProgressHtml('') })
     return () => { cancelled = true }
-  }, [drawerTab, mapRefreshKey])
+  }, [drawerTab, mapRefreshKey, setProgressHtml])
 
   // "This Week" tab — combined schedule/activity-log/deadlines view (see
   // week.go). Re-fetches whenever the tab is open, the week being viewed
@@ -1598,7 +1581,7 @@ export default function LearningApp() {
       .then((d: Activity[]) => { if (!cancelled) setActivities(d ?? []) })
       .catch(() => { if (!cancelled) setActivities([]) })
     return () => { cancelled = true }
-  }, [drawerTab, mapRefreshKey])
+  }, [drawerTab, mapRefreshKey, setActivities])
 
   // Poll real WhatsApp pairing status while the connector modal's WhatsApp
   // section is open — refreshes the QR (it's short-lived) until paired.
@@ -2053,7 +2036,7 @@ export default function LearningApp() {
       .then((act: Activity | null) => {
         if (cancelled) return
         setChildActivity(act)
-        if (!act || childResumedRef.current || childMessages.length > 0) return
+        if (!act || childResumedRef.current || useChildChatStore.getState().childMessages.length > 0) return
         childResumedRef.current = true
         fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${act.dir}/conversation.json`)}`)
           .then((r2) => r2.json())
@@ -2067,7 +2050,7 @@ export default function LearningApp() {
       })
       .catch(() => { if (!cancelled) setChildActivity(null) })
     return () => { cancelled = true }
-  }, [screen, childTreeRefreshKey])
+  }, [childTreeRefreshKey, screen, setChildActivity, setChildMessages])
 
   // The moment a distinct activity is bound (a fresh handoff, or resuming on
   // reload), show its first item — the same "don't wait on the model to
@@ -2084,7 +2067,7 @@ export default function LearningApp() {
     autoOpenedActivityRef.current = childActivity.dir
     const first = childActivity.items[0]
     if (first) { setChildViewerPath(first.path); setChildViewerRefreshKey((k) => k + 1) }
-  }, [screen, childActivity])
+  }, [childActivity, screen, setChildViewerPath])
 
   // Load the selected file for the child's own inline viewer.
   //
@@ -2106,7 +2089,7 @@ export default function LearningApp() {
       .then((d) => { if (!cancelled) setChildViewerContent({ isText: !!d.is_text, content: d.is_text ? rewriteRelativeAssetURLs(d.content ?? '', childViewerPath) : (d.content ?? '') }) })
       .catch(() => { if (!cancelled) setChildViewerContent({ isText: false, content: '' }) })
     return () => { cancelled = true }
-  }, [childViewerPath, childViewerRefreshKey])
+  }, [childViewerPath, childViewerRefreshKey, setChildViewerContent])
 
   // Load the selected file for the drawer's Files viewer.
   useEffect(() => {
@@ -2118,7 +2101,7 @@ export default function LearningApp() {
       .then((d) => { if (!cancelled) setViewerContent({ isText: !!d.is_text, content: d.is_text ? rewriteRelativeAssetURLs(d.content ?? '', viewerPath) : (d.content ?? '') }) })
       .catch(() => { if (!cancelled) setViewerContent({ isText: false, content: '' }) })
     return () => { cancelled = true }
-  }, [viewerPath, viewerRefreshKey])
+  }, [setViewerContent, viewerPath, viewerRefreshKey])
 
   // Probe for the file's metadata sidecar (<path>.meta.json — written by the
   // process-file skill when Quill files an upload: subject, topic, type, a short
@@ -2153,7 +2136,7 @@ export default function LearningApp() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [viewerPath, viewerImageList])
+  }, [setViewerPath, viewerImageList, viewerPath])
 
   // Keep the conversation scrolled to the latest message / thinking indicator.
   // Also re-scroll on `screen` itself: switching from child mode back to
@@ -2277,7 +2260,7 @@ export default function LearningApp() {
     }
     load(0)
     return () => { cancelled = true }
-  }, [])
+  }, [setBoard, setBootError, setBooting, setChildName, setEngine, setGrade, setParentLabel, setScreen])
 
   const selectedEngine = engines.find((item) => item.id === engine)
   const initial = childName.trim().slice(0, 1).toUpperCase() || 'M'

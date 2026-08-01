@@ -357,7 +357,7 @@ func isGenericAgentStep(stepID, stepPath string) bool {
 // via resolveKnowledgebaseAccess before invoking. learningsAccess must be resolved via
 // resolveLearningsAccess. When kbAccess permits writes the step is the KB writer,
 // so knowledgebase/notes/ is added to writePaths. Returns readPaths and writePaths.
-func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string) (readPaths, writePaths []string) {
+func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string, stepConfig *AgentConfigs) (readPaths, writePaths []string) {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
 	// Use run folder if available, otherwise use base workspace (backward compatibility)
 	var runWorkspacePath string
@@ -454,8 +454,26 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 		}
 	}
 
+	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, stepConfig)
 	readPaths = hcpo.appendCDPHostDownloadsReadPath(readPaths)
-	return readPaths, writePaths
+	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths)
+}
+
+func appendAdditionalWorkflowReadPaths(readPaths []string, baseWorkspacePath string, stepConfig *AgentConfigs) []string {
+	if stepConfig == nil || len(stepConfig.AdditionalReadPaths) == 0 {
+		return readPaths
+	}
+	normalized, err := normalizeAdditionalReadPaths(stepConfig.AdditionalReadPaths)
+	if err != nil {
+		// Tool-authored configs are validated before saving. Revalidate here as a
+		// security boundary for hand-edited and legacy config files; an invalid
+		// entry grants nothing.
+		return readPaths
+	}
+	for _, relativePath := range normalized {
+		readPaths = append(readPaths, filepath.Join(baseWorkspacePath, filepath.FromSlash(relativePath)))
+	}
+	return readPaths
 }
 
 // appendLearningReadPaths grants a step its shared workflow guidance and its own
@@ -1110,7 +1128,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, evaluationDBWrite)
-	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess)
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess, stepConfig)
 	stepEnvOutputPathOverride := ""
 	if override, ok := ctx.Value(messageSequenceFolderGuardOverrideKey{}).(*messageSequenceFolderGuardOverride); ok && override != nil {
 		readPaths = append([]string{}, override.ReadPaths...)

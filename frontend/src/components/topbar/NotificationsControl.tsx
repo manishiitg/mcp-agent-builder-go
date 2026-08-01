@@ -32,11 +32,11 @@ export default function NotificationsControl() {
     playNotificationSound()
 
     // Set Dock badge for test
-    if ((window as any).electronAPI) {
-      (window as any).electronAPI.setDockBadge('1')
+    if (window.electronAPI?.setDockBadge) {
+      window.electronAPI.setDockBadge('1')
       // Clear after 5 seconds for test
       setTimeout(() => {
-        (window as any).electronAPI.setDockBadge('')
+        window.electronAPI?.setDockBadge?.('')
       }, 5000)
     }
 

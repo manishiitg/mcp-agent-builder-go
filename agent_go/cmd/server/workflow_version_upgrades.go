@@ -246,20 +246,20 @@ Report migrated sequence ids, new scripted step ids, copied script paths, valida
 
 This is a product-managed Pulse report preflight. Do ONLY this builder/improve.html contract migration, then stop and wait for the next preflight turn or the scheduled workflow message.
 
-Goal: bring every workflow onto the current human-readable, responsive Pulse history contract. builder/improve.html remains the durable time-series source of truth. Runloop renders Goal / Ikigai directly from soul/soul.md and uses explicit section/module metadata to present the HTML history by Signals / Kizuki, Reflection / Hansei, and Improvements / Kaizen.
+Goal: bring every workflow onto the current human-readable, responsive Pulse history contract. builder/improve.html remains the durable time-series source of truth. Runloop renders Goal directly from soul/soul.md and uses explicit section/module metadata to present the HTML history by Issues and reviews, Decisions and analysis, and Fixes and improvements.
 
 1. Read workflow.json and builder/improve.html. Call get_reference_doc(kind="review-improve-log") and get_reference_doc(kind="review-improve-log-skeleton"). Do not run the workflow or invent fresh findings merely to complete this migration.
 2. If builder/improve.html is missing, create it from the current skeleton with an empty history and one concise migration entry. If it exists, upgrade it in place. Preserve every useful historical run, finding, decision, user rule, user answer, outcome, evidence pointer, archive link, and unresolved item. Do not discard old evidence because its markup is obsolete; move very old detail into the existing Archive only when needed for readability.
 3. Make the document conform to the current report contract:
    - the root html element has data-pulse-schema="2", a viewport meta tag, responsive full-width layout, safe wrapping, no fixed-width text columns, and no horizontal overflow;
    - builder/improve.html stays time-first and newest-first, with exactly one <!-- LOG ENTRIES: newest first --> anchor;
-   - remove any duplicated Goal/Profile card from builder/improve.html. Goal / Ikigai is sourced from soul/soul.md and rendered by Runloop, not repeated in the history document;
+   - remove any duplicated Goal/Profile card from builder/improve.html. Goal is sourced from soul/soul.md and rendered by Runloop, not repeated in the history document;
    - keep the user-facing timeline concise, with raw continuity state in one closed-by-default #pulse-agent-handoff block near the bottom;
    - keep Kind/Search/Reset filtering when present, but no date picker.
 4. Attribute every dated recent-run row and timeline card with data-date, data-kind, data-pulse-section, and one canonical data-module:
-   - Signals / Kizuki: bug_review, artifact_review, learning_health, knowledgebase_health, db_health, eval_health, report_health, cost_llm_time, or llm_ops_review. These cards state evidence-backed reviewer findings, not fixes;
-   - Reflection / Hansei: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
-   - Improvements / Kaizen: pulse_fixer for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the Signal evidence they address.
+   - Issues and reviews: bug_review, artifact_review, stores_health, eval_health, report_health, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes. Normalize historical learning_health / knowledgebase_health / db_health evidence to stores_health, and historical cost_llm_time evidence to llm_ops_review;
+   - Decisions and analysis: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
+   - Fixes and improvements: pulse_fixer for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the review evidence they address.
    - Keep every historical question and answer with who asked it: Goal Advisor -> improvements/goal_advisor; a known reviewer -> signals/<reviewer module>; a general Pulse/run question -> reflection/run_summary. Reclassify old reflection/goal_advisor answer cards into improvements/goal_advisor.
    When an old card cannot be attributed to a specific reviewer from real evidence, classify it as run_summary / reflection. Never guess a reviewer and never collapse several module results into one mixed card.
 5. Keep one concise v1.0.11 migration entry under Improvements / pulse_fixer that records the report-shell migration and confirms that historical evidence was preserved. Do not expose secrets.
@@ -389,6 +389,16 @@ If evaluation/evaluation_plan.json does not exist, this is a no-op — skip to t
 11. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.16". Do not change schema_version, planning/plan.json, schedules, notifications, or publishing in this step.
 
 Report: which eval steps needed changes vs. were already compliant, the old-shape -> new-field mapping per changed step, validate_evaluation_plan result, run_full_evaluation verification result confirming real scores are now captured (or why it was skipped), and any blockers. If evaluation_plan.json does not exist or every step already emits a numeric "score", this is a no-op migration — say so explicitly and just bump the version.`,
+	},
+	{
+		from:  workflowContractEvalVerdictSchemaVersion,
+		to:    workflowContractPulseReviewSQLiteVersion,
+		label: "upgrade-1.0.17",
+		query: `WORKFLOW VERSION UPGRADE v1.0.16 -> v1.0.17.
+
+This is a trusted backend compatibility migration from filesystem Pulse review Markdown to SQLite. Do not edit or delete review files manually. The backend imports every recognized pulse/reviews/**/*.md artifact byte-for-byte into pulse_review_log, imports only explicit CONCERNS lines into the structured finding lifecycle, verifies each transaction, retains the legacy source files for rollback/read parity, and stamps workflow.json version 1.0.17. New reviewers write their complete human-readable Markdown directly to SQLite and create no review file.
+
+If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
 	},
 }
 

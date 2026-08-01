@@ -2,10 +2,14 @@ package step_based_workflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 
 	_ "modernc.org/sqlite"
 )
@@ -40,8 +44,12 @@ const pulseReviewLogSchema = `CREATE TABLE IF NOT EXISTS pulse_review_log (
 	review_run_id TEXT NOT NULL DEFAULT '',
 	pulse_run_id TEXT NOT NULL DEFAULT '',
 	verdict TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	artifact_kind TEXT NOT NULL DEFAULT 'review',
 	artifact_path TEXT NOT NULL DEFAULT '',
 	artifact_bytes INTEGER NOT NULL DEFAULT 0,
+	artifact_markdown TEXT NOT NULL DEFAULT '',
+	content_sha256 TEXT NOT NULL DEFAULT '',
 	recorded_at TEXT NOT NULL
 )`
 
@@ -57,6 +65,62 @@ type ModuleReviewHistory struct {
 	RunCount      int      `json:"run_count"`
 	LastRanAt     string   `json:"last_ran_at,omitempty"`
 	RecentVerdict []string `json:"recent_verdicts,omitempty"`
+}
+
+type PulseReviewArtifactRecord struct {
+	ID               int64  `json:"id"`
+	Module           string `json:"module"`
+	ReviewRunID      string `json:"review_run_id"`
+	PulseRunID       string `json:"pulse_run_id,omitempty"`
+	Verdict          string `json:"verdict,omitempty"`
+	Status           string `json:"status,omitempty"`
+	ArtifactKind     string `json:"artifact_kind"`
+	LegacySourcePath string `json:"legacy_source_path,omitempty"`
+	ArtifactBytes    int    `json:"artifact_bytes"`
+	ContentSHA256    string `json:"content_sha256,omitempty"`
+	RecordedAt       string `json:"recorded_at"`
+	Markdown         string `json:"markdown,omitempty"`
+}
+
+func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB) error {
+	if _, err := db.ExecContext(ctx, pulseReviewLogSchema); err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(pulse_review_log)`)
+	if err != nil {
+		return err
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for name, definition := range map[string]string{
+		"status":            "TEXT NOT NULL DEFAULT ''",
+		"artifact_kind":     "TEXT NOT NULL DEFAULT 'review'",
+		"artifact_markdown": "TEXT NOT NULL DEFAULT ''",
+		"content_sha256":    "TEXT NOT NULL DEFAULT ''",
+	} {
+		if columns[name] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE pulse_review_log ADD COLUMN `+name+` `+definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, pulseReviewLogIndex); err != nil {
+		return err
+	}
+	return nil
 }
 
 // extractReviewVerdict pulls the reviewer's conclusion out of its artifact.
@@ -106,7 +170,18 @@ func truncateVerdict(s string) string {
 // Best-effort: a reviewer whose artifact was persisted must not fail because the
 // bookkeeping write did. Callers log and continue.
 func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, pulseRunID, artifactPath, artifact string) error {
-	module = strings.TrimSpace(module)
+	return recordPulseReviewAt(
+		ctx, workspacePath, module, reviewRunID, pulseRunID, "review",
+		artifactPath, pulseReviewStatus(artifact), artifact,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+}
+
+func recordPulseReviewAt(
+	ctx context.Context,
+	workspacePath, module, reviewRunID, pulseRunID, artifactKind, artifactPath, status, artifact, recordedAt string,
+) error {
+	module = pulsemodules.Normalize(module)
 	if module == "" {
 		return nil
 	}
@@ -115,18 +190,190 @@ func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, 
 		return err
 	}
 	defer db.Close()
-	for _, ddl := range []string{pulseReviewLogSchema, pulseReviewLogIndex} {
-		if _, err := db.ExecContext(ctx, ddl); err != nil {
-			return err
-		}
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return err
+	}
+	return recordPulseReviewOnDB(
+		ctx, db, module, reviewRunID, pulseRunID, artifactKind,
+		artifactPath, status, artifact, recordedAt,
+	)
+}
+
+func recordPulseReviewOnDB(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	module, reviewRunID, pulseRunID, artifactKind, artifactPath, status, artifact, recordedAt string,
+) error {
+	if strings.TrimSpace(recordedAt) == "" {
+		recordedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	artifactKind = strings.TrimSpace(artifactKind)
+	if artifactKind == "" {
+		artifactKind = "review"
+	}
+	sum := sha256.Sum256([]byte(artifact))
+	contentSHA := hex.EncodeToString(sum[:])
+	result, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET
+			pulse_run_id=?, verdict=?, status=?, artifact_path=?, artifact_bytes=?,
+			artifact_markdown=?, content_sha256=?, recorded_at=?
+		WHERE module=? AND review_run_id=? AND artifact_kind=? AND artifact_path=?`,
+		strings.TrimSpace(pulseRunID), extractReviewVerdict(artifact), strings.TrimSpace(status),
+		strings.TrimSpace(artifactPath), len(artifact), artifact, contentSHA, recordedAt,
+		module, strings.TrimSpace(reviewRunID), artifactKind, strings.TrimSpace(artifactPath))
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return err
+	} else if changed > 0 {
+		return nil
 	}
 	_, err = db.ExecContext(ctx, `INSERT INTO pulse_review_log
-		(module, review_run_id, pulse_run_id, verdict, artifact_path, artifact_bytes, recorded_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		(module, review_run_id, pulse_run_id, verdict, status, artifact_kind,
+		 artifact_path, artifact_bytes, artifact_markdown, content_sha256, recorded_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		module, strings.TrimSpace(reviewRunID), strings.TrimSpace(pulseRunID),
-		extractReviewVerdict(artifact), strings.TrimSpace(artifactPath),
-		len(artifact), time.Now().UTC().Format(time.RFC3339))
+		extractReviewVerdict(artifact), strings.TrimSpace(status), artifactKind,
+		strings.TrimSpace(artifactPath), len(artifact), artifact, contentSHA, recordedAt)
 	return err
+}
+
+func pulseReviewStatus(artifact string) string {
+	for _, line := range strings.Split(artifact, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "- status:") {
+			return strings.Trim(strings.TrimSpace(line[len("- status:"):]), "`* ")
+		}
+	}
+	return ""
+}
+
+// LoadPulseReviewArtifacts returns every matching artifact when limit is
+// negative. Zero keeps the bounded default for preview/history callers.
+func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string, includeMarkdown bool, limit int) ([]PulseReviewArtifactRecord, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []PulseReviewArtifactRecord{}, err
+	}
+	defer db.Close()
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	if limit == 0 {
+		limit = 200
+	}
+	module = pulsemodules.Normalize(module)
+	markdownColumn := "''"
+	if includeMarkdown {
+		markdownColumn = "artifact_markdown"
+	}
+	query := `SELECT _id, module, review_run_id, pulse_run_id,
+			verdict, status, artifact_kind, artifact_path, artifact_bytes,
+			content_sha256, recorded_at, ` + markdownColumn + `
+		FROM pulse_review_log
+		WHERE artifact_kind='review'`
+	args := []interface{}{}
+	if module != "" {
+		aliases := []string{}
+		for _, accepted := range pulsemodules.AcceptedForReviewArtifacts() {
+			if pulsemodules.Normalize(accepted) == module {
+				aliases = append(aliases, accepted)
+			}
+		}
+		if len(aliases) == 0 {
+			return []PulseReviewArtifactRecord{}, nil
+		}
+		query += ` AND module IN (` + strings.TrimRight(strings.Repeat("?,", len(aliases)), ",") + `)`
+		for _, alias := range aliases {
+			args = append(args, alias)
+		}
+	}
+	query += ` ORDER BY recorded_at DESC, _id DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PulseReviewArtifactRecord{}
+	for rows.Next() {
+		var artifact PulseReviewArtifactRecord
+		if err := rows.Scan(
+			&artifact.ID, &artifact.Module, &artifact.ReviewRunID, &artifact.PulseRunID,
+			&artifact.Verdict, &artifact.Status, &artifact.ArtifactKind,
+			&artifact.LegacySourcePath, &artifact.ArtifactBytes, &artifact.ContentSHA256,
+			&artifact.RecordedAt, &artifact.Markdown,
+		); err != nil {
+			return nil, err
+		}
+		artifact.Module = pulsemodules.Normalize(artifact.Module)
+		out = append(out, artifact)
+	}
+	return out, rows.Err()
+}
+
+func LoadPulseReviewArtifact(ctx context.Context, workspacePath string, id int64) (*PulseReviewArtifactRecord, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return nil, sql.ErrNoRows
+	}
+	defer db.Close()
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	var artifact PulseReviewArtifactRecord
+	err = db.QueryRowContext(ctx, `SELECT _id, module, review_run_id, pulse_run_id,
+			verdict, status, artifact_kind, artifact_path, artifact_bytes,
+			content_sha256, recorded_at, artifact_markdown
+		FROM pulse_review_log WHERE _id=?`, id).Scan(
+		&artifact.ID, &artifact.Module, &artifact.ReviewRunID, &artifact.PulseRunID,
+		&artifact.Verdict, &artifact.Status, &artifact.ArtifactKind,
+		&artifact.LegacySourcePath, &artifact.ArtifactBytes, &artifact.ContentSHA256,
+		&artifact.RecordedAt, &artifact.Markdown,
+	)
+	if err != nil {
+		return nil, err
+	}
+	artifact.Module = pulsemodules.Normalize(artifact.Module)
+	return &artifact, nil
+}
+
+func LoadPulseReviewArtifactForRun(ctx context.Context, workspacePath, reviewRunID, module string) (*PulseReviewArtifactRecord, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return nil, sql.ErrNoRows
+	}
+	defer db.Close()
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	module = pulsemodules.Normalize(module)
+	var artifact PulseReviewArtifactRecord
+	err = db.QueryRowContext(ctx, `SELECT _id, module, review_run_id, pulse_run_id,
+			verdict, status, artifact_kind, artifact_path, artifact_bytes,
+			content_sha256, recorded_at, artifact_markdown
+		FROM pulse_review_log
+		WHERE review_run_id=? AND module=? AND artifact_kind='review'
+		ORDER BY _id DESC LIMIT 1`, strings.TrimSpace(reviewRunID), module).Scan(
+		&artifact.ID, &artifact.Module, &artifact.ReviewRunID, &artifact.PulseRunID,
+		&artifact.Verdict, &artifact.Status, &artifact.ArtifactKind,
+		&artifact.LegacySourcePath, &artifact.ArtifactBytes, &artifact.ContentSHA256,
+		&artifact.RecordedAt, &artifact.Markdown,
+	)
+	if err != nil {
+		return nil, err
+	}
+	artifact.Module = pulsemodules.Normalize(artifact.Module)
+	return &artifact, nil
 }
 
 // LoadModuleReviewHistory summarizes recent reviews per module, most recently run
@@ -142,8 +389,12 @@ func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModul
 		perModule = 3
 	}
 
-	rows, err := db.QueryContext(ctx, `SELECT module, COUNT(*), MAX(recorded_at)
-		FROM pulse_review_log GROUP BY module ORDER BY MAX(recorded_at) DESC`)
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT module, recorded_at, verdict
+		FROM pulse_review_log WHERE artifact_kind='review'
+		ORDER BY recorded_at DESC, _id DESC`)
 	if err != nil {
 		// No table means no reviewer has run yet — that is "nothing to report",
 		// not an error the Gate has to handle.
@@ -153,13 +404,34 @@ func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModul
 		return nil, err
 	}
 	var out []ModuleReviewHistory
+	indexByModule := map[string]int{}
 	for rows.Next() {
-		var h ModuleReviewHistory
-		if err := rows.Scan(&h.Module, &h.RunCount, &h.LastRanAt); err != nil {
+		var module, recordedAt, verdict string
+		if err := rows.Scan(&module, &recordedAt, &verdict); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		out = append(out, h)
+		module = pulsemodules.Normalize(module)
+		index, exists := indexByModule[module]
+		if !exists {
+			index = len(out)
+			indexByModule[module] = index
+			out = append(out, ModuleReviewHistory{
+				Module:        module,
+				LastRanAt:     recordedAt,
+				RecentVerdict: []string{},
+			})
+		}
+		out[index].RunCount++
+		if len(out[index].RecentVerdict) < perModule {
+			if strings.TrimSpace(verdict) == "" {
+				verdict = "(ran; no verdict line found in the artifact)"
+			}
+			out[index].RecentVerdict = append(
+				out[index].RecentVerdict,
+				fmt.Sprintf("%s — %s", recordedAt, verdict),
+			)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -167,33 +439,5 @@ func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModul
 	}
 	rows.Close()
 
-	for i := range out {
-		verdicts, err := recentVerdictsForModule(ctx, db, out[i].Module, perModule)
-		if err != nil {
-			return nil, err
-		}
-		out[i].RecentVerdict = verdicts
-	}
 	return out, nil
-}
-
-func recentVerdictsForModule(ctx context.Context, db *sql.DB, module string, limit int) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT recorded_at, verdict FROM pulse_review_log
-		WHERE module = ? ORDER BY recorded_at DESC LIMIT ?`, module, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var at, verdict string
-		if err := rows.Scan(&at, &verdict); err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(verdict) == "" {
-			verdict = "(ran; no verdict line found in the artifact)"
-		}
-		out = append(out, fmt.Sprintf("%s — %s", at, verdict))
-	}
-	return out, rows.Err()
 }

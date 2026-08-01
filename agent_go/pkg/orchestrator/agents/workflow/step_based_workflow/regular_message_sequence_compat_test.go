@@ -1,8 +1,13 @@
 package step_based_workflow
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func TestScriptedToolNamesArePlanMutationsAndLegacyNamesAreNot(t *testing.T) {
@@ -75,9 +80,149 @@ func TestValidateScriptedStepUpdateTarget(t *testing.T) {
 	}
 	if err := validateScriptedStepUpdateTarget(plan, configs, "legacy-agentic"); err == nil {
 		t.Fatal("legacy agentic regular step must not be editable through update_scripted_step")
+	} else if !strings.Contains(err.Error(), "update_message_sequence_step") {
+		t.Fatalf("legacy rejection must identify the working compatibility path: %v", err)
 	}
 	if err := validateScriptedStepUpdateTarget(plan, configs, "sequence"); err == nil {
 		t.Fatal("message_sequence must use its type-specific update tool")
+	}
+}
+
+func TestPrepareMessageSequenceUpdateTargetUpgradesLegacyAgenticRegular(t *testing.T) {
+	legacy := &RegularPlanStep{
+		Type: StepTypeRegular,
+		CommonStepFields: CommonStepFields{
+			ID:          "legacy-agentic",
+			Title:       "Collect latency",
+			Description: "Collect the latency evidence.",
+		},
+		NextStepID: "end",
+	}
+	plan := &PlanningResponse{Steps: []PlanStepInterface{legacy}}
+	configs := []StepConfig{{
+		ID:           legacy.ID,
+		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeAgentic},
+	}}
+
+	upgraded, err := prepareMessageSequenceUpdateTarget(plan, configs, legacy.ID)
+	if err != nil {
+		t.Fatalf("legacy compatibility upgrade failed: %v", err)
+	}
+	if !upgraded {
+		t.Fatal("expected legacy agentic regular step to be upgraded")
+	}
+	sequence, ok := plan.Steps[0].(*MessageSequencePlanStep)
+	if !ok {
+		t.Fatalf("upgraded step type = %T, want *MessageSequencePlanStep", plan.Steps[0])
+	}
+	if sequence.ID != legacy.ID || sequence.Description != legacy.Description || sequence.NextStepID != "end" {
+		t.Fatalf("compatibility upgrade lost existing fields: %#v", sequence)
+	}
+	if len(sequence.Items) != 1 || sequence.Items[0].ID != normalizedRegularSequenceItemID {
+		t.Fatalf("compatibility upgrade did not preserve effective runtime queue: %#v", sequence.Items)
+	}
+}
+
+func TestPrepareMessageSequenceUpdateTargetRejectsScriptedRegular(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&RegularPlanStep{
+			Type:             StepTypeRegular,
+			CommonStepFields: CommonStepFields{ID: "scripted"},
+		},
+	}}
+	configs := []StepConfig{{
+		ID:           "scripted",
+		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
+	}}
+
+	upgraded, err := prepareMessageSequenceUpdateTarget(plan, configs, "scripted")
+	if err == nil || !strings.Contains(err.Error(), "update_scripted_step") {
+		t.Fatalf("scripted regular rejection = %v, want update_scripted_step guidance", err)
+	}
+	if upgraded {
+		t.Fatal("declared scripted step must never be converted")
+	}
+	if _, ok := plan.Steps[0].(*RegularPlanStep); !ok {
+		t.Fatalf("rejected scripted step was mutated to %T", plan.Steps[0])
+	}
+}
+
+func TestUpdateMessageSequenceExecutorAtomicallyPersistsLegacyUpgrade(t *testing.T) {
+	legacyPlan := &PlanningResponse{Steps: []PlanStepInterface{
+		&RegularPlanStep{
+			Type: StepTypeRegular,
+			CommonStepFields: CommonStepFields{
+				ID:                  "voice-latency-collector",
+				Title:               "Voice latency collector",
+				Description:         "Collect voice latency.",
+				ContextDependencies: []string{"input.json"},
+				ContextOutput:       FlexibleContextOutput("latency.json"),
+			},
+			NextStepID: "end",
+		},
+	}}
+	planJSON, err := json.Marshal(legacyPlan)
+	if err != nil {
+		t.Fatalf("marshal legacy plan: %v", err)
+	}
+	stepConfigJSON := `{"steps":[{"id":"voice-latency-collector","agent_configs":{"declared_execution_mode":"agentic"}}]}`
+	var writtenPlan string
+	readFile := func(_ context.Context, path string) (string, error) {
+		switch {
+		case strings.HasSuffix(path, "planning/plan.json"):
+			return string(planJSON), nil
+		case strings.HasSuffix(path, "planning/step_config.json"):
+			return stepConfigJSON, nil
+		default:
+			return "", errors.New("not found")
+		}
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		if strings.HasSuffix(path, "planning/plan.json") {
+			writtenPlan = content
+		}
+		return nil
+	}
+	executor := createUpdateMessageSequenceStepExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+
+	result, err := executor(context.Background(), map[string]interface{}{
+		"existing_step_id": "voice-latency-collector",
+		"description":      "Collect voice latency and verify per-language sample coverage.",
+		"items": []interface{}{
+			map[string]interface{}{
+				"id":      "verify-language-coverage",
+				"type":    "user_message",
+				"message": "Verify every supported language has non-zero samples and repair missing evidence.",
+			},
+		},
+		"reason": "repair the recurring missing per-language measurement evidence",
+	})
+	if err != nil {
+		t.Fatalf("legacy message-sequence update failed: %v", err)
+	}
+	if !strings.Contains(result, "upgraded its saved legacy regular type to message_sequence") {
+		t.Fatalf("update result did not disclose compatibility upgrade: %s", result)
+	}
+	if writtenPlan == "" {
+		t.Fatal("updated plan was not persisted")
+	}
+
+	var persisted PlanningResponse
+	if err := json.Unmarshal([]byte(writtenPlan), &persisted); err != nil {
+		t.Fatalf("decode persisted plan: %v", err)
+	}
+	sequence, ok := persisted.Steps[0].(*MessageSequencePlanStep)
+	if !ok {
+		t.Fatalf("persisted step type = %T, want *MessageSequencePlanStep", persisted.Steps[0])
+	}
+	if sequence.Description != "Collect voice latency and verify per-language sample coverage." {
+		t.Fatalf("description was not updated: %q", sequence.Description)
+	}
+	if len(sequence.Items) != 1 || sequence.Items[0].ID != "verify-language-coverage" {
+		t.Fatalf("items were not updated: %#v", sequence.Items)
+	}
+	if sequence.ContextOutput.String() != "latency.json" || sequence.NextStepID != "end" {
+		t.Fatalf("legacy fields were not preserved: %#v", sequence)
 	}
 }
 

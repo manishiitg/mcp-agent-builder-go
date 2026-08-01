@@ -40,6 +40,8 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 		ac.EnabledCustomTools = nil
 	case "enabled_skills":
 		ac.EnabledSkills = nil
+	case "additional_read_paths":
+		ac.AdditionalReadPaths = nil
 
 	// Pointer-bool flags — only the ones with a corresponding setter in update_step_config.
 	// The tool intentionally omits fields without a setter (e.g. enable_context_offloading,
@@ -91,7 +93,7 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 func isKnownAgentConfigClearField(name string) bool {
 	switch name {
 	case "execution_llm", "execution_tier",
-		"servers", "tools", "enabled_custom_tools", "enabled_skills",
+		"servers", "tools", "enabled_custom_tools", "enabled_skills", "additional_read_paths",
 		"learning_objective", "lock_learnings", "lock_code",
 		"use_code_execution_mode",
 		"disable_parallel_tool_execution",

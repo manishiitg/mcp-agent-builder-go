@@ -97,8 +97,16 @@ export function CLISecuritySection() {
       setStatus(next)
       setDraft(next.config)
       setSaved(true)
-    } catch (cause: any) {
-      setError(String(cause?.response?.data || cause?.message || 'Failed to save CLI security settings').trim())
+    } catch (cause: unknown) {
+      const responseData = typeof cause === 'object' && cause !== null && 'response' in cause
+        ? (cause as { response?: { data?: unknown } }).response?.data
+        : undefined
+      const message = typeof responseData === 'string'
+        ? responseData
+        : cause instanceof Error
+          ? cause.message
+          : 'Failed to save CLI security settings'
+      setError(message.trim())
     } finally {
       setSaving(false)
     }

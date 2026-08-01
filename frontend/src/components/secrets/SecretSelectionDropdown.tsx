@@ -32,7 +32,7 @@ export default function SecretSelectionDropdown({
     if (globalSecrets.length === 0) {
       fetchGlobalSecrets();
     }
-  }, []);
+  }, [fetchGlobalSecrets, globalSecrets.length]);
 
   // Global secret helpers
   const isGlobalSelected = (name: string) =>

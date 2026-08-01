@@ -127,7 +127,7 @@ export function SharedFolder({ encodedPath, uid, onBack }: SharedFolderProps) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [uid])
 
   const handleDownload = useCallback(async () => {
     if (!folderPath) return

@@ -11,6 +11,7 @@ export function buildPulseTimelineHtml(content: string): string {
   function text(el){ return (el.textContent || '').toLowerCase(); }
   function moduleFor(el){
     var explicit = el.getAttribute('data-module');
+    if (explicit === 'cost_llm_time') return 'llm_ops_review';
     if (explicit) return explicit;
     var value = text(el);
     var kind = el.getAttribute('data-kind') || '';
@@ -21,7 +22,7 @@ export function buildPulseTimelineHtml(content: string): string {
     if (value.indexOf('learning') !== -1 || value.indexOf('skill.md') !== -1) return 'stores_health';
     if (value.indexOf('database') !== -1 || value.indexOf('db.sqlite') !== -1 || value.indexOf('db health') !== -1) return 'stores_health';
     if (value.indexOf('knowledge') !== -1) return 'stores_health';
-    if (value.indexOf('cost') !== -1 || value.indexOf('token') !== -1 || value.indexOf('spend') !== -1) return 'cost_llm_time';
+    if (value.indexOf('cost') !== -1 || value.indexOf('token') !== -1 || value.indexOf('spend') !== -1) return 'llm_ops_review';
     if (value.indexOf('model') !== -1 || value.indexOf('llm') !== -1) return 'llm_ops_review';
     if (value.indexOf('evaluation') !== -1 || value.indexOf('eval ') !== -1) return 'eval_health';
     if (value.indexOf('report') !== -1 || value.indexOf('dashboard') !== -1) return 'report_health';

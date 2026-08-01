@@ -559,7 +559,7 @@ export const useRunningWorkflowsStore = create<RunningWorkflowsStore>()(
         if (state.runningWorkflows.length === 0) return
 
         // Fetch the server-side list once — it now includes needs_user_input.
-        let backendMap: Map<string, { needs_user_input?: boolean; waiting_message?: string; waiting_since?: string }> = new Map()
+        const backendMap: Map<string, { needs_user_input?: boolean; waiting_message?: string; waiting_since?: string }> = new Map()
         try {
           const { running } = await agentApi.listRunningWorkflows()
           for (const wf of running) {

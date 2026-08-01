@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
 
 var (
@@ -24,7 +26,7 @@ var (
 
 func hasTrustedWorkflowUpgradeFinalizer(target string) bool {
 	switch target {
-	case workflowContractMessageSequenceCodeVersion, workflowContractPulseHistoryVersion:
+	case workflowContractMessageSequenceCodeVersion, workflowContractPulseHistoryVersion, workflowContractPulseReviewSQLiteVersion:
 		return true
 	default:
 		return false
@@ -37,9 +39,40 @@ func finalizeTrustedWorkflowUpgrade(ctx context.Context, workspacePath, target s
 		return finalizeMessageSequenceCodeUpgrade(ctx, workspacePath, manifest)
 	case workflowContractPulseHistoryVersion:
 		return finalizePulseHistoryContractUpgrade(ctx, workspacePath, manifest)
+	case workflowContractPulseReviewSQLiteVersion:
+		return finalizePulseReviewSQLiteUpgrade(ctx, workspacePath, manifest)
 	default:
 		return fmt.Errorf("workflow version %q has no trusted finalizer", target)
 	}
+}
+
+func finalizePulseReviewSQLiteUpgrade(ctx context.Context, workspacePath string, manifest *WorkflowManifest) error {
+	if manifest == nil {
+		return errors.New("workflow manifest is missing")
+	}
+	if len(manifest.MalformedConfig) > 0 {
+		return fmt.Errorf("workflow manifest has malformed config block(s) %v; refusing to rewrite it", manifest.MalformedConfig)
+	}
+	if workflowContractVersionForUpgrade(manifest) != workflowContractEvalVerdictSchemaVersion {
+		return fmt.Errorf(
+			"expected workflow version %s before finalizing %s, found %q",
+			workflowContractEvalVerdictSchemaVersion,
+			workflowContractPulseReviewSQLiteVersion,
+			workflowContractVersionForUpgrade(manifest),
+		)
+	}
+	migration, err := step_based_workflow.ImportLegacyPulseReviewArtifacts(ctx, workspacePath)
+	if err != nil {
+		return fmt.Errorf("migrate Pulse review Markdown to SQLite: %w", err)
+	}
+	if len(migration.UnrecognizedSkipped) > 0 {
+		return fmt.Errorf("unrecognized Pulse review Markdown files were not migrated: %s", strings.Join(migration.UnrecognizedSkipped, ", "))
+	}
+	manifest.Version = workflowContractPulseReviewSQLiteVersion
+	if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
+		return fmt.Errorf("stamp workflow version %s: %w", workflowContractPulseReviewSQLiteVersion, err)
+	}
+	return nil
 }
 
 func finalizePulseHistoryContractUpgrade(ctx context.Context, workspacePath string, manifest *WorkflowManifest) error {

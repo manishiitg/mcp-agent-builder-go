@@ -174,6 +174,10 @@ func TestRecurringOpenConcernIsReportedAtThreshold(t *testing.T) {
 			LastSeenAt: ts(t, "2026-07-29T09:49:15Z")},
 		{Fingerprint: "c3", Text: "recurred but already resolved", Status: "resolved", SeenCount: 9,
 			LastSeenAt: ts(t, "2026-07-29T09:49:15Z")},
+		{Fingerprint: "d4", Text: "triaged and intentionally deferred", Status: "acknowledged", SeenCount: 12,
+			LastSeenAt: ts(t, "2026-07-29T09:49:15Z")},
+		{Fingerprint: "e5", Text: "owned by the platform", Status: "external_action_required", SeenCount: 20,
+			LastSeenAt: ts(t, "2026-07-29T09:49:15Z")},
 	}
 
 	got := Evaluate(now, lastGate, nil, concerns, DefaultConfig())

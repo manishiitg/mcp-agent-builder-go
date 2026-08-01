@@ -40,8 +40,7 @@ Current guidance kinds:
 ```text
 design-plan
 ready-to-optimize
-review-speed
-review-cost
+ops-review
 review-code
 review-artifact-drift
 improve-knowledge
@@ -60,9 +59,11 @@ improve-report
 | `/design-plan` | Workshop, Run | Comprehensive structural, artifact, and design-quality review through the read-only `review_plan` engine. |
 | `/ready-to-optimize` | Builder | Check whether the workflow is ready to hand to Optimizer. |
 | `/review-code` | Optimizer | Review all saved code artifacts, including learn-code scripts and eval code. |
-| `/review-artifact-drift` | Builder, Optimizer | Audit whether learnings, code, KB, db, reports, and eval wiring drifted from recent plan changes. |
-| `/review-speed` | Optimizer | Review latency and safe speedups. |
-| `/review-cost` | Optimizer | Review cost and safe reductions. |
+| `/review-artifact-drift` | Builder, Optimizer | Audit whether learnings, code, KB, db, reports, and eval wiring drifted from recent plan changes; persist the review and open concerns into Pulse SQLite state. |
+| `/bug-review` | Workshop | Run Pulse QA/logic review and persist the full review plus trackable concerns for the Pulse popup. |
+| `/ops-review` | Workshop | Agentically review cost, timing, tool/runtime reliability, model routing, setup, and plan-design hygiene; persist the full review plus trackable concerns. |
+| `/strategy-auditor` | Workshop | Diagnose plan-versus-goal strategy using cross-run evidence and persist the review plus trackable concerns. |
+| `/goal-advisor` | Workshop | Run the native Advisor → Critic → Finalizer pipeline and persist the complete result plus remaining open concerns. |
 | `/improve-knowledge` | Builder, Optimizer | Improve knowledgebase notes with targeted cleanup or cross-step consolidation. |
 | `/improve-learnings` | Builder, Optimizer | Improve global learnings with targeted cleanup or current-plan consolidation. |
 | `/improve-data` | Builder, Optimizer | Improve durable data contracts, schemas, and report compatibility. |

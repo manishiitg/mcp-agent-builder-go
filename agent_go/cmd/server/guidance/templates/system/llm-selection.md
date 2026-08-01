@@ -10,7 +10,8 @@ A workflow always resolves these roles:
 - **High execution**: first-time, ambiguous, or difficult step work.
 - **Medium execution**: established work with useful context and learnings.
 - **Low execution**: deterministic validation and mature routine work.
-- **Maintenance**: expensive Pulse modules such as Goal Advisor, Bug Review, report/eval improvement, KB health, and DB health.
+- **Maintenance**: expensive Pulse modules such as Goal Advisor, Bug Review,
+  Ops Review, Stores Health, and report/eval improvement.
 - **Pulse**: the gate, worklist, report update, and notification coordinator turns.
 
 The config has two modes:

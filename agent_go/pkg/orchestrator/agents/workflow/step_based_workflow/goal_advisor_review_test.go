@@ -79,7 +79,7 @@ func TestCompletedPulseReviewerResultRequiresFinalMarker(t *testing.T) {
 func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T) {
 	marker := pulseReviewerCompletionMarker("eval-health")
 	brief := "Return findings.\nEnd with exactly: REVIEW_COMPLETE eval_health"
-	instruction := buildPulseReviewerInstruction("Workflow/example", "pulse/reviews/run/eval_health.md", brief, marker)
+	instruction := buildPulseReviewerInstruction("Workflow/example", "pulse_review_log:run:eval_health", brief, marker)
 
 	if !strings.HasSuffix(instruction, marker) {
 		t.Fatalf("tool marker must be the final instruction, got:\n%s", instruction)
@@ -92,9 +92,18 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 	}
 	for _, want := range []string{
 		"ARTIFACT-FIRST RESULT CONTRACT",
-		"pulse/reviews/run/eval_health.md",
-		"not as a conversational message",
-		"trusted backend persists",
+		"pulse_review_log:run:eval_health",
+		"store in SQLite",
+		"do not write a file",
+		"BACKLOG RECONCILIATION",
+		"get_pulse_module_state",
+		"get_pulse_finding_backlog",
+		"existing_unchanged",
+		"reuse the exact existing CONCERNS payload",
+		"matched fingerprint",
+		"STRUCTURED HARNESS ISSUES",
+		"PULSE_FINDING_JSON:",
+		"never executed by the UI",
 	} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("artifact-first instruction missing %q:\n%s", want, instruction)
@@ -111,6 +120,9 @@ func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing
 		assertToolListContains(t, readOnly, tool)
 		assertToolListContains(t, proposal, tool)
 		assertToolListContains(t, approved, tool)
+	}
+	for _, tool := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
+		assertToolListContains(t, readOnly, tool)
 	}
 
 	for _, tool := range []string{"diff_patch_workspace_file", "create_human_input_request", "upsert_report_widget"} {

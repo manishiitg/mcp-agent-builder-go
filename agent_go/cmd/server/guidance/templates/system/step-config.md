@@ -41,6 +41,7 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
 
 - **`validation_schema`** — the only automated gate (set via `update_validation_schema`); catches stale files, missing fields, constraint violations. Every step needs one.
 - **`enabled_skills`** — step-level skill selection (step execution does NOT inherit workflow-selected skills; set explicitly). `enabled_custom_tools`, `selected_servers`, `selected_tools` — narrow the step's tool surface.
+- **`additional_read_paths`** — narrowly grant declared workflow-relative inputs outside the standard execution/db/KB/learnings surfaces (for example `["variables"]`). It is read-only. Absolute paths, `.` and `..` traversal are rejected, and the grant never expands writes.
 - **`review_notes`** — one-line WHY for non-obvious config (future Pulse and Workshop reviews read it). Record it whenever you set learning/KB access or designate a db writer.
 - **`description_reviewed`**, `coding_agent_tmux_lifecycle`, `transport`, `disable_parallel_tool_execution` — situational.
 

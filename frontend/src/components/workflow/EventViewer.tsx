@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useRef, useState, useCallback } from 'react'
 import {
   ChevronDown,
   ChevronRight,

@@ -18,8 +18,11 @@ export default function SecretsManagerModal({ onClose }: SecretsManagerModalProp
     if (globalSecrets.length === 0) {
       fetchGlobalSecrets();
     }
+  }, [fetchGlobalSecrets, globalSecrets.length]);
+
+  useEffect(() => {
     fetchBotSecrets();
-  }, []);
+  }, [fetchBotSecrets]);
 
   const [newName, setNewName] = useState('');
   const [newValue, setNewValue] = useState('');

@@ -92,6 +92,7 @@ const TERMINAL_SCREEN_MARKERS = [
 ]
 
 const stripAnsiControlCodes = (value: string): string =>
+  // eslint-disable-next-line no-control-regex -- ANSI escape bytes are the protocol being stripped.
   value.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
 
 export function looksLikeTerminalScreenText(value: string): boolean {
@@ -111,6 +112,7 @@ export function formatLiveStreamingPreview(value: string, maxLength = 140): stri
   if (looksLikeTerminalScreenText(value)) return ''
 
   const cleaned = stripAnsiControlCodes(value)
+    // eslint-disable-next-line no-control-regex -- Remaining terminal control bytes are intentionally removed.
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .split(/\r?\n/)
     .map(line => line.trim())

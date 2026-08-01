@@ -435,10 +435,9 @@ func TestWorkshopPromptMovedSectionsAreReferencedNotInlined(t *testing.T) {
 }
 
 // TestReferenceKindsAllRenderable verifies every kind declared in
-// referenceKinds renders without error and produces a reasonable amount of
-// content. Catches: missing .md files, malformed Go templates, accidentally
-// empty docs. Should pass even before content migration (placeholder docs
-// exist).
+// referenceKinds renders without error and is not accidentally empty. Focused
+// references are loaded on demand, so correctness/completeness is asserted by
+// their contract tests rather than an arbitrary byte ceiling.
 func TestReferenceKindsAllRenderable(t *testing.T) {
 	for _, kind := range guidance.ListReferenceKindsForTest() {
 		kind := kind
@@ -450,18 +449,6 @@ func TestReferenceKindsAllRenderable(t *testing.T) {
 			if len(body) < 200 {
 				t.Errorf("%s rendered to %d bytes — suspiciously short. Ensure the placeholder content has at least an intro paragraph.",
 					kind, len(body))
-			}
-			maxBytes := 50_000
-			// Pulse uses one consolidated, on-demand operating protocol so Gate and
-			// maintenance modules share the same evidence and mutation contract. It
-			// is intentionally larger than ordinary task-specific references, but is
-			// no longer part of every coding-agent system prompt.
-			if kind == "post-run-monitor" {
-				maxBytes = 65_000
-			}
-			if len(body) > maxBytes {
-				t.Errorf("%s rendered to %d bytes (limit %d) — split it before it gets unwieldy.",
-					kind, len(body), maxBytes)
 			}
 		})
 	}

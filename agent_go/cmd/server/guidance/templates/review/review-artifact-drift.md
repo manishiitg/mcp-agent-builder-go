@@ -2,9 +2,17 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
 
 ## Execution model
 
-- In Pulse, the parent passes this rendered checklist to one `call_generic_agent` reviewer in the consolidated parallel review batch.
+- In Pulse, the parent passes this rendered checklist to one independent `call_generic_agent` reviewer for the Artifact Review module.
 - Outside Pulse, the parent may call `call_generic_agent` once with this checklist as its instructions.
 - If you are already that generic reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
+- Otherwise launch exactly one reviewer with
+  `call_generic_agent(todo_id="standalone-artifact-review",
+  instructions="READ-ONLY REVIEW ...", preferred_tier=2,
+  module="artifact_review")`. Do not pass `pulse_run_id` or `review_run_id`;
+  the backend generates standalone identities, stores the complete Markdown in
+  SQLite, and files its `CONCERNS:` lines into the structured finding lifecycle.
+  Load the persisted result with `get_pulse_review_result` before the parent
+  validates, reports, or records any outcome.
 - `call_generic_agent` is synchronous. Its direct result is authoritative; do not poll, sleep, call `query_step`, or wait for an auto-notification.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config, write `builder/improve.html`, mark changelog entries, or mark Pulse module state.
 - Read only the matching Artifact Review cursor, open findings, and relevant
@@ -81,6 +89,6 @@ Return one compact review package containing:
 - exact proposed marks grouped as `clean`, `findings`, or `cursor-backfill`
 - any blocked entry that prevented further cursor advancement
 
-The parent Pulse Fixer/workshop agent validates this package, applies only bounded approved fixes, writes one compact **Signals / Kizuki** Artifact Review item to `builder/improve.html` using `data-pulse-section="signals"` and `data-module="artifact_review"`, advances the visible cursor, and calls `mark_changelog_artifact_reviewed` for only the exact verified entries. Do not edit or delete changelog JSON directly and do not create a second cursor or state file.
+The parent Pulse Fixer/workshop agent validates this package, applies only bounded approved fixes, writes one compact **Issues and reviews** Artifact Review item to `builder/improve.html` using `data-pulse-section="signals"` and `data-module="artifact_review"`, advances the visible cursor, and calls `mark_changelog_artifact_reviewed` for only the exact verified entries. Do not edit or delete changelog JSON directly and do not create a second cursor or state file.
 
 A finding marked `user_judgment_required` needs the user's call before it is applied (never before). If this command is running as a live chat turn with the user present (a standalone `/review-artifact-drift`), ask directly in this chat and wait for the reply. If this is the unattended scheduled Pulse pass, never ask a direct question -- nobody is watching that chat and it would stall unanswered -- use `create_human_input_request` instead, which surfaces as a Needs your decision card the user answers later.

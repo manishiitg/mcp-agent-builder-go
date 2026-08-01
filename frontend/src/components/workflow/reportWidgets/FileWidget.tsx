@@ -144,7 +144,8 @@ function ArtifactIcon({ kind }: { kind: ArtifactKind }) {
 
 function useFileContent(widget: ReportWidget, workspacePath: string): FileContentState {
   const [state, setState] = useState<FileContentState>({ status: 'loading' })
-  const path = workspaceFilePath(workspacePath, (widget.source ?? ''))
+  const source = widget.source ?? ''
+  const path = workspaceFilePath(workspacePath, source)
   const format = effectiveRenderFormat(widget)
 
   useEffect(() => {
@@ -154,7 +155,7 @@ function useFileContent(widget: ReportWidget, workspacePath: string): FileConten
 
     const load = async () => {
       try {
-        if (!isAllowedArtifactSource((widget.source ?? ''))) {
+        if (!isAllowedArtifactSource(source)) {
           throw new Error('File widgets can only read db/, knowledgebase/, or docs/ paths.')
         }
         if (format === 'link') {
@@ -192,7 +193,7 @@ function useFileContent(widget: ReportWidget, workspacePath: string): FileConten
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [format, path, (widget.source ?? '')])
+  }, [format, path, source])
 
   return state
 }
@@ -285,7 +286,8 @@ function relFolderSegments(filepath: string, sourceFolderAbs: string): string[] 
 
 function useFileList(widget: ReportWidget, workspacePath: string): FileListState {
   const [state, setState] = useState<FileListState>({ status: 'loading' })
-  const folder = workspaceFilePath(workspacePath, (widget.source ?? ''))
+  const source = widget.source ?? ''
+  const folder = workspaceFilePath(workspacePath, source)
   const maxDepth = widget.recursive ? -1 : 1
 
   useEffect(() => {
@@ -293,7 +295,7 @@ function useFileList(widget: ReportWidget, workspacePath: string): FileListState
     setState({ status: 'loading' })
     const load = async () => {
       try {
-        if (!isAllowedArtifactSource((widget.source ?? ''))) {
+        if (!isAllowedArtifactSource(source)) {
           throw new Error('File-list widgets can only read db/, knowledgebase/, or docs/ paths.')
         }
         const response = await agentApi.getPlannerFiles(folder, widget.maxItems ?? 200, maxDepth)
@@ -322,7 +324,7 @@ function useFileList(widget: ReportWidget, workspacePath: string): FileListState
     return () => {
       cancelled = true
     }
-  }, [folder, maxDepth, widget.extensions, widget.maxItems, widget.recursive, (widget.source ?? '')])
+  }, [folder, maxDepth, source, widget.extensions, widget.maxItems, widget.recursive])
 
   return state
 }

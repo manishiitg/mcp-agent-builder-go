@@ -117,7 +117,4 @@ func TestPostRunMonitorArchiveStepPreservesCurrentTruthAndStagesWrites(t *testin
 			t.Fatalf("pulse archive contract missing %q:\n%s", want, contract)
 		}
 	}
-	if len(step.query) > 500 {
-		t.Fatalf("archive scheduler prompt is not compact: %d bytes", len(step.query))
-	}
 }

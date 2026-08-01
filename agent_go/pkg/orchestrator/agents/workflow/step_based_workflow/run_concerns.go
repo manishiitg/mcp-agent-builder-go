@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,10 +71,11 @@ const (
 )
 
 const (
-	ConcernStatusOpen         = "open"
-	ConcernStatusAcknowledged = "acknowledged"
-	ConcernStatusResolved     = "resolved"
-	ConcernStatusRejected     = "rejected"
+	ConcernStatusOpen                   = "open"
+	ConcernStatusAcknowledged           = "acknowledged"
+	ConcernStatusExternalActionRequired = "external_action_required"
+	ConcernStatusResolved               = "resolved"
+	ConcernStatusRejected               = "rejected"
 )
 
 const concernLinePrefix = "CONCERNS:"
@@ -173,16 +175,46 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 		return 0, err
 	}
 	defer db.Close()
-	if _, err := db.ExecContext(ctx, runConcernsSchema); err != nil {
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
 		return 0, err
 	}
+	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	recorded, err := recordRunConcernLinesAt(
+		ctx, db, runFolder, groupName, stepID, phase, lines,
+		observedAt,
+	)
+	if err != nil {
+		return recorded, err
+	}
+	if err := recordPulseFindingDetailsAt(
+		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines,
+	); err != nil {
+		return recorded, err
+	}
+	return recorded, nil
+}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+func recordRunConcernLinesAt(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	runFolder, groupName, stepID, phase string,
+	lines []string,
+	observedAt string,
+) (int, error) {
+	if strings.TrimSpace(observedAt) == "" {
+		observedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	recorded := 0
 	for _, text := range lines {
 		fp := concernFingerprint(stepID, text)
+		previousStatus := ""
+		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
+			return recorded, err
+		}
 		// A concern that recurs after being marked resolved reopens: the fix did
 		// not hold, and that is strictly more important than the original report.
+		// A concern recurring while awaiting verification is the failed
+		// verification signal itself, so it also returns to open.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
@@ -195,10 +227,29 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 				last_seen_run = excluded.last_seen_run,
 				last_seen_at = excluded.last_seen_at,
 				seen_count = run_concerns.seen_count + 1,
-				status = CASE WHEN run_concerns.status = ? THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, now, runFolder, now, ConcernStatusOpen,
-			ConcernStatusResolved, ConcernStatusOpen)
+				status = CASE WHEN run_concerns.status IN (?, ?) THEN ? ELSE run_concerns.status END`,
+			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
+			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusOpen)
 		if err != nil {
+			return recorded, err
+		}
+		eventType := "observed_again"
+		switch previousStatus {
+		case "":
+			eventType = "filed"
+		case ConcernStatusResolved, ConcernStatusAwaitingVerification:
+			eventType = "reopened"
+		}
+		metadata, _ := json.Marshal(map[string]string{
+			"previous_status": previousStatus,
+			"phase":           phase,
+			"step_id":         stepID,
+		})
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			fp, runFolder, eventType, text, string(metadata), observedAt); err != nil {
 			return recorded, err
 		}
 		recorded++
@@ -206,25 +257,57 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 	return recorded, nil
 }
 
-// LoadOpenRunConcerns returns concerns still needing attention, most-recurring
-// first. Recurrence is the ranking signal: a contradiction reported on twelve
-// consecutive runs matters more than one seen once, and that ordering is not
-// derivable from anything else in the workflow today.
+// LoadOpenRunConcerns returns concerns still needing Pulse attention. A negative
+// limit returns the complete active backlog; zero preserves the bounded default
+// for callers that only need a preview.
 func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) ([]RunConcern, error) {
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		return nil, err
 	}
 	defer db.Close()
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 50
 	}
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
-			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status
-		FROM run_concerns
-		WHERE status IN (?, ?)
-		ORDER BY seen_count DESC, last_seen_at DESC
-		LIMIT ?`, ConcernStatusOpen, ConcernStatusAcknowledged, limit)
+	// Rank by how many active concerns a step has before ranking by how often
+	// any one of them recurred.
+	//
+	// seen_count alone treats "came back" as the only importance signal, which
+	// is right for one finding that will not stay fixed and exactly wrong for a
+	// cluster: many distinct symptoms of one cause, each seen once. Fingerprints
+	// hash the finding text, so one schema mismatch files once per field it
+	// names — social-media had 38 concerns from execute-find-opportunities, all
+	// opportunities.json failing its validation_schema, every one at
+	// seen_count=1. Sorted by recurrence they landed at positions 62 through 132
+	// of 135, each looking like an unrelated one-off, while 36 seen-twice items
+	// held the top. The single largest real defect in that workflow presented as
+	// its least important, and four Pulse passes read the list and worked from
+	// the top.
+	//
+	// Counting the cluster puts the step with the most open work first and keeps
+	// its rows adjacent, so a reviewer can recognize one cause and fix it once
+	// instead of triaging 38 lookalikes.
+	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count, c.status
+		FROM run_concerns c
+		JOIN (
+			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
+			FROM run_concerns
+			WHERE status IN (?, ?, ?, ?)
+			GROUP BY step_id
+		) cluster ON cluster.step_id = c.step_id
+		WHERE c.status IN (?, ?, ?, ?)
+		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
+			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
+	args := []interface{}{
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+	}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		// Absent table just means no concern has been raised yet.
 		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
@@ -246,6 +329,46 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	return out, rows.Err()
 }
 
+// LoadExternallyOwnedRunConcerns returns findings Pulse has diagnosed as real
+// but cannot act on in this workflow. Reviewers receive these as a suppression
+// list; recurrence updates their audit history without putting them back in the
+// active Pulse queue.
+func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) ([]RunConcern, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
+			resolved_at, resolved_by, resolution_note
+		FROM run_concerns
+		WHERE status=?
+		ORDER BY last_seen_at DESC, first_seen_at ASC`, ConcernStatusExternalActionRequired)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunConcern
+	for rows.Next() {
+		var concern RunConcern
+		if err := rows.Scan(
+			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
+			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
+			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,
+			&concern.ResolutionNote,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, concern)
+	}
+	return out, rows.Err()
+}
+
 // ResolveRunConcern records a terminal judgement on a concern.
 //
 // Absence never resolves a concern: a report that stops appearing may just mean
@@ -255,7 +378,7 @@ func ResolveRunConcern(ctx context.Context, workspacePath, fingerprint, status, 
 	switch status {
 	case ConcernStatusAcknowledged, ConcernStatusResolved, ConcernStatusRejected:
 	default:
-		return fmt.Errorf("invalid concern status %q (want acknowledged, resolved, or rejected)", status)
+		return fmt.Errorf("invalid concern status %q", status)
 	}
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil {

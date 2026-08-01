@@ -25,7 +25,7 @@ export function UpdateProgressToast() {
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
-    const api = (window as any).electronAPI
+    const api = window.electronAPI
     if (!api?.onUpdateProgress) return
     const unsubscribe = api.onUpdateProgress((p: UpdateProgress) => {
       setProgress(p)
@@ -37,7 +37,7 @@ export function UpdateProgressToast() {
   if (!progress || dismissed) return null
 
   const pct = Math.round(Math.min(1, Math.max(0, progress.percent ?? 0)) * 100)
-  const restart = () => { try { (window as any).electronAPI?.restartToInstall?.() } catch { /* noop */ } }
+  const restart = () => { try { window.electronAPI?.restartToInstall?.() } catch { /* noop */ } }
 
   return (
     <div className="fixed bottom-4 right-4 z-[9999] w-80 rounded-lg border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900">

@@ -16,7 +16,7 @@ export function convertToSlackMarkdown(md: string): string {
   let inCodeBlock = false
 
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i]
+    const line = lines[i]
 
     // Toggle code block state
     if (line.trimStart().startsWith('```')) {
@@ -89,6 +89,7 @@ function convertInline(text: string): string {
   text = text.replace(/~~(.+?)~~/g, '~$1~')
 
   // Restore code spans
+  // eslint-disable-next-line no-control-regex -- NUL-delimited placeholders cannot collide with message text.
   text = text.replace(/\x00CODE(\d+)\x00/g, (_, idx) => `\`${codeSpans[Number(idx)]}\``)
 
   return text

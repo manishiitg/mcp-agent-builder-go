@@ -3,7 +3,9 @@
 export function terminalPayloadHasVisibleContent(value: string): boolean {
   if (!value) return false
   const withoutStringControls = value
+    // eslint-disable-next-line no-control-regex -- OSC terminators contain BEL/ESC control bytes.
     .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+    // eslint-disable-next-line no-control-regex -- DCS/SOS/PM/APC strings are ESC-delimited terminal protocols.
     .replace(/\x1B[PX^_][\s\S]*?\x1B\\/g, '')
   // eslint-disable-next-line no-control-regex
   const withoutCsi = withoutStringControls.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')

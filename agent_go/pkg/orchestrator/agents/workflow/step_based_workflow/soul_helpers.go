@@ -21,13 +21,13 @@ import (
 //	<bullet list or paragraph describing when the workflow is "done right">
 //
 //	## Constraints  (optional — only explicit user-approved boundaries)
-//	## Notifications  (optional — user preference for Pulse notifications)
 //
 // Architecture, implementation choices, agent-inferred assumptions, historical
-// decisions, and references do not belong in soul.md. They are revisable and
-// should live in planning/plan.json, step descriptions, changelog, learnings, or
-// knowledgebase as appropriate. Extra H2 sections are allowed and ignored by the
-// extractor. Section order is not significant, but `## Objective` and
+// decisions, references, and notification preferences do not belong in soul.md.
+// They are revisable and should live in planning/plan.json, workflow.json, step
+// descriptions, changelog, learnings, or knowledgebase as appropriate. Extra H2
+// sections are allowed and ignored by the extractor. Section order is not
+// significant, but `## Objective` and
 // `## Success Criteria` MUST exist for the workflow to be considered ready to
 // optimize.
 

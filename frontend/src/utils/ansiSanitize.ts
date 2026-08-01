@@ -2,6 +2,7 @@ export function normalizeAnsiForEmbeddedXterm(input: string): string {
   // Preserve CLI ANSI foregrounds and styles. Drop only Claude Code's neutral
   // bg-237 canvas/fill, which the app can receive across assistant body text
   // during tmux backfill and which renders as an unnatural gray panel in xterm.
+  // eslint-disable-next-line no-control-regex -- ANSI escape bytes are the protocol being parsed.
   return input.replace(/\x1b\[([0-9;:]*)m/g, (match, rawParams: string) => {
     if (rawParams === '') return match
     const params = rawParams.split(';')

@@ -138,7 +138,7 @@ export function AuthWrapper({ children }: AuthWrapperProps) {
 
   // Single-user mode: no auth required, render children directly
   if (!isMultiUserMode) {
-    if (isDesktopAppOnlyMode() && !(window as any).electronAPI) {
+    if (isDesktopAppOnlyMode() && !window.electronAPI) {
       return <DesktopAppOnlyGate />
     }
     if (reportWorkspacePath) {
@@ -166,7 +166,7 @@ export function AuthWrapper({ children }: AuthWrapperProps) {
   }
 
   // Authenticated: render children
-  if (isDesktopAppOnlyMode() && !(window as any).electronAPI) {
+  if (isDesktopAppOnlyMode() && !window.electronAPI) {
     return <DesktopAppOnlyGate />
   }
 

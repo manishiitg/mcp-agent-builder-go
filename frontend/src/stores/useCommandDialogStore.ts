@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-type DialogName = 'skillImport' | 'mcpDetails' | 'mcpConfig' | 'models' | 'delegationTiers' | 'presetSettings'
+export type DialogName = 'skillImport' | 'mcpDetails' | 'mcpConfig' | 'models' | 'delegationTiers' | 'presetSettings'
 
 interface CommandDialogState {
   showSkillImport: boolean

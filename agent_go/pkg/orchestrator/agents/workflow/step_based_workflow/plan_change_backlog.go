@@ -1,6 +1,7 @@
 package step_based_workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 // The backlog of plan changes whose knock-on effects nobody has checked yet.
@@ -160,4 +162,41 @@ func toUnreviewedPlanChange(e PlanChangelogEntry, sourceFile string) UnreviewedP
 		}
 	}
 	return out
+}
+
+// LogCanonicalArtifactChange records a changelog entry for a canonical artifact
+// that has no plan-modification tool of its own.
+//
+// planning/changelog only ever receives entries from plan-mod tool calls, and
+// Artifact Review reads that changelog to detect drift. evaluation_plan.json and
+// workflow.json have no such tool — nothing in the tool surface edits them — so
+// every change to them arrived by direct write and left no record. Artifact
+// Review filed this three times on social-media (AR-20260729-2) and could not
+// close it: the newest eval-step changelog entry was 2026-05-29 while git showed
+// four later evaluation-plan commits, and no safe backfill existed because the
+// writes were never recorded in the first place.
+//
+// Best-effort by contract, like the plan tools: a workflow change that succeeded
+// must not fail because its audit note could not be appended.
+func LogCanonicalArtifactChange(
+	ctx context.Context,
+	workspacePath string,
+	tool string,
+	reason string,
+	changes []PlanFieldChange,
+	readFile func(context.Context, string) (string, error),
+	writeFile func(context.Context, string, string) error,
+	logger loggerv2.Logger,
+) {
+	if strings.TrimSpace(workspacePath) == "" || readFile == nil || writeFile == nil || logger == nil {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "Recorded automatically so this artifact's change is visible to artifact drift review."
+	}
+	logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+		Tool:    strings.TrimSpace(tool),
+		Reason:  reason,
+		Changes: changes,
+	}, readFile, writeFile, logger)
 }

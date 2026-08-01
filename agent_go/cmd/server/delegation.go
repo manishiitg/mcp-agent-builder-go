@@ -870,9 +870,9 @@ func workshopCompletionDisplayResult(workspacePath, result string, meta map[stri
 	if findings == "" {
 		return truncateForToolResponse(result, defaultLimit)
 	}
-	// Review prompts cap findings at 6000 characters. Keep that complete review
-	// in the UI event while the parent agent still receives only the compact
-	// artifact-path result stored above.
+	// Keep the complete review in SQLite. Only this immediate UI preview is
+	// bounded (and explicitly marked as truncated); this is not a finding or
+	// storage cap.
 	return truncateForToolResponse(findings, 6000)
 }
 

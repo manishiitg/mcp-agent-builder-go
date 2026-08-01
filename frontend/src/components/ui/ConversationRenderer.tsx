@@ -431,7 +431,7 @@ export function ConversationRenderer({ content }: ConversationRendererProps) {
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredMessages.map((msg, i) => {
+          {filteredMessages.map((msg) => {
             const originalIndex = messages.indexOf(msg)
             return (
               <MessageBubble key={originalIndex} message={msg} index={originalIndex} totalMessages={messages.length} />

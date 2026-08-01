@@ -123,6 +123,37 @@ func TestNotifyUserDefaultsToBackendOwnedRichSlack(t *testing.T) {
 	}
 }
 
+func TestNotifyUserExposesSingleHTMLBodyForGmail(t *testing.T) {
+	manager := services.GetNotificationManager()
+	manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: make(chan *services.NotificationDestination, 1)})
+	t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+	var description string
+	var parameters string
+	for _, tool := range CreateHumanTools() {
+		if tool.Function != nil && tool.Function.Name == "notify_user" {
+			description = tool.Function.Description
+			raw, err := json.Marshal(tool.Function.Parameters)
+			if err != nil {
+				t.Fatalf("marshal notify_user parameters: %v", err)
+			}
+			parameters = string(raw)
+			break
+		}
+	}
+	if !strings.Contains(parameters, `"email_html"`) {
+		t.Fatalf("notify_user Gmail schema does not expose email_html: %s", parameters)
+	}
+	if strings.Contains(parameters, `"email_body"`) {
+		t.Fatalf("notify_user Gmail schema still exposes retired email_body: %s", parameters)
+	}
+	for _, want := range []string{"one inline-styled email_html body", "message_for_user is the automatic fallback"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("notify_user Gmail description missing %q: %s", want, description)
+		}
+	}
+}
+
 func TestHumanFeedbackStoreListsPendingRequestsIndependentlyOfSessionEvents(t *testing.T) {
 	resetHumanToolTestState()
 	t.Cleanup(resetHumanToolTestState)

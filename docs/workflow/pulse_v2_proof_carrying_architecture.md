@@ -81,8 +81,8 @@ The canonical module set currently contains:
 - `report_health`
 - `eval_health`
 - `stores_health`
-- `cost_llm_time`
 - `llm_ops_review`
+- `strategy_auditor`
 - `goal_advisor`
 
 The July 2026 work materially improved Pulse:
@@ -91,7 +91,7 @@ The July 2026 work materially improved Pulse:
 - reviewer executions and verdicts are logged independently from fixer results;
 - plan changes have a durable unreviewed-impact backlog;
 - real evaluation verdicts are queryable through `db.sqlite`;
-- cost review can inspect timing and tool-call efficiency;
+- Ops Review can inspect cost, timing, and tool-call efficiency;
 - three store reviewers were consolidated into `stores_health`;
 - the operator-facing log gained fixed/open separation and visible review
   coverage;
@@ -204,9 +204,12 @@ Pulse state currently spans:
 - `pulse_module_audit`;
 - `pulse_review_log`;
 - `run_concerns`;
+- `pulse_fix_attempts` and `pulse_fix_attempt_findings`;
+- `pulse_fix_verifications` and `pulse_finding_events`;
 - `pulse_final_command_state`;
 - `eval_results`;
-- reviewer result Markdown;
+- full reviewer Markdown stored as TEXT in `pulse_review_log` (with retained
+  legacy `pulse/reviews/**/*.md` files during the v1.0.17 compatibility window);
 - `builder/improve.html`;
 - the hidden `#pulse-agent-handoff` recovery marker;
 - dashboard cards;

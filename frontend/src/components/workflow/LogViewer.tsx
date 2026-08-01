@@ -149,11 +149,10 @@ export function LogViewer({ workspacePath }: LogViewerProps) {
   const isHtml = content.trimStart().startsWith('<')
 
   const { theme } = useTheme()
-  const isDark = useMemo(() => {
-    if (typeof document === 'undefined') return false
-    const c = document.documentElement.classList
-    return c.contains('dark') || c.contains('dark-plus')
-  }, [theme])
+  const isDark = theme === 'dark' || (
+    typeof document !== 'undefined' &&
+    document.documentElement.classList.contains('dark-plus')
+  )
   const themedContent = useMemo(() => applyThemeToLog(content, isDark), [content, isDark])
 
   if (loading && !content) {

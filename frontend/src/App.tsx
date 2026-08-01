@@ -518,7 +518,7 @@ function App() {
       }
 
       // Memory usage (if available)
-      const mem = (performance as any).memory
+      const mem = performance.memory
       const memInfo = mem ? {
         usedHeap: Math.round(mem.usedJSHeapSize / 1024 / 1024),
         totalHeap: Math.round(mem.totalJSHeapSize / 1024 / 1024),
@@ -538,15 +538,15 @@ function App() {
 
       // Active timers/intervals estimate
       // Check for event listeners on window
-      const eventListenerCount = typeof (window as any).getEventListeners === 'function'
-        ? Object.values((window as any).getEventListeners(window) as Record<string, unknown[]>).reduce((sum: number, arr) => sum + (arr as unknown[]).length, 0)
+      const eventListenerCount = typeof window.getEventListeners === 'function'
+        ? Object.values(window.getEventListeners(window)).reduce((sum, arr) => sum + arr.length, 0)
         : 'N/A (use DevTools)'
 
       // Long task detection — start monitoring
-      if (!(window as any).__longTaskObserver) {
+      if (!window.__longTaskObserver) {
         try {
           const longTasks: Array<{ duration: number; time: string }> = [];
-          (window as any).__longTasks = longTasks
+          window.__longTasks = longTasks
           const observer = new PerformanceObserver((list) => {
             for (const entry of list.getEntries()) {
               longTasks.push({ duration: Math.round(entry.duration), time: new Date().toLocaleTimeString() })
@@ -554,16 +554,16 @@ function App() {
             }
           })
           observer.observe({ entryTypes: ['longtask'] })
-          ;(window as any).__longTaskObserver = observer
+          window.__longTaskObserver = observer
         } catch { /* longtask not supported */ }
       }
-      const longTasks = ((window as any).__longTasks || []) as Array<{ duration: number; time: string }>
+      const longTasks = window.__longTasks || []
       const recentLongTasks = longTasks.slice(-10)
 
       // Frame rate measurement — start if not already running
-      if (!(window as any).__fpsSamples) {
+      if (!window.__fpsSamples) {
         const fpsSamples: number[] = [];
-        (window as any).__fpsSamples = fpsSamples
+        window.__fpsSamples = fpsSamples
         let lastTime = performance.now()
         let frameCount = 0
         const measureFPS = () => {
@@ -579,7 +579,7 @@ function App() {
         }
         requestAnimationFrame(measureFPS)
       }
-      const fpsSamples = (window as any).__fpsSamples as number[]
+      const fpsSamples = window.__fpsSamples
       const avgFPS = fpsSamples.length > 0 ? Math.round(fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length) : 'measuring...'
       const minFPS = fpsSamples.length > 0 ? Math.min(...fpsSamples) : 'measuring...'
 
@@ -675,7 +675,7 @@ function App() {
 
       // Workflow store state
       try {
-        const wfStore = (window as any).__ZUSTAND_DEVTOOLS__?.['workflow-store'] || null
+        const wfStore = window.__ZUSTAND_DEVTOOLS__?.['workflow-store'] || null
         if (!wfStore) {
           // Try direct import path
           const presetStates = JSON.parse(localStorage.getItem('workflow-store') || '{}')?.state?._presetStates
@@ -929,14 +929,14 @@ function App() {
     setExportProgress(null)
     const filename = (selectedFile.name || selectedFile.path?.split('/').pop() || 'document')
       .replace(/\.[^.]+$/, '') + '.pdf'
-    const isElectron = !!(window as any).electronAPI?.printToPDF
+    const isElectron = !!window.electronAPI?.printToPDF
 
     try {
       const { restore } = await prepareDomForPdfExport(markdownContentRef.current)
       try {
         if (isElectron) {
           // Electron: printToPDF via IPC → direct file save
-          await (window as any).electronAPI.printToPDF(filename)
+          await window.electronAPI?.printToPDF?.(filename)
         } else {
           // Web: clone content into a top-level wrapper for clean full-page printing
           const printTarget = markdownContentRef.current

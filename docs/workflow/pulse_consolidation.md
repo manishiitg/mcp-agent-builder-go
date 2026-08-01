@@ -18,7 +18,7 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    Staff recommendations, cost/tier signals, and the store freshness ledgers) and
    calls `record_pulse_worklist` exactly once with one `due|skipped` decision for
    each of the eight modules (`bug_review`, `artifact_review`, `report_health`,
-   `eval_health`, `stores_health`, `cost_llm_time`, `llm_ops_review`,
+   `eval_health`, `stores_health`, `llm_ops_review`, `strategy_auditor`,
    `goal_advisor`). `stores_health` replaced the former separate
    `learning_health` / `knowledgebase_health` / `db_health` modules, which
    shared one due-cadence mechanism and one bounded-fix authority. Every skip
@@ -27,6 +27,9 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    so it is guaranteed due on the next pass rather than dropped. Go enforces
    the complete-worklist rule so a module can't silently disappear. Gate
    mutates nothing.
+   `llm_ops_review` now combines the former cost/time pass with model routing,
+   tool/runtime operations, setup, and plan-design hygiene in one agentic
+   review.
 2. **Parallel read-only reviewers.** The scheduler dispatches only the `due`
    modules. Each is reviewed by an independent `call_generic_agent` reviewer
    (batches of ≤2) that **only inspects and advises** — read-only tool allowlist,
@@ -39,8 +42,39 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    (a successful write is never proof; a fix stays `changed_unverified` until a
    real run/eval/report confirms it). Strategy/LLM changes remain proposal-only
    behind the human-input approval flow.
+   SQLite is authoritative for the per-finding lifecycle: `run_concerns` files
+   and deduplicates findings, `pulse_fix_attempts` plus
+   `pulse_fix_attempt_findings` record the mutation boundary,
+   `pulse_fix_verifications` records passed/failed/inconclusive proof, and
+   `pulse_finding_events` records filed/fixing/closed/reopened history. Complete
+   reviewer Markdown is stored as human-readable SQLite TEXT in
+   `pulse_review_log`; it is evidence, not the close/reopen state. The Pulse popup
+   is one database-native workspace: aggregate health, pending decisions, compact
+   Goal context, cross-module findings, recent lifecycle activity, module
+   reviews, fix/verification detail, and finalization status. Raw Markdown is a
+   secondary evidence view. The popup does not extract or display fragments from
+   `builder/improve.html`.
 4. **One ordered finalizer.** dashboard → backup → publish → notify, each recording
    its own live/final status. The scheduler marks anything left running as failed.
+
+The dedicated Dashboard stage still owns `builder/improve.html`. That file remains
+the full generated Pulse dashboard, archive-linked time-series report, and
+publishable artifact. Moving reviewer evidence and lifecycle state into SQLite
+does not retire or replace it.
+
+Workflow contract v1.0.17 non-destructively imports recognized historical
+`pulse/reviews/**/*.md` into `pulse_review_log` and keeps the source files during
+the compatibility window. New Pulse reviewers write their complete Markdown
+directly to SQLite and create no review file. The popup falls back to retained
+legacy files only when a workflow has no matching database review yet.
+
+Standalone Pulse-module slash commands use the same path. `/bug-review`,
+`/ops-review`, `/strategy-auditor`, and `/review-artifact-drift` pass their
+canonical module to `call_generic_agent`; Go generates manual run identities,
+stores the full Markdown in `pulse_review_log`, and indexes `CONCERNS:` into the
+finding lifecycle before the parent updates `builder/improve.html`.
+`/goal-advisor` calls the native Advisor → Critic → Finalizer pipeline directly;
+that pipeline persists its complete result and remaining concerns the same way.
 
 Goal Advisor is a Pulse-selected module (not a separate schedule). Recovery,
 timeout, and concurrency are hardened in Go: a trusted-session registry binds each

@@ -23,7 +23,6 @@ import { normalizeEventViewMode, type ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
 import { restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
-import { summarizeEventForDebug } from '../utils/eventOrdering'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
 import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
@@ -47,6 +46,7 @@ import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 // (a new [] on every selector call breaks referential equality checks)
 const EMPTY_EVENTS: PollingEvent[] = []
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
+const ENABLE_LEGACY_FRONTEND_AUTO_NOTIFICATIONS = false
 const RESTORED_CONVERSATION_CONTEXT_MARKER = '\n\nPrevious workflow-builder conversation file:'
 const STALE_STREAMING_RECOVERY_GRACE_MS = 10000
 // Grace window after a resume marker appears (page-load auto-restore sleeps ~500ms
@@ -435,7 +435,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideHeader = false, hideInput = false, compact = false, suppressTerminalPane = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel } = props
+  const { onNewChat, hideInput = false, compact = false, suppressTerminalPane = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel } = props
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -447,7 +447,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     agentMode: state.agentMode,
     setCurrentQuery: state.setCurrentQuery,
   })))
-  
+
   const { selectedModeCategory, getAgentModeFromCategory } = useModeStore(useShallow(state => ({
     selectedModeCategory: state.selectedModeCategory,
     getAgentModeFromCategory: state.getAgentModeFromCategory
@@ -458,7 +458,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     clearActivePreset: state.clearActivePreset,
     currentPresetServers: state.currentPresetServers
   })))
-  
+
   // Derive correct agent mode from selectedModeCategory (source of truth)
   const correctAgentMode = useMemo(() => {
     if (selectedModeCategory) {
@@ -466,9 +466,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
     return agentMode // Fallback to agentMode if selectedModeCategory is null
   }, [selectedModeCategory, agentMode, getAgentModeFromCategory])
-  
+
   // LLM provider configs are read via useLLMStore.getState() in helpers
-  
+
   const {
     toolList: allTools,
     chatSelectedServers,
@@ -490,17 +490,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       .filter((server): server is string => typeof server === 'string' && server.length > 0)),
     [allTools]
   )
-  
+
   // Get active tab reactively (works for both chat and workflow modes)
   // Use selector to ensure reactivity when tab config changes
   const activeTabIdFromStore = useChatStore(state => state.activeTabId)
   // null = explicitly inactive (no tab); undefined = use store's active tab
   const targetTabId = isInactive ? null : (tabId || activeTabIdFromStore)
-  const activeTab = useChatStore(state => 
+  const activeTab = useChatStore(state =>
     targetTabId ? state.chatTabs[targetTabId] : undefined
   )
   const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
-  
+
   // PERF FIX: Stable tab-session key to avoid phantom re-renders.
   //
   // PROBLEM: Previously `const chatTabs = useChatStore(state => state.chatTabs)` subscribed
@@ -534,9 +534,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // NEVER use currentPresetServers in multi-agent mode - workflow preset state is isolated to workflow mode only
     const isChatLike = selectedModeCategory === 'multi-agent'
     const tabSelectedServers: string[] = ((isChatLike && activeTab?.config)
-      ? activeTab.config.selectedServers 
+      ? activeTab.config.selectedServers
       : selectedServers).filter((server): server is string => typeof server === 'string')
-    
+
     // If no servers are selected (empty array), default to all connected servers
     if (tabSelectedServers.length === 0) {
       const all = Array.from(connectedServers)
@@ -553,7 +553,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     connectedServers,
     activeTab?.config
   ])
-  
+
   // Filter tools to only include those from effective servers
   // If "NO_SERVERS" is selected, return empty tools (pure LLM mode)
   const enabledTools = useMemo(() => {
@@ -565,14 +565,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       tool.server && effectiveServers.includes(tool.server)
     )
   }, [allTools, effectiveServers])
-  
+
   // PERF FIX: Derive tab lists from stable tabSessionKey instead of raw chatTabs reference.
   // Uses getState() for the actual tab objects (avoids subscription), and tabSessionKey
   // as the recomputation trigger (only changes on tab add/remove/session change).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const allTabs = useMemo(() => Object.values(useChatStore.getState().chatTabs), [tabSessionKey])
   const tabsWithSessions = useMemo(() => allTabs.filter(tab => tab.sessionId), [allTabs])
-  
+
   // No observer ID syncing needed - sessions are used directly
 
   const {
@@ -585,7 +585,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Deprecated: totalEvents, setTotalEvents, setLastEventCount, events, setEvents removed
     getTabEvents,
     addTabEvents,
-    setTabEvents,
     getTabLastEventIndex,
     setTabLastEventIndex,
     setHasActiveChat,
@@ -594,13 +593,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     finalResponse,
     setIsCompleted,
     isLoadingHistory,
-    setIsLoadingHistory,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    setIsApprovingWorkflow: _setIsApprovingWorkflow,
     sessionState,
-    setSessionState,
     isCheckingActiveSessions,
-    setIsCheckingActiveSessions,
     currentWorkflowPhase,
     setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId,
@@ -620,7 +614,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     pollingInterval: state.pollingInterval,
     getTabEvents: state.getTabEvents,
     addTabEvents: state.addTabEvents,
-    setTabEvents: state.setTabEvents,
     getTabLastEventIndex: state.getTabLastEventIndex,
     setTabLastEventIndex: state.setTabLastEventIndex,
     setHasActiveChat: state.setHasActiveChat,
@@ -629,12 +622,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     finalResponse: state.finalResponse,
     setIsCompleted: state.setIsCompleted,
     isLoadingHistory: state.isLoadingHistory,
-    setIsLoadingHistory: state.setIsLoadingHistory,
-    setIsApprovingWorkflow: state.setIsApprovingWorkflow,
     sessionState: state.sessionState,
-    setSessionState: state.setSessionState,
     isCheckingActiveSessions: state.isCheckingActiveSessions,
-    setIsCheckingActiveSessions: state.setIsCheckingActiveSessions,
     currentWorkflowPhase: state.currentWorkflowPhase,
     setCurrentWorkflowPhase: state.setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId: state.setCurrentWorkflowQueryId,
@@ -658,7 +647,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Get active preset for workflow mode
   const activeWorkflowPreset = getActivePreset('workflow')
   const selectedWorkflowPreset = activeWorkflowPreset?.id || null
-  
+
   // Always use tab events - never fall back to global events to prevent cross-tab mixing
   // If there are no tabs, return empty array (tabs should always exist in multi-tab mode)
   // Filter out workspace_file_operation events from display
@@ -756,7 +745,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     tabSessionKey,
   })
   useMemoLogger('ChatArea.displayEvents', displayEvents, displayEvents.length)
-  
+
   // Computed values
   const isRequiredFolderSelected = useMemo(() => {
     if (selectedModeCategory !== 'workflow') return true; // No validation needed for other modes
@@ -767,16 +756,16 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       const workflowFolder = activeWorkflowPreset?.selectedFolder?.filepath
       return workflowFolder ? workflowFolder.startsWith('Workflow/') : false
     }
-    
+
     return true;
-  }, [selectedModeCategory, activeWorkflowPreset])
+  }, [selectedModeCategory, activeWorkflowPreset, activeTab?.metadata?.isOrganizationAssistant])
 
   // Use currentPresetServers from props (passed from App.tsx when preset is selected)
 
   // State for preset selection overlay
   const [showPresetSelection, setShowPresetSelection] = useState(false)
   const [pendingModeCategory, setPendingModeCategory] = useState<Exclude<ModeCategory, null> | null>(null)
-  
+
   // State for session restoration loading
   const [isRestoringChatSessions, setIsRestoringChatSessions] = useState(false)
   // Workflow-mode restore flag is owned by WorkflowLayout via useChatStore so we can show
@@ -898,7 +887,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // State for mode switch dialog
   const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false)
   const [pendingModeSwitch, setPendingModeSwitch] = useState<Exclude<ModeCategory, null> | null>(null)
-  
+
 
   // Handle mode selection from dropdown
   // Handle mode switching with preset selection for Workflow
@@ -914,10 +903,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       if (selectedModeCategory === 'workflow') {
         clearActivePreset('workflow')
       }
-      
+
       // Check if target mode already has a preset
       const activePreset = getActivePreset(category)
-      
+
       if (activePreset) {
         // Preset already selected, switch mode directly
         switchMode(category)
@@ -933,9 +922,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const switchMode = (category: Exclude<ModeCategory, null>) => {
     const { setModeCategory, getAgentModeFromCategory } = useModeStore.getState()
     const { setAgentMode } = useAppStore.getState()
-    
+
     setModeCategory(category)
-    
+
     // Set the corresponding agent mode using centralized mapping
     const agentModeToSet = getAgentModeFromCategory(category) as AgentMode
     setAgentMode(agentModeToSet)
@@ -946,7 +935,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (pendingModeCategory) {
       // Now switch to the mode
       switchMode(pendingModeCategory)
-      
+
       // Apply the preset after mode switch (this will also set the active preset ID)
       setTimeout(() => {
         const result = applyPreset(presetId, pendingModeCategory)
@@ -954,7 +943,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           logger.error('ChatArea', 'Failed to apply preset:', result.error)
         }
       }, 100)
-      
+
       // Close overlay
       setShowPresetSelection(false)
       setPendingModeCategory(null)
@@ -967,10 +956,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     setPendingModeCategory(null)
   }
 
-  
+
   // Filter toasts to only include types supported by ToastContainer
   const filteredToasts = toasts.filter((toast: { type: string }) => toast.type === 'success' || toast.type === 'info' || toast.type === 'error') as Array<{id: string, message: string, type: 'success' | 'info' | 'error'}>
-  
+
   // Handle mode switch dialog confirmation
   const handleModeSwitchConfirm = () => {
     if (pendingModeSwitch) {
@@ -981,23 +970,23 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     setShowModeSwitchDialog(false)
     setPendingModeSwitch(null)
   }
-  
+
   // Handle mode switch dialog cancellation
   const handleModeSwitchCancel = () => {
     setShowModeSwitchDialog(false)
     setPendingModeSwitch(null)
   }
-  
+
   // Add ref for auto-scrolling
   const chatContentRef = useRef<HTMLDivElement>(null)
-  
+
   // Add ref for workflow mode handler
   const workflowModeHandlerRef = useRef<WorkflowModeHandlerRef>(null)
-  
-  
+
+
   // Track processed completion events to avoid stopping on old ones
   const processedCompletionEventsRef = useRef<Set<string>>(new Set())
-  
+
 
   // Selected preset folder state
   const lastEventIndexRef = useRef<number>(-1)
@@ -1080,7 +1069,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   useEffect(() => {
     const currentEventCount = displayEvents.length
     const previousEventCount = previousEventCountRef.current
-    
+
     // Only reset auto-scroll when starting a new conversation (0 -> > 0)
     // Don't reset if user has manually disabled it or if events are just updating
     const isRestoredMultiAgentHydration = selectedModeCategory === 'multi-agent' && (
@@ -1091,7 +1080,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (previousEventCount === 0 && currentEventCount > 0 && !isStreaming && !isRestoredMultiAgentHydration) {
       setAutoScroll(true);
     }
-    
+
     previousEventCountRef.current = currentEventCount
   }, [activeTab?.metadata?.isRestored, activeTabHasRestoredConversation, displayEvents.length, isRestoringChatSessions, isStreaming, selectedModeCategory, setAutoScroll]);
 
@@ -1101,12 +1090,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
     // Mark that we're performing programmatic scrolling
     isProgrammaticScrollRef.current = true
-    
+
     // Clear any existing timeout
     if (programmaticScrollTimeoutRef.current) {
       clearTimeout(programmaticScrollTimeoutRef.current)
     }
-    
+
     // Use requestAnimationFrame for smoother scrolling
     requestAnimationFrame(() => {
       const element = chatContentRef.current
@@ -1117,7 +1106,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         top: targetScrollTop,
         behavior
       });
-      
+
       // Clear the programmatic scroll flag after scroll completes
       // For smooth scroll, wait longer; for instant, clear immediately
       const timeoutDuration = behavior === 'smooth' ? 600 : 100
@@ -1127,12 +1116,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }, timeoutDuration)
     });
   }, [])
-
-  // Callback to re-enable auto-scroll and scroll to bottom after feedback submission
-  const handleFeedbackSubmitted = useCallback(() => {
-    setAutoScroll(true)
-    scrollToBottom('smooth')
-  }, [setAutoScroll, scrollToBottom])
 
   // Auto-scroll to bottom when new events arrive (only if autoScroll is enabled)
   // Use displayEvents (tabEvents) instead of events to track the actual displayed events
@@ -1201,10 +1184,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       lastEventIndexRef.current = lastEventIndex
     }
   }, [lastEventIndex, activeTab])
-  
+
   // Update displayEvents when active tab changes
   // Tab events are automatically loaded via tabEvents useMemo
-  
+
   // Deprecated: totalEventsRef useEffect removed
 
   // Workflow preset handlers
@@ -1213,7 +1196,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // File context is now preset-specific (from preset.selectedFolder), no need to clear
     applyPreset(presetId, 'workflow')
     setCurrentWorkflowQueryId(presetId) // Store the preset query ID for workflow approval
-    
+
     try {
       // Ensure phases are loaded and get them from store
       const workflowStore = useWorkflowStore.getState()
@@ -1223,14 +1206,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       const phases = workflowStore.phases
       const phaseIds = phases.map(p => p.id)
       const defaultPhase = workflowStore.getDefaultPhase()
-      
+
       // Check if workflow already exists for this preset
       const workflowStatus = await agentApi.getWorkflowStatus(presetId)
-      
+
       if (workflowStatus.success && workflowStatus.workflow) {
         const workflow = workflowStatus.workflow
         const status = workflow.workflow_status
-        
+
         // Set the workflow phase based on the database status
         // Use the status if it's a valid phase ID, otherwise use default (first phase)
         if (status && phaseIds.includes(status)) {
@@ -1239,7 +1222,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           // Default to first phase if status is invalid or not found
           setCurrentWorkflowPhase(defaultPhase)
         }
-        
+
         // Use presetContent directly (this is the objective from preset query)
         setCurrentQuery(presetContent)
       } else {
@@ -1268,9 +1251,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // TODO: Re-enable when RequestHumanFeedbackEvent is available
   /*
   const handleApproveWorkflow = useCallback(async (_requestId: string, eventData?: { next_phase?: string }) => {
-    
+
     setIsApprovingWorkflow(true)  // Set loading state
-    
+
     // Use the stored preset query ID instead of the request ID
     const presetQueryId = currentWorkflowQueryId
     if (!presetQueryId) {
@@ -1278,7 +1261,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       setIsApprovingWorkflow(false)
       return
     }
-    
+
     try {
       // Determine next phase based on event data
       // If next_phase is provided, use it; otherwise get the second phase (planning) as default
@@ -1288,10 +1271,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         // Use second phase (planning) if available, otherwise first phase
         nextPhase = phases.length > 1 ? phases[1].id : (phases.length > 0 ? phases[0].id : 'execution')
       }
-      
+
       // Update workflow status to the determined next phase
       await agentApi.updateWorkflow(presetQueryId, nextPhase)
-      
+
       // Stop any ongoing SSE / polling to prevent events from coming back
       if (currentTab?.sessionId) {
         disconnectSSE(currentTab.sessionId)
@@ -1311,10 +1294,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       setIsCompleted(false)
       setCurrentUserMessage('')
       setShowUserMessage(false)
-      
+
       // Update phase to the determined next phase
       setCurrentWorkflowPhase(nextPhase as WorkflowPhase)
-      
+
     } catch (error) {
       logger.error('ChatArea', 'Failed to approve workflow:', error)
       // TODO: Show error message to user
@@ -1344,7 +1327,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // Get active sessions from cache (shared across all components)
   const startActiveSessionsPolling = useChatStore(state => state.startActiveSessionsPolling)
-  
+
   // Track recently notified workshop agent names to prevent duplicate notifications
   // (retries emit multiple orchestrator_agent_end events with the same agent name)
   const notifiedWorkshopAgentsRef = useRef<Set<string>>(new Set())
@@ -1430,7 +1413,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // leaving the batched events array empty. Without updating the index here, tabEventIndices
     // stays at 0 and every SSE reconnection re-fetches all events from the beginning.
     if (response.last_processed_index !== undefined && response.last_processed_index >= 0) {
-      let newLastEventIndex = response.last_processed_index
+      const newLastEventIndex = response.last_processed_index
       if (tab) {
         setTabLastEventIndex(actualSessionId, newLastEventIndex)
         if (response.has_more !== undefined) {
@@ -1554,7 +1537,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // Legacy: orchestrator_agent_end events were previously queued as auto-notifications here.
       // That code has been removed. The backend bgAgentRegistry handles all workshop execution
       // completion notifications.
-      if (false && event.type === 'orchestrator_agent_end' && tab) {
+      if (ENABLE_LEGACY_FRONTEND_AUTO_NOTIFICATIONS && event.type === 'orchestrator_agent_end' && tab) {
         const agentType = (innerData?.agent_type ?? agentEvent?.agent_type ?? '') as string
         const isWorkshopWrapper = agentType === 'workshop-step-execution' || agentType === 'workshop-step-debug' || agentType === 'workshop-step-learning' || agentType === 'workshop-background-task' || agentType === 'workshop-report-execution'
         // Sub-agents within workshop steps have workshop_step_id in metadata (set by ContextAwareEventBridge)
@@ -1611,14 +1594,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               // Check if the result content indicates failure even when success=true (no execution error)
               // A step can complete without throwing an error but still report STATUS: FAILED in the result
               const resultIndicatesFailure = success && result && /STATUS:\s*FAILED|FAILED:|FAILURE:/i.test(result)
-	              // Use frontend workshop mode (from UI toggle) — more reliable than backend auto-detection
-	              const wfState = useWorkflowStore.getState()
-	              const workshopMode = (() => {
-	                const presetId = useGlobalPresetStore.getState().activePresetIds.workflow ?? ''
-	                const presetWorkshopMode = presetId ? wfState.workshopModeByPreset[presetId] : undefined
-	                return presetWorkshopMode || wfState.workshopMode
-	              })() || (inputData?.workshop_mode ?? '') as string
-
               // Determine if this is a sub-agent within a todo task (vs a top-level step)
               const isSubAgent = isWorkshopSubAgent
               const eventLabel = isSubAgent ? 'SUB-AGENT' : 'STEP'
@@ -1726,7 +1701,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Step status coloring on the canvas is not needed during chat — it only matters in execution mode.
     // Auto-notifications for step completions are now handled by the backend via
     // processBackgroundAgentCompletion → executeSyntheticTurn. Disabled frontend queuing.
-    if (false && selectedModeCategory === 'workflow') {
+    if (ENABLE_LEGACY_FRONTEND_AUTO_NOTIFICATIONS && selectedModeCategory === 'workflow') {
       for (const event of response.events as PollingEvent[]) {
         if (event.type === 'todo_task_step_completed' && hasUserSentMessageRef.current) {
           if (isStaleAutoNotificationEvent(event)) {
@@ -1836,7 +1811,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
       return tab.metadata?.mode === currentModeCategory
     })
-    
+
     // CRITICAL: Only poll tabs that are:
     // 1. Actively streaming (query in progress)
     // 2. Have session ID in backend's active sessions list (backend determines activity based on events)
@@ -1878,11 +1853,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
       return true
     })
-    
+
     // CRITICAL: Poll by sessionId, not observerId
     // Multiple observers can view the same session, but events are stored per session
     const sessionsToPoll: Array<{ sessionId: string; tab: ChatTab | null }> = []
-    
+
     // Add all tab sessions (deduplicate by sessionId)
     const seenSessionIds = new Set<string>()
     tabsToPoll.forEach(tab => {
@@ -1893,15 +1868,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         sessionsToPoll.push({ sessionId, tab: currentTab || tab })
       }
     })
-    
+
     if (sessionsToPoll.length === 0) {
       return
     }
-    
+
     // Poll each session
     for (const { sessionId, tab } of sessionsToPoll) {
       let currentTab = tab
-      
+
       if (tab) {
         // Re-fetch the tab from store to ensure we have the latest session ID
         const fetchedTab = chatStore.getTab(tab.tabId)
@@ -1909,7 +1884,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           continue
         }
         currentTab = fetchedTab
-        
+
         // Verify session ID matches
         if (currentTab.sessionId !== sessionId) {
           // Use the new session ID
@@ -1917,22 +1892,22 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             continue
           }
         }
-        
+
         // Double-check: verify this tab should still be polled
         // Only check isCompleted and sessionId - isStreaming is UI-only, not used for polling decisions
         if (currentTab.isCompleted && !currentTab.sessionId) {
           continue
         }
       }
-      
+
       // Get fresh tab from store to ensure we have latest session ID
       const freshTab = currentTab ? chatStore.getTab(currentTab.tabId) : null
       const effectiveSessionId = freshTab?.sessionId || currentTab?.sessionId || sessionId
-      
-      let rawLastEventIndex = currentTab 
+
+      let rawLastEventIndex = currentTab
         ? getTabLastEventIndex(effectiveSessionId)
         : lastEventIndexRef.current
-      
+
       // CRITICAL: Detect sentinel value (9999) which means "all events processed" but not an actual index
       // If lastEventIndex is 9999 or higher, check stored events to get the actual last index
       if (rawLastEventIndex >= 9999) {
@@ -1963,17 +1938,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           const actualLastIndex = storedEvents.length - 1
           rawLastEventIndex = actualLastIndex
           logger.debug('ChatArea', `Recovered lastEventIndex ${actualLastIndex} for session ${effectiveSessionId}`)
-          
+
           if (currentTab) {
             setTabLastEventIndex(effectiveSessionId, actualLastIndex)
           }
         }
       }
-      
+
       // Ensure lastEventIndex is >= 0 (API requirement)
       // -1 means "no events yet", which should be treated as 0
       const currentLastEventIndex = Math.max(0, rawLastEventIndex === -1 ? 0 : rawLastEventIndex)
-      
+
       // Track which session is currently being polled (for derived isStreaming)
 
       try {
@@ -1998,7 +1973,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   }, [startPolling, pollEvents])
 
 
-  
+
   // Start centralized active sessions polling when component mounts
   useEffect(() => {
     startActiveSessionsPolling()
@@ -2114,13 +2089,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const tabsWithActiveSessions = useMemo(() => {
     const activeIds = activeSessionIds // Capture in closure
     const chatStore = useChatStore.getState() // Get fresh store state to check streaming status
-    
+
     const filtered = tabsWithSessions.filter(tab => {
       // Must have session ID
       if (!tab.sessionId) {
         return false
       }
-      
+
       // Workflow tabs stay lightweight when idle. Keep live connections for
       // active turns because some providers build their clean transcript from
       // streaming events instead of tmux snapshots.
@@ -2169,14 +2144,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
       return true
     })
-    
+
     return filtered
     // PERF FIX: Removed `chatTabs` from dependencies. Previously this memo recomputed on
     // every setTabStreaming/setTabCompleted/setTabConfig because `chatTabs` changed reference.
     // The function already uses getState() for fresh tab data (lines above), so the memo
     // only needs to recompute when tabsWithSessions or activeSessionIds actually change.
   }, [tabsWithSessions, activeSessionIds])
-  
+
   // SSE connection management — connect/disconnect based on active sessions
   // Falls back to polling if SSE connection fails (handled inside connectSSE's onError callback)
   // NOTE: sseConnections is intentionally NOT in the dependency array to avoid infinite loops
@@ -2235,7 +2210,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (neededSessionIds.size === 0 && pollingInterval) {
       stopPolling()
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- sseConnections excluded to prevent infinite loop
+
   }, [tabsWithActiveSessions, viewModeKey, connectSSE, disconnectSSE, handleSSEMessage, handleSSEStatus, handleSSEFallback, pollingInterval, startPolling, stopPolling, pollEvents])
 
   // When the active tab's viewMode flips OFF Terminal, kick a single
@@ -2260,7 +2235,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
     }
   }, [pollingInterval, stopPolling, disconnectAllSSE])
-  
+
 
   const stopStreamingInFlightRef = useRef(false)
 
@@ -2269,11 +2244,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     stopStreamingInFlightRef.current = true
 
     const chatStore = useChatStore.getState()
-    
+
     // DO NOT stop polling - let backend determine activity based on events
     // Backend will mark session as inactive after 10 minutes of no events
     // This ensures we catch any pending events after stop is pressed
-    
+
     // Cancel only the foreground LLM turn for this tab. Background/workflow
     // agents are intentionally left running; explicit session stop handles those.
     // CRITICAL: Only use the active tab's session ID - never fall back to global sessionId.
@@ -2486,7 +2461,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       ? effectiveFileContext.some((file) => file.path === restoredConversationPath)
       : false
     const restoredConversationContext = restoredConversationPath && restoredConversationHasVisibleFallback
-      ? `\n\nPrevious workflow-builder conversation file: ${restoredConversationPath}\nThis file is JSON with a top-level conversation_history array. User messages have Role \"human\" or \"user\" and text in Parts[].Text; assistant replies have Role \"ai\" or \"assistant\"; tool calls/results may be interleaved and are usually noisy. To understand the recent context, scan conversation_history from the end for the latest user/assistant Text parts. Do not treat the last JSON entry as the last user request, because it may be a tool result or function call.${restoredConversationSummary ? `\n\n${restoredConversationSummary}` : ''}`
+      ? `\n\nPrevious workflow-builder conversation file: ${restoredConversationPath}\nThis file is JSON with a top-level conversation_history array. User messages have Role "human" or "user" and text in Parts[].Text; assistant replies have Role "ai" or "assistant"; tool calls/results may be interleaved and are usually noisy. To understand the recent context, scan conversation_history from the end for the latest user/assistant Text parts. Do not treat the last JSON entry as the last user request, because it may be a tool result or function call.${restoredConversationSummary ? `\n\n${restoredConversationSummary}` : ''}`
       : ''
     const fileContextForPrompt = restoredConversationPath
       ? effectiveFileContext.filter((file) => file.path !== restoredConversationPath)
@@ -2721,7 +2696,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       console.log('[DEBUG request payload]', {
         agent_mode: requestPayload.agent_mode,
         preset_query_id: requestPayload.preset_query_id,
-        phase_id: (requestPayload as any).phase_id,
+        phase_id: requestPayload.phase_id,
         has_files_in_context: requestPayload.query.includes('📁 Files in context:'),
         restored_conversation_path: restoredConversationPath || undefined,
         enable_browser_access: requestPayload.enable_browser_access,
@@ -2821,7 +2796,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return false
     }
 
-  }, [correctAgentMode, selectedModeCategory, getAgentModeFromCategory, isRequiredFolderSelected, isStreaming, stopStreaming, finalResponse, startPolling, effectiveServers, enabledTools, selectedWorkflowPreset, activeWorkflowPreset, pollEvents, processedCompletionEventsRef, activeTab, scrollToBottom, getActiveSessions, resetStreamingState, connectSSE, handleSSEMessage, handleSSEStatus])
+  }, [correctAgentMode, selectedModeCategory, getAgentModeFromCategory, isRequiredFolderSelected, finalResponse, effectiveServers, enabledTools, processedCompletionEventsRef, activeTab, scrollToBottom, getActiveSessions, resetStreamingState, connectSSE, handleSSEMessage, handleSSEStatus, buildExecutionOptions, handleSSEFallback])
 
   // Serialize the complete submission path by durable session. A restored chat
   // can receive a new React tab ID while an older request is still preparing;
@@ -2873,32 +2848,36 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const submitQueryWithQueryRef = useRef(submitQueryWithQuery)
   useEffect(() => { submitQueryWithQueryRef.current = submitQueryWithQuery }, [submitQueryWithQuery])
 
+  const queuedTabId = activeTab?.tabId
+  const queuedTabIsStreaming = activeTab?.isStreaming ?? false
+  const queuedTabMessages = activeTab?.config?.queuedMessages
+  const queuedTabIsProcessing = activeTab?.config?.isQueueProcessing
+
   useEffect(() => {
-    const currentIsStreaming = activeTab?.isStreaming ?? false
-    const queuedMessages = activeTab?.config?.queuedMessages || []
+    const queuedMessages = queuedTabMessages || []
 
     // Read the shared lock from the store (fresh, not from closure) to prevent
     // multiple ChatArea instances from double-processing the same queue.
-    const freshConfig = activeTab ? useChatStore.getState().getTabConfig(activeTab.tabId) : undefined
-    const isProcessing = freshConfig?.isQueueProcessing ?? false
+    const freshConfig = queuedTabId ? useChatStore.getState().getTabConfig(queuedTabId) : undefined
+    const isProcessing = freshConfig?.isQueueProcessing ?? queuedTabIsProcessing ?? false
 
     // Process queued messages when agent is idle (not streaming).
     // Uses !isStreaming instead of isCompleted because workshop step goroutines
     // may still be running in the background after the main agent turn finishes.
-    if (currentIsStreaming || !activeTab || isProcessing || queuedMessages.length === 0) {
+    if (queuedTabIsStreaming || !queuedTabId || isProcessing || queuedMessages.length === 0) {
       if (queuedMessages.length > 0) {
-        console.log(`[QUEUE_DEBUG] Not processing: isStreaming=${currentIsStreaming} hasTab=${!!activeTab} isProcessing=${isProcessing} queueLen=${queuedMessages.length}`)
+        console.log(`[QUEUE_DEBUG] Not processing: isStreaming=${queuedTabIsStreaming} hasTab=${!!queuedTabId} isProcessing=${isProcessing} queueLen=${queuedMessages.length}`)
         // SAFETY: If lock is stuck (isProcessing=true) for more than 10 seconds, force-release it.
         // This can happen if submitQuery promise never resolves or the finally block doesn't run.
-        if (isProcessing && !currentIsStreaming && activeTab) {
-          const lockKey = `queue_lock_${activeTab.tabId}`
+        if (isProcessing && !queuedTabIsStreaming && queuedTabId) {
+          const lockKey = `queue_lock_${queuedTabId}`
           const lockStore = window as unknown as Record<string, unknown>
           const lastLockTime = lockStore[lockKey] as number | undefined
           if (!lastLockTime) {
             lockStore[lockKey] = Date.now()
           } else if (Date.now() - lastLockTime > 10000) {
-            console.warn(`[QUEUE_DEBUG] Force-releasing stuck lock after 10s for tab ${activeTab.tabId}`)
-            useChatStore.getState().setTabConfig(activeTab.tabId, { isQueueProcessing: false })
+            console.warn(`[QUEUE_DEBUG] Force-releasing stuck lock after 10s for tab ${queuedTabId}`)
+            useChatStore.getState().setTabConfig(queuedTabId, { isQueueProcessing: false })
             delete lockStore[lockKey]
           }
         }
@@ -2906,7 +2885,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return
     }
 
-    const tabId = activeTab.tabId
+    const tabId = queuedTabId
     const chatStore = useChatStore.getState()
 
     // Claim the store-level lock atomically before any async work.
@@ -2923,7 +2902,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
     // Human messages: combine all as-is
     // Auto-notifications: if multiple, condense to first line of each to avoid overwhelming the agent
-    let combinedMessage: string
     const parts: string[] = []
     if (humanMessages.length > 0) {
       parts.push(humanMessages.map(m => m.trim()).join('\n\n'))
@@ -2940,7 +2918,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         parts.push(`${AUTO_NOTIFICATION_PREFIX} Multiple step completions:\n${summaryLines.map(l => l.replace(AUTO_NOTIFICATION_PREFIX, '').trim()).map(l => `- ${l}`).join('\n')}`)
       }
     }
-    combinedMessage = parts.join('\n\n')
+    const combinedMessage = parts.join('\n\n')
 
     // Clear the entire queue
     chatStore.setTabConfig(tabId, { queuedMessages: [] })
@@ -2974,7 +2952,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         }, 500)
       }
     }, 200)
-  }, [activeTab?.isStreaming, activeTab?.config?.queuedMessages, activeTab?.config?.isQueueProcessing, activeTab?.tabId])
+  }, [addToast, queuedTabId, queuedTabIsProcessing, queuedTabIsStreaming, queuedTabMessages])
 
   // Handle new chat for the active tab. Keep this scoped: workflow and
   // multi-agent tabs can coexist, so starting a fresh conversation in one tab
@@ -3004,7 +2982,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         // Continue with frontend reset even if backend stop fails.
       }
     }
-    
+
     // For workflow mode, preserve the selected preset but reset workflow phase
     if (selectedModeCategory === 'workflow' && selectedWorkflowPreset) {
       // Keep the preset selected, just reset the workflow phase to default
@@ -3015,7 +2993,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // For other modes, clear workflow state completely
       clearWorkflowState()
     }
-    
+
     if (targetTab) {
       chatStore.switchTab(targetTab.tabId)
       chatStore.resetTabChat(targetTab.tabId)
@@ -3032,14 +3010,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
 
     notifiedWorkshopAgentsRef.current.clear()
-    
+
     // Explicitly reset events and tracking for new chat
     // Note: Using tabEvents now, not global events
     // Events are cleared when tab is removed/cleared
     setLastEventIndex(-1)
     processedCompletionEventsRef.current.clear()
-    
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+
   }, [clearWorkflowState, resetChatState, onNewChat, activeTab, selectedModeCategory, selectedWorkflowPreset, setCurrentWorkflowPhase, setLastEventIndex, getActiveSessions])
 
   // Refresh workflow presets function
@@ -3235,7 +3213,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           must NOT scroll — otherwise the whole page scrolls
           around the fixed-height terminal box. */}
       <div ref={chatContentRef} className={`flex-1 ${shouldUseFullHeightContent ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 relative overscroll-y-none ${compact ? 'text-sm' : ''}`} style={{ scrollBehavior: 'auto' }}>
-        
+
         <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${shouldRenderTerminalPane ? '' : (compact ? 'px-2 pb-2' : 'px-3 pb-4')}`}>
           {/* Loading indicator for historical events */}
           {isLoadingHistory && (
@@ -3350,11 +3328,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           restoredConversationPending={resumePending && !hasRestoredLiveContent}
         />
       )}
-      
+
       {/* Toast notifications */}
-      <ToastContainer 
-        toasts={filteredToasts} 
-        onRemoveToast={removeToast} 
+      <ToastContainer
+        toasts={filteredToasts}
+        onRemoveToast={removeToast}
       />
     </div>
   )

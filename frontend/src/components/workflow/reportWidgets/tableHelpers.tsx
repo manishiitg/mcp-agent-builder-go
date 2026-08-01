@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { formatAuto, formatNamed, type FormatResult } from '../../../lib/reportFormatters'
-import type { ReportFormatterName, ReportWidget } from '../../../services/api-types'
+import type { ReportFormatterName } from '../../../services/api-types'
 import { useReportFilePreviewStore } from '../../../stores/useReportFilePreviewStore'
 import { useGlobalPresetStore } from '../../../stores/useGlobalPresetStore'
 
@@ -386,4 +386,3 @@ export function inferSecondaryColumn(
   if (candidate) return candidate
   return remainingColumns.find(col => !COMPACT_DEPRIORITIZED_COLUMNS.has(col)) ?? remainingColumns[0] ?? null
 }
-

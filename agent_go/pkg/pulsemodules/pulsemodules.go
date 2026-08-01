@@ -40,14 +40,14 @@ type Module struct {
 // Canonical module IDs. Consumers that need compile-time constants must alias
 // these values rather than restating their string literals.
 const (
-	BugReviewID      = "bug_review"
-	ArtifactReviewID = "artifact_review"
-	ReportHealthID   = "report_health"
-	EvalHealthID     = "eval_health"
-	StoresHealthID   = "stores_health"
-	CostLLMTimeID    = "cost_llm_time"
-	LLMOpsReviewID   = "llm_ops_review"
-	GoalAdvisorID    = "goal_advisor"
+	BugReviewID       = "bug_review"
+	ArtifactReviewID  = "artifact_review"
+	ReportHealthID    = "report_health"
+	EvalHealthID      = "eval_health"
+	StoresHealthID    = "stores_health"
+	LLMOpsReviewID    = "llm_ops_review"
+	StrategyAuditorID = "strategy_auditor"
+	GoalAdvisorID     = "goal_advisor"
 )
 
 // Historical IDs remain constants because read paths must recognize them, but
@@ -56,6 +56,9 @@ const (
 	RetiredLearningHealthID      = "learning_health"
 	RetiredKnowledgebaseHealthID = "knowledgebase_health"
 	RetiredDBHealthID            = "db_health"
+	// CostLLMTimeID remains readable for historical Pulse state and artifacts.
+	// New runs fold cost, timing, and tool/LLM operations into LLMOpsReviewID.
+	CostLLMTimeID = "cost_llm_time"
 )
 
 // HTML-only classifications. They are not scheduled review modules.
@@ -105,18 +108,25 @@ var All = []Module{
 		},
 	},
 	{
-		ID:        CostLLMTimeID,
-		Label:     "Cost + time",
-		StepLabel: "cost-llm-time",
-		Aliases:   []string{"cost", "llm_cost", "cost_time"},
+		// Also owns cost/timing/tool-call operations and plan-design hygiene
+		// (step-type fitness, prevalidation fitness, schema/description drift).
+		// It judges operational and engineering quality, not whether the
+		// selected tactic can reach the goal.
+		ID:        LLMOpsReviewID,
+		Label:     "Ops review",
+		StepLabel: "llm-ops-review",
+		Aliases:   []string{"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID},
 	},
 	{
-		// Also owns plan-design hygiene (step-type fitness, prevalidation
-		// fitness, schema/description drift), which Goal Advisor's contract
-		// explicitly excludes.
-		ID:        LLMOpsReviewID,
-		Label:     "Steps & setup",
-		StepLabel: "llm-ops-review",
+		// Strategy Auditor is the read-only plan-versus-goal diagnosis layer.
+		// It uses retained cross-run evidence to find strategy ceilings, proxy
+		// optimization, source/target concentration, saturation, and missing
+		// outcome telemetry. Goal Advisor consumes the diagnosis and owns any
+		// proposal, experiment, approval, or plan change.
+		ID:        StrategyAuditorID,
+		Label:     "Strategy Auditor",
+		StepLabel: "strategy-auditor",
+		Aliases:   []string{"strategy", "strategy_review", "plan_effectiveness"},
 	},
 	{
 		ID:        GoalAdvisorID,
@@ -134,6 +144,7 @@ var RetiredIDs = []string{
 	RetiredLearningHealthID,
 	RetiredKnowledgebaseHealthID,
 	RetiredDBHealthID,
+	CostLLMTimeID,
 }
 
 // PseudoIDs are data-module values that appear in builder/improve.html but are

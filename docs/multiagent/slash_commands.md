@@ -91,8 +91,7 @@ Workflow slash commands are wrappers around the backend `get_workflow_command_gu
 | `/resume` | Attach a previous chat conversation as context | Builder, Optimizer, Run | N/A |
 | `/design-plan` | Comprehensively review plan structure, dependent artifacts, and better design options | Workshop, Run | `design-plan` |
 | `/ready-to-optimize` | Check if workflow is ready to move to optimizer mode | Builder | `ready-to-optimize` |
-| `/review-speed` | Review workflow latency and how to make it faster | Optimizer | `review-speed` |
-| `/review-cost` | Review workflow cost and how to reduce it safely | Optimizer | `review-cost` |
+| `/ops-review` | Agentically review cost, timing, tool/runtime reliability, model routing, setup, and plan-design hygiene | Workshop | `ops-review` |
 | `/review-artifact-drift` | Check whether artifacts drifted from recent plan changes | Builder, Optimizer | `review-artifact-drift` |
 | `/review-code` | Review saved scripts (`main.py`) against step descriptions to detect drift | Optimizer | `review-code` |
 | `/improve-knowledge` | Improve knowledge notes with targeted cleanup or cross-step consolidation | Builder, Optimizer | `improve-knowledge` |

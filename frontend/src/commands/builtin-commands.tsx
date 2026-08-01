@@ -1,5 +1,5 @@
 import React from 'react'
-import { FileText, Server, Cpu, Bot, Layers, Minimize2, RefreshCw, GitBranch, CheckCircle, Search, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
+import { FileText, Server, Cpu, Bot, Layers, RefreshCw, GitBranch, CheckCircle, Search, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
 import type { CommandContext, CommandDefinition } from './types'
 
 function submitGuidedWorkflowCommand(
@@ -56,32 +56,6 @@ export const builtinCommands: CommandDefinition[] = [
       // conversation so its completion notification can resume synthesis and
       // persist the final open findings.
       submitGuidedWorkflowCommand(ctx, 'design-plan')
-    }
-  },
-  {
-    command: 'review-speed',
-    description: 'Review automation latency and how to make it faster',
-    icon: <Minimize2 className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'review-speed', { runFolder, background: true })
-    }
-  },
-  {
-    command: 'review-cost',
-    description: 'Review automation cost and how to reduce it safely',
-    icon: <Cpu className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'review-cost', { runFolder, background: true })
     }
   },
   {
@@ -208,8 +182,8 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'llm-ops-review',
-    description: 'Review model tiers, cost, latency, fallbacks, backup, publish, and notify setup',
+    command: 'ops-review',
+    description: 'Agentically review cost, timing, tool/runtime reliability, model routing, and setup',
     icon: <Cpu className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -217,12 +191,25 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'llm-ops-review', { runFolder, background: true })
+      submitGuidedWorkflowCommand(ctx, 'ops-review', { runFolder, background: true })
+    }
+  },
+  {
+    command: 'strategy-auditor',
+    description: 'Diagnose whether the current plan is moving the goal using cross-run evidence',
+    icon: <Target className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: 'workshop',
+    source: 'builtin',
+    execute: (ctx) => {
+      const runFolder = ctx.getWorkflowStore().selectedRunFolder
+      submitGuidedWorkflowCommand(ctx, 'strategy-auditor', { runFolder, background: true })
     }
   },
   {
     command: 'pulse-fixer',
-    description: 'Apply and verify safe fixes from existing Pulse review findings',
+    description: 'Apply and verify safe fixes from the existing Pulse backlog',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -241,7 +228,13 @@ export const builtinCommands: CommandDefinition[] = [
     requiredWorkshopMode: 'workshop',
     source: 'builtin',
     execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'goal-advisor', { background: true })
+      const focus = ctx.beforeSlash.trim()
+      ctx.onSubmit(
+        `Call run_goal_advisor_review(focus=${JSON.stringify(focus)}) exactly once. ` +
+        `This dedicated tool starts its own background Advisor → Critic → Finalizer pipeline, so do not wrap it in run_in_background and do not perform the review inline. ` +
+        `The pipeline loads the canonical goal-advisor guidance, persists its complete result and open CONCERNS in SQLite, and updates builder/improve.html only through its bounded finalizer. ` +
+        `After the automatic completion notification, present its complete executive result and mention that it is available in the Pulse popup.`
+      )
     }
   },
   {

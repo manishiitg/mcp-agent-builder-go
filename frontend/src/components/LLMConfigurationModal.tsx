@@ -229,7 +229,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
 
   // Metadata state - Driven purely by backend
   const [metadata, setMetadata] = useState<ModelMetadata[]>([])
-  const [isLoadingMetadata, setIsLoadingMetadata] = useState(false)
+  const [, setIsLoadingMetadata] = useState(false)
 
   // Fetch metadata on mount
   useEffect(() => {

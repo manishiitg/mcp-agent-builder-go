@@ -1,83 +1,115 @@
-## Pulse consolidated review and single fixer
+## Pulse independent backlog review and module fixer
 
-Use only after Gate. The scheduler supplies the exact due-module list, Pulse run
-ID, and dated review run ID. This one parent turn owns every unresolved due
-module; no later per-module parent messages exist.
+Use only after Gate. The scheduler supplies one due module, Pulse run ID, and
+dated review run ID. This parent owns that module until it has one terminal
+result.
 
-Read current module state, Gate/worklist evidence, and any current
-`.pulse-fixer-recovery` ledger. Resume honestly: revalidate `fixed_verified`,
-inspect a row left `fixing`, and do not blindly reapply changes. Preserve
-`changed_unverified` until its named evidence boundary arrives.
+Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
+current target/runtime and verification evidence; never trust HTML or blindly
+reapply partial work. Preserve `changed_unverified` until its evidence boundary.
+For the due module, load and revalidate the complete active retained backlog;
+do not merely emit fresh findings. Also load `suppressed_concerns`: an unchanged
+externally owned fingerprint is not a new finding, while materially changed
+evidence/target identity is a reopen candidate. Record every evidence-backed
+new finding. Attempt every safe bounded fix in the selected module. Leave a
+finding active only for a concrete blocker, decision, failed check, or future
+evidence checkpoint.
 
-Create one compact **READ-ONLY REVIEW** task for every due module. Run consecutive
-parallel batches of at most two `call_generic_agent` calls. In coding-agent
-code-execution mode, invoke the custom tool through its documented API bridge
-shell call; shell/curl is the supported transport. Do not use `run_in_background`,
-sleep, `list_executions`, `query_step`, or polling. If the outer MCP shell call
-moves to the background, end the current turn and wait for the compact automatic
-reviewer completion notification. Every call passes the exact `pulse_run_id`,
-dated `review_run_id`, and module. The backend persists the full result at
-`pulse/reviews/<dated-review-run-id>/<module>.md` and returns/notifies only that
-compact path reference. Treat that Markdown file—not the reviewer's completion
-message—as the sole findings artifact and read it before fixing. The reviewer is
-instructed to author artifact-form Markdown; the trusted backend performs the
-actual write because the reviewer remains read-only. A reviewer failure fails
-only its module; continue independent modules.
+Resolve the off-track diagnostic chain before normal batching. When Bug Review
+and Strategy Auditor are due for the same evidence window, run Bug Review alone first.
+A confirmed correctness bug that invalidates that window defers Auditor:
+record its terminal result as skipped/blocked with the exact post-fix,
+outcome-bearing checkpoint. Otherwise run Auditor. Strategy Auditor runs before Goal Advisor;
+launch Advisor only for an actionable diagnosis or its own
+answered-decision/experiment checkpoint.
 
-Each reviewer receives workflow scope, Gate evidence pointers, relevant focused
-guidance, and a response cap. Use `pulse-bug-review` for Bug Review;
-`review-artifact-drift` for artifacts; `improve-report`, `improve-evaluation`,
-`improve-learnings`, `improve-knowledge`, or `improve-database` for their matching
-health module; `llm-selection` plus verified cost/timing evidence for LLM/Ops;
-and current goal/experiment evidence for Goal Advisor. Goal Advisor must complete
-its strategy-first pass before plan mechanics and return the strategy ceiling,
-one highest-leverage materially different thesis, its relationship to the active
-strategy experiment, and why incremental repair is insufficient. Reject an
-Advisor packet that contains only maintenance, instrumentation, eval/report
-correction, or measurement work. Instrumentation-only tracking does not count as
-the active strategy experiment. Reviewers never edit,
-publish, notify, ask the user, write HTML, or mark module state.
+The scheduler invokes this contract once per due module, in module order. This
+stage owns only the supplied module. First inspect its current-run result,
+active retained backlog, answered decisions, awaiting-verification work, and
+any already-saved reviewer result. Drain actionable retained work before doing
+more discovery. Do not launch a reviewer merely because the module is due: if
+the saved review and lifecycle evidence are sufficient to apply or verify a
+bounded fix, do that now.
 
-Require a compact manifest: one-line verdict; next-check condition; at most five
-severity-ordered findings with stable finding ID, target key, claim, evidence,
-bounded fix, verification, and user-judgment flag/reason; overflow IDs/evidence
-when needed. A clean review returns an empty finding-ID manifest. Never drop a
-correctness finding to meet the cap. Goal Advisor gets a separate read-only
-critic after its strategy draft.
+When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
+make exactly one `call_generic_agent` call for this module. Never combine
+reviewers in one shell command, run curl in the background, use `&`/`wait`, or
+wait for another module. In coding-agent mode, use the documented API bridge
+shell transport without imposing a short shell timeout on the reviewer. If the
+outer bridge call backgrounds, stop and await its automatic notification.
+Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
+its complete Markdown directly in SQLite; call `get_pulse_review_result` with
+that review run and module before fixing. Immediately process a successful
+result; do not wait for any other reviewer. Reviewer failure is a terminal
+`Review incomplete` result for this module only and cannot block later modules.
 
-After all files exist, deduplicate findings and build a conflict map by target.
-Resolve conflicts by explicit user-approved constraints, correctness/data
-integrity, preserved goal meaning, strategy improvement, then cost/convenience.
-When evidence cannot resolve semantics, create one focused structured decision,
-block only affected modules, and do not mutate that target.
+Give each reviewer scope, Gate evidence, focused guidance, and this response contract:
+`pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
+`llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
+DB/run evidence; or the Auditor diagnosis plus goal/experiment evidence for Goal
+Advisor. Strategy Auditor never shares Goal Advisor's parallel batch. It returns
+one of `strategy_flaw`, `execution_bug`, `measurement_gap`,
+`insufficient_evidence`, or `no_material_problem`, without prescribing a plan
+mutation. Goal Advisor must lead with strategy ceiling, one materially different
+thesis, relationship to the active experiment, and why incremental repair is
+insufficient. Reject maintenance- or instrumentation-only Advisor results.
+Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 
-Then the same parent becomes the only Pulse Fixer. Initialize/refresh one compact
-recovery ledger before mutation. Apply bounded safe fixes sequentially. Before
-each mutation record target IDs, start time, pre-change hashes/versions, and
-latest relevant baseline evidence. Load `fix-verification`; old artifacts,
-successful writes, file existence, and mtime are never proof. If proof needs a
-future producing run, record `changed_unverified` / `awaiting_next_valid_run` and
-do not trigger an external side effect merely to verify.
+Require a verdict, next check, and every evidence-backed ordered finding with
+stable ID, target, claim, evidence, bounded fix, verification, and judgment
+reason. Classify retained findings rather than omitting them. Clean means an
+empty finding-ID manifest.
+An Auditor `measurement_gap` names the missing target/source/action/outcome
+linkage and blocked decision. Give Goal Advisor a separate read-only critic.
 
-Reconcile every reviewer finding ID to exactly one durable disposition before
-marking its module. Missing/duplicate dispositions block that module. Strategy
-and LLM/Ops changes remain proposals unless an exact still-valid approval exists.
-Goal Advisor operational findings are handoffs to the matching module and never
-become its primary outcome; do not let the single Fixer turn Advisor into a bug,
-eval, report, or instrumentation repair pass. Never broaden stale approval. Only the parent changes files, DB/contracts,
-plan/config, reports/evals, human-input state, changelog review state, module
-state, or `builder/improve.html`.
+Use `external_action_required` only when the finding is real but no workflow
+change can address it. Record `external_owner`, a stable `reason_code`, and an
+evidence/capability/user `reopen_condition`. This removes it from Pulse's active
+queue and suppresses unchanged rediscovery while keeping it visible on the
+external-action board. `blocked` remains for retryable/current blockers;
+`awaiting_user` remains in the decision queue.
 
-Write normal user-facing cards once after the consolidated pass, with one honest
-card and one `mark_pulse_module_result` call for every due module. Before stopping,
-perform global finding-ID reconciliation and confirm every due module has a
-terminal current-run result. Never claim completion or a clean outcome while a
-result or disposition is missing.
+Deduplicate findings before filing: match stable target/component, behavioral
+claim, and evidence boundary against active and suppressed findings. Reuse the
+existing fingerprint and exact `CONCERNS:` payload for unchanged or newly
+evidenced instances, and record the new evidence in the immutable review body.
+Create a new finding only for a genuinely different target/claim, or reopen one
+whose recorded reopen condition is now satisfied. Then map conflicts by target. Resolve by explicit user
+constraints, correctness/data integrity, preserved goal meaning, strategy
+improvement, then cost. If evidence cannot decide, create one focused decision,
+block affected modules, and do not mutate that target.
 
-The cards are not copies of reviewer packets. Translate each result for a
-non-technical operator using the `review-improve-log` plain-language card
-contract. The visible layer contains the outcome, goal/user impact, and next
-step. Keep finding ids, paths, hashes, manifests, packet/recovery state, and raw
-verification evidence in the reviewer result files and the global Agent log;
-do not copy them into timeline cards. Reviewer failure is
-shown as `Review incomplete`, with no conclusion and no unsupported change.
+Then start the only Pulse Fixer for this module as one `call_generic_agent` with
+`role="fixer"`, passing this run's `pulse_run_id`, a fresh `review_run_id`, and
+`module`. Never run two at once: it is the single writer. Do not apply fixes
+inline in this turn — a scheduled turn's model is pinned for its whole life, so
+an inline fixer mutates on a weaker tier than the reviewers that only read. The
+stage runs on the maintenance tier and is lent write authority for this run
+alone. It applies safe fixes sequentially.
+Before mutation capture targets, time, hashes/versions, and baseline. Load
+`fix-verification`; old artifacts or successful writes are not proof. If proof
+needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
+Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint
+created from its `CONCERNS:` line, and call `start_pulse_fix_attempt` before
+mutation. Keep its `attempt_id`. If a finding lacks a fingerprint, block it as a
+reviewer-contract failure instead of making an untracked change.
+
+Reconcile every finding ID to one disposition; missing/duplicates block its
+module. Strategy/LLM-Ops changes need exact valid approval.
+Strategy Auditor findings are diagnostic handoffs: `execution_bug` to Bug Review, attribution to
+Eval Health, and `strategy_flaw` or strategy-critical `measurement_gap` to Goal
+Advisor. Give a same-pass Goal Advisor the saved Auditor artifact and require it
+to challenge the causal claim. Advisor operational findings remain handoffs.
+Only the parent mutates workflow state. Neither reviewer nor Fixer writes Pulse
+HTML; the dedicated Dashboard owns it.
+
+Record `mark_pulse_module_result` for every due module. For every finding pass a
+structured `finding_dispositions` row with fingerprint, finding id, disposition,
+summary, attempt id when changed, changed files, and exact verification objects.
+Verification verdict is exactly `passed`, `failed`, or `inconclusive`.
+`fixed_verified` closes only with passed post-change proof;
+`changed_unverified` remains awaiting verification; failed proof reopens it.
+Perform module finding-ID reconciliation and require a terminal current-run result before
+claiming completion. Keep technical proof in SQLite review and lifecycle rows. Record a
+reviewer failure as `Review incomplete`, without a conclusion or unsupported
+change.

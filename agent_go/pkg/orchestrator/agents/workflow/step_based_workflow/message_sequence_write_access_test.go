@@ -3,6 +3,7 @@ package step_based_workflow
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -249,6 +250,31 @@ func TestMessageSequenceTemplateVarsUseEffectiveWriteAccess(t *testing.T) {
 	}
 	if writes := vars["FolderGuardWritePaths"]; strings.Contains(writes, "learnings/_global") {
 		t.Fatalf("folder guard write paths should not include stripped learnings grant: %q", writes)
+	}
+}
+
+func TestMessageSequenceFolderGuardIncludesAdditionalReadPathsWithoutWrites(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0, "",
+		nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/test-flow")
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/dev"}
+	config := &AgentConfigs{AdditionalReadPaths: []string{"variables", "reports/reference.json"}}
+
+	readPaths, writePaths := hcpo.setupMessageSequenceFolderGuard(
+		"step-1", "step-seq", config, MessageSequenceWriteAccess{},
+	)
+	for _, expected := range []string{"Workflow/test-flow/variables", "Workflow/test-flow/reports/reference.json"} {
+		if !slices.Contains(readPaths, expected) {
+			t.Fatalf("message-sequence read paths missing %q: %v", expected, readPaths)
+		}
+		if slices.Contains(writePaths, expected) {
+			t.Fatalf("message-sequence additional read path widened writes to %q: %v", expected, writePaths)
+		}
 	}
 }
 

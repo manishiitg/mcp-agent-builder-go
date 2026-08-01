@@ -77,7 +77,7 @@ export default function PushToGistDialog({
         let errorData
         try {
           errorData = await response.json()
-        } catch (e) {
+        } catch {
           // Ignore JSON parse error for error responses
         }
 

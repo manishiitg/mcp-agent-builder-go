@@ -35,50 +35,46 @@ interface ToolCallEndEventProps {
   event: ToolCallEndEvent
 }
 
-export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event }) => {
-  const { isExpanded, toggle } = useExpandable(true)
-  const [isRawMode, setIsRawMode] = React.useState(false)
+function isWorkspaceTool(name: string): boolean {
+  const workspaceToolNames = [
+    'read_workspace_file',
+    'update_workspace_file',
+    'diff_patch_workspace_file',
+    'list_workspace_files',
+    'delete_workspace_file',
+  ]
+  return workspaceToolNames.includes(name)
+}
 
+function isCodeExecutionTool(name: string): boolean {
+  return name === 'discover_code_structure' || name === 'discover_code_files' || name === 'write_code' || name === 'get_api_spec' || name === 'execute_shell_command'
+}
+
+function isImageGenTool(name: string): boolean {
+  return name === 'image_gen' || name === 'image_edit'
+}
+
+export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event }) => {
   const normalizedToolName = event.tool_name ? normalizeMCPToolName(event.tool_name) : event.tool_name
 
-  // Check if this is a workspace tool
-  const isWorkspaceTool = (name: string): boolean => {
-    const workspaceToolNames = [
-      'read_workspace_file',
-      'update_workspace_file',
-      'diff_patch_workspace_file',
-      'list_workspace_files',
-      'delete_workspace_file',
-    ]
-    return workspaceToolNames.includes(name)
-  }
-
-  // Check if this is a code execution tool
-  const isCodeExecutionTool = (name: string): boolean => {
-    return name === 'discover_code_structure' || name === 'discover_code_files' || name === 'write_code' || name === 'get_api_spec' || name === 'execute_shell_command'
-  }
-
-  // Check if this is an image generation/editing tool
-  const isImageGenTool = (name: string): boolean => {
-    return name === 'image_gen' || name === 'image_edit'
-  }
-
-  // If it's a workspace tool, use the specialized component
   if (normalizedToolName && isWorkspaceTool(normalizedToolName)) {
-    const specializedDisplay = <WorkspaceToolCallEndDisplay event={event} />
-    if (specializedDisplay) return specializedDisplay
+    return <WorkspaceToolCallEndDisplay event={event} />
   }
 
-  // If it's a code execution tool, use the specialized component
   if (normalizedToolName && isCodeExecutionTool(normalizedToolName)) {
-    const specializedDisplay = <CodeExecutionToolCallEndDisplay event={{ ...event, tool_name: normalizedToolName }} />
-    if (specializedDisplay) return specializedDisplay
+    return <CodeExecutionToolCallEndDisplay event={{ ...event, tool_name: normalizedToolName }} />
   }
 
-  // If it's the image generation tool, use the specialized component
   if (normalizedToolName && isImageGenTool(normalizedToolName)) {
     return <ImageGenToolCallEndDisplay event={event} />
   }
+
+  return <GenericToolCallEndEventDisplay event={event} />
+}
+
+const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event }) => {
+  const { isExpanded, toggle } = useExpandable(true)
+  const [isRawMode, setIsRawMode] = React.useState(false)
 
   const hasResult = typeof event.result === 'string' && event.result.length > 0
 

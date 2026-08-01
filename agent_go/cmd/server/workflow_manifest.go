@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 
 	"github.com/google/uuid"
@@ -23,7 +24,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.16"
+const WorkflowContractCurrentVersion = "1.0.17"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -33,6 +34,7 @@ const workflowContractHumanInputOwnershipVersion = "1.0.13"
 const workflowContractHumanReadablePulseStateVersion = "1.0.14"
 const workflowContractKBWriteMethodRetiredVersion = "1.0.15"
 const workflowContractEvalVerdictSchemaVersion = "1.0.16"
+const workflowContractPulseReviewSQLiteVersion = "1.0.17"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -557,11 +559,41 @@ func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *Workflo
 		return fmt.Errorf("failed to marshal workflow.json: %w", err)
 	}
 
+	previous, previousExists, _ := readFileFromWorkspace(ctx, manifestPath(workspacePath))
 	if err := writeFileToWorkspace(ctx, manifestPath(workspacePath), string(data)); err != nil {
 		return fmt.Errorf("failed to write workflow.json: %w", err)
 	}
 
+	// Record the change so artifact drift review can see it. workflow.json has
+	// no plan-modification tool, and planning/changelog only ever receives
+	// entries from those tools, so until now every edit here was invisible to
+	// Artifact Review.
+	//
+	// Skipped when the bytes are unchanged: WriteWorkflowManifest is called on
+	// paths that rewrite the manifest without altering it, and a changelog full
+	// of no-op entries would bury the real ones.
+	if !previousExists || previous != string(data) {
+		step_based_workflow.LogCanonicalArtifactChange(
+			ctx, workspacePath, "write_workflow_manifest",
+			"workflow.json was written directly; recorded so artifact drift review can see the change.",
+			nil, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+		)
+	}
 	return nil
+}
+
+// workflowManifestChangelogReader adapts the server's three-result read to the
+// two-result shape the changelog writer expects. A missing file reads as empty,
+// which is how the changelog writer creates its first entry.
+func workflowManifestChangelogReader(ctx context.Context, path string) (string, error) {
+	content, exists, err := readFileFromWorkspace(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", nil
+	}
+	return content, nil
 }
 
 // --- Internal helpers ---

@@ -414,9 +414,6 @@ func (g *GmailService) SendNotification(ctx context.Context, uniqueID string, me
 			subject = s
 		}
 		cc = gc.CC
-		if b := strings.TrimSpace(gc.Body); b != "" {
-			body = b
-		}
 		htmlBody = gc.HTMLBody
 		attachments = gc.Attachments
 	}
@@ -453,9 +450,6 @@ func (g *GmailService) SendUserNotification(ctx context.Context, message string,
 			subject = s
 		}
 		cc = gc.CC
-		if b := strings.TrimSpace(gc.Body); b != "" {
-			body = b
-		}
 		htmlBody = gc.HTMLBody
 		attachments = gc.Attachments
 	}

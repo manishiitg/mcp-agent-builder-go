@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import cronstrue from 'cronstrue'
-import { X, Clock, Play, Trash2, Save, ChevronDown, ChevronUp, ExternalLink, AlertTriangle, CalendarDays, Plus, Minus } from 'lucide-react'
+import { X, Clock, Play, Trash2, Save, ChevronDown, ChevronUp, ExternalLink, CalendarDays, Plus, Minus } from 'lucide-react'
 import { schedulerApi } from '../api/scheduler'
 import { agentApi } from '../services/api'
 import type { CalendarScheduleItem, ScheduledJob, CreateScheduledJobRequest, VariableGroup, SchedulerConfig } from '../services/api-types'
@@ -69,7 +69,7 @@ const SchedulePresetPopup: React.FC<SchedulePresetPopupProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
-  const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfig | null>(null)
+  const [, setSchedulerConfig] = useState<SchedulerConfig | null>(null)
 
   // Group selection — at least one group must be selected
   const [availableGroups, setAvailableGroups] = useState<VariableGroup[]>([])

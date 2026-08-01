@@ -1,24 +1,30 @@
 # STANDALONE PULSE FIXER
 
-Apply and verify bounded fixes from findings that already exist in
-`builder/improve.html` or are named in the user's focus. This command is the
-single writer; it does not rerun Pulse Gate or launch review agents.{{if .Focus}}
+Apply and verify bounded fixes from findings that already exist in the
+workflow's SQLite Pulse backlog or are named in the user's focus. This command
+is the single writer; it does not rerun Pulse Gate, launch review agents, or
+write the Dashboard HTML.{{if .Focus}}
 
 Fix focus: {{.Focus}}.{{end}}
 
 ## Select work
 
-1. Load `get_reference_doc(kind="post-run-monitor")`,
-   `get_reference_doc(kind="review-improve-log")`,
-   `get_reference_doc(kind="fix-verification")`, and the specialist guidance
-   named by each selected finding.
-2. Read open findings and decisions in `builder/improve.html`. Select only
+1. Load `get_reference_doc(kind="pulse-review-fixer")` and
+   `get_reference_doc(kind="fix-verification")`.
+2. Call `get_pulse_module_state`, then `get_pulse_finding_backlog` for the
+   selected owning modules. Treat active concerns, finding lifecycles, attempts,
+   verification history, decisions, and saved review identities as the source of
+   truth. The Dashboard is a projection, never the backlog. Select only existing
    findings with precise evidence and a bounded recommended fix. If the user
    named a finding, prioritize it. Do not infer a fix from a vague historical
-   note.
+   note, and do not launch discovery to replace missing evidence.
 3. Recheck the cited evidence before mutation. If the evidence is stale,
-   contradictory, unsafe to verify, or no longer reproducible, record that
-   disposition instead of forcing a change.
+   contradictory, unsafe to verify, or no longer reproducible, preserve or
+   disposition the existing finding instead of forcing a change.
+4. Group selected findings by owning Pulse module and call
+   `begin_pulse_fixer_run(workspace_path, modules)` exactly once. Use its returned
+   `pulse_run_id` for every lifecycle write. If it reports that a module belongs
+   to an unresolved automatic Pulse run, stop rather than taking it over.
 
 Before each mutation, establish a **post-change evidence boundary** per
 `get_reference_doc(kind="fix-verification")`: record the mutation start time,
@@ -34,8 +40,13 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   recipients, destinations, credentials, and broad plan changes require the
   existing exact approved human-input request. A free-form or unrelated answer
   is not approval.
-- Use normal direct plan/config/file/report/eval tools. Do not delegate mutation
-  to another agent and do not run an externally side-effecting workflow merely
+- Run the repair itself as one `call_generic_agent` with `role="fixer"` per
+  selected module, passing the `pulse_run_id` from `begin_pulse_fixer_run` and
+  that `module`; the backend derives the review identity. Start one at a time —
+  it is the single writer. This is the same stage scheduled Pulse uses, so a
+  manual run exercises the real path rather than a parallel one, and it runs on
+  the maintenance model tier instead of this chat turn's model. Do not apply
+  fixes inline here, and do not run an externally side-effecting workflow merely
   to verify a repair.
 - Run targeted side-effect-free validation after every change and accept it only
   under the `fix-verification` contract: verify the real runtime consumer reads
@@ -45,20 +56,21 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   `changed_unverified` with reason `awaiting_next_valid_run`, the exact next
   evidence boundary, and do not claim the finding is fixed.
 
+Before each mutation call `start_pulse_fix_attempt` with the exact existing
+fingerprint/finding ID, intended files, and before references. Do not mutate a
+finding that cannot be linked to its durable identity.
+
 ## Close out
 
-Update `builder/improve.html` once after all selected fixes. Preserve each
-original finding and add `Resolved`, `Partially resolved - changed_unverified`,
-`Blocked`, or `Invalid` with date, exact fix, verification, and remaining risk.
-Do not call
-`record_pulse_worklist`, `mark_pulse_module_result`, or final-command status
-tools: this standalone command must not impersonate or complete an automatic
-Pulse run.
+Call `mark_pulse_module_result` exactly once for every selected module, with one
+structured disposition for every selected finding and the returned attempt ID
+where required. Use `fixed_verified`, `changed_unverified`, `verified_no_change`,
+`blocked`, `awaiting_user`, `proposal_only`, `external_action_required`,
+`failed`, or `rejected` honestly under the shared lifecycle contract.
 
-Add one compact **Improvements / Kaizen** result card for the fixer batch using
-`data-pulse-section="improvements"` and `data-module="pulse_fixer"`. Link it to
-the original Signal finding anchors and state what verification passed. Do not
-rewrite the read-only Signal cards as if those reviewers applied the fixes.
+Do not call `record_pulse_worklist` or final-command status tools. Do not update
+`builder/improve.html` or `builder/card.health.html`; the next Dashboard render
+projects SQLite review, finding, fix, verification, decision, and module state.
 
 Finish with changes applied, verification performed, findings not changed and
 why, approvals still needed, and the next real-run evidence required.

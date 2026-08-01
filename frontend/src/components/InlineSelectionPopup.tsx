@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Check, ChevronDown, ChevronRight, Loader2, Search } from 'lucide-react'
 
-const DBG = '[skill-popup]'
-
 export interface InlineSelectionItem {
   id: string
   name: string
@@ -90,7 +88,7 @@ export const InlineSelectionPopup: React.FC<InlineSelectionPopupProps> = ({
     if (isOpen) {
       setSelectedIndex(0)
       setTimeout(() => {
-        const focused = searchInputRef.current?.focus()
+        searchInputRef.current?.focus()
         // console.log(`${DBG} focused input:`, !!searchInputRef.current)
       }, 50)
     } else {
