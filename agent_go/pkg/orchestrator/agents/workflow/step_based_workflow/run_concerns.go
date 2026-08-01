@@ -215,6 +215,8 @@ func recordRunConcernLinesAt(
 		// not hold, and that is strictly more important than the original report.
 		// A concern recurring while awaiting verification is the failed
 		// verification signal itself, so it also returns to open.
+		// A concern still recurring after the run it was waiting for means that
+		// run happened and did not resolve it, so awaiting_run reopens too.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
@@ -227,9 +229,9 @@ func recordRunConcernLinesAt(
 				last_seen_run = excluded.last_seen_run,
 				last_seen_at = excluded.last_seen_at,
 				seen_count = run_concerns.seen_count + 1,
-				status = CASE WHEN run_concerns.status IN (?, ?) THEN ? ELSE run_concerns.status END`,
+				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
 			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
-			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusOpen)
+			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err
 		}
@@ -237,7 +239,7 @@ func recordRunConcernLinesAt(
 		switch previousStatus {
 		case "":
 			eventType = "filed"
-		case ConcernStatusResolved, ConcernStatusAwaitingVerification:
+		case ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun:
 			eventType = "reopened"
 		}
 		metadata, _ := json.Marshal(map[string]string{
@@ -293,15 +295,15 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 		JOIN (
 			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
 			FROM run_concerns
-			WHERE status IN (?, ?, ?, ?)
+			WHERE status IN (?, ?, ?, ?, ?)
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE c.status IN (?, ?, ?, ?)
+		WHERE c.status IN (?, ?, ?, ?, ?)
 		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
 			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
 	args := []interface{}{
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
 	}
 	if limit > 0 {
 		query += ` LIMIT ?`

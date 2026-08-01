@@ -64,6 +64,7 @@ const pulseFindingEventsSchema = `CREATE TABLE IF NOT EXISTS pulse_finding_event
 const (
 	ConcernStatusFixing               = "fixing"
 	ConcernStatusAwaitingVerification = "awaiting_verification"
+	ConcernStatusAwaitingRun          = "awaiting_run"
 )
 
 const (
@@ -74,8 +75,20 @@ const (
 	FindingDispositionAwaitingUser      = "awaiting_user"
 	FindingDispositionBlocked           = "blocked"
 	FindingDispositionExternalAction    = "external_action_required"
-	FindingDispositionFailed            = "failed"
-	FindingDispositionRejected          = "rejected"
+	// FindingDispositionAwaitingRun is a real finding that no one is stuck on:
+	// the evidence to resolve it simply has not been produced yet, and the next
+	// scheduled run will produce it.
+	//
+	// blocked used to absorb these because changed_unverified requires a fix
+	// attempt with changed files, and nothing was fixed — the data was never
+	// collected. So rtslatency reported 9 blocked when 4 were only waiting: the
+	// security and latency rows were missing because those steps had not run,
+	// and the approved experiment could not ship because the digest step had not
+	// executed since 2026-07-29. Reading those as blockers points the operator at
+	// decisions that do not exist, and hides the ones that do.
+	FindingDispositionAwaitingRun = "awaiting_run"
+	FindingDispositionFailed      = "failed"
+	FindingDispositionRejected    = "rejected"
 )
 
 const (
@@ -116,18 +129,18 @@ type PulseFindingVerification struct {
 }
 
 type PulseFindingDisposition struct {
-	Fingerprint     string                     `json:"fingerprint"`
-	FindingID       string                     `json:"finding_id"`
-	AttemptID       string                     `json:"attempt_id,omitempty"`
-	Disposition     string                     `json:"disposition"`
-	Summary         string                     `json:"summary"`
-	ChangedFiles    []string                   `json:"changed_files,omitempty"`
-	BeforeRefs      []string                   `json:"before_refs,omitempty"`
-	AfterRefs       []string                   `json:"after_refs,omitempty"`
-	NextCheck       string                     `json:"next_check,omitempty"`
-	ExternalOwner   string                     `json:"external_owner,omitempty"`
-	ReasonCode      string                     `json:"reason_code,omitempty"`
-	ReopenCondition string                     `json:"reopen_condition,omitempty"`
+	Fingerprint     string   `json:"fingerprint"`
+	FindingID       string   `json:"finding_id"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	Disposition     string   `json:"disposition"`
+	Summary         string   `json:"summary"`
+	ChangedFiles    []string `json:"changed_files,omitempty"`
+	BeforeRefs      []string `json:"before_refs,omitempty"`
+	AfterRefs       []string `json:"after_refs,omitempty"`
+	NextCheck       string   `json:"next_check,omitempty"`
+	ExternalOwner   string   `json:"external_owner,omitempty"`
+	ReasonCode      string   `json:"reason_code,omitempty"`
+	ReopenCondition string   `json:"reopen_condition,omitempty"`
 	// HumanInputID links an awaiting_user finding to the question actually put
 	// to the operator. Without it "waiting on the user" is recordable while the
 	// user is never asked, which is exactly what happened: rtslatency held five
@@ -382,7 +395,7 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		FindingDispositionChangedUnverified: true, FindingDispositionProposalOnly: true,
 		FindingDispositionAwaitingUser: true, FindingDispositionBlocked: true,
 		FindingDispositionExternalAction: true, FindingDispositionFailed: true,
-		FindingDispositionRejected: true,
+		FindingDispositionRejected: true, FindingDispositionAwaitingRun: true,
 	}
 	if !allowed[disposition.Disposition] {
 		return fmt.Errorf("finding %q has invalid disposition %q", disposition.FindingID, disposition.Disposition)
@@ -433,6 +446,16 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		if len(disposition.Verification) > 0 && failed == 0 {
 			return fmt.Errorf("failed finding %q with verification evidence requires a failed check", disposition.FindingID)
 		}
+	case FindingDispositionAwaitingRun:
+		// Naming the evidence boundary is what separates waiting from stalling:
+		// without it nobody can tell whether the run that would resolve this has
+		// already happened.
+		if disposition.NextCheck == "" {
+			return fmt.Errorf("awaiting_run finding %q requires next_check naming the run or evidence that will resolve it", disposition.FindingID)
+		}
+		if len(disposition.ChangedFiles) > 0 {
+			return fmt.Errorf("awaiting_run finding %q changed files; a finding with a fix applied is changed_unverified, not awaiting_run", disposition.FindingID)
+		}
 	case FindingDispositionAwaitingUser:
 		// A finding cannot wait on a decision nobody was asked for. Requiring
 		// the question id here is what turns "awaiting_user" from a label into
@@ -469,6 +492,8 @@ func lifecycleStatusForDisposition(disposition string) (status, eventType, resol
 		return ConcernStatusAcknowledged, "awaiting_user", ""
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
+	case FindingDispositionAwaitingRun:
+		return ConcernStatusAwaitingRun, "awaiting_run", ""
 	case FindingDispositionExternalAction:
 		return ConcernStatusExternalActionRequired, "external_action_required", "pulse"
 	default:

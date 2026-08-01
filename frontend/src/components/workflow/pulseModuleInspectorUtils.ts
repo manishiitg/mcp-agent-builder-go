@@ -1,6 +1,7 @@
 import type {
   PulseFindingEvent,
   PulseFindingLifecycle,
+  PulseIssue,
 } from '../../services/api-types'
 
 export type PulseModuleSummary = {
@@ -10,6 +11,8 @@ export type PulseModuleSummary = {
   awaitingUser: number
   /** Acknowledged but Pulse has no way to act — nothing here is yours to do. */
   blocked: number
+  /** Real, but only waiting on a scheduled run to produce its evidence. */
+  awaitingRun: number
   fixing: number
   awaitingVerification: number
   closed: number
@@ -34,11 +37,55 @@ export type PulseModuleSummary = {
  * recent one that carries a reason decides.
  */
 export function acknowledgedReason(finding: PulseFindingLifecycle): 'blocked' | 'awaiting_user' | 'other' {
-  for (let index = finding.events.length - 1; index >= 0; index -= 1) {
+  // Events arrive newest first from the lifecycle API.
+  for (let index = 0; index < finding.events.length; index += 1) {
     const eventType = finding.events[index]?.event_type
     if (eventType === 'blocked' || eventType === 'awaiting_user') return eventType
   }
   return 'other'
+}
+
+/**
+ * Compatibility projection for a UI talking to an older backend. New servers
+ * provide finding.issue directly; fingerprints remain private matching keys.
+ */
+export function pulseIssueForFinding(finding: PulseFindingLifecycle): PulseIssue {
+  if (finding.issue) return finding.issue
+  const fingerprint = finding.fingerprint.toUpperCase().slice(0, 8) || 'UNKNOWN'
+  const reason = finding.status === 'acknowledged' ? acknowledgedReason(finding) : 'other'
+  const status = finding.status === 'fixing'
+    ? 'in_progress'
+    : finding.status === 'awaiting_verification'
+      ? 'in_review'
+      : finding.status === 'resolved'
+        ? 'done'
+        : finding.status === 'rejected'
+          ? 'canceled'
+          : finding.status === 'external_action_required'
+            ? 'external'
+            : reason === 'awaiting_user'
+              ? 'needs_input'
+              : reason === 'blocked'
+                ? 'blocked'
+                : 'backlog'
+  const severity = (finding.details?.severity || '').toLowerCase()
+  const priority = severity === 'critical' || severity === 'urgent'
+    ? 'urgent'
+    : ['high', 'medium', 'low'].includes(severity)
+      ? severity
+      : 'none'
+  const title = finding.details?.summary?.trim() || finding.text.trim()
+  return {
+    id: finding.finding_id || `PUL-${fingerprint}`,
+    title,
+    description: title === finding.text.trim() ? undefined : finding.text.trim(),
+    status,
+    priority,
+    module: finding.module,
+    created_at: finding.first_seen_at,
+    updated_at: finding.last_seen_at,
+    seen_count: finding.seen_count,
+  }
 }
 
 export type PulseModuleActivity = PulseFindingEvent & {
@@ -69,12 +116,16 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     inconclusiveChecks: 0,
     awaitingUser: 0,
     blocked: 0,
+    awaitingRun: 0,
   }
   findings.forEach((finding) => {
     if (finding.status === 'external_action_required') summary.externalAction++
     else if (isPulseFindingClosed(finding.status)) summary.closed++
     else if (finding.status === 'fixing') summary.fixing++
     else if (finding.status === 'awaiting_verification') summary.awaitingVerification++
+    // Waiting for data is not a blocker and not the operator's move; counting it
+    // with either sends you looking for a decision that does not exist.
+    else if (finding.status === 'awaiting_run') summary.awaitingRun++
     else if (finding.status === 'acknowledged') {
       const reason = acknowledgedReason(finding)
       if (reason === 'awaiting_user') summary.awaitingUser++

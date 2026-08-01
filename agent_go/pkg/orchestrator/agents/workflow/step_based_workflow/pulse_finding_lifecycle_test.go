@@ -589,3 +589,51 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 		t.Fatalf("a genuine pending decision was rejected: %v", err)
 	}
 }
+
+// TestAwaitingRunSeparatesWaitingFromBlocked covers the distinction rtslatency
+// had no way to express.
+//
+// Four of its nine "blocked" findings were only waiting for data: security rows
+// missing because those steps had not run, and an approved experiment unable to
+// ship because the digest step had not executed since 2026-07-29. blocked
+// absorbed them because changed_unverified demands a fix attempt with changed
+// files, and nothing was fixed. Reading those as blockers points the operator at
+// decisions that do not exist.
+func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
+	base := PulseFindingDisposition{
+		Fingerprint: "fp", FindingID: "SEC-1",
+		Disposition: FindingDispositionAwaitingRun,
+		Summary:     "security_daily_metrics has no rows; those steps did not run.",
+	}
+
+	// Waiting with no stated boundary is indistinguishable from stalling.
+	if err := validateFindingDisposition(base); err == nil ||
+		!strings.Contains(err.Error(), "requires next_check") {
+		t.Fatalf("awaiting_run accepted with no evidence boundary: %v", err)
+	}
+
+	// A finding that changed files is a fix awaiting proof, not a wait.
+	withFix := base
+	withFix.NextCheck = "next scheduled dev collection run"
+	withFix.ChangedFiles = []string{"planning/plan.json"}
+	if err := validateFindingDisposition(withFix); err == nil ||
+		!strings.Contains(err.Error(), "changed_unverified") {
+		t.Fatalf("a finding with changes applied was accepted as awaiting_run: %v", err)
+	}
+
+	valid := base
+	valid.NextCheck = "next scheduled dev collection run"
+	if err := validateFindingDisposition(valid); err != nil {
+		t.Fatalf("a genuine wait-for-data finding was rejected: %v", err)
+	}
+
+	// It must not land in the acknowledged bucket that blocked and awaiting_user
+	// share, or the UI cannot tell them apart.
+	status, event, _ := lifecycleStatusForDisposition(FindingDispositionAwaitingRun)
+	if status != ConcernStatusAwaitingRun || status == ConcernStatusAcknowledged {
+		t.Fatalf("awaiting_run mapped to status %q; it must be distinguishable from blocked", status)
+	}
+	if event != "awaiting_run" {
+		t.Fatalf("awaiting_run event = %q", event)
+	}
+}

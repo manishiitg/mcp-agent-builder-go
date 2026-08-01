@@ -66,7 +66,12 @@ Use `external_action_required` only when the finding is real but no workflow
 change can address it. Record `external_owner`, a stable `reason_code`, and an
 evidence/capability/user `reopen_condition`. This removes it from Pulse's active
 queue and suppresses unchanged rediscovery while keeping it visible on the
-external-action board. `blocked` remains for retryable/current blockers;
+external-action board. `awaiting_run` is a real finding waiting only on a scheduled run to produce its
+evidence: no fix was applied and nobody is stuck. It requires `next_check`
+naming that run. Use it rather than `blocked` whenever the answer is "the data
+does not exist yet" — calling that blocked points the operator at a decision
+that does not exist and hides the ones that do.
+`blocked` remains for retryable/current blockers;
 `awaiting_user` remains in the decision queue and requires a still-pending
 `create_human_input_request`, passed as `human_input_id`. Create the decision
 first: a finding marked awaiting_user with no question leaves the operator told
