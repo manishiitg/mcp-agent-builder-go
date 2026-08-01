@@ -2033,3 +2033,84 @@ Do not add a third design layer on top. The next edit should:
 
 Until that consolidation, the replies—not the original migration section—are
 the current decision record.
+
+---
+
+## Decision: isolate reviewers per module, unify the Fixer (2026-08-01)
+
+**Status: decided, not implemented.**
+
+### What changed today and why
+
+Until 2026-08-01 every due module shared one `consolidated-review` stage that
+both reviewed and fixed. On 2026-07-31 social-media's `bug_review` reviewer went
+silent 24 seconds in and never returned; ten minutes later the scheduler's
+idle detector killed the stage and stamped `bug_review`, `stores_health` and
+`goal_advisor` all `timed_out`. One hung reviewer cost three modules.
+
+The stage was split per module. That fixed the cascade. It also gave up
+something real.
+
+### What the split costs
+
+Cross-module deduplication and conflict resolution. Both modules can find the
+same defect and neither fixer can see the other. rtslatency closed a
+`stores_health` finding with:
+
+> "Duplicate of bug_review F2 — same attempted fix, same tool rejection."
+
+Two modules, one defect, two fix attempts spent. A single fixer would have
+recognised it once. The same blindness applies to two modules wanting to edit
+the same target: nothing reconciles them.
+
+### Why the split was wider than the problem
+
+The hang was in a **reviewer**, not a fixer. The old stage did both jobs, so
+isolating the failure isolated both. Only the reviewer needed isolating.
+
+The evidence that the consolidated fixer was the original intent is still in the
+code: every module prompt says "The parent Pulse Fixer consolidates this review
+with all other due modules", and `postRunMonitorModuleSteps` rewrites those
+phrases at runtime through a `strings.NewReplacer`. The prompts were never
+rewritten for the split — their wording is patched.
+
+### Target shape
+
+```
+reviewer(bug_review)     ⎤
+reviewer(stores_health)  ⎥  isolated: a hang or failure is terminal for its
+reviewer(eval_health)    ⎦  own module only, and its result persists alone
+             ↓
+      one Fixer, all findings across all due modules
+        - dedups by target/claim before acting
+        - resolves conflicts by target
+        - one terminal result per module
+```
+
+### The cost, and why it is acceptable
+
+The Fixer waits for reviewers to reach a terminal state, which is a barrier: one
+slow reviewer delays fixing. It no longer *kills* it, because reviewer results
+persist independently (`pulseReviewerPersistenceContext`) and a reviewer failure
+is already a terminal `Review incomplete` for its own module. The wait is
+bounded by the idle detector, and a failed reviewer contributes no findings
+rather than blocking the pass.
+
+### Implementation notes
+
+- `postRunMonitorModuleSteps` emits reviewer-only stages; drop
+  `independentModuleLanguage` and write the prompts for the real shape.
+- One Fixer stage after them, receiving every due module.
+- `call_generic_agent` with `role="fixer"` takes a module set, not one module.
+- `mark_pulse_module_result` already supports one result per module from a
+  single caller; no lifecycle change needed.
+- Watch the duplicate-attempt rate as the acceptance signal: fix attempts spent
+  on a finding another module already handled should reach zero.
+
+### Not a reason to defer
+
+"Too much moved today" is churn anxiety, not engineering. The reason this is
+recorded rather than built is narrower: the per-module design has not yet
+completed a single clean pass, and the duplicate-attempt rate above is the
+number that tells us how much the split actually costs. Build it with that
+measurement in hand, not without.
