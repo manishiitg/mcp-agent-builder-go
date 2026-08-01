@@ -637,3 +637,58 @@ func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
 		t.Fatalf("awaiting_run event = %q", event)
 	}
 }
+
+// TestVerificationCanCloseAnAttemptFromAnEarlierRun covers the flow the
+// lifecycle mandates and used to block.
+//
+// changed_unverified exists so a fix whose proof needs a future run is recorded
+// now and verified later — fix-verification, post-run-monitor and the Fixer
+// contract all say to record it with reason awaiting_next_valid_run. Requiring
+// the attempt to belong to the closing run made that impossible: the evidence
+// arrives a run later, and the disposition carrying it was rejected as
+// belonging to a previous Pulse run. social-media hit this on 2026-08-01 and
+// preserved the unresolved state rather than forcing a second write.
+func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "bug_review"
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", module, "collector writes a null column")
+
+	// Run 1 applies the fix; proof needs the next producing run.
+	attempt, err := StartPulseFixAttempt(ctx, workspacePath, "pulse-1", module,
+		"Repair the writer.", []PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "BUG-1"}},
+		[]string{"planning/plan.json"}, []string{"before"})
+	if err != nil {
+		t.Fatalf("start attempt: %v", err)
+	}
+	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionChangedUnverified, Summary: "Applied; awaiting next valid run.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
+	}})
+
+	// Run 2 has the evidence and closes the same attempt.
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionFixedVerified, Summary: "Next run produced a non-null column.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationPassed}},
+	}}, ""); err != nil {
+		t.Fatalf("a later run could not verify its own module's earlier attempt: %v", err)
+	}
+
+	// Another module still cannot close it.
+	if err := RecordPulseFindingDispositionsTx(ctx, db, "stores_health", "pulse-2", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
+		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
+	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
+		t.Fatalf("another module closed an attempt it did not make: %v", err)
+	}
+}

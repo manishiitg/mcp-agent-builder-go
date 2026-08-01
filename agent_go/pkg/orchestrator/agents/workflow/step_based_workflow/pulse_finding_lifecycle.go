@@ -570,8 +570,23 @@ func RecordPulseFindingDispositionsTx(
 				}
 				return err
 			}
-			if attemptModule != strings.TrimSpace(module) || attemptRun != strings.TrimSpace(pulseRunID) {
-				return fmt.Errorf("fix attempt %q belongs to module=%q pulse_run_id=%q", attemptID, attemptModule, attemptRun)
+			// The module must match: an attempt belongs to the module that made
+			// it, and letting another module close it would let one module take
+			// credit for work it did not do.
+			//
+			// The run deliberately need not match. changed_unverified exists
+			// precisely so a fix whose proof needs a future run is recorded now
+			// and verified later — fix-verification, post-run-monitor and the
+			// Fixer contract all instruct exactly that, with reason
+			// awaiting_next_valid_run. Requiring the attempt to belong to the
+			// closing run made that impossible: the evidence arrives a run or
+			// more after the attempt, and the disposition that would record it
+			// was rejected as belonging to a previous Pulse run. social-media hit
+			// this on 2026-08-01 and correctly preserved the unresolved state
+			// rather than forcing a second lifecycle write, which would have
+			// invented a fresh attempt for work already done.
+			if attemptModule != strings.TrimSpace(module) {
+				return fmt.Errorf("fix attempt %q belongs to module %q, not %q", attemptID, attemptModule, module)
 			}
 			var linked int
 			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_fix_attempt_findings
