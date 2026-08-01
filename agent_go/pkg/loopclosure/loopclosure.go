@@ -348,8 +348,11 @@ func openReadOnly(ctx context.Context, workspacePath string) (*sql.DB, bool, err
 		}
 		return nil, false, err
 	}
-	// Read-only: this layer observes, it never mutates workflow state.
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro&_pragma=busy_timeout(5000)"
+	// Open the existing WAL database read-write-capable so SQLite may materialize
+	// a missing -shm sidecar, then enforce logical read-only behavior on the
+	// connection. mode=ro fails with SQLITE_CANTOPEN when WAL is enabled and the
+	// shared-memory sidecar does not yet exist.
+	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=rw&_pragma=query_only(true)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, true, err

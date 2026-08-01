@@ -45,7 +45,7 @@ HTML is a superset of anything a plain document needs — prose, headings, table
 
 Interaction answers are framework-owned rows in the workflow's `db/db.sqlite` table `report_widget_responses`; the report page is only the UI. They are asynchronous: creating or displaying a widget never pauses a run, and the user may answer days later. The framework creates the table when the interaction is configured, so a consumer may safely treat an absent `answered` row as "no answer yet."
 
-If the user wants an answer to affect future execution, configure the intended consumer step (and give it DB read access) to query `$DB_PATH`, for example:
+If the user wants an answer to affect future execution, configure the intended consumer step with DB read access and have an agentic step call `query_workflow_db` (saved scripted code may query `$DB_PATH`), for example:
 
 ```sql
 SELECT instance_key, selected_option_id, note,

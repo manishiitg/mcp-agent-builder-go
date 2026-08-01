@@ -48,7 +48,7 @@ unless the user also asked for workflow behavior or eval changes.
   Give it a stable widget id, `question`, `responseKind`, optional `options`, and
   optional `instanceKey` / subject version/hash. The current run never blocks.
   If the response should affect execution, also edit the intended consumer step
-  so it reads the matching `report_widget_responses` row from `$DB_PATH` on a
+  so it reads the matching `report_widget_responses` row through `query_workflow_db` (or `$DB_PATH` in saved scripted code) on a
   later run. This is not the dynamic Pulse `report_human_inputs` flow.
 
 ### Live data + how to author

@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +23,13 @@ import (
 
 // queryTimeout bounds a single read-only query / inspection request.
 const queryTimeout = 30 * time.Second
+
+const (
+	defaultQueryMaxRows = 10_000
+	maximumQueryMaxRows = 50_000
+	maximumMutationSQL  = 100_000
+	maximumStatements   = 20
+)
 
 // dbTablesSampleRows is how many sample rows the inspector returns per table.
 const dbTablesSampleRows = 50
@@ -47,30 +57,51 @@ func resolveReadonlyDBPath(c *gin.Context, requestedPath string) (string, error)
 	return fullPath, nil
 }
 
-// openReadonlyDB opens a SQLite file read-only. mode=ro fails any write at the
-// driver level; query_only is a pragma backstop; busy_timeout avoids spurious
-// SQLITE_BUSY while a workflow step holds a write lock.
-func openReadonlyDB(fullPath string) (*sql.DB, error) {
-	dsn := "file:" + fullPath + "?mode=ro&_pragma=query_only(true)&_pragma=busy_timeout(5000)"
-	return sql.Open("sqlite", dsn)
+// openQueryOnlyDB opens an existing SQLite file read-write-capable so SQLite can
+// materialize WAL/SHM sidecars, then makes every pooled connection query-only.
+// SQL validation is still required: query_only is defense in depth, not the
+// authorization boundary for caller-supplied SQL.
+func openQueryOnlyDB(fullPath string) (*sql.DB, error) {
+	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?mode=rw&_pragma=query_only(true)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+func openMutationDB(fullPath string) (*sql.DB, error) {
+	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?mode=rw&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
 }
 
 // scanRows reads all rows of a *sql.Rows into []map[string]interface{}, keyed by
 // column name. []byte values are coerced to string so JSON output is readable.
-func scanRows(rows *sql.Rows) ([]string, []map[string]interface{}, error) {
+func scanRows(rows *sql.Rows, maxRows int) ([]string, []map[string]interface{}, bool, error) {
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	out := make([]map[string]interface{}, 0)
+	truncated := false
 	for rows.Next() {
+		if len(out) >= maxRows {
+			truncated = true
+			break
+		}
 		vals := make([]interface{}, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {
 			ptrs[i] = &vals[i]
 		}
 		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		row := make(map[string]interface{}, len(cols))
 		for i, c := range cols {
@@ -82,7 +113,170 @@ func scanRows(rows *sql.Rows) ([]string, []map[string]interface{}, error) {
 		}
 		out = append(out, row)
 	}
-	return cols, out, rows.Err()
+	return cols, out, truncated, rows.Err()
+}
+
+var safePragmaPattern = regexp.MustCompile(`(?is)^pragma\s+(?:main\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|foreign_key_list)\s*\([^;]*\)\s*;?$|^pragma\s+(?:main\.)?(?:database_list|journal_mode|user_version|schema_version)\s*;?$`)
+
+// stripSQLCommentsAndSpace removes leading whitespace and comments so policy is
+// applied to the actual first token rather than a model-controlled prefix.
+func stripSQLCommentsAndSpace(input string) string {
+	remaining := input
+	for {
+		remaining = strings.TrimSpace(remaining)
+		switch {
+		case strings.HasPrefix(remaining, "--"):
+			if newline := strings.IndexByte(remaining, '\n'); newline >= 0 {
+				remaining = remaining[newline+1:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(remaining, "/*"):
+			if end := strings.Index(remaining[2:], "*/"); end >= 0 {
+				remaining = remaining[end+4:]
+				continue
+			}
+			return remaining
+		default:
+			return remaining
+		}
+	}
+}
+
+// hasAdditionalSQLStatement rejects stacked SQL while allowing one optional
+// trailing semicolon. It understands SQLite strings, identifiers and comments.
+func hasAdditionalSQLStatement(input string) bool {
+	const (
+		plain = iota
+		singleQuote
+		doubleQuote
+		backtickQuote
+		bracketQuote
+		lineComment
+		blockComment
+	)
+	state := plain
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		next := byte(0)
+		if i+1 < len(input) {
+			next = input[i+1]
+		}
+		switch state {
+		case plain:
+			switch {
+			case ch == '\'':
+				state = singleQuote
+			case ch == '"':
+				state = doubleQuote
+			case ch == '`':
+				state = backtickQuote
+			case ch == '[':
+				state = bracketQuote
+			case ch == '-' && next == '-':
+				state = lineComment
+				i++
+			case ch == '/' && next == '*':
+				state = blockComment
+				i++
+			case ch == ';':
+				return stripSQLCommentsAndSpace(input[i+1:]) != ""
+			}
+		case singleQuote:
+			if ch == '\'' {
+				if next == '\'' {
+					i++
+				} else {
+					state = plain
+				}
+			}
+		case doubleQuote:
+			if ch == '"' {
+				if next == '"' {
+					i++
+				} else {
+					state = plain
+				}
+			}
+		case backtickQuote:
+			if ch == '`' {
+				state = plain
+			}
+		case bracketQuote:
+			if ch == ']' {
+				state = plain
+			}
+		case lineComment:
+			if ch == '\n' {
+				state = plain
+			}
+		case blockComment:
+			if ch == '*' && next == '/' {
+				state = plain
+				i++
+			}
+		}
+	}
+	return false
+}
+
+func firstSQLKeyword(input string) string {
+	input = stripSQLCommentsAndSpace(input)
+	end := 0
+	for end < len(input) {
+		ch := input[end]
+		if ch < 'A' || ch > 'Z' && ch < 'a' || ch > 'z' {
+			break
+		}
+		end++
+	}
+	return strings.ToUpper(input[:end])
+}
+
+func validateReadSQL(input string) error {
+	trimmed := stripSQLCommentsAndSpace(input)
+	if trimmed == "" {
+		return fmt.Errorf("sql cannot be empty")
+	}
+	if len(trimmed) > maximumMutationSQL {
+		return fmt.Errorf("sql exceeds %d bytes", maximumMutationSQL)
+	}
+	if hasAdditionalSQLStatement(trimmed) {
+		return fmt.Errorf("exactly one SQL statement is allowed")
+	}
+	if strings.Contains(strings.ToLower(trimmed), "load_extension") {
+		return fmt.Errorf("extension loading is not allowed")
+	}
+	switch firstSQLKeyword(trimmed) {
+	case "SELECT", "WITH", "EXPLAIN":
+		return nil
+	case "PRAGMA":
+		if safePragmaPattern.MatchString(trimmed) {
+			return nil
+		}
+		return fmt.Errorf("pragma is not in the read-only allowlist")
+	default:
+		return fmt.Errorf("only SELECT, read-only WITH/EXPLAIN, and safe schema PRAGMA statements are allowed")
+	}
+}
+
+func validateMutationSQL(input string) error {
+	trimmed := stripSQLCommentsAndSpace(input)
+	if trimmed == "" {
+		return fmt.Errorf("sql cannot be empty")
+	}
+	if len(trimmed) > maximumMutationSQL {
+		return fmt.Errorf("sql exceeds %d bytes", maximumMutationSQL)
+	}
+	if hasAdditionalSQLStatement(trimmed) {
+		return fmt.Errorf("exactly one SQL statement is allowed")
+	}
+	switch firstSQLKeyword(trimmed) {
+	case "INSERT", "UPDATE", "DELETE":
+		return nil
+	default:
+		return fmt.Errorf("only INSERT, UPDATE, and DELETE are allowed; schema changes use workflow migrations")
+	}
 }
 
 // QueryWorkflowDB handles POST /api/query — runs a read-only SQL query against a
@@ -101,6 +295,12 @@ func QueryWorkflowDB(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateReadSQL(req.SQL); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{
+			Success: false, Message: "Query rejected", Error: err.Error(),
+		})
+		return
+	}
 
 	fullPath, err := resolveReadonlyDBPath(c, req.DBPath)
 	if err != nil {
@@ -110,7 +310,7 @@ func QueryWorkflowDB(c *gin.Context) {
 		return
 	}
 
-	db, err := openReadonlyDB(fullPath)
+	db, err := openQueryOnlyDB(fullPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
 			Success: false, Message: "Failed to open database", Error: err.Error(),
@@ -131,7 +331,14 @@ func QueryWorkflowDB(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	cols, data, err := scanRows(rows)
+	maxRows := req.MaxRows
+	if maxRows <= 0 {
+		maxRows = defaultQueryMaxRows
+	}
+	if maxRows > maximumQueryMaxRows {
+		maxRows = maximumQueryMaxRows
+	}
+	cols, data, truncated, err := scanRows(rows, maxRows)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse[any]{
 			Success: false, Message: "Failed to read rows", Error: err.Error(),
@@ -141,8 +348,79 @@ func QueryWorkflowDB(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse[models.QueryResponse]{
 		Success: true,
-		Data:    models.QueryResponse{Columns: cols, Rows: data},
+		Data:    models.QueryResponse{Columns: cols, Rows: data, Truncated: truncated},
 	})
+}
+
+// MutateWorkflowDB handles POST /api/mutate. The caller must already hold the
+// workspace service token; agent-side tool registration and FolderGuard decide
+// whether that trusted session has workflow DB write authority.
+func MutateWorkflowDB(c *gin.Context) {
+	var req models.MutationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid request body", Error: err.Error()})
+		return
+	}
+	if len(req.Statements) == 0 || len(req.Statements) > maximumStatements {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid statements", Error: fmt.Sprintf("statements must contain 1-%d operations", maximumStatements)})
+		return
+	}
+	for i, statement := range req.Statements {
+		if err := validateMutationSQL(statement.SQL); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Mutation rejected", Error: fmt.Sprintf("statement %d: %v", i+1, err)})
+			return
+		}
+	}
+
+	fullPath, err := resolveReadonlyDBPath(c, req.DBPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid db_path", Error: err.Error()})
+		return
+	}
+	db, err := openMutationDB(fullPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to open database", Error: err.Error()})
+		return
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), queryTimeout)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to start transaction", Error: err.Error()})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	response := models.MutationResponse{Results: make([]models.MutationStatementResult, 0, len(req.Statements))}
+	for i, statement := range req.Statements {
+		result, execErr := tx.ExecContext(ctx, statement.SQL, statement.Params...)
+		if execErr != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Mutation failed and was rolled back", Error: fmt.Sprintf("statement %d: %v", i+1, execErr)})
+			return
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to build mutation receipt", Error: rowsErr.Error()})
+			return
+		}
+		lastInsertID, _ := result.LastInsertId()
+		response.Results = append(response.Results, models.MutationStatementResult{RowsAffected: rowsAffected, LastInsertID: lastInsertID})
+		response.TotalRowsAffected += rowsAffected
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to commit mutation", Error: err.Error()})
+		return
+	}
+	committed = true
+	log.Printf("[WORKFLOW_DB_MUTATION] user=%q db=%q statements=%d rows_affected=%d", getUserID(c), req.DBPath, len(req.Statements), response.TotalRowsAffected)
+	c.JSON(http.StatusOK, models.APIResponse[models.MutationResponse]{Success: true, Data: response})
 }
 
 // GetWorkflowDBTables handles GET /api/db/tables?db_path=... — lists tables,
@@ -164,7 +442,7 @@ func GetWorkflowDBTables(c *gin.Context) {
 		return
 	}
 
-	db, err := openReadonlyDB(fullPath)
+	db, err := openQueryOnlyDB(fullPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
 			Success: false, Message: "Failed to open database", Error: err.Error(),
@@ -196,7 +474,7 @@ func GetWorkflowDBTables(c *gin.Context) {
 		_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+quoted).Scan(&info.RowCount)
 
 		if sampleRows, err := db.QueryContext(ctx, "SELECT * FROM "+quoted+" LIMIT ?", dbTablesSampleRows); err == nil {
-			if _, data, err := scanRows(sampleRows); err == nil {
+			if _, data, _, err := scanRows(sampleRows, dbTablesSampleRows); err == nil {
 				info.Sample = data
 			}
 			sampleRows.Close()

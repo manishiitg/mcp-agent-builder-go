@@ -82,7 +82,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// DB folder: Workflow/codeanalysis/db/ (structured JSON data, always enabled, shared across runs)
 	dbPath := getDBPath(baseWorkspacePath)
 	skillStepConfig := getAgentConfigs(step)
-	dbAccessForGuard := resolveDBAccess(skillStepConfig)
+	dbAccessForGuard := resolveEffectiveDBAccess(skillStepConfig, hcpo.isEvaluationMode, false)
 	kbAccessForGuard := resolveKnowledgebaseAccess(skillStepConfig, hcpo.UseKnowledgebase())
 	learningsAccessForGuard := resolveLearningsAccess(skillStepConfig)
 
@@ -774,6 +774,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	// Get step config for code execution mode: step config > workflow/preset default
 	stepConfig := getAgentConfigs(step)
 	isCodeExecutionMode := hcpo.getCodeExecutionMode(stepConfig)
+	dbAccessForGuard := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 
 	// Resolve KB access mode for this step (explicit step config > preset default).
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
@@ -789,7 +790,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	fgSoulPath := filepath.Join(baseWorkspacePath, "soul")
 	fgBuilderPath := filepath.Join(baseWorkspacePath, "builder")
 	fgReadPaths := []string{fgExecPath, fgDBPath, fgSoulPath, fgBuilderPath}
-	fgWritePaths := []string{fgExecPath, fgDBPath}
+	fgWritePaths := []string{fgExecPath}
+	if dbAccessForGuard == DBAccessReadWrite {
+		fgWritePaths = append(fgWritePaths, fgDBPath)
+	}
 	if learningsAccess != LearningsAccessNone {
 		fgReadPaths = append(fgReadPaths, fgGlobalLearningsPath)
 		// Orchestrator writes its stores directly via the folder guard (mirrors KB below).
@@ -845,6 +849,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 		"FolderGuardWritePaths": strings.Join(toAbsPaths(docsRoot, fgWritePaths), ", "),
 		"KnowledgebasePath":     filepath.Join(docsRoot, fgKnowledgebasePath),
 		"DBPath":                filepath.Join(docsRoot, fgDBPath),
+		"DBAccess":              dbAccessForGuard,
+		"DBDirectAccess":        fmt.Sprintf("%v", isScriptedExecutionModeConfig(stepConfig)),
 		"WorkflowRoot":          filepath.Join(docsRoot, baseWorkspacePath),
 		"LearningsPath":         filepath.Join(docsRoot, fgGlobalLearningsPath),
 	}

@@ -2,7 +2,9 @@
 
 ## Status
 
-Open — root cause established 2026-08-01; production fix not yet implemented.
+Implemented locally on 2026-08-01; focused Go tests pass. Production MCP-bridge
+and full Pulse/workflow-run verification remain pending before rollout is called
+complete.
 Open-site audit completed 2026-08-01: two affected call sites, one of them
 (`loopclosure`) outside the agent path and previously unlisted — see "Every
 affected open site". The reproduction and the proposed `PRAGMA query_only`
@@ -163,8 +165,8 @@ mode=rw + PRAGMA query_only  →  row returned
 
 | Site | Open | Status |
 |---|---|---|
-| `workspace/handlers/query.go:54` (`openReadonlyDB`, backs `POST /api/query`) | `mode=ro&_pragma=query_only(true)` | affected |
-| `agent_go/pkg/loopclosure/loopclosure.go:352` | `mode=ro&_pragma=busy_timeout(5000)` | **affected — fix with the same sweep** |
+| `workspace/handlers/query.go` (`openQueryOnlyDB`, backs `POST /api/query`) | `mode=rw&_pragma=query_only(true)` | fixed; WAL regressions added |
+| `agent_go/pkg/loopclosure/loopclosure.go` | `mode=rw&_pragma=query_only(true)` | fixed; no-sidecar observation test added |
 | `agent_go/.../run_concerns.go:153` (`openRunConcernsDB`, all Pulse lifecycle IO) | plain `sql.Open("sqlite", dbPath)` | not affected |
 
 The loopclosure site is easy to miss and fails worse than the handler. It reads
@@ -400,7 +402,7 @@ the finer read-versus-write boundary. Merely changing prompts while leaving raw
 database access universally available is guidance, not enforcement.
 
 **What "proven" must mean in phases 4–6.** Removing raw `db.sqlite*` access is
-the one irreversible step here: if the tools have a gap, every agent that relied
+the highest-risk rollout step here: if the tools have a gap, every agent that relied
 on the shell loses its fallback at once, and the symptom will be agents blocked
 mid-run rather than a failing test. Proven therefore means the tool path has
 carried real work through the production MCP bridge — at minimum one full Pulse
@@ -441,6 +443,23 @@ Generate the DB section from effective access instead:
 The printed Allowed READ/WRITE lists remain useful diagnostics, but they should
 agree with the dedicated DB instructions rather than serving as the only signal
 that a generated write example is forbidden.
+
+### Implemented shape (2026-08-01)
+
+- Added shared `query_workflow_db` and `mutate_workflow_db` virtual tools.
+- Hardened `/api/query` with existing-file `mode=rw`, `query_only`, statement
+  validation, safe schema PRAGMAs, row bounds, and stacked-statement rejection.
+- Added token-protected `/api/mutate` with INSERT/UPDATE/DELETE-only validation,
+  transactions, rollback, and affected-row receipts.
+- Mapped effective `db_access` to tool exposure, including evaluation downgrade
+  and message-sequence write narrowing.
+- Updated regular/message-sequence/todo-task prompts to use the managed tools;
+  saved scripted steps retain `$DB_PATH` compatibility.
+- Hard-blocked the `db/db.sqlite*` prefix for managed agentic/background sessions
+  while leaving `db/README.md` and `db/assets/` under their normal folder policy.
+- Changed loop closure to the same WAL-capable query-only connection contract.
+- Added checkpointed-no-sidecar, active-WAL visibility, unsafe SQL, transaction
+  rollback, missing-path, read-only capability, and raw-file-block regression tests.
 
 ### Prefer typed Pulse lifecycle tools where available
 

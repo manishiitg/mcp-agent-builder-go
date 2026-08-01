@@ -1488,10 +1488,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			"StepDescription":           stepDescriptionForPrompt,
 			"StepSuccessCriteria":       "",
 			"StepContextOutput":         ResolveVariables(step.GetContextOutput().String(), hcpo.variableValues),
-			"WorkspacePath":             toAbsPath(executionWorkspacePath),                                                                    // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
-			"LearningsPath":             toAbsPath(learningsPath),                                                                             // Absolute learnings folder path
-			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                                                                         // Absolute knowledgebase folder path
-			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())),                                                        // Absolute db folder path (always enabled)
+			"WorkspacePath":             toAbsPath(executionWorkspacePath),             // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
+			"LearningsPath":             toAbsPath(learningsPath),                      // Absolute learnings folder path
+			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                  // Absolute knowledgebase folder path
+			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())), // Absolute db folder path (always enabled)
+			"DBAccess":                  dbAccess,
+			"DBDirectAccess":            fmt.Sprintf("%v", isScriptedMode),
 			"UseKnowledgebase":          fmt.Sprintf("%v", useKnowledgebase),                                                                  // Whether knowledgebase is enabled (deprecated, retained for backward compat)
 			"KbAccess":                  kbAccess,                                                                                             // KB access mode: "read" | "write" | "read-write" | "none"
 			"KbAccessLabel":             kbAccessLabel(kbAccess),                                                                              // Human-readable label for prompt display

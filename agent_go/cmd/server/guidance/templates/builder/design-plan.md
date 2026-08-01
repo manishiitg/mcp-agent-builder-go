@@ -29,7 +29,7 @@ Load `get_reference_doc(kind="assumption-audit")` and apply its plan/design lens
 
 ## The mental model to design against (current)
 
-- **db/db.sqlite is the source of truth.** A step's real output is the rows it writes to the db (via `$DB_PATH`), not a file. Reports and downstream steps read the db.
+- **db/db.sqlite is the source of truth.** A step's real output is the rows it writes through the managed DB tools (or `$DB_PATH` for saved scripted code), not a file. Reports and downstream steps read the db.
 - **`context_output` is OPTIONAL.** Use it only for a small explicit handoff a *next step* consumes (it gets injected into that step's prompt), or a deliberate file artifact. If the result is in the db, OMIT it — a hand-written receipt file duplicates the db and drifts (the classic `status: null` while the db is perfect).
 - **Validate the source of truth.** `validation_schema` can gate **files** (`files` + json_checks) AND/OR the **db** (`db: [{sql, min_rows, max_rows, checks}]`, read-only queries against db/db.sqlite). Prefer a **db check** when the step writes to the db — gate what was actually produced.
 - **`context_dependencies`** is the *file* channel (forward-only, injected into the prompt). Use `[]` when the next step just reads the db. It is NOT required for data flow — the db always is.
@@ -69,7 +69,7 @@ For each step, confirm it's the right type, and flag mis-modeling:
 PART 4 — STORES FITNESS (when to use db vs kb vs learnings; cite the step)
 Wrong-store usage is the most common silent design error. Check each step's access against what it actually needs:
 
-- **db/db.sqlite — WHAT this run produced.** State, results, rows, plus durable assets under `db/assets/` (with a metadata row). Every step can read+write via `$DB_PATH` (`db_access` defaults read-write; set `read` for pure readers / report-shaping / validation so an accidental write is sandbox-denied). This is the source of truth — results go here, not into files.
+- **db/db.sqlite — WHAT this run produced.** State, results, rows, plus durable assets under `db/assets/` (with a metadata row). Agentic steps use `query_workflow_db` / `mutate_workflow_db`; saved scripted code uses `$DB_PATH`. `db_access` defaults read-write; set `read` for pure readers / report-shaping / validation. This is the source of truth — results go here, not into files.
 - **knowledgebase/ — reusable DOMAIN knowledge across runs.** Business facts, product/catalog info, portal quirks-as-notes, and user-supplied runtime context/preferences/rules (put those in `knowledgebase/context/context.md`). Opt-in per step via `knowledgebase_access` (`read` to consume, `read-write` + `knowledgebase_contribution` to add notes). NOT for run results (db) and NOT for execution mechanics (learnings).
 - **learnings/ (SKILL.md) — HOW to run the task.** Reusable execution know-how: browser selectors/timing, auth/login flows, tool/MCP/API quirks, CLI/SDK command patterns, parsing/retry/recovery rules. `learnings_access` defaults `read` (the step sees SKILL.md); set `read-write` + a specific `learning_objective` ONLY for steps with reusable execution HOW worth capturing. Routing, validation, mechanical transforms, aggregation, pure readers, and human gates should stay read-only. Not for results (db) or domain facts (kb).
 - **soul.md** — the workflow's long-term purpose/persona (Workshop-maintained). Reference it for "what is this workflow for."

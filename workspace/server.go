@@ -121,10 +121,13 @@ func runServer(cmd *cobra.Command, args []string) {
 		api.GET("/processes", handlers.ListWorkflowProcesses)
 		api.POST("/processes/cleanup", handlers.CleanupWorkflowProcesses)
 
-		// Read-only SQLite query routes (report widgets + DatabasePopup).
-		// Connection opened mode=ro + query_only — writes are rejected by the engine.
+		// SQLite query routes (report widgets + DatabasePopup). The query
+		// connection is WAL-capable but query-only and statement-validated.
 		api.POST("/query", handlers.QueryWorkflowDB)
 		api.GET("/db/tables", handlers.GetWorkflowDBTables)
+		// Mutations are internal agent/backend operations and require the workspace
+		// service token that is deliberately absent from coding-CLI shells.
+		api.POST("/mutate", requireWorkspaceAPIToken(), handlers.MutateWorkflowDB)
 
 		// CDP connectivity check (used by frontend to verify Chrome is reachable from container)
 		api.GET("/cdp-check", handlers.CheckCdpConnection)

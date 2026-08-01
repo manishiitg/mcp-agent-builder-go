@@ -71,7 +71,7 @@ Use this order when debugging latency:
 | Path | Contents |
 |------|----------|
 | builder/conversation/YYYY-MM-DD/session-{id}-conversation.json | Previous builder chat sessions |
-| db/db.sqlite | Workflow state and results — one SQLite database, one table per entity (rows written by steps via `sqlite3`; upsert on the primary key; see persistent-stores design) |
+| db/db.sqlite | Workflow state and results — one SQLite database, one table per entity (agentic steps use managed DB tools; saved scripts retain direct compatibility; upsert on the primary key) |
 | db/README.md | Per-table schema contract (DDL, primary key, upsert rule, indexes, writers, consumers) |
 | db/assets/* | Durable media/file assets referenced by db.sqlite rows, reports, or later steps |
 | db/reports/*.html | Live report documents registered from reports/report_plan.json; they read db/db.sqlite through window.report |

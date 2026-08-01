@@ -290,6 +290,39 @@ func resolveEffectiveDBAccess(stepConfig *AgentConfigs, evaluationMode, evaluati
 	return DBAccessRead
 }
 
+const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
+
+// configureWorkflowDBSession records the trusted logical DB capability for the
+// tool executor and, for managed agents, hard-blocks raw db.sqlite/WAL/SHM file
+// access. db/README.md and db/assets/ remain governed by the ordinary read/write
+// paths. Saved scripted steps retain direct DB access during migration.
+func configureWorkflowDBSession(sessionID, workspacePath, dbAccess string, direct bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	common.SetSessionShellEnv(sessionID, map[string]string{workflowDBAccessEnv: dbAccess})
+	if direct {
+		return
+	}
+	blocked := []string{}
+	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil {
+		blocked = append(blocked, cfg.BlockedPaths...)
+	}
+	blocked = append(blocked, filepath.Join(workspacePath, DBFolderName, "db.sqlite"))
+	common.SetSessionFolderGuardBlockedPaths(sessionID, common.DeduplicateStrings(blocked))
+}
+
+func dbWritePathGranted(writePaths []string, workspacePath string) bool {
+	want := filepath.Clean(getDBPath(workspacePath))
+	for _, path := range writePaths {
+		if filepath.Clean(path) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // setupBrowserDownloadsPathOverride configures the Downloads path for browser automation tools.
 // Execution and orchestrator agents share this run-specific agent_browser folder.
 func (hcpo *StepBasedWorkflowOrchestrator) setupBrowserDownloadsPathOverride(ctx context.Context, _ *agents.OrchestratorAgentConfig, _ *AgentConfigs) {
@@ -776,6 +809,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			enabledTools = append(enabledTools, "workspace_advanced:*")
 			hcpo.GetLogger().Info("🔧 Auto-including workspace_advanced:*")
 		}
+		// Workflow DB tools are capability-derived, not model-selected. A custom
+		// tool allowlist may narrow other tools but cannot remove the safe query
+		// path or escalate a read-only step to mutation authority.
+		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
+		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
+			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
+		}
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -809,6 +849,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		defaultEnabledTools := []string{
 			"workspace_advanced:*",
 			"human_tools:*",
+			"workflow_db:query_workflow_db",
+		}
+		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
+			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
 		}
 		// Auto-include browser tools if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true)
@@ -1137,6 +1181,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 			stepEnvOutputPathOverride = writePaths[0]
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
+		if dbAccess == DBAccessReadWrite && !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
+			dbAccess = DBAccessRead
+		}
 	}
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
@@ -1200,6 +1247,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		execSessionID = hcpo.setupSubAgentSessionGuard("exec", stepID, readPaths, writePaths)
 	}
 	config.MCPSessionID = execSessionID
+	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	// Keep browser-sharing behavior unchanged: bind the per-step execution session to the
 	// same shared browser session the group session uses. If a caller later requests
 	// share_browser=false, the isolated browser session override below still wins.
@@ -1247,6 +1296,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 5. Prepare custom tools (filtered by step config)
 	toolsToRegister, executorsToUse := hcpo.prepareCustomTools(stepConfig)
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
+			}
+			filtered = append(filtered, tool)
+		}
+		toolsToRegister = filtered
+		delete(executorsToUse, "mutate_workflow_db")
+	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
 	// and STEP_EXECUTION_DIR to read sibling step outputs.
@@ -1258,7 +1318,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		}
 		stepOutputAbsPath := filepath.Join(GetPromptDocsRoot(), stepExecutionPath)
 		stepExecutionAbsPath := filepath.Dir(stepOutputAbsPath)
-		dbAbsPath := filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		dbAbsPath := ""
+		if directDBAccess {
+			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
 		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
 		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
@@ -1494,6 +1557,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	todoReadPaths, todoWritePaths := hcpo.GetFolderGuardPaths()
 	todoSessionID := hcpo.setupSubAgentSessionGuard("todo", stepID, todoReadPaths, todoWritePaths)
 	config.MCPSessionID = todoSessionID
+	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
+	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1570,6 +1636,43 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using all workspace tools for todo task orchestrator agent: %d tools", len(toolsToRegister)))
 	}
+	// DB capability tools are always derived from trusted db_access even when a
+	// step supplies a narrower custom-tool list.
+	hasTool := func(name string) bool {
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
+		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
+			continue
+		}
+		if !hasTool(name) {
+			for _, tool := range hcpo.WorkspaceTools {
+				if tool.Function != nil && tool.Function.Name == name {
+					toolsToRegister = append(toolsToRegister, tool)
+					if executor, ok := hcpo.WorkspaceToolExecutors[name]; ok {
+						executorsToUse[name] = executor
+					}
+					break
+				}
+			}
+		}
+	}
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
+			}
+			filtered = append(filtered, tool)
+		}
+		toolsToRegister = filtered
+		delete(executorsToUse, "mutate_workflow_db")
+	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the
 	// todo-task orchestrator's own shell calls resolve sibling step outputs via env vars
@@ -1581,7 +1684,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		// The todo-task orchestrator now uses a dedicated MCP session for shell/file tools.
 		// Browser reuse is bound separately above, so this session override narrows
 		// filesystem scope without breaking shared browser behavior with the builder.
-		dbAbsPath := filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		dbAbsPath := ""
+		if directDBAccess {
+			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
 		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
 		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)

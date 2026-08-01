@@ -106,3 +106,69 @@ describe('formatToolCallResult', () => {
     })
   })
 })
+
+describe('bridge tool failures that exit 0', () => {
+  // A tool that fails behind the HTTP bridge returns its error as ordinary
+  // stdout: the curl succeeded, so exit_code is 0 and every exit-code check
+  // reports success. One day of codex rollouts (2026-08-01) held 34 of these,
+  // all rendered with a green check — 46 get_api_spec rejections, 14 failed
+  // mark_pulse_module_result calls, 8 get_pulse_review_result misses.
+  it('flags a failed tool call carried in stdout with exit_code 0', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stdout: 'ERROR: tool execution failed: layer=custom_tool_handler '
+        + 'tool=get_pulse_review_result session=abc: sql: no rows in result set',
+      stderr: '',
+      exit_code: 0,
+      execution_time_ms: 25,
+    }))
+
+    expect(result.isError).toBe(true)
+  })
+
+  it('flags the virtual-tool form too', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stdout: 'ERROR: tool execution failed: layer=virtual_tool_handler '
+        + 'tool=get_api_spec session=xyz: server "custom" is not available.',
+      exit_code: 0,
+    }))
+
+    expect(result.isError).toBe(true)
+  })
+
+  it('flags canceled and timed-out envelopes', () => {
+    for (const kind of ['canceled', 'timed out']) {
+      const result = formatToolCallResult(JSON.stringify({
+        stdout: `ERROR: tool execution ${kind}: layer=custom_tool_handler tool=t session=s`,
+        exit_code: 0,
+      }))
+      expect(result.isError, kind).toBe(true)
+    }
+  })
+
+  // Matching keys off `layer=`, not the word "error", so tool output that
+  // merely discusses errors stays clean. A findings table or a log query would
+  // otherwise light up red on every row.
+  it('does not flag output that merely mentions errors', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stdout: 'ERROR count: 3\nrecent errors: tool execution was reviewed for failure modes',
+      exit_code: 0,
+    }))
+
+    expect(result.isError).toBe(false)
+  })
+
+  it('finds the failure nested inside an MCP envelope', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          stdout: 'ERROR: tool execution failed: layer=custom_tool_handler '
+            + 'tool=mark_pulse_module_result session=s: review_run_id must start with a UTC date-time',
+          exit_code: 0,
+        }),
+      }],
+    }))
+
+    expect(result.isError).toBe(true)
+  })
+})

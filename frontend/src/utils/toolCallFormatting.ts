@@ -75,10 +75,42 @@ function prettyJson(value: unknown): string {
   return JSON.stringify(expandNestedJson(value), null, 2)
 }
 
+/**
+ * The harness's own tool-failure envelope, emitted by `toolExecutionError` in
+ * mcpagent's executor as one of:
+ *
+ *   tool execution failed:   layer=… tool=… session=…: …
+ *   tool execution canceled: layer=… tool=… session=…
+ *   tool execution timed out: layer=… tool=… session=… timeout=…
+ *
+ * A failure delivered through the HTTP bridge arrives as ordinary stdout with
+ * `exit_code: 0` — the *curl* succeeded, so every exit-code check says success.
+ * On 2026-08-01 a single day of codex rollouts held 34 of these, every one
+ * rendered with a green check: 46 get_api_spec rejections, 14 failed
+ * mark_pulse_module_result calls, 8 get_pulse_review_result misses. An operator
+ * reading that transcript sees a clean run.
+ *
+ * Matched on `layer=` rather than on the word "error", so tool output that
+ * merely discusses errors — a log query, a findings table, a review body — is
+ * not flagged. This recognises the harness reporting its own failure, nothing
+ * else.
+ */
+const HARNESS_TOOL_ERROR = /tool execution (?:failed|canceled|timed out): layer=/
+
+function textCarriesHarnessError(value: unknown): boolean {
+  return typeof value === 'string' && HARNESS_TOOL_ERROR.test(value)
+}
+
 function formatTextThatMayBeJson(text: string): FormattedToolCallValue {
   const parsed = tryParseJson(text)
-  if (parsed === undefined) return { text, format: 'text', isError: false }
-  return { text: prettyJson(parsed), format: 'json', isError: jsonValueIsError(parsed) }
+  if (parsed === undefined) {
+    return { text, format: 'text', isError: textCarriesHarnessError(text) }
+  }
+  return {
+    text: prettyJson(parsed),
+    format: 'json',
+    isError: jsonValueIsError(parsed) || textCarriesHarnessError(text),
+  }
 }
 
 function isShellResult(value: unknown): value is JsonRecord {
@@ -92,10 +124,16 @@ function isShellResult(value: unknown): value is JsonRecord {
 }
 
 function jsonValueIsError(value: unknown): boolean {
+  if (typeof value === 'string') return textCarriesHarnessError(value)
+  if (Array.isArray(value)) return value.some(jsonValueIsError)
   if (!isRecord(value)) return false
   if (value.success === false || value.isError === true || value.is_error === true) return true
   if (typeof value.exit_code === 'number' && value.exit_code !== 0) return true
-  return typeof value.error === 'string' && value.error.trim().length > 0
+  if (typeof value.error === 'string' && value.error.trim().length > 0) return true
+  // A bridge failure rides in stdout with exit_code 0, and nests: the shell
+  // result wraps an MCP envelope which wraps the failing tool's own payload.
+  // Recursing is what finds it at whatever depth this particular tool landed.
+  return Object.values(value).some(jsonValueIsError)
 }
 
 function shellResultText(result: JsonRecord): string {

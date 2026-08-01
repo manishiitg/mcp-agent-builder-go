@@ -64,7 +64,7 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 | Execution folder | `+"`"+`{{.ExecutionFolderPath}}/`+"`"+` | READ |
 | Step folder (VOLATILE) | `+"`"+`{{.StepExecutionPath}}/`+"`"+` | READ/WRITE |
 | Downloads (user files) | `+"`"+`{{.DownloadsPath}}/`+"`"+` | READ/WRITE |
-| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` | READ/WRITE |
+| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` | {{if eq .DBAccess "read"}}READ{{else}}READ/WRITE{{end}} |
 {{if ne .KbAccess "none"}}| Knowledgebase (PERSISTENT, {{.KbAccessLabel}}) | `+"`"+`{{.KnowledgebasePath}}/`+"`"+` | {{.KbAccessLabel}} |
 {{end}}
 - Step folder is **volatile** — deleted on re-execution. Write all output files here.
@@ -90,7 +90,10 @@ When delegating to a sub-agent, pass the exact output file paths and required st
 
 **Three persistent stores — keep them separate when instructing sub-agents:**
 - **soul/soul.md** — workflow north star: objective and success criteria. At step start, read it if present and use it to resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the workflow goal. Treat it as READ-ONLY. When delegating, pass relevant objective/success-criteria context in the sub-agent `+"`instructions`"+`; sub-agents cannot see your system prompt.
-- **db/db.sqlite** — workflow state and results (SQLite tables produced/consumed by steps; query with `+"`sqlite3`"+`). Step-owned, upsert via `+"`INSERT ... ON CONFLICT DO UPDATE`"+`, never DROP/recreate a table. Durable media/file assets live under `+"`db/assets/`"+` with metadata rows in a `+"`db/db.sqlite`"+` table.
+{{if eq .DBDirectAccess "true"}}- **db/db.sqlite** — saved scripted-code compatibility. Use the harness-supplied absolute `+"`"+`$DB_PATH`+"`"+` and respect **{{.DBAccess}}** access. Never reconstruct the path or DROP/recreate a table.
+{{else if eq .DBAccess "read"}}- **db/db.sqlite** — read-only workflow evidence. Use `+"`query_workflow_db`"+` for schema discovery and queries. Do not open SQLite through shell/Python and do not ask sub-agents to mutate it.
+{{else}}- **db/db.sqlite** — workflow state and results. Use `+"`query_workflow_db`"+` for schema/reads and `+"`mutate_workflow_db`"+` for transactional row changes. Inspect schema before querying unfamiliar tables; never DROP/recreate a table. Durable files remain under `+"`db/assets/`"+`.
+{{end}}
 - **knowledgebase/context/** — user-supplied runtime business context. If `+"`knowledgebase/context/context.md`"+` exists and KB read access is granted, read and respect relevant sections; do not edit it.
 - **knowledgebase/notes/** — per-topic narrative markdown the workflow accumulates about its subject matter (entity-scoped like `+"`"+`company-acme.md`+"`"+` or cross-cutting like `+"`"+`pattern-*.md`+"`"+`), plus `+"`"+`notes/_index.json`+"`"+` as the registry. Use it only when `+"`"+`knowledgebase_access`+"`"+` grants read/write. {{if eq .KbWriteMethod "direct"}}This step (and its sub-agents) write KB notes directly — see the **Knowledgebase contribution** block below. The post-step KB update agent does NOT run. Use `+"`"+`diff_patch_workspace_file`+"`"+` for every KB content write, including new topic files and `+"`"+`_index.json`+"`"+` updates. Never edit `+"`knowledgebase/context/`"+`.{{else}}Written **only by the post-step KB update agent**. Sub-agents may read via shell if `+"`"+`knowledgebase_access`+"`"+` grants read; they must NOT edit `+"`"+`notes/`+"`"+` directly.{{end}}
 - **learnings/** — HOW to run the task. Use it only when relevant learnings are injected or the folder is listed in Allowed READ.{{if eq .LearningsAccess "read-write"}} This orchestrator has learnings **read-write**: once the work is verified, capture durable HOW-to knowledge (recipes, gotchas, tier hints) with `+"`"+`diff_patch_workspace_file`+"`"+`; do not use shell redirection/heredocs/tee/Python for learning writes. Keep it concise and generalizable; never dump run-specific data there — that belongs in db/.{{end}}
@@ -376,6 +379,8 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorSystemPrompt
 		"WorkflowRoot":                  templateVars["WorkflowRoot"],
 		"KnowledgebasePath":             templateVars["KnowledgebasePath"],
 		"DBPath":                        templateVars["DBPath"],
+		"DBAccess":                      templateVars["DBAccess"],
+		"DBDirectAccess":                templateVars["DBDirectAccess"],
 		"FolderGuardReadPaths":          templateVars["FolderGuardReadPaths"],
 		"FolderGuardWritePaths":         templateVars["FolderGuardWritePaths"],
 		"ShowToolsSection":              templateVars["ShowToolsSection"] == "true",

@@ -1333,6 +1333,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// not in the central workspace registry; use shell/diff/image/media tools.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"read_image", "generate_text_llm", "search_web_llm",
+		"query_workflow_db", "mutate_workflow_db",
 		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",
 		// Secret management tools. Global secrets are read-only; workflow/user
 		// encrypted stores are writable when the corresponding tools are registered.
@@ -1573,6 +1574,7 @@ func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
 		// Workspace/file tools for evidence and bounded HTML/report updates.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"read_image", "generate_text_llm", "search_web_llm",
+		"query_workflow_db",
 
 		// Guidance/reference docs are mandatory for the advisor playbook.
 		"get_workflow_command_guidance", "get_reference_doc",
@@ -1617,6 +1619,7 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
 		"start_pulse_fix_attempt", "mark_pulse_module_result", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
+		"mutate_workflow_db",
 	)
 	return tools
 }
@@ -1664,6 +1667,7 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		// Evidence gathering. Reviewers are told to read, not write; the shell
 		// is general-purpose and that instruction is what bounds it.
 		"execute_shell_command", "read_image", "generate_text_llm", "search_web_llm",
+		"query_workflow_db",
 
 		// Guidance/reference docs are mandatory for the advisor and critic playbooks.
 		"get_workflow_command_guidance", "get_reference_doc",
@@ -2115,6 +2119,11 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
+	dbAccess := DBAccessRead
+	if dbWritePathGranted(writePaths, workspacePath) {
+		dbAccess = DBAccessReadWrite
+	}
+	configureWorkflowDBSession(sessionID, workspacePath, dbAccess, false)
 	blockedWrites := workshopBlockedWritePaths(workspacePath, writePaths)
 	if len(blockedWrites) > 0 {
 		common.SetSessionFolderGuardBlockedWritePaths(sessionID, blockedWrites)
@@ -2349,7 +2358,7 @@ Users may reach this workflow through Slack, WhatsApp, or another bot channel. T
 
 The workflow has a **live frontend report viewer** at the top toolbar's "Report" tab. It reads `+"`reports/report_plan.json`"+` and renders the **HTML document(s)** registered there — each an HTML file under `+"`db/reports/`"+`. It may also render native `+"`interaction`"+` widgets only when the user explicitly configures a durable question/control in the Report page. HTML reads `+"`db/db.sqlite`"+` live via the `+"`window.report`"+` API; interaction answers are stored in the same workflow DB table `+"`report_widget_responses`"+` for later runs. **No separate "generate report" phase** — author the document/widget definition **once** and it remains live.
 
-{{if eq .WorkshopMode "workshop"}}**Workshop owns `+"`reports/report_plan.json`"+`** — author HTML documents with `+"`upsert_report_widget(kind=\"file\", renderFormat=\"html\")`"+`. When the user explicitly asks for a persistent report-page input, add a native `+"`interaction`"+` widget with a stable widget id, question, responseKind, options, and optional subject/version/hash; do not create it automatically from Pulse findings. Also configure the intended workflow consumer step to query the framework-owned `+"`report_widget_responses`"+` rows through `+"`$DB_PATH`"+`. Keep report edits presentation-only unless the user also asked for workflow behavior changes. HTML reads `+"`db/db.sqlite`"+` live via `+"`window.report.query(sql)`"+`; author it once and never regenerate it per run. For the full policy: `+"`get_reference_doc(kind=\"reporting-policy\")`"+`.
+{{if eq .WorkshopMode "workshop"}}**Workshop owns `+"`reports/report_plan.json`"+`** — author HTML documents with `+"`upsert_report_widget(kind=\"file\", renderFormat=\"html\")`"+`. When the user explicitly asks for a persistent report-page input, add a native `+"`interaction`"+` widget with a stable widget id, question, responseKind, options, and optional subject/version/hash; do not create it automatically from Pulse findings. Also configure the intended workflow consumer step to query the framework-owned `+"`report_widget_responses`"+` rows through `+"`query_workflow_db`"+` (or `+"`$DB_PATH`"+` only for saved scripted code). Keep report edits presentation-only unless the user also asked for workflow behavior changes. HTML reads `+"`db/db.sqlite`"+` live via `+"`window.report.query(sql)`"+`; author it once and never regenerate it per run. For the full policy: `+"`get_reference_doc(kind=\"reporting-policy\")`"+`.
 {{else}}**Run mode does not author reports.** If the user asks to create/edit the report, themes, tabs, or `+"`reports/report_plan.json`"+`, tell them to switch to Workshop. Do not edit `+"`reports/report_plan.json`"+` via shell from Run mode. For policy details: `+"`get_reference_doc(kind=\"reporting-policy\")`"+`.
 {{end}}
 
@@ -2366,7 +2375,7 @@ The workflow has a **live frontend report viewer** at the top toolbar's "Report"
 
 You may maintain the live frontend report (`+"`reports/report_plan.json`"+`) so it stays aligned with current outputs, metrics, and evaluation evidence. Use report-plan tools for report edits; use workshop tools only when the underlying workflow behavior or eval coverage actually needs to change.
 
-**Core toolchain:** `+"`get_report_plan`"+` (read IDs) → author/register HTML with `+"`upsert_report_widget(kind=\"file\", renderFormat=\"html\")`"+`, or add an explicitly requested native `+"`interaction`"+` widget → `+"`move_report_widget`"+` / `+"`toggle_report_widget`"+` / `+"`remove_report_widget`"+` → `+"`validate_report_plan`"+` after every edit → `+"`preview_report_render`"+`. HTML reads the DB via `+"`window.report.query(sql)`"+`; workflow steps read configured interaction answers from `+"`report_widget_responses`"+` through `+"`$DB_PATH`"+`.
+**Core toolchain:** `+"`get_report_plan`"+` (read IDs) → author/register HTML with `+"`upsert_report_widget(kind=\"file\", renderFormat=\"html\")`"+`, or add an explicitly requested native `+"`interaction`"+` widget → `+"`move_report_widget`"+` / `+"`toggle_report_widget`"+` / `+"`remove_report_widget`"+` → `+"`validate_report_plan`"+` after every edit → `+"`preview_report_render`"+`. HTML reads the DB via `+"`window.report.query(sql)`"+`; agentic workflow steps read configured interaction answers with `+"`query_workflow_db`"+`, while saved scripted code may use `+"`$DB_PATH`"+`.
 
 **For the full toolchain (the two formats, `+"`window.report`"+` API, tabs, per-report themes, the good-document + design-quality guide, missing-data triage, full workflow), call:**
 `+"`get_reference_doc(kind=\"report-plan\")`"+` — load before authoring or editing `+"`reports/report_plan.json`"+`.
@@ -2421,7 +2430,7 @@ Run mode is the user-facing runtime surface, including Slack and WhatsApp routes
 1. **Do direct runtime work** when no workflow run is needed: use available tools plus workflow context to answer, look up, analyze, summarize, or take a small operational action. Before acting, ground in the generated skill, KB, and db state: `+"`learnings/_global/SKILL.md`"+` for HOW to operate, `+"`knowledgebase/context/`"+` and targeted `+"`knowledgebase/notes/`"+` for business context, and `+"`db/`"+` plus `+"`db/README.md`"+` for durable facts/results.
 2. **Run the workflow** for one configured group at a time with `+"`run_full_workflow(group_name=\"...\")`"+`.
 3. **Run a specific step or orphan utility step** with `+"`execute_step(step_id=\"...\", group_name=\"...\")`"+` when the user asks for a targeted action, retry, data check, or one-off investigation.
-4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with sqlite3), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
+4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with `+"`query_workflow_db`"+`), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
 5. **Inspect/debug execution** with `+"`list_executions`"+`, `+"`query_step`"+`, `+"`debug_step`"+`, and read-only review tools. Explain the issue and next action; do not mutate plan/config/learnings/KB/report/eval files in Run mode.
 
 ### Runtime context access
@@ -2527,7 +2536,7 @@ For the full debugging playbook (workshop vs run investigation workflow steps, r
 
 Priority order when reviewing a step: (1) Correctness — description precision, validation schema completeness, context I/O wiring. (2) Knowledge — learnings quality, lock lifecycle. (3) Efficiency — tool-call waste, workflow structure (merge/split/reorder).
 
-	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. `+"`db_access`"+` defaults to `+"`\"read-write\"`"+` (every step can read+write `+"`db/db.sqlite`"+` via `+"`$DB_PATH`"+`); set `+"`\"read\"`"+` for least-privilege steps that must never mutate the db (pure readers, report-shaping/aggregation, validation) so an accidental write is sandbox-denied. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_learnings=true`"+` is a deliberate Workshop/user decision, never a runtime side effect; `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. Three locks: `+"`lock_learnings`"+` (per-step, freezes SKILL.md), `+"`lock_code`"+` (per-step scripted, freezes main.py), `+"`lock_knowledgebase`"+` (workflow-wide, freezes notes/ auto-updates).
+	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. `+"`db_access`"+` defaults to `+"`\"read-write\"`"+`: agentic steps get `+"`query_workflow_db`"+` plus `+"`mutate_workflow_db`"+`, while saved scripted code keeps `+"`$DB_PATH`"+` compatibility; set `+"`\"read\"`"+` for pure readers, report shaping, and validation. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_learnings=true`"+` is a deliberate Workshop/user decision, never a runtime side effect; `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. Three locks: `+"`lock_learnings`"+` (per-step, freezes SKILL.md), `+"`lock_code`"+` (per-step scripted, freezes main.py), `+"`lock_knowledgebase`"+` (workflow-wide, freezes notes/ auto-updates).
 
 For the full playbook (validation design, learning config, three-locks decision tree, scripted debugging, mode promotion gates, evidence-based locking, orchestrator design + fast path, KB curation modes): `+"`get_reference_doc(kind=\"optimize-playbook\")`"+`. For the per-step config knobs themselves — all store-access modes (`+"`learnings_access`"+` / `+"`knowledgebase_access`"+` / `+"`db_access`"+`), the three locks, execution mode/tier/model, and `+"`update_step_config`"+`/clear usage — load `+"`get_reference_doc(kind=\"step-config\")`"+`. When patching `+"`learnings/{step-id}/main.py`"+`: also load `+"`code-authoring`"+`.
 {{end}}
@@ -4686,7 +4695,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"db_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "read-write"},
-					"description": "Access mode for this step against db/db.sqlite (and db/). Defaults to 'read-write' — every step can read AND write the workflow db (the back-compat default; db is the shared structured-state surface). Set 'read' for least-privilege read-only steps that should never mutate the db — pure readers, report-shaping/aggregation, validation/preflight checks: db/ stays readable but is removed from the step's write paths, so an accidental write is sandbox-denied. Steps always reference the db via the absolute $DB_PATH env var. Omit to keep the read-write default.",
+					"description": "Access mode for this step against db/db.sqlite (and db/). Defaults to 'read-write'. Agentic steps receive query_workflow_db plus mutate_workflow_db; 'read' exposes query only. Saved scripted/application code retains absolute $DB_PATH compatibility during migration. Pure readers, report shaping, aggregation, validation, and preflight checks should use 'read'. Omit to keep the read-write default.",
 				},
 				"knowledgebase_contribution": map[string]interface{}{
 					"type":        "string",

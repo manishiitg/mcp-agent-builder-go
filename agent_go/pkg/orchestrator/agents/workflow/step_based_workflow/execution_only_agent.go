@@ -73,8 +73,9 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 
 **Three persistent stores — do not confuse them. Only access a store when it appears in Allowed READ/WRITE or a dedicated prompt section grants access:**
 - **soul/soul.md** — workflow north star, and the ONLY place the overall goal is written down. Holds `+"`"+`## Objective`+"`"+` (what the workflow is for), `+"`"+`## Success Criteria`+"`"+` (what "done right" means for the whole workflow, not just your step), and sometimes `+"`"+`## Constraints`+"`"+` (owner-approved boundaries — limits, caps, budgets). Read it at step start: it is what lets you resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the point of the workflow. Treat it as READ-ONLY. **If a value in your step description contradicts a `+"`"+`## Constraints`+"`"+` entry, the constraint wins — it is the owner's decision and your description may be stale. Do not silently pick one: use the constraint and report the conflict with a `+"`"+`CONCERNS:`+"`"+` line.**
-{{if eq .IsEvaluationMode "true"}}- **db/db.sqlite** — **READ-ONLY workflow evidence**. Use the absolute `+"`"+`$DB_PATH`+"`"+` env var for `+"`SELECT`"+` queries when the rubric needs durable workflow facts. Never INSERT, UPDATE, DELETE, migrate, or otherwise modify the workflow DB from an evaluation. Evaluation findings belong only in `+"`"+`$STEP_OUTPUT_DIR/{{.StepContextOutput}}`+"`"+`. Never use a relative `+"`"+`db/db.sqlite`+"`"+` path.
-{{else}}- **db/db.sqlite** — **workflow state and results**. A SQLite database with one table per entity that this step produces/consumes (processed records, cursors, cumulative output). Owned by your step. Always use the absolute `+"`"+`$DB_PATH`+"`"+` env var: read with `+"`sqlite3 \"$DB_PATH\" \"SELECT ...\"`"+` and write with `+"`INSERT ... ON CONFLICT(<pk>) DO UPDATE SET ...`"+` (upsert on the table's primary key). NEVER use relative `+"`"+`db/db.sqlite`+"`"+` from step code or shell, and NEVER DROP/recreate a table or delete-then-insert the whole table — that destroys rows from other groups/runs. Schema/contract per table is in `+"`db/README.md`"+`. (Single-quote SQL in the shell; JSON paths like `+"`'$.field'`"+` need quoting.)
+{{if eq .DBDirectAccess "true"}}- **db/db.sqlite** — **workflow state and results for saved scripted code**. Use the absolute `+"`"+`$DB_PATH`+"`"+` supplied by the harness; never reconstruct or use a relative path. Respect the effective **{{.DBAccess}}** access mode. Never DROP/recreate a table or replace the whole table. Schema/contract per table is in `+"`db/README.md`"+`.
+{{else if eq .DBAccess "read"}}- **db/db.sqlite** — **READ-ONLY workflow evidence**. Use `+"`query_workflow_db(action=\"describe\")`"+` before querying unfamiliar tables, then use `+"`query_workflow_db(action=\"query\", sql=\"SELECT ...\")`"+` in a later call. You cannot mutate the database. Do not open `+"`db.sqlite`"+` with shell, Python, or a copied path.
+{{else}}- **db/db.sqlite** — **workflow state and results**. Use `+"`query_workflow_db`"+` for schema discovery and reads, and `+"`mutate_workflow_db`"+` for transactional INSERT/UPDATE/DELETE operations. Inspect unfamiliar schemas before constructing a dependent query. Prefer primary-key upserts; never DROP/recreate a table or replace the whole table. Do not open `+"`db.sqlite`"+` directly from shell or Python. Schema/contract per table is in `+"`db/README.md`"+`.
 {{end}}
 - **knowledgebase/** — durable business/domain context. `+"`knowledgebase/context/context.md`"+` is user-supplied runtime context: rules, preferences, constraints, assumptions, and examples that steps must respect. When this file exists and KB read access is granted, READ it once at step start and apply every relevant item. Per-topic narrative markdown under `+"`"+`notes/`+"`"+` is what the workflow discovered over time, one file per topic (entity-scoped like `+"`"+`company-acme.md`+"`"+` or cross-cutting like `+"`"+`pattern-*`+"`"+`), plus `+"`"+`notes/_index.json`+"`"+` as the registry. When you need discovered KB notes, ALWAYS `+"`"+`cat knowledgebase/notes/_index.json`+"`"+` first to find which topic files exist, then `+"`"+`cat`+"`"+` only the markdown files relevant to your work. NEVER `+"`"+`cat knowledgebase/notes/*.md`+"`"+` — file count grows unboundedly and loading all of them blows context. `+"`knowledgebase/context/`"+` is user content; the optimizer is forbidden from rewriting it so captured context remains stable across improvement passes. When your step has write access, you are the writer: use `+"`"+`diff_patch_workspace_file`+"`"+` for every KB content write, including new topic files and `+"`"+`_index.json`+"`"+` updates — see the **Knowledgebase contribution** block below. **Do NOT write to `+"`"+`knowledgebase/context/`+"`"+`** — that store is user-owned via the `+"`"+`capture_context`+"`"+` tool only.
 - **learnings/** — **HOW to run the task** (selectors, auth flows, tool patterns). Use it only when relevant learnings are injected under `+"`"+`## Skill`+"`"+` or the folder is listed in Allowed READ. Treat learnings/skill content as advisory guidance from previous runs: the current step description, orchestrator instructions, and human input are the source of truth. Use relevant guidance when it helps; ignore stale or conflicting guidance.
@@ -92,7 +93,7 @@ cat knowledgebase/notes/company-acme.md
 {{end}}
 {{if .KBGuidanceBlock}}{{.KBGuidanceBlock}}{{end}}
 ## EXECUTION RULES
-{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}1. **Output to the db**: this step declares no output file — persist your results to the workflow database via the absolute `+"`"+`$DB_PATH`+"`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required (the step is validated against the db).{{end}}
+{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}{{if eq .DBAccess "read"}}1. **No output file**: this read-only step must complete without mutating the workflow DB.{{else if eq .DBDirectAccess "true"}}1. **Output to the db**: this scripted step declares no output file — persist through the absolute `+"`"+`$DB_PATH`+"`"+`.{{else}}1. **Output to the db**: this step declares no output file — persist results with `+"`mutate_workflow_db`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required.{{end}}{{end}}
 {{if .UseCodeStyleRules}}2. Derive output paths from `+"`"+`os.environ['STEP_OUTPUT_DIR']`+"`"+` in code. E.g., `+"`"+`open(os.path.join(os.environ['STEP_OUTPUT_DIR'], '{{.StepContextOutput}}'), "w")`+"`"+`.
 3. **No env var fallbacks in Python**: always `+"`"+`os.environ['KEY']`+"`"+` — never `+"`"+`os.environ.get('KEY', 'default')`+"`"+`. Variables use `+"`"+`VAR_<NAME>`+"`"+`, secrets use `+"`"+`SECRET_<NAME>`+"`"+`. Missing var must raise KeyError, not silently use a hardcoded value.
 {{else}}2. Derive output paths from `+"`"+`$STEP_OUTPUT_DIR`+"`"+` in shell commands. E.g., `+"`"+`mkdir -p "$(dirname "$STEP_OUTPUT_DIR/{{.StepContextOutput}}")" && echo '...' > "$STEP_OUTPUT_DIR/{{.StepContextOutput}}"`+"`"+`.
@@ -134,7 +135,7 @@ You are running as an **evaluation agent** — your job is to **verify and asses
 - **Read** the target execution outputs referenced in your step description (via the TARGET_RUN_PATH the description resolves — never from leftover files in your own eval sandbox)
 - **Check** whether outputs meet the success criteria your step measures (content correctness, data quality, groundedness against the source) — operational checks like bare file existence belong to pre-validation and the per-run monitor, not here; a missing input still means fail closed, naming the missing path
 - **Write** your evaluation findings to your context_output file as structured JSON with the named verdict fields score, max_score, reasoning, evidence (plus any dimensions your validation schema requires) — the evaluation report is assembled from these fields
-- **Treat the workflow DB as read-only evidence**. Evaluation findings are never persisted to `+"`"+`$DB_PATH`+"`"+`; write them only to `+"`"+`$STEP_OUTPUT_DIR/{{.StepContextOutput}}`+"`"+`
+- **Treat the workflow DB as read-only evidence**. Read it with `+"`query_workflow_db`"+`; write evaluation findings only to `+"`"+`$STEP_OUTPUT_DIR/{{.StepContextOutput}}`+"`"+`
 - **Do NOT** re-execute or modify the original workflow outputs — only read and assess them
 - Focus on evidence-based assessment: quote specific content from files, reference exact field values
 {{end}}
@@ -186,7 +187,7 @@ You MUST incorporate it into this run. It takes priority over the default step d
 {{if .StepContextDependencies}}{{.StepContextDependencies}}{{else}}None{{end}}
 
 ### Output
-{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}- **No output file** — persist results to the db via the absolute `+"`"+`$DB_PATH`+"`"+`.{{end}}
+{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}{{if eq .DBAccess "read"}}- **No output file** — read-only DB access; do not persist database changes.{{else if eq .DBDirectAccess "true"}}- **No output file** — persist scripted results through `+"`"+`$DB_PATH`+"`"+`.{{else}}- **No output file** — persist results with `+"`mutate_workflow_db`"+`.{{end}}{{end}}
 
 {{if .ScriptedPriorContext}}{{.ScriptedPriorContext}}
 {{end}}### Execution Checklist
@@ -220,6 +221,8 @@ type WorkflowExecutionOnlyTemplate struct {
 	OrchestratorInstructions string // Orchestrator instructions (split from description)
 	HasSkill                 string // "true" if skill files are available
 	IsScriptedMode           string // "true" when scripted mode is enabled
+	DBAccess                 string // effective "read" or "read-write"
+	DBDirectAccess           string // "true" only for saved scripted-code compatibility
 	ScriptedPriorContext     string // Prior script context (failed script + error, or existing script for update)
 	IsContributionTurn       string // "true" for a synthetic learnings/KB closing turn — renders JUST the contribution message, no execute-the-task/output-file scaffolding
 }
@@ -315,6 +318,18 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 	previousStepsSummary := templateVars["PreviousStepsSummary"]
 	knowledgebasePath := templateVars["KnowledgebasePath"] // Knowledgebase folder path (persistent files across runs)
 	dbPath := templateVars["DBPath"]                       // DB folder path (structured JSON, always enabled)
+	dbAccess := strings.TrimSpace(templateVars["DBAccess"])
+	if dbAccess == "" {
+		if templateVars["IsEvaluationMode"] == "true" {
+			dbAccess = DBAccessRead
+		} else {
+			dbAccess = DBAccessReadWrite
+		}
+	}
+	dbDirectAccess := templateVars["DBDirectAccess"]
+	if dbDirectAccess == "" {
+		dbDirectAccess = fmt.Sprintf("%t", templateVars["IsScriptedMode"] == "true")
+	}
 	useProjectedReferenceSkills := hctpeoa.useProjectedReferenceSkills(templateVars)
 	if useProjectedReferenceSkills {
 		// Coding CLI adapters project the workflow-reference and
@@ -391,10 +406,12 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 		"StepNumber":                stepNumber,
 		"StepExecutionPath":         stepExecutionPath,
 		"PreviousStepsSummary":      previousStepsSummary,
-		"PlanPosition":              templateVars["PlanPosition"],              // Where this step sits in the plan — steps cannot read planning/plan.json
-		"ValidationSchema":          validationSchema,                          // Validation schema JSON string
-		"KnowledgebasePath":         knowledgebasePath,                         // Knowledgebase folder path
-		"DBPath":                    dbPath,                                    // DB folder path (always enabled)
+		"PlanPosition":              templateVars["PlanPosition"], // Where this step sits in the plan — steps cannot read planning/plan.json
+		"ValidationSchema":          validationSchema,             // Validation schema JSON string
+		"KnowledgebasePath":         knowledgebasePath,            // Knowledgebase folder path
+		"DBPath":                    dbPath,                       // DB folder path (always enabled)
+		"DBAccess":                  dbAccess,
+		"DBDirectAccess":            dbDirectAccess,
 		"KbAccess":                  templateVars["KbAccess"],                  // "read" | "write" | "read-write" | "none"
 		"KbAccessLabel":             templateVars["KbAccessLabel"],             // Human-readable label (e.g., "READ/WRITE")
 		"KnowledgebaseContribution": templateVars["KnowledgebaseContribution"], // Author-authored instruction for the step's KB contribution (direct mode only)
@@ -444,6 +461,18 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlyUserMessageProcessor(tem
 	// Split description into base description and orchestrator instructions
 	fullDescription := templateVars["StepDescription"]
 	isScriptedMode := templateVars["IsScriptedMode"] == "true"
+	dbAccess := strings.TrimSpace(templateVars["DBAccess"])
+	if dbAccess == "" {
+		if templateVars["IsEvaluationMode"] == "true" {
+			dbAccess = DBAccessRead
+		} else {
+			dbAccess = DBAccessReadWrite
+		}
+	}
+	dbDirectAccess := templateVars["DBDirectAccess"]
+	if dbDirectAccess == "" {
+		dbDirectAccess = fmt.Sprintf("%t", isScriptedMode)
+	}
 	if isScriptedMode {
 		fullDescription = sanitizeScriptedDescription(fullDescription)
 	}
@@ -476,6 +505,8 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlyUserMessageProcessor(tem
 		StepSuccessCriteria:      templateVars["StepSuccessCriteria"],
 		HasSkill:                 fmt.Sprintf("%t", templateVars["LearningHistory"] != ""),
 		IsScriptedMode:           fmt.Sprintf("%t", isScriptedMode),
+		DBAccess:                 dbAccess,
+		DBDirectAccess:           dbDirectAccess,
 		ScriptedPriorContext:     BuildScriptedPriorContext(templateVars["ScriptedPriorScript"], templateVars["ScriptedPriorError"], templateVars["ScriptedMetadataPath"], templateVars["IsScriptedLocked"] == "true"),
 		IsContributionTurn:       templateVars["IsContributionTurn"],
 	}

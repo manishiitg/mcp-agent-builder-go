@@ -1420,7 +1420,8 @@ export const agentApi = {
   },
 
   // Run a read-only SQL query against a workflow's db/db.sqlite. The workspace
-  // service opens the connection mode=ro + query_only, so only reads succeed.
+  // service opens the existing WAL database mode=rw + query_only, so SQLite can
+  // maintain sidecars while SQL mutations remain rejected.
   // Returns { success, data: { columns, rows } } — rows are objects keyed by column.
   queryWorkflowDB: async (dbPath: string, sql: string) => {
     const response = await workspaceApi.post('/api/query', { db_path: dbPath, sql })

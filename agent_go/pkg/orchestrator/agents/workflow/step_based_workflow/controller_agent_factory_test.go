@@ -55,6 +55,31 @@ func TestResolveEffectiveDBAccessMakesEvaluationReadOnlyByDefault(t *testing.T) 
 	}
 }
 
+func TestConfigureWorkflowDBSessionBlocksRawSQLiteForManagedAgents(t *testing.T) {
+	sessionID := "managed-workflow-db"
+	defer common.ClearSessionShellConfig(sessionID)
+	common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo/db"}, []string{"Workflow/demo/db"})
+	configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
+
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || cfg.Env[workflowDBAccessEnv] != DBAccessReadWrite {
+		t.Fatalf("trusted DB access not recorded: %+v", cfg)
+	}
+	if len(cfg.BlockedPaths) != 1 || cfg.BlockedPaths[0] != "Workflow/demo/db/db.sqlite" {
+		t.Fatalf("raw SQLite path not blocked: %+v", cfg.BlockedPaths)
+	}
+}
+
+func TestConfigureWorkflowDBSessionRetainsScriptedCompatibility(t *testing.T) {
+	sessionID := "scripted-workflow-db"
+	defer common.ClearSessionShellConfig(sessionID)
+	configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, true)
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || len(cfg.BlockedPaths) != 0 {
+		t.Fatalf("scripted compatibility unexpectedly blocked: %+v", cfg)
+	}
+}
+
 func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
