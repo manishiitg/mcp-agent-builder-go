@@ -119,6 +119,30 @@ type Config struct {
 	Transport llm.CodingAgentTransport
 }
 
+func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
+	directTools := make([]mcpagent.ToolDefinition, 0, len(cfg.Tools))
+	for _, tool := range cfg.Tools {
+		group := strings.TrimSpace(tool.Category)
+		if group == "" {
+			group = "family_tools"
+		}
+		directTools = append(directTools, mcpagent.ToolDefinition{
+			Name:         tool.Name,
+			Description:  tool.Description,
+			InputSchema:  tool.Params,
+			Execute:      tool.Handler,
+			DisplayGroup: group,
+		})
+	}
+	return mcpagent.AgentDefinition{
+		Instructions: cfg.SystemPrompt,
+		Tools: mcpagent.ToolSet{
+			Direct: directTools,
+			MCP:    []mcpagent.MCPToolSource{{Name: "exa-search"}},
+		},
+	}
+}
+
 // Session bundles a live agent with its in-process executor server. Not safe
 // for concurrent Ask calls; create one Session per conversation turn (cheap for
 // a low-QPS local app) or serialize access.
@@ -238,9 +262,6 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 			opts = append(opts, mcpagent.WithPiPersistentInteractiveSession(true))
 		}
 	}
-	if strings.TrimSpace(cfg.SystemPrompt) != "" {
-		opts = append(opts, mcpagent.WithSystemPrompt(cfg.SystemPrompt))
-	}
 	if strings.TrimSpace(cfg.WorkingDir) != "" {
 		opts = append(opts, mcpagent.WithCodingAgentWorkingDir(cfg.WorkingDir))
 	}
@@ -295,26 +316,13 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		// just documenting it.
 		closeOtherInteractiveSessions(sessionID)
 	}
-	agent, err := mcpagent.NewAgent(ctx, model, b.mcpConfigPath, opts...)
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, definitionFromConfig(cfg), mcpagent.RuntimeConfig{
+		Model:         model,
+		MCPConfigPath: b.mcpConfigPath,
+		LegacyOptions: opts,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
-	}
-
-	// Register the app-specific custom tools. This publishes them into the
-	// session-scoped codeexec registry (agent.go: InitRegistryForSession) so the
-	// shared executor server resolves /tools/custom/{name} calls to these
-	// handlers. Native bridge exposure is handled above via
-	// WithAdditionalBridgeTools — scoped to this agent, not the shared
-	// mcpagent bridgeTools list.
-	for _, t := range cfg.Tools {
-		category := t.Category
-		if strings.TrimSpace(category) == "" {
-			category = "family_tools"
-		}
-		if err := agent.RegisterCustomTool(t.Name, t.Description, t.Params, t.Handler, category); err != nil {
-			agent.Close()
-			return nil, fmt.Errorf("register tool %q: %w", t.Name, err)
-		}
 	}
 
 	// Restore provider-native continuation state (Claude Code's `--resume` UUID,
