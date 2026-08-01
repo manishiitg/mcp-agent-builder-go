@@ -329,12 +329,31 @@ export function PulseWorkspace({
         </div>
       )}
 
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+      {/*
+        Ordered by who has to act. "Needs you" leads because it is the only
+        number the operator can move, and it was previously invisible: it was
+        folded into a single count alongside blocked work, so a workflow with 6
+        real items, 12 blocked, and 4 questions read as 25 outstanding problems
+        and gave no way to tell a healthy workflow from a struggling one.
+      */}
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-6">
         <Metric
-          label="Needs action"
+          label="Needs you"
+          value={summary.awaitingUser}
+          detail={summary.awaitingUser > 0 ? 'waiting on your decision' : 'nothing waiting on you'}
+          tone="border-fuchsia-500/25 bg-fuchsia-500/5 text-fuchsia-700 dark:text-fuchsia-300"
+        />
+        <Metric
+          label="Pulse can fix"
           value={summary.open}
-          detail={summary.recurring > 0 ? `${summary.recurring} recurring` : 'new or acknowledged'}
+          detail={summary.recurring > 0 ? `${summary.recurring} seen before` : 'queued for a fixer'}
           tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
+        />
+        <Metric
+          label="Blocked"
+          value={summary.blocked}
+          detail="no action available to Pulse"
+          tone="border-slate-500/25 bg-slate-500/5 text-slate-700 dark:text-slate-300"
         />
         <Metric
           label="Being fixed"
@@ -350,15 +369,11 @@ export function PulseWorkspace({
         />
         <Metric
           label="Closed"
-          value={summary.closed}
-          detail={`${summary.passedChecks} passed verification${summary.passedChecks === 1 ? '' : 's'}`}
+          value={summary.closed + summary.externalAction}
+          detail={summary.externalAction > 0
+            ? `${summary.passedChecks} verified · ${summary.externalAction} handed off`
+            : `${summary.passedChecks} passed verification${summary.passedChecks === 1 ? '' : 's'}`}
           tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
-        />
-        <Metric
-          label="External action"
-          value={summary.externalAction}
-          detail="diagnosed and suppressed from Pulse retries"
-          tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
         />
       </section>
 

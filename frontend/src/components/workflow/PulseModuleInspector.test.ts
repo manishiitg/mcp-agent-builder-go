@@ -122,3 +122,32 @@ describe('PulseModuleInspector data summaries', () => {
     expect(activity[1]).toMatchObject({ findingID: 'BUG-1', findingText: 'First' })
   })
 })
+
+describe('acknowledged findings are split by who must act', () => {
+  const finding = (status: string, eventTypes: string[]): PulseFindingLifecycle => ({
+    fingerprint: `fp-${status}-${eventTypes.join('-')}`,
+    step_id: 'step', phase: 'review', text: 't', status,
+    seen_count: 1, fix_attempts: [], verifications: [],
+    events: eventTypes.map((event_type) => ({ event_type, summary: '', recorded_at: '' })),
+  } as unknown as PulseFindingLifecycle)
+
+  it('counts blocked separately from work Pulse can pick up', () => {
+    // rtslatency's real shape: one number said 25 needed action when only 6
+    // were Pulse's to do, 12 were blocked, and 4 were questions for the operator.
+    const summary = summarizePulseModule([
+      finding('acknowledged', ['filed', 'blocked']),
+      finding('acknowledged', ['filed', 'blocked']),
+      finding('acknowledged', ['filed', 'awaiting_user']),
+      finding('open', ['filed']),
+    ])
+    expect(summary.blocked).toBe(2)
+    expect(summary.awaitingUser).toBe(1)
+    expect(summary.open).toBe(1)
+  })
+
+  it('uses the most recent reason when a finding was blocked and then handed to the user', () => {
+    const summary = summarizePulseModule([finding('acknowledged', ['blocked', 'awaiting_user'])])
+    expect(summary.awaitingUser).toBe(1)
+    expect(summary.blocked).toBe(0)
+  })
+})
