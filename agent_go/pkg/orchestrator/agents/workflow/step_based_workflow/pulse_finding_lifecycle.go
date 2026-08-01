@@ -640,17 +640,39 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 		limit = 100
 	}
 	module = strings.TrimSpace(module)
+	// Lead with the step carrying the most unresolved work, and keep its rows
+	// together.
+	//
+	// Recency put whatever was filed last on top, which is arbitrary when a
+	// whole cluster is filed in one run. Fingerprints hash the finding text, so
+	// one schema mismatch files once per field it names: social-media held 39
+	// concerns from execute-find-opportunities, all opportunities.json failing
+	// its validation_schema. Interleaved by timestamp they read as unrelated
+	// one-offs, and successive Bug Review passes worked the top of the list and
+	// left all 39 untouched.
+	//
+	// Clustering only helped where it was applied. LoadOpenRunConcerns was
+	// reordered first, but that backs get_pulse_module_state while the Fixer
+	// reads this query through get_pulse_finding_backlog — so the fix landed on
+	// a path the Fixer never reads and the backlog did not move.
 	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count,
 			c.status, c.resolution_note, COALESCE(d.detail_json, '')
 		FROM run_concerns c
 		LEFT JOIN pulse_finding_details d ON d.fingerprint=c.fingerprint
+		LEFT JOIN (
+			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
+			FROM run_concerns
+			WHERE status NOT IN ('resolved', 'rejected', 'external_action_required')
+			GROUP BY step_id
+		) cluster ON cluster.step_id = c.step_id
 		WHERE ?='' OR c.step_id=? OR EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
 			WHERE af.fingerprint=c.fingerprint AND a.module=?
 		)
-		ORDER BY c.last_seen_at DESC, c.seen_count DESC`
+		ORDER BY COALESCE(cluster.active_count, 0) DESC, COALESCE(cluster.peak_seen, 0) DESC,
+			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`
 	args := []interface{}{module, module, module}
 	if limit > 0 {
 		query += ` LIMIT ?`

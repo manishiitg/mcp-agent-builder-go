@@ -472,3 +472,49 @@ func TestExternalActionRequiredNeedsOwnershipAndReopenBoundary(t *testing.T) {
 		t.Fatalf("incomplete external disposition was accepted: %v", err)
 	}
 }
+
+// TestFindingBacklogLeadsWithTheLargestCluster covers the query the Fixer
+// actually reads.
+//
+// get_pulse_finding_backlog resolves here, not through LoadOpenRunConcerns.
+// Reordering that other function alone left this one sorting by recency, so
+// social-media's 39 execute-find-opportunities concerns — one schema mismatch
+// filed once per field it named — stayed interleaved with unrelated findings
+// and successive Bug Review passes never reached them.
+func TestFindingBacklogLeadsWithTheLargestCluster(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+
+	file := func(runID, step, text string) {
+		t.Helper()
+		if _, err := RecordRunConcerns(
+			ctx, workspacePath, runID, "", step, ConcernPhaseReview, "CONCERNS: "+text,
+		); err != nil {
+			t.Fatalf("record concern: %v", err)
+		}
+	}
+	// Filed first, so recency ranks them last.
+	for _, field := range []string{"$.status", "$.targets", "$.synthesis_notes"} {
+		file("pulse-1", "execute-find-opportunities",
+			"prevalidation gate failed at opportunities.json "+field)
+	}
+	// Filed last, so recency would put this on top.
+	file("pulse-2", "execute-digest", "digest was not delivered")
+
+	lifecycles, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", 50)
+	if err != nil {
+		t.Fatalf("load backlog: %v", err)
+	}
+	if len(lifecycles) != 4 {
+		t.Fatalf("expected 4 findings, got %d", len(lifecycles))
+	}
+	for i := 0; i < 3; i++ {
+		if lifecycles[i].StepID != "execute-find-opportunities" {
+			t.Fatalf("position %d is %q; the 3-concern cluster must lead and stay contiguous, "+
+				"not be ranked below a single newer finding", i+1, lifecycles[i].StepID)
+		}
+	}
+	if lifecycles[3].StepID != "execute-digest" {
+		t.Fatalf("the isolated finding should follow the cluster, got %q", lifecycles[3].StepID)
+	}
+}
