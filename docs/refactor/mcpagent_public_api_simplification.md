@@ -1,8 +1,8 @@
 # mcpagent public API simplification
 
-**Status:** Proposed refactor  
-**Date:** 2026-08-01  
-**Repositories:** `mcpagent`, `mcp-agent-builder-go`  
+**Status:** In progress
+**Date:** 2026-08-01
+**Repositories:** `mcpagent`, `mcp-agent-builder-go`
 **Related:** `docs/bugs/custom_tool_category_as_agent_addressing.md`
 
 ## Decision
@@ -44,6 +44,15 @@ removed the worst prompt and registry lifecycle combinations. It is not the
 final design. In particular, methods such as `SetInstructions`,
 `AddInstructions`, `ResetInstructions`, `SetToolAccess`, and
 `RegisterCustomTool` still allow an already-created agent to change identity.
+
+Production evidence makes the cost concrete:
+
+- 46 failed `get_api_spec` calls were recorded in one day, dominated by callers
+  guessing a category or server even though the tool name already resolved.
+- One background agent received a 10,476-character prompt with no tool inventory
+  while `query_workflow_db` was registered and executable.
+- A materialized prompt previously grew to 14 times its intended size across
+  turns because clearing one prompt list did not rebuild the copied prompt text.
 
 ## Core invariant
 
@@ -149,13 +158,24 @@ type Agent interface {
 }
 
 type Session interface {
-    Run(ctx context.Context, input Input) (Result, error)
+    Run(ctx context.Context, turn Turn) (Result, error)
     Send(ctx context.Context, input Input) (DeliveryResult, error)
     Snapshot() SessionHandle
     Events() <-chan Event
     Close() error
 }
+
+type Turn struct {
+    Input      Input
+    ToolPolicy ToolPolicy
+}
 ```
+
+`Run` starts or continues a model turn and applies that turn's runtime tool
+policy. `Send` delivers steering or user input into an already-running turn; it
+does not begin a second turn. The effective tool manifest is rendered at the
+outbound request boundary from the immutable definition intersected with the
+current `ToolPolicy`. It is never stored in the base instructions.
 
 For simple one-turn callers, a convenience method may be provided:
 
@@ -210,7 +230,7 @@ The exact count is less important than the ownership boundary:
 | `GetCustomTools` | Read-only definition diagnostics, not mutable map exposure. |
 | `GetCustomToolsByCategory` | Remove; category is not runtime addressing. |
 | `GetCustomToolCategories` | Move to configuration/UI metadata if still needed. |
-| `SetToolAccess` | Remove from normal runtime API; construct the agent with its effective tool set. |
+| `SetToolAccess` | Replace mutable agent state with `Turn.ToolPolicy`; permissions remain runtime policy, not identity. |
 | `SetToolArgTransformer` | Fold into the tool definition or internal adapter. |
 | `GetToolOutputHandler` | Internal. |
 | `SetToolOutputHandler` | Runtime configuration at construction. |
@@ -317,15 +337,17 @@ resolve phase
   -> build final instructions
   -> resolve enabled skills
   -> expand configured tool bundles and MCP sources
-  -> compile permissions into the concrete tool set
   -> validate unique tool names
   -> create immutable agent
   -> start or resume session
+  -> apply the current permissions to each turn
 ```
 
-When the workflow phase or workshop mode changes, the builder creates a new
-agent with the new definition. Conversation continuity is preserved through an
-opaque `SessionHandle`; it is not preserved by mutating the old agent.
+When the workflow phase changes identity inputs, the builder creates a new agent
+with the new definition. A workshop-mode change that only changes authorization
+uses a new per-turn `ToolPolicy`, not a new agent. Conversation continuity is
+preserved through an opaque `SessionHandle`; it is not preserved by mutating the
+old agent.
 
 Dynamic values should be routed deliberately:
 
@@ -336,23 +358,33 @@ Dynamic values should be routed deliberately:
 | Reusable procedural guidance | `Skills` |
 | Executable capabilities | `Tools` |
 | Secrets and environment values | Tool runtime environment, never prompt mutation |
-| Folder permissions | `RuntimeConfig.Workspace` and derived effective tools |
+| Folder permissions | `RuntimeConfig.Workspace` plus per-turn `ToolPolicy` |
 | Continuation state | `SessionHandle` |
 | Usage, cost, tool failures | `Result` and observability |
 
 ## Migration plan
+
+Every stage is independently shippable. Each stage lands as its own commit in
+both repositories, retains the previously working path until its replacement is
+covered, and can be reverted without reverting later unrelated work. Production
+diagnostics must identify whether the legacy or replacement path handled a run.
 
 ### Stage 1 — freeze the target API
 
 - Add `AgentDefinition`, `ToolSet`, `ToolDefinition`, and `RuntimeConfig`.
 - Add a public-API golden test that enumerates exported `Agent` and `Session`
   methods.
-- Set a hard target of no more than 12 exported methods on each primary type.
+- Freeze the legacy `*Agent` baseline at exactly 70 exported methods and only
+  lower that committed number during migration.
+- Set the final target at exactly four `Agent` methods (`Start`, `Run`,
+  `Definition`, `Close`) and five `Session` methods (`Run`, `Send`, `Snapshot`,
+  `Events`, `Close`).
 - Do not add compatibility aliases without an explicit migration deadline.
 
 ### Stage 2 — structured tool registry
 
 - Replace positional `RegisterCustomTool` calls with `ToolDefinition` values.
+- Reject duplicate names before mutating any registry, identifying both owners.
 - Expand category-based configuration bundles before `NewAgent`.
 - Load MCP tools into the same name-keyed registry.
 - Fail construction on duplicate names.
@@ -362,11 +394,12 @@ Dynamic values should be routed deliberately:
 
 - Introduce one builder function that returns `AgentDefinition` and
   `RuntimeConfig`.
-- Move all current `AddInstructions`, `AttachSkill`, tool registration, and
-  `SetToolAccess` calls before construction.
+- Move all current `AddInstructions`, `AttachSkill`, and tool registration
+  identity assembly before construction.
 - Replace phase mutation with new-agent construction.
-- Delete `SetInstructions`, `AddInstructions`, `ResetInstructions`, skill
-  mutation, and tool-policy mutation.
+- Replace per-turn `SetToolAccess` mutation with `Turn.ToolPolicy`.
+- Delete `SetInstructions`, `AddInstructions`, `ResetInstructions`, and skill
+  mutation.
 
 ### Stage 4 — one session abstraction
 
@@ -379,7 +412,8 @@ Dynamic values should be routed deliberately:
 ### Stage 5 — move infrastructure off Agent
 
 - Move bridge configuration and virtual-tool handlers into internal packages.
-- Move event emission into an observer/transport layer.
+- Move event emission into an observer/transport layer and migrate all 11
+  downstream listener-registration call sites.
 - Return usage and diagnostics in `Result`.
 - Move connection health into a diagnostics service.
 - Remove raw mutable map getters.
@@ -397,13 +431,14 @@ Dynamic values should be routed deliberately:
   identity.
 - Instructions, skills, tools, model, provider, and workspace policy cannot be
   mutated after construction.
-- A phase or workshop-mode change creates a new agent definition.
+- A phase change that alters identity creates a new definition; a workshop-mode
+  authorization change supplies a new per-turn policy.
 - Direct and MCP tools share one unique name-keyed registry.
 - Category is absent from the public tool registration and discovery APIs.
 - Duplicate tool names fail construction with both sources identified.
 - The builder performs no prompt rebuilding, registry refreshing, allow-list
   mutation, or manual tool-manifest assembly.
-- `Agent` and `Session` each expose no more than 12 methods.
+- The final `Agent` surface has exactly four methods and `Session` exactly five.
 - Events emitted for a run contain the same instructions and effective tool
   view actually sent to the model.
 - Usage, cost, tool failures, and diagnostics are returned structurally rather
