@@ -2,6 +2,8 @@ package step_based_workflow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -199,4 +201,130 @@ func LogCanonicalArtifactChange(
 		Reason:  reason,
 		Changes: changes,
 	}, readFile, writeFile, logger)
+}
+
+// canonicalArtifactDriftTool marks changelog entries this detector wrote, so it
+// can find its own last recorded hash without a separate state table.
+const canonicalArtifactDriftTool = "record_artifact_drift"
+
+// driftTrackedArtifacts are workflow-relative files that shape behavior but have
+// no plan-modification tool, so nothing appends a changelog entry when they
+// change.
+var driftTrackedArtifacts = []string{"evaluation/evaluation_plan.json"}
+
+// RecordCanonicalArtifactDrift appends a changelog entry when a tracked artifact
+// changed since the last time this ran.
+//
+// Detection is by content hash rather than by intercepting a writer, because
+// there is no writer to intercept: nothing in the tool surface edits
+// evaluation_plan.json — validate_evaluation_plan and run_full_evaluation are
+// the only eval tools and neither mutates it — so every edit arrives as a direct
+// file write or a shell command. A tool-based fix would record only the edits
+// that chose to use the tool, which is the same gap in a new shape. Hashing
+// catches the change however it was made.
+//
+// social-media filed this three times as AR-20260729-2 and could not close it:
+// the newest eval-step changelog entry was 2026-05-29 while git showed four
+// later evaluation-plan commits. The entry is written after the fact and says
+// so — it records that the file changed and what it now hashes to, not who
+// changed it, because that information was never captured.
+//
+// Best-effort like the plan tools: Pulse must not fail because an audit note
+// could not be appended.
+func RecordCanonicalArtifactDrift(
+	ctx context.Context,
+	workspacePath string,
+	readFile func(context.Context, string) (string, error),
+	writeFile func(context.Context, string, string) error,
+	logger loggerv2.Logger,
+) {
+	workspacePath = strings.Trim(strings.TrimSpace(workspacePath), "/")
+	if workspacePath == "" || readFile == nil || writeFile == nil || logger == nil {
+		return
+	}
+	recorded := lastRecordedArtifactHashes(workspacePath)
+	for _, artifact := range driftTrackedArtifacts {
+		content, err := readFile(ctx, workspacePath+"/"+artifact)
+		if err != nil || strings.TrimSpace(content) == "" {
+			continue
+		}
+		sum := sha256.Sum256([]byte(content))
+		current := hex.EncodeToString(sum[:])
+		previous, seen := recorded[artifact]
+		if seen && previous == current {
+			continue
+		}
+		reason := fmt.Sprintf(
+			"%s changed with no plan-modification tool to record it, so this entry was written after the fact by content hash. It records that the file changed, not who changed it.",
+			artifact,
+		)
+		if !seen {
+			reason = fmt.Sprintf(
+				"First recorded hash for %s. It has no plan-modification tool, so earlier edits left no changelog entry and cannot be reconstructed.",
+				artifact,
+			)
+		}
+		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+			Tool:   canonicalArtifactDriftTool,
+			Reason: reason,
+			Changes: []PlanFieldChange{{
+				Field:    artifact,
+				OldValue: previous,
+				NewValue: current,
+			}},
+		}, readFile, writeFile, logger)
+	}
+}
+
+// lastRecordedArtifactHashes returns the most recent hash this detector wrote
+// per artifact, newest entry winning.
+func lastRecordedArtifactHashes(workspacePath string) map[string]string {
+	out := map[string]string{}
+	dir := workflowAbsPath(workspacePath, PlanningFolderName, "changelog")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	type stamped struct {
+		at    time.Time
+		value string
+	}
+	latest := map[string]stamped{}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(dir, f.Name()))
+		if readErr != nil {
+			continue
+		}
+		var file PlanChangelog
+		if json.Unmarshal(raw, &file) != nil {
+			continue
+		}
+		for _, entry := range file.Entries {
+			if entry.Tool != canonicalArtifactDriftTool {
+				continue
+			}
+			at, _ := time.Parse(time.RFC3339, strings.TrimSpace(entry.Timestamp))
+			for _, change := range entry.Changes {
+				value, _ := change.NewValue.(string)
+				if value == "" {
+					continue
+				}
+				// Timestamps are second-precision, so two entries written in the
+				// same second tie. Later-scanned wins on a tie, which within a
+				// file is append order — otherwise a second edit in the same
+				// second would be read as no change at all.
+				if current, ok := latest[change.Field]; ok && at.Before(current.at) {
+					continue
+				}
+				latest[change.Field] = stamped{at: at, value: value}
+			}
+		}
+	}
+	for field, entry := range latest {
+		out[field] = entry.value
+	}
+	return out
 }
