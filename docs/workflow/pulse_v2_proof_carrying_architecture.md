@@ -2202,6 +2202,32 @@ Not that verification is weak — that many fixes need a real producing run to
 prove, and those runs were not completing. The failure is upstream in the
 pipeline, not in how fixes are checked.
 
+### The case against this decision
+
+Recorded because the evidence is thinner than the conclusion, and the next
+reader should see both sides rather than only the verdict.
+
+**"Zero reopened" may mean "zero re-checked."** This is the serious objection. A
+finding reopens only if a later reviewer looks at that area again and re-reports
+it. Reviewers are capped at five findings and their focus varies per pass, so a
+broken fix may simply never be re-examined. Nothing in the data distinguishes a
+fix that held from one nobody revisited. The decision above treats non-recurrence
+as evidence of holding; it is also consistent with absence of looking.
+
+**Ten samples decide nothing.** Zero failures in ten would occur roughly a fifth
+of the time even at a 15% true failure rate.
+
+Two weaker objections were tested and do not hold. The Fixer might be claiming
+only the trivially provable and deferring everything hard, which would produce
+the same perfect record — but the checks behind `fixed_verified` are deterministic
+replays against real data, full-table re-runs, re-SELECT confirmation and
+consumer-path tests, not weak proofs. And it might be choosing an easy exam for
+itself, but those checks are not easy exams.
+
+What would settle it is coverage data: whether reviewers actually re-examine the
+areas where fixes were claimed. Absent that, this decision rests on a small
+sample and an unproven assumption, and should be held loosely.
+
 ### If this is proposed again
 
 Bring the number: `fixed_verified` findings that later reopened.
