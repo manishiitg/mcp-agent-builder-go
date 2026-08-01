@@ -1831,6 +1831,44 @@ func getUpdateHumanInputStepSchema() string {
 }
 
 // getUpdateValidationSchemaSchema returns the JSON schema for update_validation_schema tool
+// updateToolForStepType names the tool that edits a given step type.
+//
+// A refusal that says only "use its type-specific update tool" tells an agent it
+// was wrong without telling it what is right, and the reasonable next conclusion
+// is that the step cannot be edited at all. rtslatency shows the cost: a fixer
+// tried update_scripted_step on two message_sequence collectors, was correctly
+// refused, and recorded "legacy agentic regular step, not editable" as a blocked
+// finding. It re-reported that for days while update_message_sequence_step sat in
+// its own tool surface the whole time.
+func updateToolForStepType(stepType StepType) string {
+	switch stepType {
+	case StepTypeMessageSeq:
+		return "update_message_sequence_step"
+	case StepTypeTodoTask:
+		return "update_todo_task_step"
+	case StepTypeRouting:
+		return "update_routing_step"
+	case StepTypeHumanInput:
+		return "update_human_input_step"
+	case StepTypeRegular:
+		return "update_scripted_step"
+	default:
+		return ""
+	}
+}
+
+// wrongStepTypeToolError explains what the step is and which tool edits it, so a
+// refusal cannot be mistaken for an unsupported step.
+func wrongStepTypeToolError(stepID string, actual StepType, attempted string) error {
+	if tool := updateToolForStepType(actual); tool != "" {
+		return fmt.Errorf(
+			"step %q is a %s step, so %s does not apply — use %s instead. The step is editable; only the tool was wrong",
+			stepID, actual, attempted, tool,
+		)
+	}
+	return fmt.Errorf("step %q is a %s step, which %s does not handle and no update tool covers", stepID, actual, attempted)
+}
+
 func getUpdateValidationSchemaSchema() string {
 	return `{
 		"type": "object",
@@ -3440,7 +3478,7 @@ func validateScriptedStepUpdateTarget(plan *PlanningResponse, stepConfigs []Step
 		return nil // updateSingleStep returns the existing detailed not-found error.
 	}
 	if existingStep.StepType() != StepTypeRegular {
-		return fmt.Errorf("step %q is %q, not a scripted step; use its type-specific update tool", stepID, existingStep.StepType())
+		return wrongStepTypeToolError(stepID, existingStep.StepType(), "update_scripted_step")
 	}
 	if !isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
 		return fmt.Errorf("step %q is a legacy agentic regular step, not a declared scripted step; use update_message_sequence_step, which will atomically upgrade its saved type and apply the edit", stepID)
@@ -3481,7 +3519,7 @@ func prepareMessageSequenceUpdateTarget(plan *PlanningResponse, stepConfigs []St
 		}
 		return true, nil
 	default:
-		return false, fmt.Errorf("step %q is %q, not message_sequence; use its type-specific update tool", stepID, existingStep.StepType())
+		return false, wrongStepTypeToolError(stepID, existingStep.StepType(), "update_message_sequence_step")
 	}
 }
 

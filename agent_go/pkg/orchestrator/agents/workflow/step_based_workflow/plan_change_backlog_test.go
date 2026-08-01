@@ -137,3 +137,36 @@ func TestCollectPlanChangeBacklogCapsListingNotCount(t *testing.T) {
 		t.Fatalf("note must disclose truncation: %q", got.Note)
 	}
 }
+
+// TestWrongStepTypeRefusalNamesTheRightTool covers the mistake that turned a
+// solvable finding into a fake blocker.
+//
+// rtslatency's collectors are message_sequence and todo_task steps. A fixer
+// tried update_scripted_step, was correctly refused by a message saying only
+// "use its type-specific update tool", and concluded the steps were "not
+// editable". It filed that as blocked and re-reported it for days, while
+// update_message_sequence_step was in its own tool surface throughout.
+func TestWrongStepTypeRefusalNamesTheRightTool(t *testing.T) {
+	err := wrongStepTypeToolError("step-daily-latency-collect-dev-voice", StepTypeMessageSeq, "update_scripted_step")
+	if err == nil {
+		t.Fatal("a wrong-tool call was not refused")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "update_message_sequence_step") {
+		t.Fatalf("refusal does not name the tool that works: %q", msg)
+	}
+	if !strings.Contains(msg, "editable") {
+		t.Fatalf("refusal does not say the step is editable, so it still reads as a capability gap: %q", msg)
+	}
+
+	for stepType, want := range map[StepType]string{
+		StepTypeTodoTask:   "update_todo_task_step",
+		StepTypeRouting:    "update_routing_step",
+		StepTypeHumanInput: "update_human_input_step",
+		StepTypeRegular:    "update_scripted_step",
+	} {
+		if got := updateToolForStepType(stepType); got != want {
+			t.Fatalf("step type %q maps to %q, want %q", stepType, got, want)
+		}
+	}
+}

@@ -62,6 +62,13 @@ empty finding-ID manifest.
 An Auditor `measurement_gap` names the missing target/source/action/outcome
 linkage and blocked decision. Give Goal Advisor a separate read-only critic.
 
+A tool refusal is not evidence that a finding is unfixable. Check the target's
+actual type before concluding anything: rtslatency recorded two collectors as
+"not editable" after `update_scripted_step` was refused, when they were
+message_sequence steps and `update_message_sequence_step` was in the same tool
+surface. Before `blocked` or `external_action_required` on a rejected edit, name
+the tool you used, the target's real type, and the tool that type requires.
+
 Use `external_action_required` only when the finding is real but no workflow
 change can address it. Record `external_owner`, a stable `reason_code`, and an
 evidence/capability/user `reopen_condition`. This removes it from Pulse's active
