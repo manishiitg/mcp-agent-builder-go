@@ -2036,9 +2036,14 @@ the current decision record.
 
 ---
 
-## Decision: isolate reviewers per module, unify the Fixer (2026-08-01)
+## Decision: keep per-module Fixers (2026-08-01)
 
-**Status: decided, not implemented.**
+**Status: evaluated and rejected. Recorded so it is not re-proposed from the
+same reasoning.**
+
+This section first argued for unifying the Fixer. Measuring the premise killed
+it. The argument and the measurement are both kept below, because the reasoning
+was plausible and someone will make it again.
 
 ### What changed today and why
 
@@ -2107,10 +2112,46 @@ rather than blocking the pass.
 - Watch the duplicate-attempt rate as the acceptance signal: fix attempts spent
   on a finding another module already handled should reach zero.
 
-### Not a reason to defer
+### The measurement that rejected it
 
-"Too much moved today" is churn anxiety, not engineering. The reason this is
-recorded rather than built is narrower: the per-module design has not yet
-completed a single clean pass, and the duplicate-attempt rate above is the
-number that tells us how much the split actually costs. Build it with that
-measurement in hand, not without.
+The case above rested on one anecdote — a single duplicate note — and assumed
+per-module Fixers are blind to each other. Both workflows say otherwise:
+
+```
+                       fix attempts   findings fix-attempted by >1 module
+rtslatency                  16                      0
+social-media                12                      0
+```
+
+**No finding has ever been fix-attempted by two modules.** Duplicates were
+recognised and closed, not double-fixed: 4 concerns across both workflows carry
+a duplicate resolution note, and each was closed on the first attempt rather
+than repaired twice.
+
+The premise was wrong. Per-module Fixers are isolated in **execution**, not in
+**visibility** — `get_pulse_module_state` returns the complete active backlog
+regardless of module, so a Fixer already sees what every other module filed. It
+used that: "Duplicate of bug_review F2 — same attempted fix, same tool
+rejection" is a per-module Fixer correctly recognising another module's work.
+
+Sequential execution supplies the rest. Fixers never overlap, so the second sees
+the first's changes on disk, which is what conflict resolution needed a single
+view for.
+
+### What unifying would actually buy
+
+Little, at a real cost. It reintroduces the barrier — the Fixer cannot start
+until every reviewer terminates — to obtain deduplication that already happens,
+and it re-couples work that the 2026-07-31 cascade proved should be independent.
+
+The wording seam is real and worth fixing on its own: module prompts still say
+"consolidates this review with all other due modules" and are rewritten at
+runtime by a `strings.NewReplacer`. Rewrite the prompts for the shape the system
+actually has. That is a clarity fix, not an architecture change.
+
+### If this is proposed again
+
+Bring the number that would justify it: findings fix-attempted by more than one
+module, or fix attempts spent on work another module already completed. Both are
+queryable from `pulse_fix_attempt_findings` joined to `pulse_fix_attempts`. As
+of 2026-08-01 both are zero.
