@@ -10,57 +10,44 @@ import (
 	"time"
 )
 
-// mlxVoiceDir/mlxVoicePython is the ONE shared Python environment for every
-// Apple-Silicon-only voice feature: Kokoro (read-aloud, voice_kokoro.go) and
-// Parakeet (speech-to-text, voice_parakeet.go) both run on Apple's MLX
-// framework via the same mlx-audio package, so they share ONE install rather
-// than duplicating ~1GB of Python packages twice. Concretely: turning on the
-// "most natural" voice and turning on Parakeet transcription install (and
-// uninstall) the exact same thing.
+// mlxVoiceDir/mlxVoicePython is the Python environment for the Apple-
+// Silicon-only Parakeet speech-to-text feature (voice_parakeet.go), which
+// runs on Apple's MLX framework via the mlx-audio package.
 func mlxVoiceDir() string    { return filepath.Join(familyDataDir(), "mlx-voice") }
 func mlxVoicePython() string { return filepath.Join(mlxVoiceDir(), ".venv", "bin", "python") }
 
 const mlxVoiceInstallID = "mlx-voice"
 
 // mlxVoiceTotalSizeMB is the REAL end-to-end cost, measured rather than
-// guessed: ~1.07GB of Python packages (mlx-audio + misaki + a spaCy model),
-// plus a ~312MB Kokoro checkpoint and a ~2.36GB Parakeet checkpoint — both
-// warmed during install (see installMlxVoiceEnv) so neither feature's first
-// real use is an unannounced multi-hundred-MB-to-multi-GB download.
-const mlxVoiceTotalSizeMB = 3750
+// guessed: ~750MB of Python packages (mlx-audio and its deps) plus a
+// ~2.36GB Parakeet checkpoint, warmed during install (see installMlxVoiceEnv)
+// so the feature's first real use isn't an unannounced multi-GB download.
+const mlxVoiceTotalSizeMB = 3110
 
-// spacyModelSpec pins the English spaCy model misaki (Kokoro's text
-// processor) needs. Pinned to a wheel URL rather than `spacy download`,
-// because that shells out to pip/uv itself — and when misaki tried to fetch
-// this model lazily at speak time instead, it failed SILENTLY (no
-// virtualenv env-var is set when Go execs the interpreter directly).
-// Installing it explicitly here avoids that failure mode entirely.
-const spacyModelSpec = "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-
-// mlxVoiceInstalled checks the interpreter AND that the shared package set
-// actually imports. A bare venv directory left behind by a half-finished
-// install is not "installed" — every feature depending on it would otherwise
-// report ready and then silently do nothing.
+// mlxVoiceInstalled checks the interpreter AND that the package set actually
+// imports. A bare venv directory left behind by a half-finished install is
+// not "installed" — the feature depending on it would otherwise report ready
+// and then silently do nothing.
 func mlxVoiceInstalled() bool {
 	if fi, err := os.Stat(mlxVoicePython()); err != nil || fi.Size() == 0 {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, mlxVoicePython(), "-c", "import mlx_audio, en_core_web_sm").Run() == nil
+	return exec.CommandContext(ctx, mlxVoicePython(), "-c", "import mlx_audio").Run() == nil
 }
 
-// installMlxVoiceEnv builds the environment and warms BOTH checkpoints
-// (Kokoro + Parakeet), reporting progress into modelInstallStates so either
-// feature's card in Settings shows the same live progress. Idempotent: a
-// second call while an install is already running is a no-op.
+// installMlxVoiceEnv builds the environment and warms the Parakeet
+// checkpoint, reporting progress into modelInstallStates so the Settings
+// card shows live progress. Idempotent: a second call while an install is
+// already running is a no-op.
 //
-// Progress is coarse rather than per-byte during the two model downloads
-// (unlike the old whisper-tier downloads, which streamed through Go and
-// could report exact bytes) — these run inside the Python subprocess via
-// mlx-audio's own huggingface_hub fetch, which this code doesn't intercept.
-// The bar still moves at each real milestone; it just doesn't creep smoothly
-// during the two heaviest steps.
+// Progress is coarse rather than per-byte during the model download (unlike
+// the old whisper-tier downloads, which streamed through Go and could report
+// exact bytes) — this runs inside the Python subprocess via mlx-audio's own
+// huggingface_hub fetch, which this code doesn't intercept. The bar still
+// moves at each real milestone; it just doesn't creep smoothly during the
+// heaviest step.
 func installMlxVoiceEnv() {
 	modelInstallMu.Lock()
 	if st, running := modelInstallStates[mlxVoiceInstallID]; running && st.Installing {
@@ -102,29 +89,12 @@ func installMlxVoiceEnv() {
 			setErr(fmt.Errorf("could not install the voice engine: %s", lastLines(string(out), 200)))
 			return
 		}
-		bump(0.15)
-		if out, err := exec.CommandContext(ctx, venvPy, append(append([]string{}, pipArgs...), "misaki[en]")...).CombinedOutput(); err != nil {
-			setErr(fmt.Errorf("could not install the voice engine: %s", lastLines(string(out), 200)))
-			return
-		}
-		bump(0.2)
-		if out, err := exec.CommandContext(ctx, venvPy, append(append([]string{}, pipArgs...), spacyModelSpec)...).CombinedOutput(); err != nil {
-			setErr(fmt.Errorf("could not install the voice engine: %s", lastLines(string(out), 200)))
-			return
-		}
 		bump(0.25)
 
-		// Warm the Kokoro checkpoint (~312MB) into the persistent worker's
-		// memory — this is what makes the FIRST "read this aloud" instant
-		// instead of hanging on an unannounced download AND a cold model load.
-		if _, err := sharedVoiceWorker.call(ctx, map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
-			setErr(fmt.Errorf("could not finish setting up the voice: %w", err))
-			return
-		}
-		bump(0.35)
-
-		// Warm the Parakeet checkpoint (~2.36GB) the same way — same reason,
-		// for the mic/WhatsApp transcription side.
+		// Warm the Parakeet checkpoint (~2.36GB) into the persistent worker's
+		// memory — this is what makes the FIRST mic/WhatsApp transcription
+		// instant instead of hanging on an unannounced download AND a cold
+		// model load.
 		if err := warmParakeet(ctx); err != nil {
 			setErr(fmt.Errorf("could not finish setting up speech recognition: %w", err))
 			return
@@ -133,20 +103,16 @@ func installMlxVoiceEnv() {
 		modelInstallMu.Lock()
 		delete(modelInstallStates, mlxVoiceInstallID)
 		modelInstallMu.Unlock()
-		log.Printf("[voice] mlx voice engine installed (Kokoro + Parakeet)")
+		log.Printf("[voice] mlx voice engine installed (Parakeet)")
 	}()
 }
 
-// removeMlxVoiceEnv deletes the whole shared environment — Kokoro AND
-// Parakeet together, since they are one install. Whichever Settings card
-// triggers this (the read-aloud tier or the speech-to-text tier), both
-// features go back to needing a fresh install; both cards' copy discloses
-// this rather than leaving it as a surprise.
+// removeMlxVoiceEnv deletes the whole environment.
 func removeMlxVoiceEnv() error {
 	if err := os.RemoveAll(mlxVoiceDir()); err != nil {
 		return err
 	}
-	log.Printf("[voice] mlx voice engine removed (Kokoro + Parakeet)")
+	log.Printf("[voice] mlx voice engine removed (Parakeet)")
 	return nil
 }
 

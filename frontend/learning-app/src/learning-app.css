@@ -587,6 +587,14 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-scene-more { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; font-size: 11px; font-weight: 700; color: var(--muted, #8a8478); background: linear-gradient(to bottom, transparent, var(--surface) 75%); pointer-events: none; border-radius: 0 0 14px 14px; }
 .fl-tbubble { padding: 14px 16px; border-radius: 18px 18px 18px 6px; background: var(--surface); color: var(--reply-bubble-text); font-size: var(--text-body); line-height: 1.6; box-shadow: 0 6px 16px rgba(13, 35, 76, .06); }
 .fl-tbubble.is-streaming::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: fl-cursor-blink 1s step-end infinite; }
+/* Quiet until the bubble is hovered, same treatment the old read-aloud row
+   used — an occasional control shouldn't compete with the words on every
+   message. Stays a checkbox (not a button) since it's one persistent
+   preference, not a per-message action. */
+.fl-reminder-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; opacity: 0; transition: opacity .12s ease; color: var(--muted, #8a8478); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
+.fl-tmsg.is-tutor:hover .fl-reminder-row,
+.fl-reminder-row:focus-within { opacity: 1; }
+.fl-reminder-row input { margin: 0; }
 .fl-tbubble strong { color: var(--heading); }
 /* A thin dashed rule above every tutor reply — live (streaming) or reloaded
    from history alike, since both share this same .fl-tmsg.is-tutor .fl-tbubble
@@ -917,27 +925,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-voice-toggle strong { font-size: var(--text-secondary); font-weight: 700; color: var(--heading); }
 .fl-voice-toggle small { font-size: var(--text-caption); color: var(--muted, #8a8478); }
 
-/* Read-aloud controls under an agent reply. In-flow (not an overlay) so the
-   auto-read toggle sits where the behaviour it controls actually happens —
-   next to the reply being read — rather than hidden in Settings. Quiet until
-   the bubble is hovered: an occasional control shouldn't compete with the
-   words on every message. */
-.fl-speak-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; opacity: 0; transition: opacity .12s ease; }
-.fl-msg.is-agent:hover .fl-speak-row,
-.fl-tmsg.is-tutor:hover .fl-speak-row,
-.fl-speak-row:focus-within { opacity: 1; }
-/* Stays visible while speaking — it's the only way to stop it. */
-.fl-speak-row:has(.is-speaking) { opacity: 1; }
-.fl-speak-btn { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted, #8a8478); font: inherit; font-size: var(--text-caption); font-weight: 700; cursor: pointer; transition: background .12s ease, color .12s ease, border-color .12s ease; }
-.fl-speak-btn:hover { background: #f4efe4; border-color: #e6c877; color: var(--heading); }
-.fl-speak-btn.is-speaking { background: var(--sun-soft, #fdeecb); border-color: #e6c877; color: #8a6114; }
-.fl-speak-auto { display: inline-flex; align-items: center; gap: 5px; color: var(--muted, #8a8478); font-size: var(--text-caption); font-weight: 600; cursor: pointer; }
-.fl-speak-auto input { margin: 0; }
-/* Route to the fuller voice options from where the feature is actually used —
-   a parent who just discovered "Listen" shouldn't have to guess that voice
-   choice and mic setup live behind the gear icon. */
-.fl-speak-settings { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--muted, #8a8478); font: inherit; font-size: var(--text-caption); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.fl-speak-settings:hover { color: var(--heading); }
 .fl-settings-engine-name { flex: 1; font-weight: 700; }
 .fl-settings-engine-status { font-size: var(--text-caption); font-weight: 650; color: #b23b3b; }
 .fl-settings-engine-status.is-ready { color: #2f8a52; }
@@ -1016,7 +1003,7 @@ audio.fl-viewer-media { background: var(--surface); }
 }
 @media (prefers-reduced-motion: reduce) { .fl-start-burst { display: none; } }
 @keyframes fl-star-pop { 0% { opacity: 0; transform: scale(0) rotate(-25deg); } 60% { opacity: 1; transform: scale(1.25) rotate(8deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
-.fl-child-composer { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
+.fl-child-composer { position: relative; display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
 .fl-child-composer textarea { min-width: 0; min-height: 42px; max-height: 160px; padding: 10px 0 10px 8px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-child-composer textarea::placeholder { color: #6a7c95; }
 .fl-child-side { display: flex; flex-direction: column; gap: 14px; }
@@ -1173,11 +1160,6 @@ audio.fl-viewer-media { background: var(--surface); }
    glance, since they sit side by side. */
 .fl-ghost-btn.is-danger { color: #b3261e; border-color: #e6c2c2; }
 .fl-ghost-btn.is-danger:hover { background: #fdecec; border-color: #d99a9a; color: #8c1d18; }
-
-/* Voice picker inside a read-aloud tier. Only rendered when a tier has more
-   than one voice, so a single-voice tier shows no pointless dropdown. */
-.fl-voice-pick { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: var(--text-caption); color: var(--muted, #8a8478); font-weight: 600; }
-.fl-voice-pick select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--heading); font: inherit; font-size: var(--text-caption); cursor: pointer; }
 
 /* Live transcription preview while recording — refreshes every couple of
    seconds (see useMicDictation's LIVE_PREVIEW_INTERVAL_MS), not word-by-word.

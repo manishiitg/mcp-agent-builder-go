@@ -129,18 +129,10 @@ func main() {
 	mux.HandleFunc("/api/whatsapp/voice", handleWhatsAppVoiceToggle)
 	mux.HandleFunc("/api/voice/hardware", handleVoiceHardware)
 	mux.HandleFunc("/api/voice/status", handleVoiceStatus)
-	mux.HandleFunc("/api/voice/speak", handleVoiceSpeak)
 	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
 	mux.HandleFunc("/api/voice/warm", handleVoiceWarm)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
-	mux.HandleFunc("/api/voice/voices", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			handleSetVoice(w, r)
-			return
-		}
-		handleVoiceVoices(w, r)
-	})
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
 	mux.HandleFunc("/api/pulse/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -203,9 +195,6 @@ func main() {
 		go func() {
 			if err := warmParakeet(context.Background()); err != nil {
 				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
-			}
-			if _, err := sharedVoiceWorker.call(context.Background(), map[string]any{"cmd": "load_tts", "model": kokoroModel}); err != nil {
-				log.Printf("[voice] background warm-up (read-aloud voice) failed: %v", err)
 			}
 		}()
 	}

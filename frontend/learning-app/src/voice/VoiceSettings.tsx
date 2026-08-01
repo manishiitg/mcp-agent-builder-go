@@ -1,5 +1,4 @@
-// The Settings → Voice panel: STT/TTS tier catalogs, the auto-read-aloud
-// toggle, and a "hear a sample" preview.
+// The Settings → Voice panel: the speech-to-text tier catalog.
 //
 // Tier availability is computed SERVER-side against this actual machine (see
 // cmd/family-server/voice_hardware.go), so this component never has to guess
@@ -45,8 +44,8 @@ export function VoiceSettings({
     <>
       <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Voice</p>
       <p className="fl-note">
-        Talk to Quill instead of typing, and have replies read out loud. All of this happens on this
-        computer — nothing is sent over the internet, so it keeps working offline and costs nothing.
+        Talk to Quill instead of typing. This happens on this computer — nothing is sent over the
+        internet, so it keeps working offline and costs nothing.
       </p>
 
       {!status ? (
@@ -67,23 +66,7 @@ export function VoiceSettings({
               />
             ))}
           </div>
-
-          <p className="fl-voice-group-label">Reading replies out loud</p>
-          <div className="fl-settings-engines">
-            {status.tts_tiers.map((t) => (
-              <VoiceTierCard
-                key={t.id}
-                tier={t}
-                busy={busy}
-                sampleable
-                onInstall={(id) => modelAction('install', id)}
-                onRemove={(id) => modelAction('remove', id)}
-              />
-            ))}
-          </div>
           {actionError && <p className="fl-voice-tier-error">{actionError}</p>}
-
-
         </>
       )}
     </>

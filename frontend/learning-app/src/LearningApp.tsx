@@ -16,6 +16,7 @@ import {
   Activity as PulseIcon,
   ArrowLeft,
   ArrowRight,
+  Bell,
   BookOpen,
   Check,
   CheckCircle2,
@@ -71,9 +72,7 @@ import {
 } from './stores'
 import { FAMILY_API } from './apiBase'
 import { VoiceSettings } from './voice/VoiceSettings'
-import { readAutoSpeak, speakText } from './voice/speech'
-import { useSpeakReply } from './voice/useSpeakReply'
-import { ReplySpeakControls } from './voice/ReplySpeakControls'
+import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
 import { MicButton } from './voice/MicButton'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
@@ -1141,8 +1140,7 @@ export default function LearningApp() {
   // chat for an activity the parent already navigated away from. Without
   // this, whichever request happened to resolve LAST won regardless of which
   // was actually clicked last, since fetch responses aren't guaranteed to
-  // arrive in request order — the same race speakText's generation counter
-  // (see voice/speech.ts) already fixed for double-playback.
+  // arrive in request order.
   const handoffGenerationRef = useRef(0)
   // The workspace's TRUE size on disk, from /api/workspace/tree — including
   // what the listing hides (see workspaceTreeResponse), so the number in the
@@ -1175,8 +1173,6 @@ export default function LearningApp() {
   // machine's hardware (see /api/voice/status), so the UI never has to guess
   // what an Intel vs Apple Silicon Mac can actually run.
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
-  const [parentAutoSpeak, setParentAutoSpeak] = useState(() => readAutoSpeak('parent'))
-  const [childAutoSpeak, setChildAutoSpeak] = useState(() => readAutoSpeak('child'))
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
   // Secrets (credentials the parent saves for Quill's tools, e.g. a school
   // portal login) — settings-form only, never through chat, so a value typed
@@ -1247,6 +1243,8 @@ export default function LearningApp() {
 
   const wsRefreshKey = useWorkspaceStore((s) => s.wsRefreshKey)
   const setWsRefreshKey = useWorkspaceStore((s) => s.setWsRefreshKey)
+  const treeNodes = useWorkspaceStore((s) => s.treeNodes)
+  const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
   // Reflect the workspace file system in the drawer (materials the agent can
   // read). Refetches when entering the chat and after each upload/tool event.
   // The child's own conversation resume lives in a separate effect below,
@@ -1292,13 +1290,6 @@ export default function LearningApp() {
               const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
               const loaded = (c.messages || []).map(toParentMsg)
               setParentMessages(loaded)
-              // History being resumed on load, not a fresh reply — seed the
-              // baseline so auto-read doesn't fire the instant the page
-              // loads (same fix as the child thread's resume path above).
-              const last = loaded[loaded.length - 1]
-              if (last?.role === 'assistant' && last.text) {
-                lastSpokenParentRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
-              }
             })
             .catch(() => {})
         }
@@ -1481,8 +1472,6 @@ export default function LearningApp() {
   const setFilesSubjectFilter = useWorkspaceStore((s) => s.setFilesSubjectFilter)
   const filesGroupBy = useWorkspaceStore((s) => s.filesGroupBy)
   const setFilesGroupBy = useWorkspaceStore((s) => s.setFilesGroupBy)
-  const treeNodes = useWorkspaceStore((s) => s.treeNodes)
-  const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
   const activities = useWorkspaceStore((s) => s.activities)
   const setActivities = useWorkspaceStore((s) => s.setActivities)
   const viewerPath = useWorkspaceStore((s) => s.viewerPath)
@@ -1649,6 +1638,18 @@ export default function LearningApp() {
   // Pulse config above.
   const [fastMode, setFastMode] = useState(false)
   const [savingFastMode, setSavingFastMode] = useState(false)
+
+  // Child Mode reminder sound — off by default, opt-in from Settings. Quill
+  // can take anywhere from a few seconds to several minutes to reply (real
+  // turns logged tonight ran 30s-5min); a child who's wandered off while
+  // waiting has no other signal that a reply actually arrived. Persisted to
+  // localStorage (not familyState) since it's a per-device UI preference, not
+  // a family policy — same reasoning the old read-aloud toggle used.
+  const [childReminderSound, setChildReminderSound] = useState(() => readReminderSoundPref())
+  const toggleChildReminderSound = (on: boolean) => {
+    setChildReminderSound(on)
+    persistReminderSoundPref(on)
+  }
   useEffect(() => {
     if (screen !== 'parent' && screen !== 'tutor' && !settingsOpen) return
     let cancelled = false
@@ -1688,7 +1689,7 @@ export default function LearningApp() {
     // startup warm-up) — otherwise "Warming up…" would sit stale until the
     // parent happened to close and reopen Settings. Idle Settings with
     // nothing in flight shouldn't hit the server every couple seconds though.
-    const allTiers = [...(voiceStatus?.stt_tiers ?? []), ...(voiceStatus?.tts_tiers ?? [])]
+    const allTiers = voiceStatus?.stt_tiers ?? []
     const anyInstalling = allTiers.some((t) => t.installing)
     const anyWarming = allTiers.some((t) => t.installed && t.warm === false)
     if (!anyInstalling && !anyWarming) return
@@ -1724,66 +1725,6 @@ export default function LearningApp() {
         setSecretValueDraft('')
       })
       .finally(() => setSavingSecret(false))
-  }
-
-  // Read-aloud, one instance per thread (parent chat and child tutor each
-  // track their own "which reply is speaking" index).
-  const { speakingIdx, speakReply } = useSpeakReply()
-  const { speakingIdx: parentSpeakingIdx, speakReply: speakParentReply } = useSpeakReply()
-
-  // Auto-read: speak the newest tutor reply once the turn finishes. Keyed on
-  // the settled message list (not the streaming text) so it reads the final,
-  // reconciled reply exactly once rather than re-firing on every stream tick.
-  // Independent of the parent thread's own auto-read below — a parent may
-  // want the CHILD's replies read aloud (a child who can't read well yet)
-  // without wanting their own parent-chat replies read aloud too.
-  const lastSpokenChildRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!childAutoSpeak || childSending) return
-    const last = childMessages[childMessages.length - 1]
-    if (!last || last.role !== 'assistant' || !last.text) return
-    const key = `${childMessages.length}:${last.text.slice(0, 64)}`
-    if (lastSpokenChildRef.current === key) return
-    lastSpokenChildRef.current = key
-    speakText(last.text).catch(() => {})
-  }, [childAutoSpeak, childSending, childMessages])
-
-  // Same idea for the parent thread, entirely independent state.
-  const lastSpokenParentRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!parentAutoSpeak || sending) return
-    const last = parentMessages[parentMessages.length - 1]
-    if (!last || last.role !== 'assistant' || !last.text) return
-    const key = `${parentMessages.length}:${last.text.slice(0, 64)}`
-    if (lastSpokenParentRef.current === key) return
-    lastSpokenParentRef.current = key
-    speakText(last.text).catch(() => {})
-  }, [parentAutoSpeak, sending, parentMessages])
-
-  // Wraps the raw setters so flipping the toggle ON seeds the baseline to
-  // whatever reply is ALREADY showing — otherwise the effects above (which
-  // depend on childAutoSpeak/parentAutoSpeak) immediately treat the reply
-  // that's already on screen as newly arrived and speak it right then. Turning
-  // this on should apply going forward, not retroactively read the current
-  // reply the instant you enable it (which also raced against a manual
-  // "Listen" click on that same reply, playing both at once).
-  const handleChildAutoSpeakChange = (on: boolean) => {
-    if (on) {
-      const last = childMessages[childMessages.length - 1]
-      if (last?.role === 'assistant' && last.text) {
-        lastSpokenChildRef.current = `${childMessages.length}:${last.text.slice(0, 64)}`
-      }
-    }
-    setChildAutoSpeak(on)
-  }
-  const handleParentAutoSpeakChange = (on: boolean) => {
-    if (on) {
-      const last = parentMessages[parentMessages.length - 1]
-      if (last?.role === 'assistant' && last.text) {
-        lastSpokenParentRef.current = `${parentMessages.length}:${last.text.slice(0, 64)}`
-      }
-    }
-    setParentAutoSpeak(on)
   }
 
   const deleteSecret = (name: string) => {
@@ -1905,6 +1846,7 @@ export default function LearningApp() {
             // indicator rather than let it linger until the idle timeout.
             setChildRemoteStatus('')
             setChildRemoteToolCalls([])
+            if (childReminderSound && fresh[fresh.length - 1]?.role === 'assistant') playReminderChime()
           }
         })
         .catch(() => {})
@@ -2103,15 +2045,6 @@ export default function LearningApp() {
             const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
             const loaded = (c.messages || []).map(toParentMsg)
             setChildMessages(loaded)
-            // This is HISTORY being resumed (e.g. a page refresh) — not a
-            // fresh reply. Seed the auto-speak baseline to match it, so the
-            // effect below (which re-runs the moment childMessages changes)
-            // finds it already "seen" instead of reading an old reply aloud
-            // the instant the page loads.
-            const last = loaded[loaded.length - 1]
-            if (last?.role === 'assistant' && last.text) {
-              lastSpokenChildRef.current = `${loaded.length}:${last.text.slice(0, 64)}`
-            }
           })
           .catch(() => {})
       })
@@ -2637,6 +2570,7 @@ export default function LearningApp() {
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
+        if (childReminderSound) playReminderChime()
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
       .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
@@ -2700,6 +2634,7 @@ export default function LearningApp() {
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
           return next
         })
+        if (childReminderSound) playReminderChime()
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
       .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
@@ -3252,15 +3187,6 @@ export default function LearningApp() {
                         <div className="fl-msg-col">
                           <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
                             <Markdown text={m.text ?? ''} />
-                            <ReplySpeakControls
-                              scope="parent"
-                              speaking={parentSpeakingIdx === i}
-                              isLatest={i === parentMessages.length - 1}
-                              autoSpeak={parentAutoSpeak}
-                              onToggleSpeak={() => speakParentReply(i, m.text ?? '')}
-                              onAutoSpeakChange={handleParentAutoSpeakChange}
-                              onOpenSettings={() => setSettingsOpen(true)}
-                            />
                           </div>
                         </div>
                       </>
@@ -3336,7 +3262,12 @@ export default function LearningApp() {
                 <Zap size={19} />
               </button>
               <MicButton
-                onText={(text) => setFocusInput((cur) => (cur ? `${cur} ${text}` : text))}
+                onText={(text) => {
+                  setFocusInput((cur) => (cur ? `${cur} ${text}` : text))
+                  // So Enter immediately sends — without this the composer
+                  // stays unfocused after dictation and Enter does nothing.
+                  focusTextareaRef.current?.focus()
+                }}
                 disabled={uploading}
                 shortcutEnabled={screen === 'parent'}
               />
@@ -4341,15 +4272,15 @@ export default function LearningApp() {
                       <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                       <div className="fl-tbubble">
                         <Markdown text={m.text ?? ''} />
-                        <ReplySpeakControls
-                          scope="child"
-                          speaking={speakingIdx === i}
-                          isLatest={i === childMessages.length - 1}
-                          autoSpeak={childAutoSpeak}
-                          onToggleSpeak={() => speakReply(i, m.text ?? '')}
-                          onAutoSpeakChange={handleChildAutoSpeakChange}
-                          onOpenSettings={() => setSettingsOpen(true)}
-                        />
+                        <label className="fl-reminder-row">
+                          <input
+                            type="checkbox"
+                            checked={childReminderSound}
+                            onChange={(e) => toggleChildReminderSound(e.target.checked)}
+                          />
+                          <Bell size={13} />
+                          <span>Remind me with a sound</span>
+                        </label>
                       </div>
                     </div>
                   ) : (
@@ -4398,8 +4329,24 @@ export default function LearningApp() {
               <form className="fl-child-composer" onSubmit={sendChildMessage}>
                 <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
                 <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>
+                <button
+                  type="button"
+                  className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                  aria-label="Fast mode"
+                  aria-pressed={fastMode}
+                  title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                  onClick={() => toggleFastMode(!fastMode)}
+                  disabled={savingFastMode}
+                >
+                  <Zap size={19} />
+                </button>
                 <MicButton
-                  onText={(text) => setChildInput((cur) => (cur ? `${cur} ${text}` : text))}
+                  onText={(text) => {
+                    setChildInput((cur) => (cur ? `${cur} ${text}` : text))
+                    // So Enter immediately sends — without this the composer
+                    // stays unfocused after dictation and Enter does nothing.
+                    childTextareaRef.current?.focus()
+                  }}
                   disabled={childUploading}
                   shortcutEnabled={screen === 'tutor'}
                 />

@@ -48,14 +48,11 @@ func currentVoiceTranscriptionStatus(s familyState) voiceTranscriptionStatus {
 }
 
 // handleWhatsAppVoiceToggle turns on-device WhatsApp voice-note transcription
-// on or off. Turning it on kicks off the shared MLX voice environment install
-// if it isn't already there (Parakeet — Apple Silicon only) and returns
+// on or off. Turning it on kicks off the MLX voice environment install if it
+// isn't already there (Parakeet — Apple Silicon only) and returns
 // immediately; the frontend polls for progress. Turning it off does NOT
-// delete anything: the same install also backs the "most natural" read-aloud
-// voice (see voice_kokoro.go), so a parent switching off transcription must
-// not silently break reading-aloud too. Deleting it is a deliberate action
-// via the "Remove" button on either tier's own Settings card, not a side
-// effect of this toggle.
+// delete anything — that's a deliberate, separate action via the "Remove"
+// button on the tier's own Settings card, not a side effect of this toggle.
 func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -87,7 +84,7 @@ func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 	if enabled {
 		installMlxVoiceEnv()
 	} else {
-		log.Printf("[voice] WhatsApp voice transcription disabled (engine left installed — it also powers the most natural read-aloud voice)")
+		log.Printf("[voice] WhatsApp voice transcription disabled (engine left installed — remove it separately from Settings if you want it gone)")
 	}
 
 	stateMu.Lock()

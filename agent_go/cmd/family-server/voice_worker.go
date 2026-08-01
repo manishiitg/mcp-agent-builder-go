@@ -26,9 +26,9 @@ var voiceWorkerScript embed.FS
 // onto RAM/GPU memory for a family who stepped away.
 const voiceWorkerIdleTimeout = 15 * time.Minute
 
-// voiceWorker manages ONE persistent Python process that keeps both the
-// Parakeet (STT) and Kokoro (TTS) models loaded in memory, reused across
-// every request rather than reloaded from scratch each time. A fresh
+// voiceWorker manages ONE persistent Python process that keeps the Parakeet
+// (STT) model loaded in memory, reused across every request rather than
+// reloaded from scratch each time. A fresh
 // `python -c` process pays ~1.9s just re-importing mlx_audio before any real
 // work happens — measured directly, not assumed — which is why this exists.
 //

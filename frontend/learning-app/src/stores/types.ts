@@ -18,7 +18,7 @@ export type ConvMeta = { id: string; title: string; when: string; scope: 'parent
 
 export type DebugToolCall = { tool: string; args?: string; result?: string; err?: string }
 
-// Voice (speech-to-text / read-aloud) — mirrors the Go side's voiceTier /
+// Voice (speech-to-text) — mirrors the Go side's voiceTier /
 // voiceStatusResponse in cmd/family-server/voice_hardware.go.
 export type VoiceTier = {
   id: string
@@ -42,11 +42,9 @@ export type VoiceTier = {
   can_install?: boolean
   can_remove?: boolean
 }
-export type VoiceChoice = { id: string; label: string; accent?: string; gender?: 'male' | 'female' }
 export type VoiceStatus = {
   hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }
   stt_tiers: VoiceTier[]
-  tts_tiers: VoiceTier[]
 }
 export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string; toolCalls?: DebugToolCall[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string }
