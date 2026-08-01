@@ -5003,6 +5003,19 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register update_validation_schema tool: %w", err)
 	}
 
+	// The evaluation plan had no mutation tool, so every edit arrived by direct
+	// write and left nothing in planning/changelog for artifact drift review to
+	// read (AR-20260729-2).
+	if err := mcpAgent.RegisterCustomTool(
+		"update_evaluation_plan",
+		"Update one step in evaluation/evaluation_plan.json and record the change in planning/changelog. Provide step_id and reason (both required) plus at least one of title, description, context_output, context_dependencies, max_score, applies_to_routes, validation_schema, db_write. Use this instead of editing the file directly: a direct write leaves no changelog entry, so artifact drift review cannot see the change or judge it. Fields not named are preserved exactly, including any this tool does not model. applies_to_routes gates the step to specific routes selected by a routing step. Setting a field to its current value is reported as no change and writes no entry. Scripted-versus-agentic execution lives in evaluation/step_config.json via update_step_config, not here.",
+		parseSchemaForToolParametersMust(getUpdateEvaluationPlanSchema()),
+		createUpdateEvaluationPlanExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register update_evaluation_plan tool: %w", err)
+	}
+
 	if logger != nil {
 		logger.Info(fmt.Sprintf("✅ Registered all plan modification tools for %s", agentName))
 	}

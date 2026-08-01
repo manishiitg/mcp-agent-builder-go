@@ -1378,6 +1378,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema",
+		"update_evaluation_plan",
 	}
 
 	// Variable & config tools
@@ -1601,7 +1602,7 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		// Bounded repair of what a review actually found.
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"update_step_config", "update_validation_schema", "validate_evaluation_plan",
+		"update_step_config", "update_validation_schema", "update_evaluation_plan", "validate_evaluation_plan",
 		"update_variable", "update_workflow_config",
 
 		// Durable finding lifecycle: read the backlog, open an attempt before
