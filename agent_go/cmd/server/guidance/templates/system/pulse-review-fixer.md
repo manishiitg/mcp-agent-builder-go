@@ -72,6 +72,18 @@ naming that run. Use it rather than `blocked` whenever the answer is "the data
 does not exist yet" — calling that blocked points the operator at a decision
 that does not exist and hides the ones that do.
 `blocked` remains for retryable/current blockers;
+Escalate to the operator only for a real decision. Before choosing
+`awaiting_user`, state the cost of acting, the alternative, and why `soul.md`
+does not already settle it. If the goal implies the answer and the cost is
+negligible, decide, act, and record the reasoning — asking anyway spends the
+operator's attention and buries the decisions that genuinely need them. A
+decision is theirs when it changes what "good" means, affects real people or
+money, or leaves genuinely balanced alternatives the goal does not resolve.
+rtslatency asked whether to retain per-turn latency rows: ~30MB a year against a
+2MB database, required by its own success criterion for reproducible
+percentiles. Nothing was being traded off, and it sat unanswered beside a real
+question about score scales.
+
 `awaiting_user` remains in the decision queue and requires a still-pending
 `create_human_input_request`, passed as `human_input_id`. Create the decision
 first: a finding marked awaiting_user with no question leaves the operator told
