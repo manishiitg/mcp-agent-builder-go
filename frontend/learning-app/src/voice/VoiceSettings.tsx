@@ -1,20 +1,16 @@
-// The Settings → Voice panel: STT/TTS tier catalogs, the auto-read-aloud
-// toggle, and a "hear a sample" preview.
+// The Settings → Voice panel: the speech-to-text tier catalog.
 //
 // Tier availability is computed SERVER-side against this actual machine (see
 // cmd/family-server/voice_hardware.go), so this component never has to guess
 // what an Intel vs Apple Silicon Mac can run — it just renders what it's told.
 
 import { useState } from 'react'
-import { Volume2 } from 'lucide-react'
 import type { VoiceStatus } from '../stores'
-import { speakText } from './speech'
 import { VoiceTierCard } from './VoiceTierCard'
 import { FAMILY_API } from '../apiBase'
 
 export function VoiceSettings({
   status,
-  childName,
   onRefresh,
 }: {
   status: VoiceStatus | null
@@ -23,7 +19,6 @@ export function VoiceSettings({
    *  download progress live while an install is running. */
   onRefresh: () => void
 }) {
-  const [previewing, setPreviewing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -45,22 +40,12 @@ export function VoiceSettings({
       .finally(() => { setBusy(false); onRefresh() })
   }
 
-  // Play a short sample, so a parent can actually HEAR a voice before
-  // committing to it — the whole point of offering tiers is that "more
-  // natural" is a judgment only they can make.
-  const preview = () => {
-    setPreviewing(true)
-    speakText(`Hi ${childName || 'there'}! This is how I'll read things out to you.`)
-      .then(() => setPreviewing(false))
-      .catch(() => setPreviewing(false))
-  }
-
   return (
     <>
       <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Voice</p>
       <p className="fl-note">
-        Talk to Quill instead of typing, and have replies read out loud. All of this happens on this
-        computer — nothing is sent over the internet, so it keeps working offline and costs nothing.
+        Talk to Quill instead of typing. This happens on this computer — nothing is sent over the
+        internet, so it keeps working offline and costs nothing.
       </p>
 
       {!status ? (
@@ -81,23 +66,7 @@ export function VoiceSettings({
               />
             ))}
           </div>
-
-          <p className="fl-voice-group-label">Reading replies out loud</p>
-          <div className="fl-settings-engines">
-            {status.tts_tiers.map((t) => (
-              <VoiceTierCard
-                key={t.id}
-                tier={t}
-                busy={busy}
-                sampleable
-                onInstall={(id) => modelAction('install', id)}
-                onRemove={(id) => modelAction('remove', id)}
-              />
-            ))}
-          </div>
           {actionError && <p className="fl-voice-tier-error">{actionError}</p>}
-
-
         </>
       )}
     </>

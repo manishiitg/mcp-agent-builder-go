@@ -1,9 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Download, Trash2, Loader2, Volume2 } from 'lucide-react'
-import { speakText } from './speech'
+import { Download, Trash2, Loader2 } from 'lucide-react'
 import { MicTestButton } from './MicTestButton'
-import type { VoiceTier, VoiceChoice } from '../stores'
-import { FAMILY_API } from '../apiBase'
+import type { VoiceTier } from '../stores'
 
 function sizeLabel(mb?: number): string {
   if (!mb) return 'no download'
@@ -11,7 +8,7 @@ function sizeLabel(mb?: number): string {
 }
 
 /**
- * One STT/TTS option.
+ * One speech-to-text option.
  *
  * Deliberately shows the REAL tradeoff rather than just a name — size,
  * language coverage, and why an option is unavailable on this specific Mac —
@@ -26,51 +23,15 @@ export function VoiceTierCard({
   onInstall,
   onRemove,
   busy,
-  sampleable,
   testable,
 }: {
   tier: VoiceTier
   onInstall?: (id: string) => void
   onRemove?: (id: string) => void
   busy?: boolean
-  /** Read-aloud tiers preview with a play button. */
-  sampleable?: boolean
   /** Speech tiers preview by recording you and showing what they heard. */
   testable?: boolean
 }) {
-  const [sampling, setSampling] = useState(false)
-  // Voice options for this tier, loaded only when it's actually usable —
-  // there's nothing to choose between for a tier that isn't installed.
-  const [voices, setVoices] = useState<VoiceChoice[]>([])
-  const [voice, setVoice] = useState('')
-  useEffect(() => {
-    if (!sampleable || !tier.installed) return
-    let cancelled = false
-    fetch(`${FAMILY_API}/api/voice/voices?tier=${encodeURIComponent(tier.id)}`)
-      .then((r) => r.json())
-      .then((d: { voices?: VoiceChoice[]; selected?: string }) => {
-        if (cancelled) return
-        setVoices(d.voices ?? [])
-        setVoice(d.selected ?? '')
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [sampleable, tier.installed, tier.id])
-
-  const chooseVoice = (id: string) => {
-    setVoice(id)
-    fetch(`${FAMILY_API}/api/voice/voices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier: tier.id, voice: id }),
-    }).catch(() => {})
-  }
-  const playSample = () => {
-    setSampling(true)
-    speakText("Hi! Here's how I'll read things out to you. The Prime Meridian passes through Greenwich, in England, and it's the line we measure longitude from. Everything to the east of it is ahead in time, and everything to the west is behind.", tier.id, voice)
-      .then(() => setSampling(false))
-      .catch(() => setSampling(false))
-  }
   const pct = tier.total_bytes
     ? Math.min(100, Math.round(((tier.got_bytes ?? 0) / tier.total_bytes) * 100))
     : 0
@@ -96,11 +57,6 @@ export function VoiceTierCard({
             <span className="fl-voice-tier-progress"><Loader2 size={12} className="fl-mic-spin" /> {pct}%</span>
           ) : (
             <>
-              {sampleable && tier.installed && (
-                <button className="fl-ghost-btn is-tiny" type="button" disabled={sampling} onClick={playSample} title="Hear what this voice sounds like">
-                  <Volume2 size={12} /> {sampling ? 'Playing…' : 'Hear it'}
-                </button>
-              )}
               {tier.can_install && onInstall && (
                 <button className="fl-ghost-btn is-tiny" type="button" disabled={busy} onClick={() => onInstall(tier.id)}>
                   <Download size={12} /> Install
@@ -123,17 +79,6 @@ export function VoiceTierCard({
         <div className="fl-voice-progress-track" aria-label={`Downloading, ${pct}%`}>
           <span className="fl-voice-progress-fill" style={{ width: `${pct}%` }} />
         </div>
-      )}
-      {voices.length > 1 && (
-        <label className="fl-voice-pick">
-          <span>Voice</span>
-          <select value={voice} onChange={(e) => chooseVoice(e.target.value)}>
-            {voices.map((v) => {
-              const parts = [v.label, v.accent, v.gender === 'male' ? 'Male' : v.gender === 'female' ? 'Female' : undefined].filter(Boolean)
-              return <option key={v.id} value={v.id}>{parts.join(' · ')}</option>
-            })}
-          </select>
-        </label>
       )}
       {testable && tier.installed && !tier.installing && <MicTestButton tier={tier.id} />}
       {tier.install_error && <p className="fl-voice-tier-error">{tier.install_error}</p>}
