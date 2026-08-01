@@ -269,12 +269,40 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	if limit == 0 {
 		limit = 50
 	}
-	query := `SELECT fingerprint, step_id, phase, group_name, text,
-			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status
-		FROM run_concerns
-		WHERE status IN (?, ?, ?, ?)
-		ORDER BY seen_count DESC, first_seen_at ASC, last_seen_at DESC`
-	args := []interface{}{ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification}
+	// Rank by how many active concerns a step has before ranking by how often
+	// any one of them recurred.
+	//
+	// seen_count alone treats "came back" as the only importance signal, which
+	// is right for one finding that will not stay fixed and exactly wrong for a
+	// cluster: many distinct symptoms of one cause, each seen once. Fingerprints
+	// hash the finding text, so one schema mismatch files once per field it
+	// names — social-media had 38 concerns from execute-find-opportunities, all
+	// opportunities.json failing its validation_schema, every one at
+	// seen_count=1. Sorted by recurrence they landed at positions 62 through 132
+	// of 135, each looking like an unrelated one-off, while 36 seen-twice items
+	// held the top. The single largest real defect in that workflow presented as
+	// its least important, and four Pulse passes read the list and worked from
+	// the top.
+	//
+	// Counting the cluster puts the step with the most open work first and keeps
+	// its rows adjacent, so a reviewer can recognize one cause and fix it once
+	// instead of triaging 38 lookalikes.
+	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count, c.status
+		FROM run_concerns c
+		JOIN (
+			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
+			FROM run_concerns
+			WHERE status IN (?, ?, ?, ?)
+			GROUP BY step_id
+		) cluster ON cluster.step_id = c.step_id
+		WHERE c.status IN (?, ?, ?, ?)
+		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
+			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
+	args := []interface{}{
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+	}
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)

@@ -220,3 +220,54 @@ func TestReviewerConcernsDedupeByModuleAcrossRuns(t *testing.T) {
 		t.Fatalf("phase = %q, want %q", open[0].Phase, ConcernPhaseReview)
 	}
 }
+
+// TestClusteredConcernsOutrankAnIsolatedRecurrence reproduces the social-media
+// shape that hid its own largest defect.
+//
+// One schema mismatch files once per field it names, so 38 concerns from
+// execute-find-opportunities all sat at seen_count=1 while 36 unrelated
+// seen-twice findings held the top of the list. Ranked by recurrence alone the
+// cluster landed at positions 62-132 of 135, every row looking like a one-off,
+// and four Pulse passes worked from the top and never reached it.
+func TestClusteredConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+
+	// One cause, many distinct symptoms: each names a different field, so each
+	// gets its own fingerprint and is only ever seen once.
+	for _, field := range []string{"$.status", "$.targets", "$.synthesis_notes", "$.score"} {
+		artifact := "## Findings\n\nCONCERNS: prevalidation gate failed at opportunities.json " + field + "\n"
+		if _, err := RecordRunConcerns(ctx, ws, "run-1", "", "execute-find-opportunities", ConcernPhasePreValidation, artifact); err != nil {
+			t.Fatalf("record %s: %v", field, err)
+		}
+	}
+
+	// An unrelated finding that genuinely recurred.
+	recurring := "## Findings\n\nCONCERNS: daily digest was not delivered\n"
+	for _, run := range []string{"run-1", "run-2", "run-3"} {
+		if _, err := RecordRunConcerns(ctx, ws, run, "", "execute-digest", ConcernPhaseReview, recurring); err != nil {
+			t.Fatalf("record recurring: %v", err)
+		}
+	}
+
+	open, err := LoadOpenRunConcerns(ctx, ws, -1)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(open) != 5 {
+		t.Fatalf("expected 5 concerns, got %d", len(open))
+	}
+	if open[0].StepID != "execute-find-opportunities" {
+		t.Fatalf("the 4-concern cluster must rank above a single 3x recurrence; got %q at position 1 (seen_count=%d)",
+			open[0].StepID, open[0].SeenCount)
+	}
+	// The cluster must stay contiguous so one cause reads as one problem.
+	for i := 0; i < 4; i++ {
+		if open[i].StepID != "execute-find-opportunities" {
+			t.Fatalf("cluster split at position %d by %q", i+1, open[i].StepID)
+		}
+	}
+	if open[4].StepID != "execute-digest" || open[4].SeenCount != 3 {
+		t.Fatalf("the isolated recurrence should follow the cluster, got %+v", open[4])
+	}
+}
