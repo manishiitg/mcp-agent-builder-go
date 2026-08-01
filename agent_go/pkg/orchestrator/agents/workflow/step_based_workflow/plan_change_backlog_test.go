@@ -1,10 +1,13 @@
 package step_based_workflow
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func changelogWorkspace(t *testing.T, files map[string]string) string {
@@ -135,5 +138,57 @@ func TestCollectPlanChangeBacklogCapsListingNotCount(t *testing.T) {
 	}
 	if !strings.Contains(got.Note, "Showing the") {
 		t.Fatalf("note must disclose truncation: %q", got.Note)
+	}
+}
+
+// TestCanonicalArtifactDriftRecordsChangeAndThenStaysQuiet covers the gap
+// AR-20260729-2 reported: evaluation_plan.json has no plan-modification tool, so
+// every edit arrived by direct write and left nothing in the changelog for
+// Artifact Review to see.
+func TestCanonicalArtifactDriftRecordsChangeAndThenStaysQuiet(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+
+	files := map[string]string{}
+	read := func(_ context.Context, path string) (string, error) { return files[path], nil }
+	write := func(_ context.Context, path, content string) error {
+		files[path] = content
+		abs := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(path, "")))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(abs, []byte(content), 0o644)
+	}
+	logger := loggerv2.NewNoop()
+
+	entryCount := func() int {
+		total := 0
+		for _, hashes := range []map[string]string{lastRecordedArtifactHashes(workspacePath)} {
+			total += len(hashes)
+		}
+		return total
+	}
+
+	// A direct write nobody recorded.
+	files[workspacePath+"/evaluation/evaluation_plan.json"] = `{"steps":[{"id":"eval-a"}]}`
+	RecordCanonicalArtifactDrift(ctx, workspacePath, read, write, logger)
+	if entryCount() != 1 {
+		t.Fatalf("first write was not recorded; drift review would still see nothing")
+	}
+	first := lastRecordedArtifactHashes(workspacePath)["evaluation/evaluation_plan.json"]
+
+	// Unchanged: must not append a no-op entry that buries the real ones.
+	RecordCanonicalArtifactDrift(ctx, workspacePath, read, write, logger)
+	if got := lastRecordedArtifactHashes(workspacePath)["evaluation/evaluation_plan.json"]; got != first {
+		t.Fatalf("an unchanged artifact produced a new hash %q, want %q", got, first)
+	}
+
+	// Changed again by direct write: recorded, with the new hash.
+	files[workspacePath+"/evaluation/evaluation_plan.json"] = `{"steps":[{"id":"eval-a"},{"id":"eval-b"}]}`
+	RecordCanonicalArtifactDrift(ctx, workspacePath, read, write, logger)
+	if got := lastRecordedArtifactHashes(workspacePath)["evaluation/evaluation_plan.json"]; got == first || got == "" {
+		t.Fatalf("a second direct edit was not recorded (hash still %q)", got)
 	}
 }

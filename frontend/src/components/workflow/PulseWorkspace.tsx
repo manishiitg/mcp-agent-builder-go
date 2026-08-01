@@ -201,6 +201,7 @@ function FindingEvidence({
       {finding.resolution_note && (
         <div>
           <div className="font-semibold text-foreground">Why it is in this state</div>
+          <div className="text-[10px] text-muted-foreground">Pulse\u2019s own explanation for the status above</div>
           <div className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">{finding.resolution_note}</div>
         </div>
       )}
@@ -208,6 +209,7 @@ function FindingEvidence({
       {(finding.external_owner || finding.reopen_condition) && (
         <div>
           <div className="font-semibold text-foreground">Handed off</div>
+          <div className="text-[10px] text-muted-foreground">Real, but nobody in this workflow can fix it</div>
           <div className="mt-0.5 text-muted-foreground">
             {finding.external_owner && <>Owner: {finding.external_owner}. </>}
             {finding.reason_code && <>Reason: {finding.reason_code}. </>}
@@ -219,6 +221,7 @@ function FindingEvidence({
       {finding.verifications.length > 0 && (
         <div>
           <div className="font-semibold text-foreground">Checks run</div>
+          <div className="text-[10px] text-muted-foreground">Tests Pulse performed to decide whether the fix worked</div>
           <div className="mt-1 space-y-1.5">
             {finding.verifications.map((check, index) => (
               <div key={`${check.check}-${index}`} className="rounded border bg-background p-2">
@@ -245,6 +248,7 @@ function FindingEvidence({
       {finding.fix_attempts.length > 0 && (
         <div>
           <div className="font-semibold text-foreground">Fix attempts</div>
+          <div className="text-[10px] text-muted-foreground">Each time Pulse tried to repair this, and what it edited</div>
           <div className="mt-1 space-y-1.5">
             {finding.fix_attempts.map((attempt) => (
               <div key={attempt.attempt_id} className="rounded border bg-background p-2">
@@ -266,6 +270,7 @@ function FindingEvidence({
       {finding.events.length > 0 && (
         <div>
           <div className="font-semibold text-foreground">History</div>
+          <div className="text-[10px] text-muted-foreground">Every time this was reported, worked on, or changed status</div>
           <div className="mt-1 space-y-0.5 text-muted-foreground">
             {finding.events.map((event, index) => (
               <div key={`${event.event_type}-${index}`}>

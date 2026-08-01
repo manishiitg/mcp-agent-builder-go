@@ -1796,6 +1796,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// changelog already records every plan-mod call and artifact_review
 			// already stamps the ones that have been reconciled; nothing counted
 			// the remainder, so Gate had to derive it from the files each run.
+			// Record drift on artifacts that have no plan-modification tool
+			// before reading the backlog, so a change made by direct write shows
+			// up in the same changelog Artifact Review reads rather than being
+			// invisible to it.
+			step_based_workflow.RecordCanonicalArtifactDrift(
+				ctx, workspacePath, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			)
 			planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
 			// What each reviewer has actually been finding. Without this the choice
 			// between modules is a guess: nothing distinguished a module that keeps
