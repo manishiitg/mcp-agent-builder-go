@@ -31,11 +31,9 @@ func installStateFor(id string) modelInstallState {
 	return modelInstallState{}
 }
 
-// POST /api/voice/model/install {"id":"kokoro"|"parakeet"} — starts a
-// background install and returns immediately; the settings UI polls
-// /api/voice/status for progress. Both ids trigger the SAME shared MLX voice
-// environment (see voice_mlx_env.go) — Kokoro (read-aloud) and Parakeet
-// (speech-to-text) are one install, not two.
+// POST /api/voice/model/install {"id":"parakeet"} — starts a background
+// install and returns immediately; the settings UI polls /api/voice/status
+// for progress.
 func handleVoiceModelInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -48,7 +46,7 @@ func handleVoiceModelInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if req.ID != "kokoro" && req.ID != "parakeet" {
+	if req.ID != "parakeet" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown model"})
 		return
 	}
@@ -56,9 +54,8 @@ func handleVoiceModelInstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "installing"})
 }
 
-// POST /api/voice/model/remove {"id":"kokoro"|"parakeet"} — deletes the
-// shared MLX voice environment. Removing EITHER one removes both, since they
-// are the same install; the UI copy on both tiers discloses this.
+// POST /api/voice/model/remove {"id":"parakeet"} — deletes the MLX voice
+// environment.
 func handleVoiceModelRemove(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -71,7 +68,7 @@ func handleVoiceModelRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if req.ID != "kokoro" && req.ID != "parakeet" {
+	if req.ID != "parakeet" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown model"})
 		return
 	}

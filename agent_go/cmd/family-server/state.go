@@ -61,12 +61,6 @@ type familyState struct {
 	// those apart.
 	WhatsAppVoiceEnabled *bool `json:"whatsapp_voice_enabled,omitempty"`
 
-	// VoiceChoices maps a read-aloud tier -> the voice the parent picked for
-	// it (see voice_choices.go). Per-tier rather than one global setting
-	// because the tiers have entirely different voice catalogs: picking
-	// "Aman" only means something for the built-in Mac voices.
-	VoiceChoices map[string]string `json:"voice_choices,omitempty"`
-
 	// Schedule is the child's recurring weekly class/commitment schedule (see
 	// week.go) — parent-configurable settings, same lifecycle as PulseConfig
 	// above, not a log. Powers the "This Week" view's busy/free-time display.

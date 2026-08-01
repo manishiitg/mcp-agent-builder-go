@@ -10,15 +10,15 @@
 >   replaced by self-contained activity folders (`<Subject>/<Topic>/<slug>/`).
 > - **Connectors** — the Gmail / `gws` integration was removed entirely.
 >   WhatsApp and Browser (CDP) are current.
-> - **Voice (STT/TTS)** — not in the 07-19 draft at all. Speech-to-text and
->   text-to-speech both run locally, hardware-tiered: whisper.cpp as the
->   universal baseline, with Parakeet (STT) and Kokoro (TTS) via MLX on Apple
->   Silicon. A persistent Python worker keeps models resident with a 15-minute
->   idle unload, and warm-up runs one real inference — loading weights alone
->   leaves a JIT compile on the first real call. The composer does live
->   preview transcription with pause-triggered refresh; the mic is only ever
->   closed by the user. Read-aloud is per-thread (parent and child toggle
->   independently) over a shared voice/model choice.
+> - **Voice (STT only)** — not in the 07-19 draft at all. Speech-to-text runs
+>   locally via Parakeet on Apple Silicon (MLX) — used by mic dictation and
+>   WhatsApp voice-note transcription. A persistent Python worker keeps the
+>   model resident with a 15-minute idle unload, and warm-up runs one real
+>   inference — loading weights alone leaves a JIT compile on the first real
+>   call. The composer does live preview transcription with pause-triggered
+>   refresh; the mic is only ever closed by the user. Text-to-speech
+>   (Kokoro + macOS `say`, per-thread read-aloud) existed briefly and was
+>   removed as unused — STT only, going forward.
 > - **Secrets** — an encrypted store exists, reaching tools as
 >   `$SECRET_<NAME>` in both the shell and `agent_browser`, with
 >   `set_secret` / `delete_secret` from chat and a Settings form.

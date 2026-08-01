@@ -17,7 +17,7 @@ func handleVoiceHardware(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detectVoiceHardware())
 }
 
-// voiceTier is one option in the STT or TTS picker. Available is a hard
+// voiceTier is one option in the STT picker. Available is a hard
 // hardware gate (e.g. Apple-Silicon-only tiers on an Intel Mac); ComingSoon is
 // honest labeling for a tier that's designed into the catalog but has no real
 // install/run path wired up yet — never show a tier as pickable unless it
@@ -52,11 +52,10 @@ type voiceTier struct {
 type voiceStatusResponse struct {
 	Hardware voiceHardware `json:"hardware"`
 	STTTiers []voiceTier   `json:"stt_tiers"`
-	TTSTiers []voiceTier   `json:"tts_tiers"`
 }
 
 // GET /api/voice/status — the full tier catalog for the Settings -> Voice
-// picker: hardware facts plus every STT/TTS tier, each with real
+// picker: hardware facts plus every STT tier, each with real
 // availability/installed state computed against THIS machine and the
 // WhatsApp voice pipeline's own existing install state (voiceModelInstalled)
 // — not a second, disconnected notion of "installed".
@@ -66,7 +65,6 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hw := detectVoiceHardware()
-	_, sayErr := exec.LookPath("say")
 
 	// One tier: Parakeet, English-only, Apple Silicon only. This app used to
 	// offer three universal whisper.cpp tiers (any Mac, ~100 languages
@@ -95,64 +93,19 @@ func handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 			TotalBytes:  st.TotalBytes,
 			InstallErr:  st.Error,
 			CanInstall:  hw.IsAppleSilicon && !installed && !st.Installing,
-			// Removing this ALSO removes the "most natural" read-aloud voice
-			// below — they are the same shared install (see voice_mlx_env.go).
-			CanRemove: installed,
+			CanRemove:   installed,
 		}
 	}()}
 	if !hw.IsAppleSilicon {
 		stt[0].UnavailableWhy = "Needs a newer Mac (2020 or later)"
 	}
 
-	tts := []voiceTier{
-		{
-			ID:          "builtin",
-			Label:       "Standard",
-			Description: "Your Mac's built-in voice. Ready right now — nothing to download.",
-			Languages:   "English, Hindi, and many more",
-			Available:   sayErr == nil,
-			Installed:   sayErr == nil,
-			Warm:        sayErr == nil, // never cold — no separate process to warm up
-		},
-		func() voiceTier {
-			st := installStateFor(mlxVoiceInstallID)
-			// Same reasoning as the STT tier above: not "installed" while the
-			// shared install is still running its model warm-ups.
-			installed := mlxVoiceInstalled() && !st.Installing
-			return voiceTier{
-				ID:          "kokoro",
-				Label:       "Most natural",
-				Description: "The most life-like voice — closest to a real person reading aloud. Also includes Hindi and several other languages.",
-				SizeMB:      mlxVoiceTotalSizeMB,
-				Languages:   "English, Hindi, and more",
-				Available:   hw.IsAppleSilicon,
-				Installed:   installed,
-				Warm:        installed && sharedVoiceWorker.IsWarm(kokoroModel),
-				Installing:  st.Installing,
-				GotBytes:    st.GotBytes,
-				TotalBytes:  st.TotalBytes,
-				InstallErr:  st.Error,
-				CanInstall:  hw.IsAppleSilicon && !installed && !st.Installing,
-				// Removing this ALSO removes speech-to-text above — they are
-				// the same shared install (see voice_mlx_env.go).
-				CanRemove: installed,
-			}
-		}(),
-	}
-	if sayErr != nil {
-		tts[0].UnavailableWhy = "Not available on this computer"
-	}
-	if !hw.IsAppleSilicon {
-		tts[1].UnavailableWhy = "Needs a newer Mac (2020 or later)"
-	}
-
-	writeJSON(w, http.StatusOK, voiceStatusResponse{Hardware: hw, STTTiers: stt, TTSTiers: tts})
+	writeJSON(w, http.StatusOK, voiceStatusResponse{Hardware: hw, STTTiers: stt})
 }
 
-// voiceHardware is what the voice settings UI needs to decide which STT/TTS
-// tiers are actually offerable on this machine: the shared MLX voice
-// environment (Parakeet STT + Kokoro TTS) needs IsAppleSilicon. Nothing gates
-// on RAM today — macOS's own voice is light on any Mac this app targets — but
+// voiceHardware is what the voice settings UI needs to decide which STT
+// tiers are actually offerable on this machine: the MLX voice environment
+// (Parakeet STT) needs IsAppleSilicon. Nothing gates on RAM today, but
 // TotalRAMBytes is reported so a future heavier tier has a real number to
 // gate on instead of guessing.
 type voiceHardware struct {
