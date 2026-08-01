@@ -159,3 +159,94 @@ func TestUpdateEvaluationPlanIsQuietWhenNothingChanged(t *testing.T) {
 		t.Fatalf("a no-op edit wrote %d changelog entries", len(backlog.Changes))
 	}
 }
+
+// TestWorkshopBlocksDirectWritesToTheEvaluationPlan pins the protection that
+// makes update_evaluation_plan the only way to change the file.
+//
+// planning/ is safe by never being a write path, so plan.json has always been
+// tool-only. evaluation/ must stay writable for runs/, so the plan file inside
+// it needs an explicit write deny — without one the tool is merely the polite
+// option and a direct write still leaves no changelog entry.
+func TestWorkshopBlocksDirectWritesToTheEvaluationPlan(t *testing.T) {
+	workspacePath := "Workflow/example"
+	blocked := workshopBlockedWritePaths(workspacePath, workshopWritePaths(workspacePath))
+
+	want := workspacePath + "/" + evaluationPlanRelPath
+	var found bool
+	for _, path := range blocked {
+		if path == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("evaluation_plan.json is not write-denied for a workshop session: %v", blocked)
+	}
+
+	// The rest of evaluation/ must stay writable: eval runs write runs/ on every
+	// execution, and update_step_config writes step_config.json.
+	for _, mustNotBlock := range []string{
+		workspacePath + "/evaluation/runs",
+		workspacePath + "/evaluation/step_config.json",
+	} {
+		for _, path := range blocked {
+			if strings.HasPrefix(mustNotBlock, path) {
+				t.Fatalf("%q is denied by block %q; only the plan file may be denied", mustNotBlock, path)
+			}
+		}
+	}
+}
+
+// TestWorkshopClaimsNoProtectionItDoesNotProvide keeps the deny list honest for
+// sessions that could not write evaluation/ anyway.
+func TestWorkshopClaimsNoProtectionItDoesNotProvide(t *testing.T) {
+	readOnlySession := workshopBlockedWritePaths("Workflow/example", []string{})
+	if len(readOnlySession) != 0 {
+		t.Fatalf("a session with no write paths reported denies it is not enforcing: %v", readOnlySession)
+	}
+	if got := workshopBlockedWritePaths("", workshopWritePaths("Workflow/example")); len(got) != 0 {
+		t.Fatalf("an empty workspace produced deny paths: %v", got)
+	}
+}
+
+// TestTypedWriteToolsRefuseTheEvaluationPlan covers the second write surface.
+//
+// The kernel sandbox denies shell writes, but typed workspace tools go through
+// the server and never touch the sandbox — so guarding only the shell would
+// leave the file editable by diff_patch_workspace_file while looking protected.
+func TestTypedWriteToolsRefuseTheEvaluationPlan(t *testing.T) {
+	called := false
+	inner := func(context.Context, map[string]interface{}) (string, error) {
+		called = true
+		return "wrote", nil
+	}
+
+	guarded, ok := guardToolOnlyArtifactWrites("diff_patch_workspace_file", inner).(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("guard did not return a callable executor")
+	}
+	_, err := guarded(context.Background(), map[string]interface{}{
+		"filepath": "Workflow/example/" + evaluationPlanRelPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "update_evaluation_plan") {
+		t.Fatalf("a direct write to the eval plan was allowed, or the error did not name the tool to use: %v", err)
+	}
+	if called {
+		t.Fatal("the underlying write executed despite the guard")
+	}
+
+	// Every other file still writes normally.
+	called = false
+	if _, err := guarded(context.Background(), map[string]interface{}{
+		"filepath": "Workflow/example/evaluation/step_config.json",
+	}); err != nil {
+		t.Fatalf("an unrelated file was blocked: %v", err)
+	}
+	if !called {
+		t.Fatal("an unrelated write did not reach the underlying executor")
+	}
+
+	// Tools that are not file writers pass through untouched.
+	if got := guardToolOnlyArtifactWrites("get_workflow_config", inner); got == nil {
+		t.Fatal("a non-write tool lost its executor")
+	}
+}
