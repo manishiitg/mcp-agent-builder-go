@@ -397,23 +397,6 @@ func (bo *BaseOrchestrator) registerCustomToolsForAgent(
 
 	// Removed excessive category summary logging
 
-	// 🔧 CRITICAL FIX: Explicitly update code execution registry after all tools are registered
-	// This ensures workspace and human tools are available in code execution mode
-	// Check agent config first (if provided), otherwise fall back to orchestrator level
-	useCodeExecutionMode := false
-	if config != nil {
-		useCodeExecutionMode = config.UseCodeExecutionMode
-	} else {
-		// Fallback to orchestrator level if config not provided (backward compatibility)
-		useCodeExecutionMode = bo.GetUseCodeExecutionMode()
-	}
-	if useCodeExecutionMode {
-		if err := mcpAgent.UpdateCodeExecutionRegistry(); err != nil {
-			bo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to update code execution registry for %s: %v", agentName, err))
-			// Don't fail agent creation if registry update fails, but log the warning
-		}
-	}
-
 	return nil
 }
 

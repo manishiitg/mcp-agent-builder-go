@@ -107,7 +107,7 @@ httpReq.Header.Set(<span class="g">"X-Session-ID"</span>, sessionID)            
   <!-- 04 -->
   <h2 id="flow"><span class="n">04</span>Runtime flow</h2>
   <div class="pipe">
-    <div class="stage"><div class="s-n">CLI</div><div class="s-t">Claude Code</div><div class="s-f">mcp__api-bridge__get_api_spec(category)</div></div>
+    <div class="stage"><div class="s-n">CLI</div><div class="s-t">Claude Code</div><div class="s-f">mcp__api-bridge__get_api_spec(tool_name)</div></div>
     <div class="arrow">→ stdio →</div>
     <div class="stage"><div class="s-n">PROXY</div><div class="s-t">mcpbridge</div><div class="s-f">POST + X-Session-ID + X-Virtual-Scope-ID</div></div>
     <div class="arrow">→ HTTP →</div>
@@ -115,22 +115,21 @@ httpReq.Header.Set(<span class="g">"X-Session-ID"</span>, sessionID)            
     <div class="arrow">→</div>
     <div class="stage"><div class="s-n">REGISTRY</div><div class="s-t">that agent's a.customTools</div><div class="s-f">handleGetAPISpec → buildToolIndex</div></div>
   </div>
-  <p><code>get_api_spec</code> is <b>not</b> a canned list in the bridge — every call round-trips to the Go server, which reads the <i>current</i> <code>a.customTools</code> of the <b>scoped agent instance</b> and returns it, grouped by category (category = the "server" name). The CLI's system prompt is built the same way (<code>buildToolIndex</code> + inlined pre-discovered specs) and rebuilt when the registry changes.</p>
+  <p><code>get_api_spec</code> is <b>not</b> a canned list in the bridge — every call round-trips to the Go server, resolves the requested tool name on the <b>scoped agent instance</b>, and checks the current session policy before using its schema cache. The CLI's tool manifest is derived from the same current state immediately before each request.</p>
 
   <!-- 05 -->
   <h2 id="dynamic"><span class="n">05</span>How it stays in sync — the dynamic link</h2>
   <p class="lead">One shared structure connects the workflow code and the bridge: <code>Agent.customTools</code>. The workflow layer writes it; the bridge layer reads it.</p>
 <pre><span class="c">// workflow layer (agent_go) registers →</span>
 RegisterCustomTool(name, def, params, exec, category)  →  a.customTools[name] = {def, category}
-<span class="c">// bridge layer (mcpagent) reads, on demand and at prompt-build →</span>
-UpdateCodeExecutionRegistry()  →  buildToolIndex()              <span class="c">// the get_api_spec index</span>
-                               →  buildPreDiscoveredToolSpecs() <span class="c">// full specs inlined in the system prompt</span>
-                               →  rebuildSystemPromptWithUpdatedToolStructure()</pre>
-  <p>For a tool to be callable by a CLI agent, all three must hold for the <b>scoped</b> agent:</p>
+<span class="c">// bridge layer (mcpagent) derives one authorized view on demand →</span>
+Instructions()  →  buildToolIndex()              <span class="c">// compact request-time manifest</span>
+                →  buildPreDiscoveredToolSpecs() <span class="c">// allowed preloaded schemas</span>
+get_api_spec(tool_name) → authorize → schema cache → internal route</pre>
+  <p>For a tool to be callable by a CLI agent, both must hold for the <b>scoped</b> agent:</p>
   <div class="grid2">
     <div class="tile"><h4>1 · Registered</h4><p>In that agent's <code>a.customTools</code> with a non-empty category.</p></div>
-    <div class="tile"><h4>2 · Allow-listed</h4><p><code>GetToolsForWorkshopMode</code> → <code>SetToolAllowList</code>; gates both the index and execution.</p></div>
-    <div class="tile"><h4>3 · Prompt rebuilt</h4><p><code>UpdateCodeExecutionRegistry</code> triggers it; <code>SetToolAllowList</code> alone does not.</p></div>
+    <div class="tile"><h4>2 · Allowed</h4><p><code>GetToolsForWorkshopMode</code> → <code>SetToolAccess</code>; gates manifest, schema discovery, and execution.</p></div>
   </div>
 
   <!-- 06 -->

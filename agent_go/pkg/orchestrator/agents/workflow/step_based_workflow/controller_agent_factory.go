@@ -1045,7 +1045,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KB consolidate agent: %w", err)
 	}
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, false); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
 	return agent, nil
@@ -1103,7 +1103,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KB reorganize agent: %w", err)
 	}
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, false); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
 	return agent, nil
@@ -1113,8 +1113,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 // This includes setting folder guard paths and optionally updating the code execution registry
 // agent: The orchestrator agent to configure
 // agentName: Name of the agent (for logging)
-// shouldUpdateRegistry: If true, updates the code execution registry after setting folder guard paths
-func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.OrchestratorAgent, agentName string, shouldUpdateRegistry bool) error {
+func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.OrchestratorAgent, agentName string) error {
 	baseAgent := agent.GetBaseAgent()
 	if baseAgent == nil {
 		return nil // No base agent, nothing to configure
@@ -1130,20 +1129,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.Or
 	readPaths, writePaths := hcpo.GetFolderGuardPaths()
 	mcpAgent.SetFolderGuardPaths(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Folder guard paths set for %s agent - Read: %v, Write: %v", agentName, readPaths, writePaths))
-
-	// Update code execution registry AFTER setting folder guard paths (if requested)
-	// Note: Base factory has already updated the registry (if bo.GetUseCodeExecutionMode() is true), but it didn't have folder guard paths set.
-	// This update ensures the registry has the correct path validation code with folder guard enabled.
-	if shouldUpdateRegistry {
-		// CRITICAL: Folder guard paths must be set BEFORE registry update
-		// The registry generation uses these paths to create the path validation code
-		// This ensures LLM-generated code can only access paths within allowed boundaries
-		if err := mcpAgent.UpdateCodeExecutionRegistry(); err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to update code execution registry for %s: %v", agentName, err))
-			return err
-		}
-		hcpo.GetLogger().Info(fmt.Sprintf("✅ [CODE_EXECUTION] Registry updated for %s agent - folder guard enabled", agentName))
-	}
 
 	return nil
 }
@@ -1366,7 +1351,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	hcpo.appendSupplementaryPrompts(ctx, mcpAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings)
 
 	// Apply post-setup configuration (folder guard paths and optional registry update)
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, isCodeExecutionMode); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		// Log warning but don't fail agent creation
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
@@ -1777,7 +1762,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 
 	// Post-setup: folder guard paths (todo task orchestrator agent may use code execution mode, so registry update may be needed)
 	// Note: Folder guard paths are already set on orchestrator by caller, but we need to apply them to the agent
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, isCodeExecutionMode); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		return nil, fmt.Errorf("failed to apply post-setup to todo task orchestrator agent: %w", err)
 	}
 

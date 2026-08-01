@@ -460,17 +460,12 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 			workshopMode := phaseTemplateVars["WorkshopMode"]
 			allowedTools := todo_creation_human.GetToolsForWorkshopMode(workshopMode)
-			underlyingAgent.SetToolAllowList(allowedTools)
+			underlyingAgent.SetToolAccess(allowedTools)
 			log.Printf("[WORKSHOP_TOOLS] Applied tool allow list for mode=%s (%d tools): %v", workshopMode, len(allowedTools), allowedTools)
 		} else {
 			// Non-workshop phases get all tools
-			underlyingAgent.ClearToolAllowList()
+			underlyingAgent.SetToolAccess(nil)
 		}
-	}
-
-	// Rebuild code execution registry after prompt + tool changes
-	if err := underlyingAgent.UpdateCodeExecutionRegistry(); err != nil {
-		log.Printf("[WORKFLOW_PHASE] Warning: Failed to update code execution registry: %v", err)
 	}
 
 	return nil

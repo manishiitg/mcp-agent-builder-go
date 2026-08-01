@@ -177,7 +177,7 @@ You may use execute_shell_command to read files, run helper code, and write outp
 Prefer calling these sub-agent tools directly only when they are actually listed as provider-callable tools in this session.
 
 In bridge-only CLI sessions where only the documented api-bridge tools are native, sub-agent tools are dynamic custom tools:
-- call get_api_spec for server_name="sub_agent_tools" and the specific tool name
+- call get_api_spec with the specific tool name
 - then invoke the returned custom endpoint via execute_shell_command using MCP_CUSTOM and MCP_AUTH
 
 Do not guess tool names. If your provider explicitly lists direct sub-agent tool names, use those. Otherwise discover the exact callable shape first, then use the documented HTTP endpoint.

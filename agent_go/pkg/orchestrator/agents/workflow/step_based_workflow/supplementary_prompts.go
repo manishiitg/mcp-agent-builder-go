@@ -71,7 +71,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	if isolatedSessionID != "" {
 		for _, skill := range effectiveSkills {
 			if skill == "agent-browser" {
-				mcpAgent.AppendSystemPrompt(fmt.Sprintf(
+				mcpAgent.AddInstructions(fmt.Sprintf(
 					"## Browser Isolation\nYou have an isolated browser session. When using the agent_browser tool, use session name %q instead of \"default\" to avoid sharing browser state with other agents.",
 					isolatedSessionID,
 				))
@@ -86,7 +86,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	if len(effectiveSecrets) > 0 {
 		secretPrompt := BuildWorkflowSecretPrompt(effectiveSecrets)
 		if secretPrompt != "" {
-			mcpAgent.AppendSystemPrompt(secretPrompt)
+			mcpAgent.AddInstructions(secretPrompt)
 			hcpo.GetLogger().Info(fmt.Sprintf("🔐 Added secret prompt to agent (%d secrets)", len(effectiveSecrets)))
 		}
 	}
@@ -99,7 +99,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 		browserPrompt = browserinstructions.BuildBrowserRuntimeInstructions(browserCfg)
 	}
 	if browserPrompt != "" {
-		mcpAgent.AppendSystemPrompt(browserPrompt)
+		mcpAgent.AddInstructions(browserPrompt)
 		hcpo.GetLogger().Info(fmt.Sprintf("🌐 Added browser instructions to agent (agent-browser=%v, cdp=%v)",
 			browserCfg.HasAgentBrowser, browserCfg.CdpPort > 0))
 	}
@@ -115,7 +115,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 		if hostDownloads := common.CDPHostDownloadsReadPath(browserCfg.Mode); hostDownloads != "" {
 			downloadsPrompt += fmt.Sprintf(" In CDP mode, Chrome-native downloads can land in the host Downloads folder %q. That host folder is read-only: copy needed files into %q first, then process the workspace copy. Never write, move, or delete files under the host Downloads folder.", hostDownloads, browserDownloadsPath)
 		}
-		mcpAgent.AppendSystemPrompt(downloadsPrompt)
+		mcpAgent.AddInstructions(downloadsPrompt)
 		hcpo.GetLogger().Info(fmt.Sprintf("🌐 Added workflow browser downloads guidance to agent: %s", browserDownloadsPath))
 	}
 

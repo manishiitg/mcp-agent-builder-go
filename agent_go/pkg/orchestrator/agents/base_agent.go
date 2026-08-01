@@ -380,9 +380,9 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 	// Set or append system prompt if provided
 	if systemPrompt != "" {
 		if overwriteSystemPrompt {
-			ba.agent.SetSystemPrompt(systemPrompt)
+			ba.agent.SetInstructions(systemPrompt)
 		} else {
-			ba.agent.AppendSystemPrompt(systemPrompt)
+			ba.agent.AddInstructions(systemPrompt)
 		}
 	}
 

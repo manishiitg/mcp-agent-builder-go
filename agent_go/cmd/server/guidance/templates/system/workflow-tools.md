@@ -6,7 +6,7 @@ cheat sheet; this skill is the deep reference with full signatures,
 parameters, when-to-use rules, and gotchas.
 
 If you need to confirm an exact parameter shape that isn't documented
-here, call `get_api_spec(server_name="workflow", tool_name="...")` — that
+here, call `get_api_spec(tool_name="...")` — that
 returns the live JSON schema for the tool.
 
 ### Coding-CLI bridge routing
@@ -17,7 +17,7 @@ CLI, the native bridge exposes only `execute_shell_command`,
 `diff_patch_workspace_file`, `agent_browser`, and `get_api_spec`. Never try
 `api-bridge.list_executions`, `api-bridge.query_step`, or another catalog name
 as a native bridge call. For every non-native tool, call
-`get_api_spec(server_name="workflow", tool_name="<name>")` first, then use
+`get_api_spec(tool_name="<name>")` first, then use
 `execute_shell_command` to invoke the endpoint it returns with the supplied
 `$MCP_MCP`/`$MCP_CUSTOM` route and `$MCP_AUTH`. Do not guess or hardcode an
 HTTP URL.

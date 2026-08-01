@@ -1313,7 +1313,7 @@ func (iwm *InteractiveWorkshopManager) SetToolCallQuery(mainSessionID string, qu
 }
 
 // GetToolsForWorkshopMode returns the list of tool names that should be available
-// for the given workshop mode. This is used with Agent.SetToolAllowList() to dynamically
+// for the given workshop mode. This is used with Agent.SetToolAccess() to dynamically
 // restrict tools per-turn as the user switches modes from the frontend.
 //
 // Tools are grouped into categories:
@@ -1740,7 +1740,7 @@ func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report preview tool: %v", agentName, err))
 	}
-	mcpAgentRef.SetToolAllowList(allowedToolNames)
+	mcpAgentRef.SetToolAccess(allowedToolNames)
 	logger.Info(fmt.Sprintf("🔧 %s: registered workshop mutation tools and applied allow list (%d tools)", agentName, len(allowedToolNames)))
 }
 
@@ -2550,11 +2550,11 @@ Every `+"`get_reference_doc(kind=\"X\")`"+` pointer below is also a file: `+"`re
 
 For `+"`human_feedback`"+`, use a foreground curl. Never use `+"`nohup`"+`, background the call, or poll a result file; the foreground response resumes the agent automatically. Cursor agents must keep `+"`timeout_seconds <= 45`"+`.
 
-The native `+"`api-bridge`"+` exposes only `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, and `+"`get_api_spec`"+`. Names such as `+"`execute_step`"+`, `+"`query_step`"+`, `+"`list_executions`"+`, and the other workflow tools below are logical HTTP-backed tools, not native `+"`api-bridge.<name>`"+` calls. Never call `+"`api-bridge.list_executions`"+` or guess another native bridge name. First call `+"`get_api_spec(server_name=\"workflow\", tool_name=\"<name>\")`"+`, then invoke the returned endpoint through `+"`execute_shell_command`"+` using the provided `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route and `+"`$MCP_AUTH`"+`; do not invent or hardcode a URL. The normal workflow loop uses `+"`execute_step`"+` / `+"`run_full_workflow`"+`, waits for the automatic completion notification rather than polling, and inspects a live step with `+"`query_step`"+` only when the user asks. Workshop decisions can use `+"`create_human_input_request`"+` and `+"`run_goal_advisor_review`"+`. Read the attached `+"`workflow-reference`"+` skill's `+"`references/workflow-tools.md`"+` (or call `+"`get_reference_doc(kind=\"workflow-tools\")`"+`) for the complete catalog, signatures, mode rules, schedules, secrets, notifications, and gotchas.
+The native `+"`api-bridge`"+` exposes only `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, and `+"`get_api_spec`"+`. Names such as `+"`execute_step`"+`, `+"`query_step`"+`, `+"`list_executions`"+`, and the other workflow tools below are logical HTTP-backed tools, not native `+"`api-bridge.<name>`"+` calls. Never call `+"`api-bridge.list_executions`"+` or guess another native bridge name. First call `+"`get_api_spec(tool_name=\"<name>\")`"+`, then invoke the returned endpoint through `+"`execute_shell_command`"+` using the provided `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route and `+"`$MCP_AUTH`"+`; do not invent or hardcode a URL. The normal workflow loop uses `+"`execute_step`"+` / `+"`run_full_workflow`"+`, waits for the automatic completion notification rather than polling, and inspects a live step with `+"`query_step`"+` only when the user asks. Workshop decisions can use `+"`create_human_input_request`"+` and `+"`run_goal_advisor_review`"+`. Read the attached `+"`workflow-reference`"+` skill's `+"`references/workflow-tools.md`"+` (or call `+"`get_reference_doc(kind=\"workflow-tools\")`"+`) for the complete catalog, signatures, mode rules, schedules, secrets, notifications, and gotchas.
 {{else}}
 ## TOOLS REFERENCE (cheat sheet)
 
-{{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** You do NOT have direct tool-call access. Bridge-native tools: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(server_name=\"workflow\", tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
+{{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** You do NOT have direct tool-call access. Bridge-native tools: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
 {{end}}
 
 This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas (especially Schedules and Secrets, which have multi-step flows), call **`+"`get_reference_doc(kind=\"workflow-tools\")`"+`**.
@@ -2631,15 +2631,6 @@ func (agent *WorkflowInteractiveWorkshopAgent) Execute(ctx context.Context, temp
 
 	// Register custom workshop tools (execute_step, query_step, send_step_message, stop_step, update_step_config)
 	registerWorkshopAgentTools(iwm, mcpAgentRef, workspacePath, logger)
-
-	// Update the code execution registry for CLI providers.
-	if agent.GetConfig().UseCodeExecutionMode {
-		if err := mcpAgentRef.UpdateCodeExecutionRegistry(); err != nil {
-			logger.Warn(fmt.Sprintf("⚠️ Failed to update code execution registry with workshop tools: %v", err))
-		} else {
-			logger.Info("✅ Code execution registry updated with workshop tools")
-		}
-	}
 
 	// Build system prompt and initial user message
 	var systemPrompt, userMessage strings.Builder
@@ -10067,7 +10058,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	}
 
 	iwm.registerWorkshopMutationToolsForToolAgent(agent, workspacePath, stageAgentIdentity, allowedToolNames, logger)
-	if err := iwm.controller.applyPostSetupToAgent(agent, stageAgentIdentity+"-agent", false); err != nil {
+	if err := iwm.controller.applyPostSetupToAgent(agent, stageAgentIdentity+"-agent"); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", stageAgentIdentity, err))
 	}
 	restoreSetup()
@@ -10423,7 +10414,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	}
 
 	// Apply post-setup configuration (folder guard + registry for code execution mode)
-	if err := iwm.controller.applyPostSetupToAgent(agent, "background-task-agent", isCodeExecMode); err != nil {
+	if err := iwm.controller.applyPostSetupToAgent(agent, "background-task-agent"); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for background-task-agent: %v", err))
 	}
 

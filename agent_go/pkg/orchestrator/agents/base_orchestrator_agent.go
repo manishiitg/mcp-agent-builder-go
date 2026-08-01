@@ -167,7 +167,7 @@ func (boa *BaseOrchestratorAgent) Initialize(ctx context.Context) error {
 	}
 
 	// Append the agent-specific prompt to the existing system prompt
-	boa.baseAgent.agent.AppendSystemPrompt(boa.systemPrompt)
+	boa.baseAgent.agent.AddInstructions(boa.systemPrompt)
 	return nil
 }
 
@@ -182,6 +182,7 @@ func ExecuteStructuredWithInputProcessor[T any](boa *BaseOrchestratorAgent, ctx 
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
+	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -218,15 +219,6 @@ func ExecuteStructuredWithInputProcessor[T any](boa *BaseOrchestratorAgent, ctx 
 		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
 	}
 	messages = append(messages, userMessageContent)
-
-	// Set system prompt if provided
-	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			baseAgent.agent.SetSystemPrompt(systemPrompt)
-		} else {
-			baseAgent.agent.AppendSystemPrompt(systemPrompt)
-		}
-	}
 
 	// Use AskWithHistoryStructured from mcpagent
 	// Note: schema parameter needs to be a zero value of type T for the schema type, and schemaString is the JSON schema string
@@ -282,6 +274,7 @@ func ExecuteStructuredWithInputProcessorViaTool[T any](boa *BaseOrchestratorAgen
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
+	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -314,15 +307,6 @@ func ExecuteStructuredWithInputProcessorViaTool[T any](boa *BaseOrchestratorAgen
 		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
 	}
 	messages = append(messages, userMessageContent)
-
-	// Set system prompt if provided
-	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			baseAgent.agent.SetSystemPrompt(systemPrompt)
-		} else {
-			baseAgent.agent.AppendSystemPrompt(systemPrompt)
-		}
-	}
 
 	// Use AskWithHistoryStructuredViaTool from mcpagent
 	result, err := mcpagent.AskWithHistoryStructuredViaTool[T](baseAgent.agent, agentCtx, messages, toolName, toolDescription, schema)
@@ -415,6 +399,7 @@ func (boa *BaseOrchestratorAgent) ExecuteWithTemplateValidation(ctx context.Cont
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
+	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -437,7 +422,7 @@ func (boa *BaseOrchestratorAgent) ExecuteWithTemplateValidation(ctx context.Cont
 	}
 
 	// Delegate to template's Execute method which enforces event patterns
-	result, updatedConversationHistory, err := boa.baseAgent.Execute(agentCtx, userMessage, conversationHistory, systemPrompt, overwriteSystemPrompt)
+	result, updatedConversationHistory, err := boa.baseAgent.Execute(agentCtx, userMessage, conversationHistory, "", false)
 
 	duration := time.Since(startTime)
 
@@ -550,28 +535,10 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 		agentName = boa.baseAgent.name
 	}
 
-	// Build full system prompt for the event
-	// If a systemPrompt override is provided, combine it with appended supplementary prompts.
-	// Otherwise, read the current full prompt from the agent (which already includes appended prompts).
-	// Note: {{TOOL_STRUCTURE}} placeholder is resolved later by SetSystemPrompt, so replace it
-	// with a short marker for the event to keep the prompt readable.
 	var fullSystemPrompt string
 	if boa.baseAgent != nil {
 		if mcpAg := boa.baseAgent.Agent(); mcpAg != nil {
-			if systemPrompt != "" {
-				fullSystemPrompt = systemPrompt
-				for _, p := range mcpAg.GetAppendedSystemPrompts() {
-					fullSystemPrompt += "\n\n" + p
-				}
-			} else {
-				fullSystemPrompt = mcpAg.GetSystemPrompt()
-			}
-		}
-	}
-	// Resolve {{TOOL_STRUCTURE}} placeholder with actual tool index
-	if boa.baseAgent != nil {
-		if mcpAg := boa.baseAgent.Agent(); mcpAg != nil {
-			fullSystemPrompt = mcpAg.ResolveToolStructure(fullSystemPrompt)
+			fullSystemPrompt = mcpAg.Instructions()
 		}
 	}
 
@@ -602,6 +569,17 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 	}
 
 	boa.emitEvent(ctx, events.OrchestratorAgentStart, eventData)
+}
+
+func (boa *BaseOrchestratorAgent) applyInstructions(systemPrompt string, overwrite bool) {
+	if systemPrompt == "" || boa.baseAgent == nil || boa.baseAgent.agent == nil {
+		return
+	}
+	if overwrite {
+		boa.baseAgent.agent.SetInstructions(systemPrompt)
+		return
+	}
+	boa.baseAgent.agent.AddInstructions(systemPrompt)
 }
 
 // emitAgentEndEvent emits an agent end event automatically

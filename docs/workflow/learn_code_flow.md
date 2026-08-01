@@ -97,7 +97,7 @@ Both modes use the same bridge-based execution model.
 
 The execution agent does not call most MCP tools directly. Instead it:
 
-1. Uses `get_api_spec(server_name, tool_name)` to inspect a tool's HTTP contract.
+1. Uses `get_api_spec(tool_name)` to inspect a tool's HTTP contract.
 2. Uses `execute_shell_command` to write and run Python or shell code.
 3. Calls per-tool HTTP endpoints such as:
    - `POST /tools/mcp/{server}/{tool}`

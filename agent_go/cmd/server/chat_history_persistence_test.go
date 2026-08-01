@@ -1443,7 +1443,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPromp
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	currentPrompt := "<current>mode=auto; query agent_browser status</current>"
-	agent.SetSystemPrompt(currentPrompt)
+	agent.SetInstructions(currentPrompt)
 
 	// Old conversation files may still contain persisted prompts and a resolved
 	// browser_mode. JSON decoding must ignore those legacy fields, and native
@@ -1466,7 +1466,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPromp
 	if !api.seedCodingAgentRuntimeFromRestoredConversation("pi-ui-session", "pi-cli", "", runtime, agent) {
 		t.Fatal("expected Pi resume state to be seeded")
 	}
-	if got := agent.GetSystemPrompt(); got != currentPrompt {
+	if got := agent.Instructions(); got != currentPrompt {
 		t.Fatalf("native resume overwrote current prompt: got %q want %q", got, currentPrompt)
 	}
 }
@@ -1481,8 +1481,8 @@ func TestCaptureChatHistoryAgentRuntimeOmitsPromptAndBrowserAvailability(t *test
 			Model:           "pi-cli",
 		},
 	}
-	agent.SetSystemPrompt("<current>mode=cdp</current>")
-	agent.AppendSystemPrompt("<dynamic-browser-state>")
+	agent.SetInstructions("<current>mode=cdp</current>")
+	agent.AddInstructions("<dynamic-browser-state>")
 	common.SetSessionBrowserMode("pi-ui-session", "cdp")
 
 	runtime := api.captureChatHistoryAgentRuntime("pi-ui-session", "pi-cli", "pi-cli", "Workflow/example", agent)
@@ -1505,7 +1505,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t 
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	preExisting := "default agent prompt set elsewhere"
-	agent.SetSystemPrompt(preExisting)
+	agent.SetInstructions(preExisting)
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:              "coding_agent",
 		Provider:          "pi-cli",
@@ -1518,8 +1518,8 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t 
 		t.Fatal("expected Pi resume state to be seeded")
 	}
 
-	if got := agent.GetSystemPrompt(); got != preExisting {
-		t.Fatalf("agent.GetSystemPrompt() = %q, want %q unchanged — empty runtime SystemPrompt must NOT clobber a prompt set elsewhere", got, preExisting)
+	if got := agent.Instructions(); got != preExisting {
+		t.Fatalf("agent.Instructions() = %q, want %q unchanged — empty runtime SystemPrompt must NOT clobber a prompt set elsewhere", got, preExisting)
 	}
 }
 

@@ -4923,14 +4923,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// 1. OPERATING MODE — the agent's core behavior (delegate everything vs work directly).
 			//    This MUST come first so it takes precedence over reference material.
 			if !isWorkflowPhase {
-				underlyingAgent.AppendSystemPrompt(virtualtools.GetMultiAgentDelegationInstructionsWithUser(perUserChatsFolder, currentUserID))
+				underlyingAgent.AddInstructions(virtualtools.GetMultiAgentDelegationInstructionsWithUser(perUserChatsFolder, currentUserID))
 				logfWithContext(queryLogCtx, "[DELEGATION] Added multi-agent delegation instructions to system prompt")
 				if section := virtualtools.BuildSpawnCapabilitiesSection(buildCapabilitiesContext(req)); section != "" {
-					underlyingAgent.AppendSystemPrompt(section)
+					underlyingAgent.AddInstructions(section)
 				}
 				if delegationTierCfg := resolveDelegationTierConfig(req.DelegationTierConfig); delegationTierCfg != nil {
 					if tierSection := virtualtools.BuildCustomTierPromptSection(delegationTierCfg); tierSection != "" {
-						underlyingAgent.AppendSystemPrompt(tierSection)
+						underlyingAgent.AddInstructions(tierSection)
 					}
 				}
 				// Register get_reference_doc for the multi-agent chat path. The
@@ -4953,19 +4953,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			// 2. WORKSPACE MAP — compact folder listing with absolute paths and access levels.
 			if isWorkflowPhase {
-				underlyingAgent.AppendSystemPrompt(GetWorkflowPhaseWorkspaceMap(shellRoot, workflowPhaseFolder))
+				underlyingAgent.AddInstructions(GetWorkflowPhaseWorkspaceMap(shellRoot, workflowPhaseFolder))
 			} else {
-				underlyingAgent.AppendSystemPrompt(GetWorkspaceMap(shellRoot, perUserChatsFolder))
+				underlyingAgent.AddInstructions(GetWorkspaceMap(shellRoot, perUserChatsFolder))
 			}
 			if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-				underlyingAgent.AppendSystemPrompt(capabilitySection)
+				underlyingAgent.AddInstructions(capabilitySection)
 				log.Printf("[LLM TOOLS] Added LLM/media capability snapshot to system prompt")
 			}
 
 			// 3. CONTEXT — workflow references, skills (what the agent needs to know).
 			if len(req.WorkflowContextPaths) > 0 {
 				if workflowPrompt := buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL()); workflowPrompt != "" {
-					underlyingAgent.AppendSystemPrompt(workflowPrompt)
+					underlyingAgent.AddInstructions(workflowPrompt)
 					log.Printf("[WORKFLOW-CTX] Added workflow context to system prompt (%d workflows)", len(req.WorkflowContextPaths))
 				}
 			}
@@ -4988,7 +4988,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// "## Headers" or "[link](url)" syntax that WhatsApp / Slack
 			// display literally. No-op when BotPlatform is empty (chat UI).
 			if channelPrompt := buildChannelFormattingInstructions(req.BotPlatform); channelPrompt != "" {
-				underlyingAgent.AppendSystemPrompt(channelPrompt)
+				underlyingAgent.AddInstructions(channelPrompt)
 				log.Printf("[CHANNEL] Added %s formatting rules to system prompt", req.BotPlatform)
 			}
 
@@ -5007,7 +5007,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					_, endpointGuidance := cdpPromptEndpoints(chatBrowserCfg.CdpPorts, chatBrowserCfg.CdpPort)
 					browserPrompt += endpointGuidance + " These endpoints are configured candidates; live status is authoritative.\n"
 				}
-				underlyingAgent.AppendSystemPrompt(browserPrompt)
+				underlyingAgent.AddInstructions(browserPrompt)
 				log.Printf("[BROWSER] Added dynamic browser pointer to system prompt (configured_mode=%s candidate_cdp_ports=%v)",
 					chatBrowserCfg.Mode, chatBrowserCfg.CdpPorts)
 			}
@@ -5015,23 +5015,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			//    Only for worker agents (workflow phase). The orchestrator delegates all file
 			//    work so it doesn't need 300+ lines of config schemas and parsing commands.
 			if isWorkflowPhase {
-				underlyingAgent.AppendSystemPrompt(GetWorkspaceReference(shellRoot, perUserChatsFolder))
+				underlyingAgent.AddInstructions(GetWorkspaceReference(shellRoot, perUserChatsFolder))
 			}
 
 			// 6. SUPPLEMENTARY — conditional grants, CLI provider overrides.
 			for _, section := range resolvedGrants.PromptSections {
-				underlyingAgent.AppendSystemPrompt(section)
+				underlyingAgent.AddInstructions(section)
 			}
 			if len(resolvedGrants.PromptSections) > 0 {
 				log.Printf("[GRANTS] Appended %d prompt section(s) for active grants: %v", len(resolvedGrants.PromptSections), resolvedGrants.AppliedNames)
 			}
 
-			// Update code execution registry AFTER all AppendSystemPrompt calls so that
-			// AppendedSystemPrompts is fully populated. rebuildSystemPromptWithUpdatedToolStructure
-			// will then re-assemble the final prompt as: (clean base with tool structure) + all appended prompts.
-			if err := underlyingAgent.UpdateCodeExecutionRegistry(); err != nil {
-				log.Printf("[CUSTOM TOOLS] Warning: Failed to update code execution registry: %v", err)
-			}
+			// Registrations update execution routing immediately. Restore the
+			// delegation wrappers once after the final registration.
 			if refreshMultiAgentDelegationTools != nil {
 				if err := refreshMultiAgentDelegationTools(); err != nil {
 					log.Printf("[DELEGATION TOOLS] Warning: Failed to restore async delegation wrappers after registry rebuild: %v", err)
@@ -5040,13 +5036,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			log.Printf("[SYSTEM_PROMPT] Final assembled prompt length=%d chars, hasGuidance=%v", len(underlyingAgent.GetSystemPrompt()), req.LLMGuidance != "" || llmGuidance != "")
+			log.Printf("[SYSTEM_PROMPT] Final assembled prompt length=%d chars, hasGuidance=%v", len(underlyingAgent.Instructions()), req.LLMGuidance != "" || llmGuidance != "")
 
 			// Add CLI-specific tool mapping for providers that use the api-bridge.
 			// Tool names differ by CLI: Claude Code uses mcp__api-bridge__* while
 			// Codex/Gemini expose the same bridge as mcp_api-bridge_*.
 			if common.IsCLIProvider(req.Provider) {
-				underlyingAgent.AppendSystemPrompt(virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider))
+				underlyingAgent.AddInstructions(virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider))
 				log.Printf("[CLI PROVIDER] Added custom tool HTTP API mapping for %s", req.Provider)
 			}
 			// --- Workflow Phase Chat Mode ---
@@ -5269,19 +5265,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 				// Override the agent's system prompt — use SetSystemPrompt to properly set tracking flags
 				// so that rebuildSystemPromptWithUpdatedToolStructure preserves this prompt
-				underlyingAgent.ClearAppendedSystemPrompts()
-				underlyingAgent.SetSystemPrompt(phaseSystemPrompt)
+				underlyingAgent.ResetInstructions(phaseSystemPrompt)
 				log.Printf("[WORKFLOW_PHASE] Overrode system prompt (%d chars) for phase=%s", len(phaseSystemPrompt), workflowPhaseID)
 
 				// Re-append supplementary prompts after system prompt override
 				// (ClearAppendedSystemPrompts above wiped browser/secrets instructions)
 				if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-					underlyingAgent.AppendSystemPrompt(capabilitySection)
+					underlyingAgent.AddInstructions(capabilitySection)
 					log.Printf("[WORKFLOW_PHASE] Appended LLM/media capability snapshot to %s system prompt", workflowPhaseID)
 				}
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					if notificationPrompt := buildWorkflowNotificationInstructionsPrompt(req.NotificationRunSummaryInstructions, req.NotificationPulseSummaryInstructions); notificationPrompt != "" {
-						underlyingAgent.AppendSystemPrompt(notificationPrompt)
+						underlyingAgent.AddInstructions(notificationPrompt)
 						log.Printf("[WORKFLOW_PHASE] Appended workflow notification preferences to %s system prompt", workflowPhaseID)
 					}
 				}
@@ -5296,7 +5291,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						}
 						secretPrompt := todo_creation_human.BuildWorkflowSecretPrompt(entries)
 						if secretPrompt != "" {
-							underlyingAgent.AppendSystemPrompt(secretPrompt)
+							underlyingAgent.AddInstructions(secretPrompt)
 							log.Printf("[WORKFLOW_PHASE] Appended %d secrets to %s system prompt", len(entries), workflowPhaseID)
 						}
 					}
@@ -5331,7 +5326,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 									_, endpointGuidance := cdpPromptEndpoints(phaseConfiguredCDPPorts, phaseBrowserCfg.CdpPort)
 									browserPrompt += endpointGuidance + " These are configured candidates only; `agent_browser status` is authoritative for current reachability.\n"
 								}
-								underlyingAgent.AppendSystemPrompt(browserPrompt)
+								underlyingAgent.AddInstructions(browserPrompt)
 								log.Printf("[WORKFLOW_PHASE] Appended dynamic browser pointer to %s (configured_mode=%s, candidate_cdp_ports=%v)",
 									workflowPhaseID, configuredBrowserMode, phaseConfiguredCDPPorts)
 							}
@@ -5380,7 +5375,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if len(req.WorkflowContextPaths) > 0 {
 					workflowPrompt := buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL())
 					if workflowPrompt != "" {
-						underlyingAgent.AppendSystemPrompt(workflowPrompt)
+						underlyingAgent.AddInstructions(workflowPrompt)
 						log.Printf("[WORKFLOW_PHASE] Re-appended workflow context prompt (%d workflows) after system prompt override", len(req.WorkflowContextPaths))
 					}
 				}
@@ -5611,7 +5606,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// Only inject secret names (not values) into the system prompt — values are in env vars
 			secretPrompt := buildSecretNamesPrompt(allChatSecrets)
 			if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
-				underlyingAgent.AppendSystemPrompt(secretPrompt)
+				underlyingAgent.AddInstructions(secretPrompt)
 				logfWithContext(queryLogCtx, "[SECRETS] Injected %d secret names (not values) into system prompt", len(allChatSecrets))
 			}
 		}
