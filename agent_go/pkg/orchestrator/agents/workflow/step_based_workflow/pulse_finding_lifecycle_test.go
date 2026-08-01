@@ -664,6 +664,7 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
 		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
 		Disposition: FindingDispositionChangedUnverified, Summary: "Applied; awaiting next valid run.",
+		NextCheck:    "next scheduled dev collection run writes latency_daily_metrics",
 		ChangedFiles: []string{"planning/plan.json"},
 		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
 	}})
@@ -690,5 +691,34 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
 	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
 		t.Fatalf("another module closed an attempt it did not make: %v", err)
+	}
+}
+
+// TestChangedUnverifiedMustNameWhatWillSettleIt makes the verification loop
+// closable.
+//
+// A fix awaiting proof is only verifiable if the next reviewer can tell whether
+// the evidence has arrived. Without a named boundary it cannot, so it re-attempts
+// the fix instead of checking it — rtslatency carried a finding at seen_count 4,
+// still awaiting_verification, repaired again on every pass because nothing ever
+// checked the run that had since produced its evidence.
+func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
+	base := PulseFindingDisposition{
+		Fingerprint: "fp", FindingID: "BUG-1", AttemptID: "fix-1",
+		Disposition:  FindingDispositionChangedUnverified,
+		Summary:      "Collector now writes the column.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
+	}
+
+	if err := validateFindingDisposition(base); err == nil ||
+		!strings.Contains(err.Error(), "requires next_check") {
+		t.Fatalf("a fix awaiting proof was accepted with nothing naming what would settle it: %v", err)
+	}
+
+	settled := base
+	settled.NextCheck = "next dev collection run writes latency_daily_metrics"
+	if err := validateFindingDisposition(settled); err != nil {
+		t.Fatalf("a fix naming its evidence boundary was rejected: %v", err)
 	}
 }

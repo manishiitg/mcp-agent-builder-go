@@ -55,6 +55,23 @@ thesis, relationship to the active experiment, and why incremental repair is
 insufficient. Reject maintenance- or instrumentation-only Advisor results.
 Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 
+**Verify before discovering.** The reviewer is the independent check on fixes it
+did not make. Before looking for anything new, take every `changed_unverified`
+finding this module owns whose `next_check` evidence has since arrived, and
+judge it against the post-change evidence: `passed`, `failed`, or
+`inconclusive`. Return those verdicts as a verification list, separate from new
+findings. The Fixer routes them — passed closes the finding as `fixed_verified`,
+failed reopens it, inconclusive leaves it awaiting the boundary it still names.
+
+Verification does not count against the finding cap. It is not discovery, and
+charging it to the same budget makes a reviewer choose between confirming past
+work and finding new problems.
+
+Without this, only failure is detectable. A fix that worked is never confirmed,
+so it is re-attempted every pass: rtslatency carried a finding at seen_count 4,
+still awaiting_verification, repaired again on each cycle because nothing ever
+checked the run that had since produced its evidence.
+
 Require a verdict, next check, and every evidence-backed ordered finding with
 stable ID, target, claim, evidence, bounded fix, verification, and judgment
 reason. Classify retained findings rather than omitting them. Clean means an

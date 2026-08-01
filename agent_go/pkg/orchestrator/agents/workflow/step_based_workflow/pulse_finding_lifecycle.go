@@ -435,6 +435,14 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
 			return fmt.Errorf("changed_unverified finding %q requires paired before_refs and after_refs", disposition.FindingID)
 		}
+		// next_check names the evidence that will settle this. Without it the
+		// next reviewer cannot tell whether the producing run has happened, so
+		// the finding is re-attempted instead of verified — rtslatency held one
+		// at seen_count 4, still awaiting_verification, because each pass
+		// re-fixed it rather than checking the run that had since occurred.
+		if disposition.NextCheck == "" {
+			return fmt.Errorf("changed_unverified finding %q requires next_check naming the run, table, or artifact whose arrival proves or disproves this fix", disposition.FindingID)
+		}
 		if inconclusive == 0 || failed > 0 {
 			return fmt.Errorf("changed_unverified finding %q requires an inconclusive verification and no failed check", disposition.FindingID)
 		}
