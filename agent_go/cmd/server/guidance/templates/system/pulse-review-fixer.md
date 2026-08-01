@@ -67,7 +67,10 @@ change can address it. Record `external_owner`, a stable `reason_code`, and an
 evidence/capability/user `reopen_condition`. This removes it from Pulse's active
 queue and suppresses unchanged rediscovery while keeping it visible on the
 external-action board. `blocked` remains for retryable/current blockers;
-`awaiting_user` remains in the decision queue.
+`awaiting_user` remains in the decision queue and requires a still-pending
+`create_human_input_request`, passed as `human_input_id`. Create the decision
+first: a finding marked awaiting_user with no question leaves the operator told
+that something needs them and given nothing to answer.
 
 Deduplicate findings before filing: match stable target/component, behavioral
 claim, and evidence boundary against active and suppressed findings. Reuse the
@@ -91,8 +94,10 @@ Before mutation capture targets, time, hashes/versions, and baseline. Load
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint
 created from its `CONCERNS:` line, and call `start_pulse_fix_attempt` before
-mutation. Keep its `attempt_id`. If a finding lacks a fingerprint, block it as a
-reviewer-contract failure instead of making an untracked change.
+mutation. From `get_pulse_finding_backlog`, pass `issue.id` as `finding_id` and
+the fingerprint from that same item; keep its `attempt_id`. IDs address records
+but never decide semantic sameness. If a finding lacks either value, block it as
+a reviewer-contract failure instead of making an untracked change.
 
 Reconcile every finding ID to one disposition; missing/duplicates block its
 module. Strategy/LLM-Ops changes need exact valid approval.

@@ -518,3 +518,74 @@ func TestFindingBacklogLeadsWithTheLargestCluster(t *testing.T) {
 		t.Fatalf("the isolated finding should follow the cluster, got %q", lifecycles[3].StepID)
 	}
 }
+
+// TestAwaitingUserRequiresARealPendingQuestion closes the gap that left
+// rtslatency with five findings marked awaiting_user and zero pending
+// questions: the operator was told five things needed their decision and had
+// nothing to answer, with no way to discover why.
+func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "eval_health"
+	pulseRunID := "pulse-1"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, module,
+		"eval steps declare no max_score scale")
+
+	disposition := PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint,
+		FindingID:   "EVAL-1",
+		Disposition: FindingDispositionAwaitingUser,
+		Summary:     "Needs a decision on the score scale.",
+	}
+
+	// No question at all: the label alone must not be accepted.
+	if err := validateFindingDisposition(disposition); err == nil ||
+		!strings.Contains(err.Error(), "requires human_input_id") {
+		t.Fatalf("awaiting_user was accepted with no question to answer: %v", err)
+	}
+
+	// A question that was never created must not satisfy it either.
+	disposition.HumanInputID = "invented-id"
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+	err = RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, "")
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("awaiting_user accepted a human input id that was never created: %v", err)
+	}
+
+	// An answered question does not keep a finding waiting either.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO report_human_inputs (id, status) VALUES ('answered-q', 'answered')`); err != nil {
+		t.Fatalf("seed answered question: %v", err)
+	}
+	disposition.HumanInputID = "answered-q"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil ||
+		!strings.Contains(err.Error(), "only wait on a pending decision") {
+		t.Fatalf("a finding was parked on an already-answered question: %v", err)
+	}
+
+	// A real pending question is accepted.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO report_human_inputs (id, status) VALUES ('open-q', 'pending')`); err != nil {
+		t.Fatalf("seed pending question: %v", err)
+	}
+	disposition.HumanInputID = "open-q"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err != nil {
+		t.Fatalf("a genuine pending decision was rejected: %v", err)
+	}
+}

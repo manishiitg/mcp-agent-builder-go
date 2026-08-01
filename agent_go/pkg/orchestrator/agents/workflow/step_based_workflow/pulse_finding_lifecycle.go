@@ -128,7 +128,13 @@ type PulseFindingDisposition struct {
 	ExternalOwner   string                     `json:"external_owner,omitempty"`
 	ReasonCode      string                     `json:"reason_code,omitempty"`
 	ReopenCondition string                     `json:"reopen_condition,omitempty"`
-	Verification    []PulseFindingVerification `json:"verification,omitempty"`
+	// HumanInputID links an awaiting_user finding to the question actually put
+	// to the operator. Without it "waiting on the user" is recordable while the
+	// user is never asked, which is exactly what happened: rtslatency held five
+	// findings marked awaiting_user and zero pending questions, so the operator
+	// had nothing to answer and no way to discover that.
+	HumanInputID string                     `json:"human_input_id,omitempty"`
+	Verification []PulseFindingVerification `json:"verification,omitempty"`
 }
 
 type PulseFindingEvent struct {
@@ -142,6 +148,7 @@ type PulseFindingEvent struct {
 }
 
 type PulseFindingLifecycle struct {
+	Issue           PulseIssue                 `json:"issue"`
 	Fingerprint     string                     `json:"fingerprint"`
 	FindingID       string                     `json:"finding_id,omitempty"`
 	Module          string                     `json:"module,omitempty"`
@@ -222,6 +229,7 @@ func NormalizePulseFindingDisposition(disposition PulseFindingDisposition) Pulse
 	disposition.ExternalOwner = strings.TrimSpace(disposition.ExternalOwner)
 	disposition.ReasonCode = strings.TrimSpace(disposition.ReasonCode)
 	disposition.ReopenCondition = strings.TrimSpace(disposition.ReopenCondition)
+	disposition.HumanInputID = strings.TrimSpace(disposition.HumanInputID)
 	for index := range disposition.Verification {
 		verification := &disposition.Verification[index]
 		verification.Check = strings.TrimSpace(verification.Check)
@@ -425,6 +433,13 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		if len(disposition.Verification) > 0 && failed == 0 {
 			return fmt.Errorf("failed finding %q with verification evidence requires a failed check", disposition.FindingID)
 		}
+	case FindingDispositionAwaitingUser:
+		// A finding cannot wait on a decision nobody was asked for. Requiring
+		// the question id here is what turns "awaiting_user" from a label into
+		// something the operator can actually act on.
+		if disposition.HumanInputID == "" {
+			return fmt.Errorf("awaiting_user finding %q requires human_input_id: create the decision with create_human_input_request first, or use blocked/proposal_only if no question is being asked", disposition.FindingID)
+		}
 	case FindingDispositionExternalAction:
 		if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
 			return fmt.Errorf("external_action_required finding %q requires external_owner, reason_code, and reopen_condition", disposition.FindingID)
@@ -503,6 +518,24 @@ func RecordPulseFindingDispositionsTx(
 		}
 		if concernExists != 1 {
 			return fmt.Errorf("no concern with fingerprint %q", fingerprint)
+		}
+		// Prove the decision exists and is still open. A claimed id is not
+		// evidence: an already-answered or invented question would leave the
+		// finding parked on a decision the operator can never make.
+		if disposition.Disposition == FindingDispositionAwaitingUser {
+			var inputStatus string
+			err := db.QueryRowContext(ctx,
+				`SELECT status FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
+			).Scan(&inputStatus)
+			if err != nil {
+				if err == sql.ErrNoRows {
+					return fmt.Errorf("awaiting_user finding %q references human input %q, which does not exist", findingID, disposition.HumanInputID)
+				}
+				return err
+			}
+			if inputStatus != "pending" {
+				return fmt.Errorf("awaiting_user finding %q references human input %q with status %q; a finding can only wait on a pending decision", findingID, disposition.HumanInputID, inputStatus)
+			}
 		}
 		if attemptID != "" {
 			var attemptModule, attemptRun string
@@ -814,6 +847,14 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			out[index].Events = append(out[index].Events, event)
 		}
 		eventRows.Close()
+		out[index].Issue = NewPulseIssue(out[index])
+		// Ordinary and migrated concerns predate reviewer-assigned IDs. Expose
+		// the deterministic compact issue ID through the legacy lifecycle field
+		// too, because fixer write tools use finding_id as the durable human
+		// address while fingerprint remains the internal matching key.
+		if strings.TrimSpace(out[index].FindingID) == "" {
+			out[index].FindingID = out[index].Issue.ID
+		}
 	}
 	return out, nil
 }
