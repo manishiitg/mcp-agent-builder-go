@@ -1313,7 +1313,7 @@ func (iwm *InteractiveWorkshopManager) SetToolCallQuery(mainSessionID string, qu
 }
 
 // GetToolsForWorkshopMode returns the list of tool names that should be available
-// for the given workshop mode. This is used with Agent.SetToolAccess() to dynamically
+// for the given workshop mode. This is used as the per-turn ToolPolicy to dynamically
 // restrict tools per-turn as the user switches modes from the frontend.
 //
 // Tools are grouped into categories:
@@ -1740,7 +1740,7 @@ func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report preview tool: %v", agentName, err))
 	}
-	mcpAgentRef.SetToolAccess(allowedToolNames)
+	agent.GetBaseAgent().SetToolPolicy(allowedToolNames)
 	logger.Info(fmt.Sprintf("🔧 %s: registered workshop mutation tools and applied allow list (%d tools)", agentName, len(allowedToolNames)))
 }
 

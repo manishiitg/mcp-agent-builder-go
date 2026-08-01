@@ -105,6 +105,7 @@ type BaseAgent struct {
 	maxTurns     int
 	provider     string
 	mcpSessionID string
+	toolPolicy   mcpagent.ToolPolicy
 }
 
 // NewBaseAgent creates a new BaseAgent instance with comprehensive functionality
@@ -115,6 +116,7 @@ func NewBaseAgent(
 	llm llmtypes.Model,
 	instructions string,
 	serverNames []string,
+	directTools []mcpagent.ToolDefinition,
 	selectedTools []string, // NEW parameter
 	useCodeExecutionMode bool, // NEW parameter
 	mode AgentMode,
@@ -345,9 +347,27 @@ func NewBaseAgent(
 			loggerv2.Int("overrides_count", len(runtimeOverrides)))
 	}
 
-	// Create agent with all options
-	// modelID is automatically extracted from llm
-	agent, err := mcpagent.NewAgent(ctx, llm, configPath, options...)
+	mcpSources := make([]mcpagent.MCPToolSource, 0, len(serverNames))
+	for _, serverName := range serverNames {
+		if name := strings.TrimSpace(serverName); name != "" {
+			mcpSources = append(mcpSources, mcpagent.MCPToolSource{Name: name})
+		}
+	}
+
+	// Create the agent from one identity value. Runtime options remain on the
+	// compatibility path while sessions/events are migrated, but instructions,
+	// direct tools, and MCP sources are now fixed before construction.
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
+		Instructions: instructions,
+		Tools: mcpagent.ToolSet{
+			Direct: directTools,
+			MCP:    mcpSources,
+		},
+	}, mcpagent.RuntimeConfig{
+		Model:         llm,
+		MCPConfigPath: configPath,
+		LegacyOptions: options,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
@@ -388,17 +408,6 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 
 	startTime := time.Now()
 
-	// Prepare messages: always append userMessage to conversation history
-	messages := make([]llmtypes.MessageContent, len(conversationHistory))
-	copy(messages, conversationHistory)
-
-	// Always append the user message
-	userMessageContent := llmtypes.MessageContent{
-		Role:  llmtypes.ChatMessageTypeHuman,
-		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
-	}
-	messages = append(messages, userMessageContent)
-
 	// Execute the agent with orchestrator context and conversation history
 	orchestratorCtx := context.WithValue(ctx, orchestratorIDKey, fmt.Sprintf("%s_%s_%d", ba.agentType, ba.name, time.Now().UnixNano()))
 	if ba.mcpSessionID != "" {
@@ -407,14 +416,11 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		// scoped folder guard instead of falling back to the parent workflow guard.
 		orchestratorCtx = context.WithValue(orchestratorCtx, common.ChatSessionIDKey, ba.mcpSessionID)
 	}
-	var answer string
-	var updatedConversationHistory []llmtypes.MessageContent
-	var err error
-	if handle := ba.agent.CurrentAgentSessionHandle(); handle != nil && !handle.Provider.Empty() {
-		answer, updatedConversationHistory, _, err = ba.agent.ContinueAgentSessionWithHistory(orchestratorCtx, handle, messages)
-	} else {
-		answer, updatedConversationHistory, err = ba.agent.AskWithHistory(orchestratorCtx, messages)
-	}
+	result, err := ba.agent.Run(orchestratorCtx, mcpagent.Turn{
+		Input:      userMessage,
+		History:    conversationHistory,
+		ToolPolicy: ba.toolPolicy,
+	})
 
 	executionTime := time.Since(startTime)
 
@@ -425,7 +431,13 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 	// Removed verbose logging
 	_ = executionTime
 
-	return answer, updatedConversationHistory, nil
+	return result.Text, result.History, nil
+}
+
+// SetToolPolicy applies a runtime authorization view to subsequent turns. It
+// does not mutate the agent definition or its request-time tool registry.
+func (ba *BaseAgent) SetToolPolicy(toolNames []string) {
+	ba.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
 }
 
 // Agent returns the underlying MCP agent

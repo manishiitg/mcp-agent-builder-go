@@ -117,6 +117,7 @@ func (boa *BaseOrchestratorAgent) Initialize(ctx context.Context) error {
 		llmInstance,
 		boa.systemPrompt,
 		boa.config.ServerNames,
+		boa.config.DirectTools,
 		boa.config.SelectedTools,
 		boa.config.UseCodeExecutionMode,
 		boa.config.Mode,

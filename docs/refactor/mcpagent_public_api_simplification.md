@@ -448,6 +448,30 @@ diagnostics must identify whether the legacy or replacement path handled a run.
 - `go test ./...` passes in `mcpagent` and `go test ./agent_go/...` passes in
   `mcp-agent-builder-go`.
 
+## Cutover progress (2026-08-01)
+
+The branch-level cutover now has a working end-to-end spine:
+
+- direct and MCP tools enter one canonical name-keyed registry;
+- request-time manifests and `get_api_spec` resolve from that registry;
+- conflicting implementation owners fail before replacing registry state;
+- `AgentDefinition` is validated and deeply cloned before runtime creation;
+- the reusable `agentsession` path and the main orchestrator assemble direct
+  tools and MCP sources before constructing the agent;
+- `BaseAgent` executes through `Run(Turn)` rather than choosing among ask and
+  continuation methods itself;
+- `Turn.ToolPolicy` is request-scoped and controls the rendered manifest,
+  schema discovery, and session HTTP execution guard without changing identity;
+- `Session` is pinned to exactly five methods: `Run`, `Send`, `Snapshot`,
+  `Events`, and `Close`; and
+- dead legacy exports have been made internal, reducing the concrete `Agent`
+  surface from 70 to 54 methods so far.
+
+The remaining `Agent` methods still have live builder, chat, event, dynamic-tool,
+or provider-adapter callers. They require caller migration rather than blind
+visibility changes; the public-surface golden test prevents either accidental
+regrowth or undocumented removal while that deletion pass continues.
+
 ## Review (2026-08-01)
 
 Endorsed in direction. The core diagnosis — *"a caller can invoke individually
