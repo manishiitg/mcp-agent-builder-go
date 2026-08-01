@@ -611,9 +611,6 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		return nil, fmt.Errorf("failed to create MCP agent: %w", err)
 	}
 
-	// Set the agent's provider field
-	agent.SetProvider(config.Provider)
-
 	// Set prompt log label for agent prompt logging
 	if config.Name != "" {
 		agent.PromptLogLabel = config.Name
@@ -725,7 +722,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 		)
 
 		// Emit the event
-		w.agent.EmitTypedEvent(ctx, serverSelectionEvent)
+		w.emitEvent(serverSelectionEvent)
 	}
 
 	// Check for context cancellation before executing the request
@@ -965,7 +962,16 @@ func (w *LLMAgentWrapper) EmitTypedEvent(ctx context.Context, eventData events.E
 	if w.closed || w.agent == nil {
 		return
 	}
-	w.agent.EmitTypedEvent(ctx, eventData)
+	w.emitEvent(eventData)
+}
+
+func (w *LLMAgentWrapper) emitEvent(eventData events.EventData) {
+	if eventData == nil || w.tracer == nil {
+		return
+	}
+	event := events.NewAgentEvent(eventData)
+	event.TraceID = string(w.traceID)
+	w.tracer.EmitEvent(event)
 }
 
 // StreamWithEvents streams text chunks from the agent during execution
@@ -1066,7 +1072,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						string(w.agent.TraceID),
 					)
 					ev.ToolCallID = tc.ID
-					w.agent.EmitTypedEvent(ctx, ev)
+					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
 					if w.agent == nil {
@@ -1087,7 +1093,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						w.config.ModelID,
 					)
 					ev.ToolCallID = tc.ID
-					w.agent.EmitTypedEvent(ctx, ev)
+					w.emitEvent(ev)
 				},
 			})
 			defer unregisterHTTPToolHook()

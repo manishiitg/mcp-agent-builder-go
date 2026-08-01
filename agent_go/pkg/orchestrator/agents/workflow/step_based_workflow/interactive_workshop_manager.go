@@ -10375,12 +10375,14 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	// it on the step config it's spawned from.
 	skillPrompt := ""
 	effectiveSkills := GetEffectiveSkills(nil, iwm.controller.BaseOrchestrator)
+	var identitySkills []*llmtypes.Skill
 	if len(effectiveSkills) > 0 {
 		if attached := skills.LoadAttachable(getWorkspaceAPIURL(), effectiveSkills); len(attached) > 0 {
-			for _, s := range attached {
-				mcpAgent.AttachSkill(s)
-			}
+			identitySkills = append(identitySkills, attached...)
 		}
+	}
+	if err := baseAgent.ApplyIdentity(ctx, identitySkills); err != nil {
+		return "", fmt.Errorf("apply background agent skills: %w", err)
 	}
 
 	secretPrompt := ""

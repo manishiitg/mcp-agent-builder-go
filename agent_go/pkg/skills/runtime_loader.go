@@ -10,7 +10,7 @@ import (
 )
 
 // LoadAttachable resolves a list of selected skill folder names to
-// `*llmtypes.Skill` values suitable for `mcpagent.Agent.AttachSkill(...)`.
+// `*llmtypes.Skill` values suitable for `mcpagent.AgentDefinition.Skills`.
 //
 // For each folder name the loader:
 //  1. Reads workspace/skills/<name>/SKILL.md, parsing the YAML

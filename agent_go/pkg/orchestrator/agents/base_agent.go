@@ -106,6 +106,9 @@ type BaseAgent struct {
 	provider     string
 	mcpSessionID string
 	toolPolicy   mcpagent.ToolPolicy
+	definition   mcpagent.AgentDefinition
+	runtime      mcpagent.RuntimeConfig
+	lastHandle   *mcpagent.AgentSessionHandle
 }
 
 // NewBaseAgent creates a new BaseAgent instance with comprehensive functionality
@@ -357,17 +360,19 @@ func NewBaseAgent(
 	// Create the agent from one identity value. Runtime options remain on the
 	// compatibility path while sessions/events are migrated, but instructions,
 	// direct tools, and MCP sources are now fixed before construction.
-	agent, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
+	definition := mcpagent.AgentDefinition{
 		Instructions: instructions,
 		Tools: mcpagent.ToolSet{
 			Direct: directTools,
 			MCP:    mcpSources,
 		},
-	}, mcpagent.RuntimeConfig{
+	}
+	runtime := mcpagent.RuntimeConfig{
 		Model:         llm,
 		MCPConfigPath: configPath,
 		LegacyOptions: options,
-	})
+	}
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, definition, runtime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
@@ -390,6 +395,8 @@ func NewBaseAgent(
 		maxTurns:     maxTurns,
 		provider:     provider,
 		mcpSessionID: mcpSessionID,
+		definition:   definition,
+		runtime:      runtime,
 	}, nil
 }
 
@@ -399,10 +406,8 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 
 	// Set or append system prompt if provided
 	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			ba.agent.SetInstructions(systemPrompt)
-		} else {
-			ba.agent.AddInstructions(systemPrompt)
+		if err := ba.ApplyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+			return "", nil, err
 		}
 	}
 
@@ -421,6 +426,7 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		History:    conversationHistory,
 		ToolPolicy: ba.toolPolicy,
 	})
+	ba.lastHandle = result.Handle
 
 	executionTime := time.Since(startTime)
 
@@ -432,6 +438,79 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 	_ = executionTime
 
 	return result.Text, result.History, nil
+}
+
+// ApplyInstructions creates a new immutable agent identity when a caller needs
+// a different prompt. Provider continuation is carried through the opaque
+// handle; the existing Agent is never mutated in place.
+func (ba *BaseAgent) ApplyInstructions(ctx context.Context, systemPrompt string, overwrite bool) error {
+	if strings.TrimSpace(systemPrompt) == "" {
+		return nil
+	}
+	nextInstructions := systemPrompt
+	if !overwrite && strings.TrimSpace(ba.definition.Instructions) != "" {
+		nextInstructions = ba.definition.Instructions + "\n\n" + systemPrompt
+	}
+	if nextInstructions == ba.definition.Instructions {
+		return nil
+	}
+
+	nextDefinition := ba.definition
+	nextDefinition.Instructions = nextInstructions
+	return ba.replaceDefinition(ctx, nextDefinition, false)
+}
+
+// ApplyIdentity rebuilds the agent with additional construction-time skills
+// and prompt supplements. It exists for workflow factories that resolve these
+// inputs after their base configuration is loaded but before the first turn.
+func (ba *BaseAgent) ApplyIdentity(ctx context.Context, skills []*llmtypes.Skill, supplements ...string) error {
+	nextDefinition := ba.definition
+	nextDefinition.Skills = append(append([]*llmtypes.Skill(nil), nextDefinition.Skills...), skills...)
+	for _, supplement := range supplements {
+		if strings.TrimSpace(supplement) == "" {
+			continue
+		}
+		if strings.TrimSpace(nextDefinition.Instructions) == "" {
+			nextDefinition.Instructions = supplement
+		} else {
+			nextDefinition.Instructions += "\n\n" + supplement
+		}
+	}
+	return ba.replaceDefinition(ctx, nextDefinition, false)
+}
+
+func (ba *BaseAgent) replaceDefinition(ctx context.Context, nextDefinition mcpagent.AgentDefinition, force bool) error {
+	if !force && nextDefinition.Instructions == ba.definition.Instructions && len(nextDefinition.Skills) == len(ba.definition.Skills) {
+		return nil
+	}
+	nextRuntime := ba.runtime
+	nextRuntime.ResumeHandle = ba.lastHandle
+	nextAgent, err := mcpagent.NewAgentFromDefinition(ctx, nextDefinition, nextRuntime)
+	if err != nil {
+		return fmt.Errorf("rebuild agent identity: %w", err)
+	}
+	nextAgent.PromptLogLabel = ba.agent.PromptLogLabel
+	nextAgent.APIKeys = ba.agent.APIKeys
+	ba.agent.Close()
+	ba.agent = nextAgent
+	ba.definition = nextDefinition
+	ba.instructions = nextDefinition.Instructions
+	return nil
+}
+
+// Resume reconstructs the runtime around persisted continuation state without
+// mutating the existing Agent instance.
+func (ba *BaseAgent) Resume(ctx context.Context, handle *mcpagent.AgentSessionHandle) error {
+	if handle == nil || handle.Empty() {
+		return nil
+	}
+	ba.lastHandle = handle
+	return ba.replaceDefinition(ctx, ba.definition, true)
+}
+
+// SessionHandle returns the latest opaque continuation state produced by Run.
+func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
+	return ba.lastHandle
 }
 
 // SetToolPolicy applies a runtime authorization view to subsequent turns. It

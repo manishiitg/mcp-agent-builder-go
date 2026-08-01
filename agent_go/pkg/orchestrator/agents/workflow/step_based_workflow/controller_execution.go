@@ -876,7 +876,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	var capturedSystemPrompt string
 	if executionAgent != nil {
 		if ba := executionAgent.GetBaseAgent(); ba != nil && ba.Agent() != nil {
-			capturedSystemPrompt = ba.Agent().Instructions()
+			capturedSystemPrompt = ba.Agent().Definition().Instructions
 		}
 	}
 	promptsPath := fmt.Sprintf("%s/%s-prompts.json", logDir, filenameBase)
@@ -1896,9 +1896,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					if eoa, ok := executionAgent.(*WorkflowExecutionOnlyAgent); ok {
 						preSystemPrompt := eoa.executionOnlySystemPromptProcessor(templateVars)
 						if ba := executionAgent.GetBaseAgent(); ba != nil {
-							if mcpAg := ba.Agent(); mcpAg != nil {
-								mcpAg.SetInstructions(preSystemPrompt)
-								preSystemPrompt = mcpAg.Instructions()
+							if ba.Agent() != nil {
+								if err := ba.ApplyInstructions(ctx, preSystemPrompt, true); err != nil {
+									return "", updatedContextFiles, fmt.Errorf("prepare execution agent instructions: %w", err)
+								}
+								preSystemPrompt = ba.Agent().Definition().Instructions
 							}
 						}
 						preUserMessage := eoa.executionOnlyUserMessageProcessor(templateVars)

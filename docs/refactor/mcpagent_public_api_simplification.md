@@ -469,13 +469,23 @@ The branch-level cutover now has a working end-to-end spine:
   `Events`, and `Close`; and
 - structured `Result.Usage` now includes token counts, cost components, and
   context utilization, removing the wrapper's need to query pricing state; and
+- provider-native continuation is now supplied through `RuntimeConfig`, and
+  workflow recovery/identity changes rebuild an agent around the opaque handle
+  rather than mutating the live instance;
+- workflow supplementary skills and prompt sections are applied by creating a
+  replacement immutable definition before the turn, while preserving the MCP
+  session and provider continuation handle; and
 - dead legacy exports have been made internal, reducing the concrete `Agent`
-  surface from 70 to 54 methods so far.
+  surface from 70 to 53 methods so far.
 
-The remaining `Agent` methods still have live builder, chat, event, dynamic-tool,
-or provider-adapter callers. They require caller migration rather than blind
-visibility changes; the public-surface golden test prevents either accidental
-regrowth or undocumented removal while that deletion pass continues.
+The remaining `Agent` methods still have live chat/server, gRPC, event,
+dynamic-tool, or provider-adapter callers. In particular, the main chat server
+still assembles prompt sections, skills, tools, and observers after creating its
+wrapper. Those five compatibility mutators remain public until that factory is
+changed to collect all identity inputs first; deleting them earlier would lose
+observers/tools during repeated reconstruction. The public-surface golden test
+prevents either accidental regrowth or undocumented removal while that final
+factory migration continues.
 
 ## Review (2026-08-01)
 

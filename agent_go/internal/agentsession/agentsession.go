@@ -317,35 +317,22 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		// just documenting it.
 		closeOtherInteractiveSessions(sessionID)
 	}
+	// The app's current activity directory is authoritative. A persisted handle
+	// may contain an older shared root, so correct it before construction applies
+	// the opaque continuation state.
+	if cfg.SessionHandle != nil && !cfg.SessionHandle.Empty() && strings.TrimSpace(cfg.WorkingDir) != "" {
+		cfg.SessionHandle.Provider.WorkingDir = cfg.WorkingDir
+	}
 	agent, err := mcpagent.NewAgentFromDefinition(ctx, definitionFromConfig(cfg), mcpagent.RuntimeConfig{
 		Model:         model,
 		MCPConfigPath: b.mcpConfigPath,
+		ResumeHandle:  cfg.SessionHandle,
 		LegacyOptions: opts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
 
-	// Restore provider-native continuation state (Claude Code's `--resume` UUID,
-	// etc.) BEFORE the first generation so the CLI reloads full prior context
-	// from its own session store — the durable, cross-restart path. Applied even
-	// though the warm tmux may already hold context in-process: the two coexist
-	// (the provider reuses a live tmux when present, else mints a fresh one and
-	// resumes via this handle). This is what AgentWorks does after a restart.
-	if cfg.SessionHandle != nil && !cfg.SessionHandle.Empty() {
-		// ApplyAgentSessionHandle restores handle.Provider.WorkingDir onto the
-		// agent, OVERWRITING the WithCodingAgentWorkingDir value opts already
-		// set above — confirmed live: a persisted handle saved before this
-		// activity's own working dir existed kept restoring the OLD shared
-		// workspace-root path every single turn, silently undoing the whole
-		// point of scoping each activity to its own folder. cfg.WorkingDir is
-		// this app's own current, authoritative choice — never a stale one to
-		// defer to — so pin it onto the handle before applying it.
-		if strings.TrimSpace(cfg.WorkingDir) != "" {
-			cfg.SessionHandle.Provider.WorkingDir = cfg.WorkingDir
-		}
-		agent.ApplyAgentSessionHandle(cfg.SessionHandle)
-	}
 	runtimeSession, err := agent.Start(ctx)
 	if err != nil {
 		agent.Close()

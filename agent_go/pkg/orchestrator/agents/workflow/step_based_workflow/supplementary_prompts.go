@@ -9,8 +9,6 @@ import (
 	browserinstructions "github.com/manishiitg/coding-agent-loop/agent_go/pkg/instructions"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
-
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -20,18 +18,20 @@ import (
 // This is the standard post-setup injection used by execution and todo-task agents.
 func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	ctx context.Context,
-	mcpAgent *mcpagent.Agent,
+	baseAgent *agents.BaseAgent,
 	config *agents.OrchestratorAgentConfig,
 	effectiveSkills []string,
 	isolatedSessionID string,
 	attachGlobalLearnings bool,
 ) {
+	var identitySkills []*llmtypes.Skill
+	var supplements []string
 	// Coding CLI agents get static AgentWorks contracts as native projected
 	// skills. The execution role deliberately receives only the reference
 	// corpus, not workflow-commands: slash-command procedures belong to the
 	// builder chat and add irrelevant matching noise inside a workflow step.
 	if workflowReference := projectedWorkflowReferenceSkill(config); workflowReference != nil {
-		mcpAgent.AttachSkill(workflowReference)
+		identitySkills = append(identitySkills, workflowReference)
 		hcpo.GetLogger().Info(fmt.Sprintf("📚 Attached projected workflow reference skill (%d supporting docs)", len(workflowReference.SupportingFiles)))
 	}
 
@@ -43,9 +43,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	// BuildWorkflowSkillPrompt + AppendSystemPrompt.
 	if len(effectiveSkills) > 0 {
 		if attached := skills.LoadAttachable(getWorkspaceAPIURL(), effectiveSkills); len(attached) > 0 {
-			for _, s := range attached {
-				mcpAgent.AttachSkill(s)
-			}
+			identitySkills = append(identitySkills, attached...)
 			hcpo.GetLogger().Info(fmt.Sprintf("🎯 Attached %d step skill(s) to agent: %v", len(attached), effectiveSkills))
 		}
 	}
@@ -62,7 +60,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	// setup) — both paths land the identical pointer skill.
 	if attachGlobalLearnings {
 		if globalSkill := skills.LoadGlobalSkill(getWorkspaceAPIURL(), hcpo.GetWorkspacePath()); globalSkill != nil {
-			mcpAgent.AttachSkill(globalSkill)
+			identitySkills = append(identitySkills, globalSkill)
 			hcpo.GetLogger().Info("🌐 Attached workflow global skill pointer (_global → learnings/_global/)")
 		}
 	}
@@ -71,7 +69,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	if isolatedSessionID != "" {
 		for _, skill := range effectiveSkills {
 			if skill == "agent-browser" {
-				mcpAgent.AddInstructions(fmt.Sprintf(
+				supplements = append(supplements, fmt.Sprintf(
 					"## Browser Isolation\nYou have an isolated browser session. When using the agent_browser tool, use session name %q instead of \"default\" to avoid sharing browser state with other agents.",
 					isolatedSessionID,
 				))
@@ -86,7 +84,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	if len(effectiveSecrets) > 0 {
 		secretPrompt := BuildWorkflowSecretPrompt(effectiveSecrets)
 		if secretPrompt != "" {
-			mcpAgent.AddInstructions(secretPrompt)
+			supplements = append(supplements, secretPrompt)
 			hcpo.GetLogger().Info(fmt.Sprintf("🔐 Added secret prompt to agent (%d secrets)", len(effectiveSecrets)))
 		}
 	}
@@ -99,7 +97,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 		browserPrompt = browserinstructions.BuildBrowserRuntimeInstructions(browserCfg)
 	}
 	if browserPrompt != "" {
-		mcpAgent.AddInstructions(browserPrompt)
+		supplements = append(supplements, browserPrompt)
 		hcpo.GetLogger().Info(fmt.Sprintf("🌐 Added browser instructions to agent (agent-browser=%v, cdp=%v)",
 			browserCfg.HasAgentBrowser, browserCfg.CdpPort > 0))
 	}
@@ -115,8 +113,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 		if hostDownloads := common.CDPHostDownloadsReadPath(browserCfg.Mode); hostDownloads != "" {
 			downloadsPrompt += fmt.Sprintf(" In CDP mode, Chrome-native downloads can land in the host Downloads folder %q. That host folder is read-only: copy needed files into %q first, then process the workspace copy. Never write, move, or delete files under the host Downloads folder.", hostDownloads, browserDownloadsPath)
 		}
-		mcpAgent.AddInstructions(downloadsPrompt)
+		supplements = append(supplements, downloadsPrompt)
 		hcpo.GetLogger().Info(fmt.Sprintf("🌐 Added workflow browser downloads guidance to agent: %s", browserDownloadsPath))
+	}
+	if err := baseAgent.ApplyIdentity(ctx, identitySkills, supplements...); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to apply supplementary agent identity: %v", err))
 	}
 
 }

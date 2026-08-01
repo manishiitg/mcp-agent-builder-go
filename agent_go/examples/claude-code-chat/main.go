@@ -229,13 +229,8 @@ func run(ctx context.Context, log loggerv2.Logger) error {
 
 	// Print tool index at startup so we can verify custom tools are included
 	fmt.Fprintf(os.Stderr, "\n=== Tool Index (UseCodeExecutionMode=%v) ===\n", agent.UseCodeExecutionMode)
-	if sp := agent.Instructions(); sp != "" {
-		if start := strings.Index(sp, "```json\n"); start != -1 {
-			jsonStart := start + 8
-			if end := strings.Index(sp[jsonStart:], "\n```"); end != -1 {
-				fmt.Fprintf(os.Stderr, "%s\n", sp[jsonStart:jsonStart+end])
-			}
-		}
+	if index, err := json.MarshalIndent(agent.Definition().Tools, "", "  "); err == nil {
+		fmt.Fprintf(os.Stderr, "%s\n", index)
 	}
 	fmt.Fprintf(os.Stderr, "=== End Tool Index ===\n\n")
 
@@ -753,33 +748,11 @@ func handleCommand(input string, history *[]llm.MessageContent, agent *mcpagent.
 		}
 		return true, false
 	case "/index":
-		// Extract and print the tool index JSON from the system prompt.
-		// The tool index is embedded inside <available_tools>...</available_tools>
-		// with a ```json code block containing the actual JSON.
-		sp := agent.Instructions()
-		start := strings.Index(sp, "<available_tools>")
-		end := strings.Index(sp, "</available_tools>")
-		if start == -1 || end == -1 {
-			fmt.Println("No <available_tools> section found in system prompt.")
-			fmt.Printf("System prompt length: %d chars\n", len(sp))
-			fmt.Printf("UseCodeExecutionMode: %v\n", agent.UseCodeExecutionMode)
+		index, err := json.MarshalIndent(agent.Definition().Tools, "", "  ")
+		if err != nil {
+			fmt.Printf("Unable to render tool index: %v\n", err)
 		} else {
-			block := sp[start : end+len("</available_tools>")]
-			// Try to extract just the JSON from the ```json ... ``` block
-			jsonStart := strings.Index(block, "```json\n")
-			jsonEnd := strings.Index(block[jsonStart+8:], "\n```")
-			if jsonStart != -1 && jsonEnd != -1 {
-				jsonStr := block[jsonStart+8 : jsonStart+8+jsonEnd]
-				var parsed interface{}
-				if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
-					pretty, _ := json.MarshalIndent(parsed, "", "  ")
-					fmt.Printf("Tool Index:\n%s\n", string(pretty))
-				} else {
-					fmt.Printf("Tool index (raw JSON):\n%s\n", jsonStr)
-				}
-			} else {
-				fmt.Printf("Available tools section:\n%s\n", block)
-			}
+			fmt.Printf("Tool Index:\n%s\n", string(index))
 		}
 		return true, false
 	case "/help":
@@ -788,7 +761,7 @@ func handleCommand(input string, history *[]llm.MessageContent, agent *mcpagent.
 		fmt.Println("  /clear        — reset conversation history + session")
 		fmt.Println("  /history      — show message count")
 		fmt.Println("  /usage        — show cumulative token usage")
-		fmt.Println("  /index        — show tool index from system prompt")
+		fmt.Println("  /index        — show registered tool index")
 		fmt.Println("  /help         — show this help")
 		return true, false
 	}

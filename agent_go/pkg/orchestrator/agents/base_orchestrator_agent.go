@@ -167,8 +167,6 @@ func (boa *BaseOrchestratorAgent) Initialize(ctx context.Context) error {
 		boa.baseAgent.agent.PromptLogLabel = string(boa.agentType)
 	}
 
-	// Append the agent-specific prompt to the existing system prompt
-	boa.baseAgent.agent.AddInstructions(boa.systemPrompt)
 	return nil
 }
 
@@ -183,7 +181,10 @@ func ExecuteStructuredWithInputProcessor[T any](boa *BaseOrchestratorAgent, ctx 
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
-	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
+	if err := boa.applyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+		var zero T
+		return zero, nil, err
+	}
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -275,7 +276,10 @@ func ExecuteStructuredWithInputProcessorViaTool[T any](boa *BaseOrchestratorAgen
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
-	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
+	if err := boa.applyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+		var zero T
+		return zero, nil, err
+	}
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -400,7 +404,9 @@ func (boa *BaseOrchestratorAgent) ExecuteWithTemplateValidation(ctx context.Cont
 	} else {
 		userMessage = inputProcessor(templateVars)
 	}
-	boa.applyInstructions(systemPrompt, overwriteSystemPrompt)
+	if err := boa.applyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+		return "", nil, err
+	}
 
 	// Auto-emit agent start event (after computing user message so it can be included)
 	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
@@ -539,7 +545,7 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 	var fullSystemPrompt string
 	if boa.baseAgent != nil {
 		if mcpAg := boa.baseAgent.Agent(); mcpAg != nil {
-			fullSystemPrompt = mcpAg.Instructions()
+			fullSystemPrompt = mcpAg.Definition().Instructions
 		}
 	}
 
@@ -572,15 +578,11 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 	boa.emitEvent(ctx, events.OrchestratorAgentStart, eventData)
 }
 
-func (boa *BaseOrchestratorAgent) applyInstructions(systemPrompt string, overwrite bool) {
+func (boa *BaseOrchestratorAgent) applyInstructions(ctx context.Context, systemPrompt string, overwrite bool) error {
 	if systemPrompt == "" || boa.baseAgent == nil || boa.baseAgent.agent == nil {
-		return
+		return nil
 	}
-	if overwrite {
-		boa.baseAgent.agent.SetInstructions(systemPrompt)
-		return
-	}
-	boa.baseAgent.agent.AddInstructions(systemPrompt)
+	return boa.baseAgent.ApplyInstructions(ctx, systemPrompt, overwrite)
 }
 
 // emitAgentEndEvent emits an agent end event automatically

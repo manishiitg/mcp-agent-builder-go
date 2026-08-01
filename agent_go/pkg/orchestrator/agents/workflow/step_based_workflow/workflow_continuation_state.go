@@ -73,10 +73,10 @@ func currentAgentSessionHandle(agent agents.OrchestratorAgent) *mcpagent.AgentSe
 		return nil
 	}
 	base := agent.GetBaseAgent()
-	if base == nil || base.Agent() == nil {
+	if base == nil {
 		return nil
 	}
-	handle := base.Agent().CurrentAgentSessionHandle()
+	handle := base.SessionHandle()
 	if handle == nil || handle.Empty() {
 		return nil
 	}
