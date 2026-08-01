@@ -460,10 +460,15 @@ The branch-level cutover now has a working end-to-end spine:
   tools and MCP sources before constructing the agent;
 - `BaseAgent` executes through `Run(Turn)` rather than choosing among ask and
   continuation methods itself;
+- the reusable `agentsession` adapter and the legacy `agentwrapper` execution
+  paths now also run through `Session.Run`/`Agent.Run`, with continuation,
+  updated history, usage, and cancellation results returned together;
 - `Turn.ToolPolicy` is request-scoped and controls the rendered manifest,
   schema discovery, and session HTTP execution guard without changing identity;
 - `Session` is pinned to exactly five methods: `Run`, `Send`, `Snapshot`,
   `Events`, and `Close`; and
+- structured `Result.Usage` now includes token counts, cost components, and
+  context utilization, removing the wrapper's need to query pricing state; and
 - dead legacy exports have been made internal, reducing the concrete `Agent`
   surface from 70 to 54 methods so far.
 

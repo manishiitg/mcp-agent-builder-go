@@ -37,7 +37,8 @@ type LLMAgentWrapper struct {
 	logger  loggerv2.Logger
 
 	// In-memory conversation history for multi-turn state
-	history []llmtypes.MessageContent
+	history    []llmtypes.MessageContent
+	lastResult mcpagent.Result
 }
 
 func providerUsesNativeContextManagement(provider llm.Provider) bool {
@@ -46,6 +47,21 @@ func providerUsesNativeContextManagement(provider llm.Provider) bool {
 
 func providerNeedsPlainTextHistory(provider llm.Provider) bool {
 	return common.IsCLIProvider(string(provider))
+}
+
+func configuredServerNames(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "all" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if name := strings.TrimSpace(part); name != "" {
+			result = append(result, name)
+		}
+	}
+	return result
 }
 
 func sanitizeHistoryForPlainTextProvider(messages []llmtypes.MessageContent) []llmtypes.MessageContent {
@@ -688,7 +704,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	// Emit server selection event
 	if w.agent != nil {
 		// Get the list of connected servers
-		serverNames := w.agent.GetServerNames()
+		serverNames := configuredServerNames(w.config.ServerName)
 		totalServers := len(serverNames)
 
 		// Determine source based on configuration
@@ -722,7 +738,9 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if providerNeedsPlainTextHistory(w.config.Provider) {
 		messages = sanitizeHistoryForPlainTextProvider(messages)
 	}
-	response, updatedMessages, err := w.agent.AskWithHistory(timeoutCtx, messages)
+	result, err := w.agent.Run(timeoutCtx, mcpagent.Turn{History: messages})
+	response := result.Text
+	updatedMessages := result.History
 	duration := time.Since(startTime)
 
 	// End the trace after conversation completion
@@ -746,6 +764,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	// Add assistant message to history
 	w.mu.Lock()
 	w.history = updatedMessages
+	w.lastResult = result
 	w.mu.Unlock()
 
 	return response, nil
@@ -776,10 +795,9 @@ func (w *LLMAgentWrapper) GetMetricsSnapshot() AgentMetricsSnapshot {
 		ToolCallsExecuted: w.metrics.ToolCallsExecuted,
 	}
 	// Get total cost from the underlying agent (includes provider-reported costs)
-	if w.agent != nil {
-		_, _, _, _, _, _, _, _, _, totalCost, _, _, _ := w.agent.GetTokenUsageWithPricing()
-		snapshot.TotalCostUSD = totalCost
-	}
+	w.mu.RLock()
+	snapshot.TotalCostUSD = w.lastResult.Usage.TotalCostUSD
+	w.mu.RUnlock()
 	return snapshot
 }
 
@@ -1075,17 +1093,12 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			defer unregisterHTTPToolHook()
 		}
 
-		// Execute the request with the agent. When a provider-native handle is
-		// available, route through mcpagent's continuation API while preserving
-		// the wrapper's full history for UI and persistence.
-		var response string
-		var updatedMessages []llmtypes.MessageContent
-		var err error
-		if handle := w.agent.CurrentAgentSessionHandle(); handle != nil && !handle.Provider.Empty() {
-			response, updatedMessages, _, err = w.agent.ContinueAgentSessionWithHistory(ctx, handle, messages)
-		} else {
-			response, updatedMessages, err = w.agent.AskWithHistory(ctx, messages)
-		}
+		// Execute through the single turn API. It selects fresh versus provider-
+		// native continuation internally and returns history, handle, and usage
+		// as one result.
+		result, err := w.agent.Run(ctx, mcpagent.Turn{History: messages})
+		response := result.Text
+		updatedMessages := result.History
 
 		// Fetch completed tool calls recorded at the HTTP execution level.
 		// These are written by executor/handlers.go when a tool finishes — independent of
@@ -1110,6 +1123,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			w.mu.Lock()
 			historyBefore := len(w.history)
 			w.history = updatedMessages
+			w.lastResult = result
 
 			// For CLI providers: rebuild history from tool calls recorded at the HTTP level.
 			// These are captured by executor/handlers.go when a tool finishes — even if the

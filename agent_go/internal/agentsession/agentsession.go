@@ -148,6 +148,7 @@ func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
 // a low-QPS local app) or serialize access.
 type Session struct {
 	agent    *mcpagent.Agent
+	runtime  *mcpagent.Session
 	logger   loggerv2.Logger
 	shutdown func()
 	closed   bool
@@ -345,6 +346,11 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		}
 		agent.ApplyAgentSessionHandle(cfg.SessionHandle)
 	}
+	runtimeSession, err := agent.Start(ctx)
+	if err != nil {
+		agent.Close()
+		return nil, fmt.Errorf("start agent session: %w", err)
+	}
 
 	// Track the warm-resume owner so /api/reset can proactively close its tmux
 	// session (the provider otherwise reaps it on idle).
@@ -354,6 +360,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 
 	s := &Session{
 		agent:             agent,
+		runtime:           runtimeSession,
 		logger:            logger,
 		holdsPriorContext: holdsPriorContext,
 		shutdown:          agent.Close, // per-turn agent only; shared bridge + tmux persist
@@ -578,11 +585,11 @@ func (s *Session) Ask(ctx context.Context, history []Message) (string, error) {
 			Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: m.Text}},
 		})
 	}
-	reply, _, err := s.agent.AskWithHistory(ctx, msgs)
+	result, err := s.runtime.Run(ctx, mcpagent.Turn{History: msgs})
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(sanitizeReply(reply)), nil
+	return strings.TrimSpace(sanitizeReply(result.Text)), nil
 }
 
 // sanitizeReply strips internal CLI/transport notices that occasionally bleed
@@ -633,7 +640,7 @@ func (s *Session) Handle() *Handle {
 	if s == nil || s.agent == nil {
 		return nil
 	}
-	return s.agent.CurrentAgentSessionHandle()
+	return s.runtime.Snapshot()
 }
 
 // Close disposes the per-turn agent. Safe to call more than once. It closes ONLY
@@ -645,6 +652,9 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
+	if s.runtime != nil {
+		_ = s.runtime.Close()
+	}
 	if s.shutdown != nil {
 		s.shutdown()
 	}
