@@ -2155,3 +2155,64 @@ Bring the number that would justify it: findings fix-attempted by more than one
 module, or fix attempts spent on work another module already completed. Both are
 queryable from `pulse_fix_attempt_findings` joined to `pulse_fix_attempts`. As
 of 2026-08-01 both are zero.
+
+---
+
+## Decision: the Fixer verifies its own fixes (2026-08-01)
+
+**Status: evaluated and kept.**
+
+### The proposal
+
+Mirror real QA: reviewer finds, Fixer fixes, **reviewer verifies the fix**. A
+developer checking their own work is weaker than an independent tester, and the
+current design has the Fixer record its own pass/fail verdicts.
+
+### The measurement
+
+```
+                        fixed_verified   of those, reopened
+rtslatency                    7                 0
+social-media                  3                 0
+
+reopened from findings the Fixer marked unverified:  13
+```
+
+No finding a Fixer declared `fixed_verified` has ever reopened. Every reopen came
+from `changed_unverified` — fixes the Fixer explicitly said it could not yet
+prove, which then recurred.
+
+The Fixer is calibrated. When it claims verification it is right; when it is
+unsure it says so, and those are the ones that come back. An independent
+verification pass would currently catch nothing, at the cost of an extra pass per
+fix.
+
+### Why self-verification is not the weak point it looks like
+
+Two mechanisms already cover it. `fixed_verified` requires a passing check with
+no failed or inconclusive results, so a Fixer cannot close on a claim alone. And
+recurrence is independent: a later reviewer that re-reports the finding reopens
+it automatically, without anyone being asked to audit the Fixer's claim. Blind
+rediscovery is a stronger test than asking a reviewer to confirm someone else's
+conclusion, which invites anchoring.
+
+### What the 13 reopens actually say
+
+Not that verification is weak — that many fixes need a real producing run to
+prove, and those runs were not completing. The failure is upstream in the
+pipeline, not in how fixes are checked.
+
+### If this is proposed again
+
+Bring the number: `fixed_verified` findings that later reopened.
+
+```sql
+SELECT COUNT(DISTINCT e.fingerprint)
+FROM pulse_finding_events e
+JOIN pulse_fix_attempt_findings af
+  ON af.fingerprint = e.fingerprint AND af.disposition = 'fixed_verified'
+WHERE e.event_type = 'reopened';
+```
+
+As of 2026-08-01 it is 0 in both workflows. A rising count is the signal that
+independent verification has started to earn its cost.
