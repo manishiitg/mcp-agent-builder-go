@@ -39,6 +39,7 @@ type LLMAgentWrapper struct {
 	logger    loggerv2.Logger
 	runtime   mcpagent.RuntimeConfig
 	finalized bool
+	assembly  *mcpagent.DefinitionAssembly
 
 	// In-memory conversation history for multi-turn state
 	history    []llmtypes.MessageContent
@@ -646,6 +647,7 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		logger:  logger,
 		runtime: mcpagent.RuntimeConfig{Model: llm, MCPConfigPath: config.ConfigPath, LegacyOptions: options},
 	}
+	wrapper.assembly = mcpagent.NewDefinitionAssembly(agent)
 
 	// Don't end the trace immediately - let it be ended after conversation completion
 	if mainTraceID == "" {
@@ -782,6 +784,30 @@ func (w *LLMAgentWrapper) GetUnderlyingAgent() *mcpagent.Agent {
 	return w.agent
 }
 
+func (w *LLMAgentWrapper) AddInstructions(instructions ...string) error {
+	return w.assembly.AddInstructions(instructions...)
+}
+
+func (w *LLMAgentWrapper) ResetInstructions(base string, supplements ...string) error {
+	return w.assembly.ResetInstructions(base, supplements...)
+}
+
+func (w *LLMAgentWrapper) AttachSkill(skill *llmtypes.Skill) error {
+	return w.assembly.AddSkill(skill)
+}
+
+func (w *LLMAgentWrapper) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), category string) error {
+	return w.assembly.AddTool(name, description, parameters, execute, 0, category)
+}
+
+func (w *LLMAgentWrapper) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, category string) error {
+	return w.assembly.AddTool(name, description, parameters, execute, timeout, category)
+}
+
+func (w *LLMAgentWrapper) AssemblyInstructions() string {
+	return w.assembly.Snapshot().Instructions
+}
+
 // FinalizeDefinition converts the legacy incremental chat/server assembly into
 // one immutable definition before the first turn. It is idempotent. Callers may
 // continue reading the underlying runtime afterward, but identity mutations
@@ -799,7 +825,7 @@ func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
 		return errors.New("underlying agent is nil")
 	}
 
-	view := w.agent.Definition()
+	view := w.assembly.Snapshot()
 	direct := make([]mcpagent.ToolDefinition, 0)
 	customTools := w.agent.GetCustomTools()
 	names := make([]string, 0, len(customTools))
@@ -853,6 +879,7 @@ func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
 	old := w.agent
 	w.agent = next
 	w.finalized = true
+	w.assembly.Seal()
 	mcpagent.RetireReplacedAgent(old)
 	return nil
 }

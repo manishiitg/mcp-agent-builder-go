@@ -480,6 +480,10 @@ The branch-level cutover now has a working end-to-end spine:
   the freeze includes static prompt supplements, cloned skill definitions,
   direct tool executors/schemas, and observers, while replacement retirement
   preserves shared tracers and MCP/provider state;
+- chat and delegation prompt/skill/tool assembly now routes through a dedicated
+  `DefinitionAssembly`, which seals at finalization and rejects later identity
+  changes; runtime `Agent` access is retained only for diagnostics, observers,
+  steering, and continuation during the remaining caller migration;
 - the gRPC adapter now owns an explicit `Session` and returns response, history,
   usage, and costs from `Result` instead of calling legacy `Ask*`, token getters,
   or raw tool maps; and
