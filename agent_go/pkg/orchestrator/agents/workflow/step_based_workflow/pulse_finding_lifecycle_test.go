@@ -722,3 +722,53 @@ func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 		t.Fatalf("a fix naming its evidence boundary was rejected: %v", err)
 	}
 }
+
+// The consolidated Fixer is instructed to pass module="pulse_fixer", meaning
+// every due module. This read path treats module as a plain step_id filter, so
+// the sentinel matched nothing: get_pulse_finding_backlog returned 0 rows for
+// the one value the Fixer's own contract tells it to send, against 149 for an
+// omitted filter on social-media. It only did any work by falling back to
+// omitting the module.
+func TestPulseFixerSentinelLoadsEveryModulesBacklog(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-consolidated"
+	// Filed directly: filedReviewConcern asserts a single open concern exists,
+	// and this case needs two modules represented at once.
+	for module, text := range map[string]string{
+		"bug_review":    "reply targets repeat across runs",
+		"stores_health": "follower delta writer is missing",
+	} {
+		if _, err := RecordRunConcerns(
+			ctx, workspacePath, pulseRunID, "", module, ConcernPhaseReview, "CONCERNS: "+text,
+		); err != nil {
+			t.Fatalf("record %s concern: %v", module, err)
+		}
+	}
+
+	sentinel, err := LoadPulseFindingLifecycles(ctx, workspacePath, "pulse_fixer", -1)
+	if err != nil {
+		t.Fatalf("load backlog for the fixer sentinel: %v", err)
+	}
+	everything, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		t.Fatalf("load complete backlog: %v", err)
+	}
+	if len(sentinel) != len(everything) {
+		t.Fatalf("pulse_fixer returned %d findings, want the complete backlog of %d",
+			len(sentinel), len(everything))
+	}
+	if len(sentinel) != 2 {
+		t.Fatalf("sentinel backlog = %d findings, want both modules", len(sentinel))
+	}
+
+	// A real module must still filter, or the sentinel fix would have widened
+	// every per-module read into a full-backlog read.
+	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "bug_review", -1)
+	if err != nil {
+		t.Fatalf("load scoped backlog: %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].StepID != "bug_review" {
+		t.Fatalf("bug_review backlog = %+v, want only its own finding", scoped)
+	}
+}

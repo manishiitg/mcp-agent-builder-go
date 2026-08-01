@@ -13,6 +13,23 @@ export type PulseModuleSummary = {
   blocked: number
   /** Real, but only waiting on a scheduled run to produce its evidence. */
   awaitingRun: number
+  /** Understood and recorded as a proposal; Pulse chose not to repair it. */
+  proposals: number
+  /**
+   * Concerns the workflow's own steps filed while running — prevalidation,
+   * execution, message-sequence. They share `run_concerns` with Pulse findings
+   * but are not Pulse's queue: the backend lifecycle only claims
+   * `phase === 'review'`, and these ride along with module state as Gate
+   * evidence. Counting them under "Pulse can fix" made social-media read 105
+   * when Pulse owned 10.
+   */
+  workflowReported: number
+  /**
+   * A status this UI does not know. Never folded into `open`: a fallthrough on
+   * the most alarming metric means every disposition added later silently
+   * inflates it, which is exactly how proposals became "Pulse can fix".
+   */
+  unclassified: number
   fixing: number
   awaitingVerification: number
   closed: number
@@ -36,11 +53,19 @@ export type PulseModuleSummary = {
  * The reason lives in the finding's events rather than its status, so the most
  * recent one that carries a reason decides.
  */
-export function acknowledgedReason(finding: PulseFindingLifecycle): 'blocked' | 'awaiting_user' | 'other' {
+export function acknowledgedReason(
+  finding: PulseFindingLifecycle,
+): 'blocked' | 'awaiting_user' | 'proposal' | 'other' {
   // Events arrive newest first from the lifecycle API.
   for (let index = 0; index < finding.events.length; index += 1) {
     const eventType = finding.events[index]?.event_type
     if (eventType === 'blocked' || eventType === 'awaiting_user') return eventType
+    // The comment above always described three reasons; only two were ever
+    // implemented, so proposal_only findings fell through to `other` and were
+    // counted as work Pulse could pick up. That is backwards — a proposal is
+    // one Pulse deliberately decided not to fix. social-media read 109 when 105
+    // were actionable and 4 were recorded proposals.
+    if (eventType === 'proposal_recorded') return 'proposal'
   }
   return 'other'
 }
@@ -94,6 +119,20 @@ export type PulseModuleActivity = PulseFindingEvent & {
   findingText: string
 }
 
+/**
+ * `run_concerns` holds two species. Pulse reviewer findings carry
+ * `phase === 'review'`; everything else was filed by the workflow's own steps
+ * during a run and is Gate evidence, not Pulse's queue — the backend lifecycle
+ * makes the same distinction at pulse_finding_lifecycle.go.
+ *
+ * An absent phase is treated as Pulse-owned so an older backend that does not
+ * send the field keeps showing its findings rather than silently hiding them.
+ */
+export function isPulseOwnedFinding(finding: PulseFindingLifecycle): boolean {
+  const phase = (finding.phase || '').trim()
+  return phase === '' || phase === 'review'
+}
+
 export function isPulseFindingClosed(status: string): boolean {
   return status === 'resolved'
     || status === 'rejected'
@@ -117,8 +156,17 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     awaitingUser: 0,
     blocked: 0,
     awaitingRun: 0,
+    proposals: 0,
+    workflowReported: 0,
+    unclassified: 0,
   }
   findings.forEach((finding) => {
+    // Decided before status: a workflow-reported concern is not a Pulse finding
+    // in any state, so it must not land in a Pulse bucket.
+    if (!isPulseOwnedFinding(finding)) {
+      summary.workflowReported++
+      return
+    }
     if (finding.status === 'external_action_required') summary.externalAction++
     else if (isPulseFindingClosed(finding.status)) summary.closed++
     else if (finding.status === 'fixing') summary.fixing++
@@ -130,8 +178,14 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
       const reason = acknowledgedReason(finding)
       if (reason === 'awaiting_user') summary.awaitingUser++
       else if (reason === 'blocked') summary.blocked++
+      else if (reason === 'proposal') summary.proposals++
       else summary.open++
-    } else summary.open++
+    }
+    // `open` is matched explicitly. Anything else is a status this build does
+    // not model, and it goes to `unclassified` rather than swelling the number
+    // the operator is most likely to act on.
+    else if (finding.status === 'open') summary.open++
+    else summary.unclassified++
     if (finding.seen_count > 1 && finding.status !== 'external_action_required') summary.recurring++
     if (finding.details?.issue_kind === 'harness_issue') summary.harnessIssues++
     summary.attempts += finding.fix_attempts.length

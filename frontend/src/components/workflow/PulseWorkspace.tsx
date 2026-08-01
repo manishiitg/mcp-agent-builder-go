@@ -29,6 +29,7 @@ import {
   buildPulseModuleActivity,
   acknowledgedReason,
   isPulseFindingClosed,
+  isPulseOwnedFinding,
   pulseIssueForFinding,
   summarizePulseModule,
 } from './pulseModuleInspectorUtils'
@@ -123,12 +124,14 @@ function IssuePriority({ finding }: { finding: PulseFindingLifecycle }) {
 }
 
 /** Which slice of the backlog the findings list is showing. */
-type PulseFocus = 'all' | 'awaiting_user' | 'open' | 'blocked' | 'awaiting_run' | 'fixing' | 'awaiting_verification' | 'closed'
+type PulseFocus = 'all' | 'awaiting_user' | 'open' | 'proposals' | 'workflow_reported' | 'blocked' | 'awaiting_run' | 'fixing' | 'awaiting_verification' | 'closed'
 
 const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Needs attention',
   awaiting_user: 'Waiting on you',
   open: 'Pulse can fix these',
+  proposals: 'Recorded proposals',
+  workflow_reported: 'Reported by workflow runs',
   blocked: 'Blocked',
   awaiting_run: 'Waiting for data',
   fixing: 'Being fixed now',
@@ -140,6 +143,8 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   all: 'Open findings across every review module',
   awaiting_user: 'Each one needs a decision only you can make',
   open: 'Queued for a fixer; nothing is blocking them',
+  proposals: 'Understood and written down; Pulse chose not to repair them',
+  workflow_reported: 'Filed by the workflow\u2019s own steps while running \u2014 evidence for the Gate, not Pulse\u2019s queue',
   blocked: 'Diagnosed, but Pulse has no action available',
   awaiting_run: 'Real, but the next scheduled run has to produce the evidence',
   fixing: 'A fixer holds these right now',
@@ -437,8 +442,10 @@ export function PulseWorkspace({
     () => {
       const matchesFocus = (finding: PulseFindingLifecycle) => {
         switch (focus) {
+          // Every focus except workflow_reported is a slice of Pulse's own
+          // backlog, so a concern the workflow filed is excluded up front.
           case 'all':
-            return !isPulseFindingClosed(finding.status)
+            return isPulseOwnedFinding(finding) && !isPulseFindingClosed(finding.status)
           case 'closed':
             return isPulseFindingClosed(finding.status)
           case 'fixing':
@@ -449,10 +456,16 @@ export function PulseWorkspace({
             return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'awaiting_user'
           case 'blocked':
             return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'blocked'
+          case 'proposals':
+            return isPulseOwnedFinding(finding)
+              && finding.status === 'acknowledged' && acknowledgedReason(finding) === 'proposal'
+          case 'workflow_reported':
+            return !isPulseOwnedFinding(finding)
           case 'open':
-            return finding.status !== 'acknowledged'
-              ? finding.status === 'open'
-              : acknowledgedReason(finding) === 'other'
+            return isPulseOwnedFinding(finding)
+              && (finding.status !== 'acknowledged'
+                ? finding.status === 'open'
+                : acknowledgedReason(finding) === 'other')
           default:
             return true
         }
@@ -611,6 +624,24 @@ export function PulseWorkspace({
           tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
         />
         <Metric
+          label="From workflow runs"
+          focus="workflow_reported"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={summary.workflowReported}
+          detail="reported by steps, not Pulse's queue"
+          tone="border-orange-500/25 bg-orange-500/5 text-orange-700 dark:text-orange-300"
+        />
+        <Metric
+          label="Proposals"
+          focus="proposals"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={summary.proposals}
+          detail="recorded, not repaired"
+          tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
+        />
+        <Metric
           label="Blocked"
           focus="blocked"
           activeFocus={focus}
@@ -657,6 +688,17 @@ export function PulseWorkspace({
             : `${summary.passedChecks} passed verification${summary.passedChecks === 1 ? '' : 's'}`}
           tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
         />
+        {/* Only ever visible when the backend has a disposition this build does
+            not model. Silence here would mean findings vanishing from every
+            count rather than inflating one of them. */}
+        {summary.unclassified > 0 && (
+          <Metric
+            label="Unclassified"
+            value={summary.unclassified}
+            detail="status this UI does not recognise"
+            tone="border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-300"
+          />
+        )}
       </section>
 
       <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />

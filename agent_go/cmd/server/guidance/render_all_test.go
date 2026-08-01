@@ -84,7 +84,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		"pulse-review-fixer": {
 			wants: []string{
 				"exactly one", "saved review and lifecycle evidence", "automatic notification", "get_pulse_review_result",
-				"only Pulse Fixer for this module", "terminal current-run result", "cannot block later modules",
+				"one consolidated Fixer", "terminal current-run result", "cannot block later reviewers", "compact, priority-ordered Fix queue",
 			},
 		},
 		"pulse-finalizer": {
@@ -119,7 +119,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"change `post_run_monitor`",
 			"record_pulse_worklist",
 			"call_generic_agent",
-			"only Pulse Fixer",
+			"one consolidated Pulse Fixer",
 		},
 		"pulse-setup": {
 			"Set up recurring workflow runs with dynamic Pulse",
@@ -154,6 +154,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"begin_pulse_fixer_run",
 			"get_pulse_module_state",
 			"get_pulse_finding_backlog",
+			"`issue.id` as `finding_id`",
 			"mark_pulse_module_result",
 			"post-change evidence boundary",
 			"changed_unverified",
@@ -345,10 +346,10 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one ordered finalizer turn",
 		"mark_pulse_final_command_result",
 		"not automatically due every Pulse",
-		"Independent Review/Fix Stages And One Sequential Writer",
+		"Independent Review Stages And One Consolidated Writer",
 		"existing unchanged, existing with new evidence, reopened, or genuinely",
 		"every evidence-backed severity-ordered finding row",
-		"in-turn review ledger",
+		"structured Fix queue",
 		"Never trust HTML as recovery truth",
 		"blindly reapply",
 		"fixed_verified",
@@ -370,7 +371,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"awaiting_next_valid_run",
 		"use `run_in_background`",
 		"READ-ONLY REVIEW",
-		"parent becomes this module's only **Pulse Fixer**",
+		"exactly one `call_generic_agent` with `role=\"fixer\"`",
 		"does not launch",
 		"`run_goal_advisor_review`",
 		"backend independently enforces",
@@ -496,11 +497,15 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Needs your decision",
 		"Assumptions challenged",
 		"Today's outcome",
+		"Current work: a projection, not another backlog",
+		`get_pulse_finding_backlog`,
+		"Needs verification",
+		"at most three",
 		`<details class="technical">`,
 		"Hidden agent handoff projection",
 		`#pulse-agent-handoff`,
 		"scheduler conditionally sends a dedicated archive turn",
-		"newest **20** timeline cards",
+		"newest **20** material timeline cards",
 		"Stage complete active and archive HTML documents",
 		`href="improve-archive/YYYY-MM.html"`,
 		"**Goal:**",
@@ -510,8 +515,8 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Do not add a second active-question card",
 		"What happened",
 		"Why it matters",
-		"data-repeat-count",
-		"same module and same reason",
+		"Repeated reviewer sightings",
+		"do not create another visible card",
 	} {
 		if !strings.Contains(reviewLog, want) {
 			t.Fatalf("review-improve-log missing archive contract %q", want)
@@ -525,7 +530,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if !strings.Contains(skeleton, `class="asof"`) || !strings.Contains(skeleton, ".tile .asof") {
 		t.Fatal("review-improve-log-skeleton missing visible tile freshness markup")
 	}
-	for _, want := range []string{`data-pulse-schema="2"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="technical"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="bug_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Today's outcome`} {
+	for _, want := range []string{`data-pulse-schema="3"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `data-queue="verification"`, `class="technical"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="bug_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Today's outcome`} {
 		if !strings.Contains(skeleton, want) {
 			t.Fatalf("review-improve-log-skeleton missing stable verdict markup %q", want)
 		}
@@ -533,8 +538,8 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if !strings.Contains(skeleton, `href="improve-archive/YYYY-MM.html"`) {
 		t.Fatal("review-improve-log-skeleton missing archive link example")
 	}
-	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `data-status="open"`) {
-		t.Fatal("review-improve-log-skeleton must not duplicate the Goal or an active SQLite question")
+	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `class="entry open"`) || strings.Contains(skeleton, `class="modfields"`) {
+		t.Fatal("review-improve-log-skeleton must not duplicate Goal, standing issue cards, or reviewer field dumps")
 	}
 	for _, want := range []string{`data-pulse-section="improvements" data-module="goal_advisor"`, `data-status="answered"`, `Question + answer`} {
 		if !strings.Contains(skeleton, want) {
@@ -779,8 +784,8 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	for _, want := range []string{
 		`run Bug Review alone first`,
 		`record Auditor as terminally deferred`,
-		`one independently terminal stage per due module`,
-		`later modules`,
+		`one read-only stage per due module`,
+		`Review stages never mutate or mark module`,
 		`one honest terminal result for every due module`,
 		`later Dashboard stage`,
 		`must not update ` + "`builder/improve.html`",
@@ -794,7 +799,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render pulse: %v", err)
 	}
-	for _, want := range []string{`Run every module this standalone review selects`, `Process modules independently`, `one explicitly attributed result card per due module`} {
+	for _, want := range []string{`Run every module this standalone review selects`, `Process modules independently`, `exactly one ` + "`call_generic_agent`" + ` with`, `role="fixer"`} {
 		if !strings.Contains(pulse, want) {
 			t.Fatalf("manual pulse missing complete reviewer contract %q", want)
 		}

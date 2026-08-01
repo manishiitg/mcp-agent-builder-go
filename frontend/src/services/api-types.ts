@@ -520,7 +520,21 @@ export interface PulseFindingDetails {
   }
 }
 
+export interface PulseIssue {
+  id: string
+  title: string
+  description?: string
+  status: 'backlog' | 'in_progress' | 'in_review' | 'needs_input' | 'blocked' | 'done' | 'canceled' | 'external' | string
+  priority: 'urgent' | 'high' | 'medium' | 'low' | 'none' | string
+  module?: string
+  created_at?: string
+  updated_at?: string
+  seen_count: number
+}
+
 export interface PulseFindingLifecycle {
+  /** Compact user-facing issue. Remaining fields are lifecycle internals. */
+  issue?: PulseIssue
   fingerprint: string
   finding_id?: string
   module?: string

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 const pulseFixAttemptsSchema = `CREATE TABLE IF NOT EXISTS pulse_fix_attempts (
@@ -721,6 +723,17 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 		limit = 100
 	}
 	module = strings.TrimSpace(module)
+	// "pulse_fixer" is the consolidated Fixer's module sentinel, meaning every
+	// due module rather than a module of that name. The write path has always
+	// understood it; this read path did not, and `module` here is a plain
+	// step_id filter. No concern carries step_id "pulse_fixer" and no attempt is
+	// recorded under it, so the tool that hands the Fixer its queue returned an
+	// empty list for the exact value its own contract tells it to pass — 0 rows
+	// against 149 for an omitted module on social-media, 2026-08-01. The Fixer
+	// only did any work at all by falling back to omitting the filter.
+	if module == pulsemodules.PseudoPulseFixerID {
+		module = ""
+	}
 	// Lead with the step carrying the most unresolved work, and keep its rows
 	// together.
 	//

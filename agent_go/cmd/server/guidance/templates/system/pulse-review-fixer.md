@@ -1,8 +1,8 @@
-## Pulse independent backlog review and module fixer
+## Pulse independent reviews and one consolidated Fixer
 
-Use only after Gate. The scheduler supplies one due module, Pulse run ID, and
-dated review run ID. This parent owns that module until it has one terminal
-result.
+Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
+dated review run ID. It runs one read-only review stage per selected module,
+then exactly one consolidated Fixer stage for the pass.
 
 Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -23,13 +23,13 @@ outcome-bearing checkpoint. Otherwise run Auditor. Strategy Auditor runs before 
 launch Advisor only for an actionable diagnosis or its own
 answered-decision/experiment checkpoint.
 
-The scheduler invokes this contract once per due module, in module order. This
-stage owns only the supplied module. First inspect its current-run result,
+The scheduler invokes the reviewer phase once per due module, in module order.
+Each review stage owns only the supplied module. First inspect its current-run result,
 active retained backlog, answered decisions, awaiting-verification work, and
-any already-saved reviewer result. Drain actionable retained work before doing
-more discovery. Do not launch a reviewer merely because the module is due: if
-the saved review and lifecycle evidence are sufficient to apply or verify a
-bounded fix, do that now.
+any already-saved reviewer result. Do not launch a reviewer merely because the
+module is due: if saved review and lifecycle evidence already answer the review
+question, stop and leave that evidence for the consolidated Fixer. Reviewer
+stages never mutate, start fix attempts, or mark module state.
 
 When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
 make exactly one `call_generic_agent` call for this module. Never combine
@@ -38,10 +38,11 @@ wait for another module. In coding-agent mode, use the documented API bridge
 shell transport without imposing a short shell timeout on the reviewer. If the
 outer bridge call backgrounds, stop and await its automatic notification.
 Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
-its complete Markdown directly in SQLite; call `get_pulse_review_result` with
-that review run and module before fixing. Immediately process a successful
-result; do not wait for any other reviewer. Reviewer failure is a terminal
-`Review incomplete` result for this module only and cannot block later modules.
+its complete Markdown and structured verification results directly in SQLite;
+call `get_pulse_review_result` with that review run and module before the review
+stage ends. Reviewer failure is retained as `Review incomplete` evidence for
+this module only and cannot block later reviewers. The consolidated Fixer
+records the terminal module result.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response contract:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
@@ -59,8 +60,11 @@ Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 did not make. Before looking for anything new, take every `changed_unverified`
 finding this module owns whose `next_check` evidence has since arrived, and
 judge it against the post-change evidence: `passed`, `failed`, or
-`inconclusive`. Return those verdicts as a verification list, separate from new
-findings. The Fixer routes them — passed closes the finding as `fixed_verified`,
+`inconclusive`. Emit the required `PULSE_VERIFICATION_JSON` marker with
+finding ID, fingerprint, attempt ID, verdict, expected, observed, evidence, and
+next-check boundary when inconclusive. The backend validates and transports
+these records separately from prose. Return those verdicts as a verification
+list, separate from new findings. The Fixer routes them — passed closes the finding as `fixed_verified`,
 failed reopens it, inconclusive leaves it awaiting the boundary it still names.
 
 Verification does not count against the finding cap. It is not discovery, and
@@ -123,13 +127,23 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-Then start the only Pulse Fixer for this module as one `call_generic_agent` with
-`role="fixer"`, passing this run's `pulse_run_id`, a fresh `review_run_id`, and
-`module`. Never run two at once: it is the single writer. Do not apply fixes
-inline in this turn — a scheduled turn's model is pinned for its whole life, so
-an inline fixer mutates on a weaker tier than the reviewers that only read. The
+After every selected reviewer stage finishes, start exactly one Pulse Fixer as
+one `call_generic_agent` with `role="fixer"`, this run's `pulse_run_id`, dated
+`review_run_id`, and `module="pulse_fixer"`. Never run a Fixer per module and
+never run two Fixers at once. Do not apply fixes inline in the parent turn. The
 stage runs on the maintenance tier and is lent write authority for this run
-alone. It applies safe fixes sequentially.
+alone.
+
+The Fixer first builds one compact, priority-ordered Fix queue across all due
+modules. Each queue item is a coherent repair bundle. Group findings only when
+they share the same root cause, require compatible changes to the same target,
+and have one verification condition. Cross-reviewer grouping is allowed;
+conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
+externally owned findings stay visible but do not enter the actionable queue.
+There is no arbitrary queue cap and no finding may disappear. For each
+actionable bundle, `start_pulse_fix_attempt` is the durable queue record: link
+every affected finding before mutation, process bundles sequentially, and
+checkpoint/disposition one bundle before beginning the next.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `fix-verification`; old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
@@ -149,7 +163,7 @@ to challenge the causal claim. Advisor operational findings remain handoffs.
 Only the parent mutates workflow state. Neither reviewer nor Fixer writes Pulse
 HTML; the dedicated Dashboard owns it.
 
-Record `mark_pulse_module_result` for every due module. For every finding pass a
+Record `mark_pulse_module_result` exactly once for every due module. For every finding pass a
 structured `finding_dispositions` row with fingerprint, finding id, disposition,
 summary, attempt id when changed, changed files, and exact verification objects.
 Verification verdict is exactly `passed`, `failed`, or `inconclusive`.

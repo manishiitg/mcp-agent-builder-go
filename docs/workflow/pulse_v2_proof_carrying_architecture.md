@@ -2036,14 +2036,39 @@ the current decision record.
 
 ---
 
-## Decision: keep per-module Fixers (2026-08-01)
+## Decision: one consolidated Fixer (2026-08-01)
 
-**Status: evaluated and rejected. Recorded so it is not re-proposed from the
-same reasoning.**
+**Status: adopted by operator decision, over the measurement below.**
 
-This section first argued for unifying the Fixer. Measuring the premise killed
-it. The argument and the measurement are both kept below, because the reasoning
-was plausible and someone will make it again.
+This section has been reversed twice in one day, so read the whole thing before
+touching it.
+
+It first argued for unifying the Fixer. Measuring the premise killed that: no
+finding had ever been fix-attempted by two modules, so the deduplication
+unification promised already happened. The argument and the measurement are both
+kept below, unedited.
+
+The operator then approved the consolidated Fixer anyway, and that is the shape
+the system now has: reviewer-only stages per module, then exactly one Fixer with
+`module="pulse_fixer"` for the pass. The measurement was never rebutted — it
+measured deduplication, which was only ever one of the arguments. A single Fixer
+also gives one priority order across all due modules, one queue whose depth is
+visible, and one place where cross-module conflicts are reconciled rather than
+resolved by execution order. Those were not measured, and are not disprovable by
+the duplicate-attempt count.
+
+**What this costs, and what must be built because of it.** Unifying reintroduces
+the barrier: the Fixer cannot start until every reviewer has terminated, so a
+single hung reviewer now delays fixes for every module. That is exactly the
+coupling the 2026-07-31 cascade punished. It is a live risk, not a theoretical
+one — on 2026-08-01 a stage agent finished its work and then held its caller for
+65 minutes (`docs/bugs/codex_structured_turn_completion_hang.md`), and the
+foreground path `/pulse-fixer` uses has **no stall detection at all**; only the
+scheduler has a 10-minute idle detector. Bounding a hung reviewer on the
+foreground path is now load-bearing for this design rather than a nice-to-have.
+
+**Do not revert this from the measurement alone.** The number below is real and
+still true; it was weighed and did not decide the question.
 
 ### What changed today and why
 
@@ -2149,18 +2174,27 @@ The wording seam is real and worth fixing on its own: module prompts still say
 runtime by a `strings.NewReplacer`. Rewrite the prompts for the shape the system
 actually has. That is a clarity fix, not an architecture change.
 
-### If this is proposed again
+### If reverting to per-module Fixers is proposed
 
-Bring the number that would justify it: findings fix-attempted by more than one
-module, or fix attempts spent on work another module already completed. Both are
-queryable from `pulse_fix_attempt_findings` joined to `pulse_fix_attempts`. As
-of 2026-08-01 both are zero.
+The duplicate-attempt count is not sufficient grounds — it was already weighed
+and did not decide this. Bring evidence on the cost the consolidated shape
+actually incurs: passes where a hung or slow reviewer delayed every module's
+fixes, or conflicts the single queue failed to reconcile. Both are visible from
+`pulse_fix_attempts` timings joined to reviewer stage durations.
+
+The duplicate-attempt query remains useful as a health signal:
+`pulse_fix_attempt_findings` joined to `pulse_fix_attempts`. As of 2026-08-01,
+findings fix-attempted by more than one module were zero in both workflows.
 
 ---
 
 ## Decision: the Fixer verifies its own fixes (2026-08-01)
 
-**Status: evaluated and kept.**
+**Status: kept for fixes provable at the time; superseded for the rest.** The
+operator approved moving verification of run-dependent fixes to the reviewers,
+and that is now the shape. The split follows the two classes this section
+identifies, so the reasoning below still holds — with one claim corrected at the
+end.
 
 ### The proposal
 
@@ -2226,9 +2260,27 @@ collector writes a new column and nothing can verify it until that collector
 runs. These are the 13, correctly recorded `changed_unverified` with reason
 `awaiting_next_valid_run`.
 
-An independent verifier adds nothing to either class. For the first, the proof is
-already deterministic. For the second, a verifier is as unable to produce the
-missing run as the Fixer is.
+An independent verifier adds nothing to the first class: the proof is already
+deterministic.
+
+**The claim that it adds nothing to the second was wrong, and is now reversed.**
+It confused two different verifiers. A verifier *in the same pass* is indeed as
+unable to produce the missing run as the Fixer is. A verifier in the **next**
+pass is not — by then the run has happened and the evidence exists. Nobody has
+to produce anything; someone has to go and look.
+
+That is the shape now built. A `changed_unverified` finding names a `next_check`
+boundary; when a later reviewer runs and that evidence has arrived, it judges the
+finding before doing any discovery and emits a `PULSE_VERIFICATION_JSON` marker
+with the verdict. The Fixer routes it: `passed` closes as `fixed_verified`,
+`failed` reopens, `inconclusive` leaves it awaiting the boundary it still names.
+Verification does not count against the finding cap, so a reviewer never has to
+choose between confirming past work and finding new problems.
+
+This is what the 13 reopens were asking for. They were not evidence that
+verification is weak; they were fixes waiting on runs that then completed with
+nobody assigned to check them, so each pass repaired them again. rtslatency
+carried one finding at `seen_count` 4 for exactly this reason.
 
 ### The case against, and what survives it
 

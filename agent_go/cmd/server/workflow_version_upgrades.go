@@ -400,6 +400,26 @@ This is a trusted backend compatibility migration from filesystem Pulse review M
 
 If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
 	},
+	{
+		from:  workflowContractPulseReviewSQLiteVersion,
+		to:    workflowContractCompactPulseReportVersion,
+		label: "upgrade-1.0.18",
+		query: `WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18.
+
+This is a product-managed Pulse presentation migration. Do ONLY this compact-report upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
+
+Goal: builder/improve.html remains the readable published history, while SQLite and the Pulse popup own the complete operational issue tracker. Make the active HTML lighter without deleting history.
+
+1. Read workflow.json and builder/improve.html. Call get_reference_doc(kind="review-improve-log") and get_reference_doc(kind="review-improve-log-skeleton"). Call get_pulse_finding_backlog without a module filter.
+2. If builder/improve.html exists, upgrade it to data-pulse-schema="3" while preserving the verdict/status header, coverage, Today's outcome, collapsed Technical details, filters, material Activity history, hidden #pulse-agent-handoff, and Archive links.
+3. Add exactly one data-source="sqlite" Current work section after Today's outcome. Derive Open, Fixing, and Verify counts from the returned issue statuses. Show at most three Important now items and three Needs verification items, with a compact +N more in Pulse note when truncated. Stable issue ids may appear only in data-issue-id attributes.
+4. Do not copy skeleton instructions or example comments into the saved HTML. Remove visible raw agent output, .modfields reviewer field dumps, and any visible Agent log. Full review evidence already lives in SQLite.
+5. Standing .entry.open cards are no longer active state. Preserve them unchanged in their matching monthly builder/improve-archive/YYYY-MM.html file, then remove them from the active Activity timeline. Keep one-time material lifecycle events such as filed, fixed, verified, reopened, escalated, and consequential decisions. Do not create cards for clean reviewer results; coverage and SQLite retain them.
+6. Verify the active file has exactly one log insertion anchor, one Current work section, no active .entry.open/.modfields/.agentlog, no duplicated Goal/Profile card, and still contains all non-standing material history. Do not impose a byte or character budget.
+7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.18". Do not change schema_version, plans, steps, schedules, notifications, publishing, or any unrelated file.
+
+Report the before/after active card count, how many standing cards moved to monthly archives, whether raw reviewer/Agent blocks were removed, the three Current work counts, and any blocker, then stop.`,
+	},
 }
 
 func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {

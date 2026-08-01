@@ -34,6 +34,10 @@ require (
 
 replace github.com/manishiitg/coding-agent-loop/workspace => ../workspace
 
+// Local checkout so adapter work is exercised before it is tagged. Drop this
+// and bump the pinned version above once the provider change is released.
+replace github.com/manishiitg/multi-llm-provider-go => ../../multi-llm-provider-go
+
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.18.0 // indirect

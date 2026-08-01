@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -68,18 +69,77 @@ type ModuleReviewHistory struct {
 }
 
 type PulseReviewArtifactRecord struct {
-	ID               int64  `json:"id"`
-	Module           string `json:"module"`
-	ReviewRunID      string `json:"review_run_id"`
-	PulseRunID       string `json:"pulse_run_id,omitempty"`
-	Verdict          string `json:"verdict,omitempty"`
-	Status           string `json:"status,omitempty"`
-	ArtifactKind     string `json:"artifact_kind"`
-	LegacySourcePath string `json:"legacy_source_path,omitempty"`
-	ArtifactBytes    int    `json:"artifact_bytes"`
-	ContentSHA256    string `json:"content_sha256,omitempty"`
-	RecordedAt       string `json:"recorded_at"`
-	Markdown         string `json:"markdown,omitempty"`
+	ID               int64                           `json:"id"`
+	Module           string                          `json:"module"`
+	ReviewRunID      string                          `json:"review_run_id"`
+	PulseRunID       string                          `json:"pulse_run_id,omitempty"`
+	Verdict          string                          `json:"verdict,omitempty"`
+	Status           string                          `json:"status,omitempty"`
+	ArtifactKind     string                          `json:"artifact_kind"`
+	LegacySourcePath string                          `json:"legacy_source_path,omitempty"`
+	ArtifactBytes    int                             `json:"artifact_bytes"`
+	ContentSHA256    string                          `json:"content_sha256,omitempty"`
+	RecordedAt       string                          `json:"recorded_at"`
+	Markdown         string                          `json:"markdown,omitempty"`
+	Verifications    []PulseReviewVerificationResult `json:"verifications"`
+}
+
+// PulseReviewVerificationResult is the reviewer's structured judgment about a
+// prior changed_unverified attempt. The reviewer remains read-only; the single
+// Fixer consumes this record and performs the lifecycle mutation.
+type PulseReviewVerificationResult struct {
+	FindingID   string   `json:"finding_id"`
+	Fingerprint string   `json:"fingerprint"`
+	AttemptID   string   `json:"attempt_id"`
+	Verdict     string   `json:"verdict"`
+	Expected    string   `json:"expected"`
+	Observed    string   `json:"observed"`
+	Evidence    []string `json:"evidence"`
+	NextCheck   string   `json:"next_check,omitempty"`
+}
+
+const pulseVerificationMarker = "PULSE_VERIFICATION_JSON:"
+
+func ExtractPulseReviewVerifications(artifact string) ([]PulseReviewVerificationResult, error) {
+	results := []PulseReviewVerificationResult{}
+	seen := map[string]bool{}
+	for lineNumber, raw := range strings.Split(artifact, "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, pulseVerificationMarker) {
+			continue
+		}
+		var result PulseReviewVerificationResult
+		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, pulseVerificationMarker))), &result); err != nil {
+			return nil, fmt.Errorf("verification marker line %d is invalid JSON: %w", lineNumber+1, err)
+		}
+		result.FindingID = strings.TrimSpace(result.FindingID)
+		result.Fingerprint = strings.TrimSpace(result.Fingerprint)
+		result.AttemptID = strings.TrimSpace(result.AttemptID)
+		result.Verdict = strings.TrimSpace(result.Verdict)
+		result.Expected = strings.TrimSpace(result.Expected)
+		result.Observed = strings.TrimSpace(result.Observed)
+		result.NextCheck = strings.TrimSpace(result.NextCheck)
+		result.Evidence = normalizedLifecycleStrings(result.Evidence)
+		if result.FindingID == "" || result.Fingerprint == "" || result.AttemptID == "" || result.Expected == "" || result.Observed == "" {
+			return nil, fmt.Errorf("verification marker line %d requires finding_id, fingerprint, attempt_id, expected, and observed", lineNumber+1)
+		}
+		switch result.Verdict {
+		case VerificationPassed, VerificationFailed:
+		case VerificationInconclusive:
+			if result.NextCheck == "" {
+				return nil, fmt.Errorf("inconclusive verification marker line %d requires next_check", lineNumber+1)
+			}
+		default:
+			return nil, fmt.Errorf("verification marker line %d verdict must be passed, failed, or inconclusive", lineNumber+1)
+		}
+		key := result.Fingerprint + "\x00" + result.AttemptID
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate verification marker for finding %q attempt %q", result.FindingID, result.AttemptID)
+		}
+		seen[key] = true
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB) error {
@@ -170,6 +230,9 @@ func truncateVerdict(s string) string {
 // Best-effort: a reviewer whose artifact was persisted must not fail because the
 // bookkeeping write did. Callers log and continue.
 func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, pulseRunID, artifactPath, artifact string) error {
+	if _, err := ExtractPulseReviewVerifications(artifact); err != nil {
+		return err
+	}
 	return recordPulseReviewAt(
 		ctx, workspacePath, module, reviewRunID, pulseRunID, "review",
 		artifactPath, pulseReviewStatus(artifact), artifact,
@@ -310,6 +373,12 @@ func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string,
 			return nil, err
 		}
 		artifact.Module = pulsemodules.Normalize(artifact.Module)
+		if includeMarkdown {
+			artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
+			if err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, artifact)
 	}
 	return out, rows.Err()
@@ -341,6 +410,10 @@ func LoadPulseReviewArtifact(ctx context.Context, workspacePath string, id int64
 		return nil, err
 	}
 	artifact.Module = pulsemodules.Normalize(artifact.Module)
+	artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
+	if err != nil {
+		return nil, err
+	}
 	return &artifact, nil
 }
 
@@ -373,7 +446,43 @@ func LoadPulseReviewArtifactForRun(ctx context.Context, workspacePath, reviewRun
 		return nil, err
 	}
 	artifact.Module = pulsemodules.Normalize(artifact.Module)
+	artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
+	if err != nil {
+		return nil, err
+	}
 	return &artifact, nil
+}
+
+func LoadPulseReviewVerificationsForPulseRun(ctx context.Context, workspacePath, pulseRunID, module string) ([]PulseReviewVerificationResult, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	module = pulsemodules.Normalize(module)
+	rows, err := db.QueryContext(ctx, `SELECT artifact_markdown FROM pulse_review_log
+		WHERE pulse_run_id=? AND module=? AND artifact_kind='review' AND status!='failed'
+		ORDER BY recorded_at ASC, _id ASC`, strings.TrimSpace(pulseRunID), module)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []PulseReviewVerificationResult{}
+	for rows.Next() {
+		var markdown string
+		if err := rows.Scan(&markdown); err != nil {
+			return nil, err
+		}
+		parsed, err := ExtractPulseReviewVerifications(markdown)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, parsed...)
+	}
+	return results, rows.Err()
 }
 
 // LoadModuleReviewHistory summarizes recent reviews per module, most recently run

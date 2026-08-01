@@ -2193,9 +2193,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		if result.err != nil && result.outcome != postRunMonitorStepTimedOut {
 			reason += ": " + result.err.Error()
 		}
-		if module := pulseModuleForPostRunMonitorStep(st.label); module != "" {
-			if _, err := markPulseModuleResult(ctx, sctx.WorkspacePath, module, pulseRunID, resultName, reason, []string{"scheduler timeout/failure handling"}); err != nil {
-				s.sessionLogf(sctx, oldSessionID, "[PULSE] failed to record %s result for module %s: %v", resultName, module, err)
+		if st.label == "pulse-fixer" {
+			if err := markUnresolvedPulseDueModules(ctx, sctx.WorkspacePath, pulseRunID, resultName, reason); err != nil {
+				s.sessionLogf(sctx, oldSessionID, "[PULSE] failed to record unresolved module results after consolidated Fixer failure: %v", err)
 			}
 		}
 		releaseTrustedSession(oldSessionID)
@@ -2331,12 +2331,10 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 			if abortIfInterrupted(st, result) {
 				return
 			}
-			if result.outcome == postRunMonitorStepCompleted {
-				if module := pulseModuleForPostRunMonitorStep(st.label); module != "" {
-					if err := validatePulseModuleResult(ctx, sctx.WorkspacePath, pulseRunID, module); err != nil {
-						result = postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
-						s.sessionLogf(sctx, sessionID, "[PULSE] module %s completion contract failed: %v", module, err)
-					}
+			if result.outcome == postRunMonitorStepCompleted && st.label == "pulse-fixer" {
+				if err := validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
+					result = postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
+					s.sessionLogf(sctx, sessionID, "[PULSE] consolidated Fixer completion contract failed: %v", err)
 				}
 			}
 			if result.outcome == postRunMonitorStepCompleted || attempt == attempts {
@@ -2345,9 +2343,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		}
 		if result.outcome != postRunMonitorStepCompleted {
 			reason := handleStepFailure(st, result, i < len(steps)-1)
-			// A failed safety checkpoint blocks mutation, but a failed reviewer
-			// is terminal only for its own module. Later module stages use their
-			// own saved evidence/fixer and must still get a chance to drain work.
+			// A failed safety checkpoint blocks mutation. A failed reviewer is
+			// retained as evidence but does not close its module; later reviewers
+			// still run and the one consolidated Fixer records terminal outcomes.
 			if st.label == "pre-backup" {
 				skipMaintenanceReason = reason
 			}
@@ -2505,16 +2503,13 @@ func postRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleStep {
 		{pulseModuleGoalAdvisor, postRunMonitorStep{"goal-advisor", fmt.Sprintf("PULSE MODULE — GOAL ADVISOR. pulse_run_id=%q. Run the read-only strategy advisor and separate read-only critic defined by the consolidated Pulse protocol. When a current Strategy Auditor result exists, consume its evidence-backed diagnosis instead of repeating the longitudinal audit; challenge its causal claim while designing the response. The reviewer must complete the strategy-first pass before plan mechanics: state the current strategy ceiling, one highest-leverage materially different thesis, its relationship to the current experiment, and why incremental repair is insufficient. A packet containing only bug repair, plan cleanup, instrumentation, eval/report correction, or measurement work is invalid. Use Gate evidence and any active strategy .advisor-experiment to choose healthy 10x/headroom, active-strategy challenge or measurement, or approved-answer review. Instrumentation-only tracking is not an active strategy experiment and must not block a bold strategy proposal. When the current strategy appears capped or repeated goal misses/bugs/cost evidence suggest the plan shape itself is limiting outcomes, it may propose simplify, restructure, or a bounded experiment — a materially different strategic shape, not a structural-hygiene fix (that is llm_ops_review's job; a problem caused by mistyped steps or drift routes there instead). For any change disposition, compare the current plan with at most two credible alternatives and state expected benefit, affected goal criterion, evidence, risk, migration/rollback, and measurement. The separate critic must challenge whether the recommendation is materially better than the current plan. Preserve at most one active strategy experiment. Challenge an existing strategy experiment against the new thesis and recommend advancing, revising, retiring, or replacing it rather than repairing it indefinitely. Operational correctness issues such as stale receipts, wrong paths, parsing/schema wiring, fail-closed behavior, and standalone measurement/report/eval work are handoffs to Bug Review, Eval Health, Report Health, or the matching module; Goal Advisor does not fix them and continues strategic review whenever trustworthy business-outcome evidence remains. Reviewers must not edit files, update builder/improve.html, create/consume questions, or mark module state. "+pulseModuleImproveLogReminder+" The parent Pulse Fixer consolidates advisor and critic results, records a proposal or applies only an exact previously approved strategy experiment, and never turns a maintenance handoff into the Goal Advisor outcome. It then calls mark_pulse_module_result(workspace_path=\"<current workflow>\", pulse_run_id=%q, module=\"goal_advisor\", result=\"done|changed|blocked|failed|skipped\", reason=\"...\", evidence=[...]).", pulseRunID, pulseRunID)}},
 	}
 	const offTrackBugReviewProtocol = "OFF-TRACK GOAL QA. When Gate selected Bug Review because a material goal is below target, declining, or stalled, use the goal miss as risk evidence even if execution completed cleanly. Test whether the real runtime path implements the intended behavioral contract, inputs, routing, stores, outputs, and measurement correctly; distinguish a correctness bug from a strategy limitation, and compare this checkpoint with the latest prior QA evidence. Do not equate successful execution with correct or goal-effective behavior."
-	independentModuleLanguage := strings.NewReplacer(
-		"Use the consolidated protocol:", "Use the independent module protocol:",
-		"defined by the consolidated Pulse protocol", "defined by the independent module protocol",
-		"consolidates this review with all other due modules", "owns and reconciles this module review",
-		"consolidates advisor and critic results", "reconciles advisor and critic results",
-		"records one consolidated `Report fix` outcome", "records one `Report fix` outcome",
-		"records one consolidated `Eval fix` outcome", "records one `Eval fix` outcome",
-	)
+	// The per-module-Fixer shape needed these prompts rewritten at runtime,
+	// because they are written for a Fixer that consolidates every due module.
+	// That shape is gone: one consolidated Fixer runs per pass again. Leaving
+	// the replacer in place inverted correct text — reviewers were told a
+	// per-module Fixer owned their module while the scheduler launched a single
+	// module="pulse_fixer" stage. Say it once, in the prompt, and mean it.
 	for i := range steps {
-		steps[i].step.query = independentModuleLanguage.Replace(steps[i].step.query)
 		if steps[i].module == pulseModuleBugReview {
 			steps[i].step.query += "\n\n" + offTrackBugReviewProtocol
 		}
@@ -2585,7 +2580,7 @@ func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotific
 		// get_reference_doc(kind="review-improve-log") zero times across 361
 		// turns. A contrast run (linkedin) that did load it produced the
 		// correct format, so loading the contract is the deciding factor.
-		{"dashboard", fmt.Sprintf("PULSE DASHBOARD. pulse_run_id=%q. This stage alone owns Pulse render. FIRST load get_reference_doc(kind=\"review-improve-log\"); read worklist/results/reviews. Write builder/improve.html once; if legacy/malformed, load the skeleton and upgrade while preserving history. Refresh builder/card.health.html; create only genuine user questions. Read improve.html back. Require %d unique canonical coverage data-module ids and labels, all 5 outcome cells, a sibling collapsed technical-details section, and #pulse-agent-handoff[data-pulse-run-id] for this run. Mark command=\"dashboard\" running then done only after proof, and stop.", pulseRunID, len(pulseModuleOrder))},
+		{"dashboard", fmt.Sprintf("PULSE DASHBOARD. pulse_run_id=%q. This stage alone owns Pulse render. FIRST load get_reference_doc(kind=\"review-improve-log\"); read worklist/results/reviews and call get_pulse_finding_backlog without a module filter. Write builder/improve.html once as a compact SQLite-backed projection; if legacy/malformed, load the skeleton and upgrade while preserving history in monthly archives. Do not copy skeleton instructions/examples, raw agent output, per-reviewer field dumps, or standing open-finding cards into the active file. Refresh builder/card.health.html; create only genuine user questions. Read improve.html back. Require %d unique canonical coverage data-module ids and labels, all 5 outcome cells, one data-source=\"sqlite\" Current work summary with Open/Fixing/Verify counts and short Important now/Needs verification queues, a sibling collapsed technical-details section, and #pulse-agent-handoff[data-pulse-run-id] for this run. Mark command=\"dashboard\" running then done only after proof, and stop.", pulseRunID, len(pulseModuleOrder))},
 		{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load get_reference_doc(kind=\"pulse-finalizer\") and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The dashboard stage already ran, so complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with mark_pulse_final_command_result. Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)},
 	}
 }
@@ -2630,28 +2625,23 @@ func postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module string)
 	}
 	return postRunMonitorStep{
 		label: label,
-		query: fmt.Sprintf("PULSE BACKLOG DRAIN + INDEPENDENT REVIEW/FIX. pulse_run_id=%q, review_run_id=%q, module=%q. "+
-			"Load get_reference_doc(kind=\"pulse-review-fixer\") and follow it exactly for this module only. First reconcile the complete active retained backlog, answered decisions, unfinished attempts, awaiting-verification work, and any already-saved SQLite reviewer result. Drain actionable saved findings before discovery; do not launch a reviewer merely because the module is due. If genuinely fresh evidence requires review, make exactly one call_generic_agent call for module=%q with these exact run identities; never combine reviewers in one shell command or use background curl, & or wait. Load the SQLite result with get_pulse_review_result and immediately apply or disposition its findings without waiting for another module. Record one honest terminal mark_pulse_module_result for this module, then stop.",
+		query: fmt.Sprintf("PULSE INDEPENDENT READ-ONLY REVIEW. pulse_run_id=%q, review_run_id=%q, module=%q. "+
+			"Load get_reference_doc(kind=\"pulse-review-fixer\") and follow its reviewer phase for this module only. Reconcile the complete active retained backlog, awaiting-verification work, and any already-saved SQLite result before discovery. If the evidence is already sufficient, do not launch a duplicate reviewer. Otherwise make exactly one call_generic_agent call with role=\"reviewer\", module=%q, and these exact run identities; never combine reviewers in one shell command or use background curl, & or wait. Confirm the SQLite result can be loaded with get_pulse_review_result, then stop without editing, starting a fix attempt, or marking module state. The single consolidated Fixer stage after all selected reviews owns every mutation and terminal module result.",
 			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief,
 	}, true
 }
 
-func validatePulseModuleResult(ctx context.Context, workspacePath, pulseRunID, module string) error {
-	worklist, ok, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
-	if err != nil {
-		return fmt.Errorf("read Pulse worklist: %w", err)
+func postRunMonitorConsolidatedFixStep(pulseRunID, reviewRunID string, modules []string) postRunMonitorStep {
+	quoted := make([]string, 0, len(modules))
+	for _, module := range modules {
+		quoted = append(quoted, fmt.Sprintf("%q", module))
 	}
-	if !ok {
-		return fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
+	return postRunMonitorStep{
+		label: "pulse-fixer",
+		query: fmt.Sprintf("PULSE CONSOLIDATED FIXER. pulse_run_id=%q, review_run_id=%q, due_modules=[%s]. "+
+			"Load get_reference_doc(kind=\"pulse-review-fixer\") and follow its consolidated Fixer phase. Make exactly one call_generic_agent call with role=\"fixer\", module=\"pulse_fixer\", these exact run identities, and instructions containing the due module list. Do not apply fixes inline in this parent stage. The child must load all saved SQLite reviews and the complete lifecycle backlog; consume structured verification verdicts first; semantically consolidate actionable findings into a short priority-ordered repair list; start one durable fix attempt per coherent repair bundle; apply bundles sequentially; and call mark_pulse_module_result exactly once for every due module. Group only the same root cause with compatible target changes and one verification condition. Keep conflicting, waiting, proposal-only, and externally owned work separate. After the child completes, validate that every due module is terminal, then stop.",
+			pulseRunID, reviewRunID, strings.Join(quoted, ", ")),
 	}
-	state, exists := worklist[module]
-	if !exists || strings.TrimSpace(strings.ToLower(state.LastDecision)) != "due" {
-		return fmt.Errorf("module %q is not due in Pulse worklist %q", module, pulseRunID)
-	}
-	if strings.TrimSpace(state.LastResult) == "" {
-		return fmt.Errorf("due Pulse module %q lacks a terminal current-run result", module)
-	}
-	return nil
 }
 
 func validatePulseDueModuleResults(ctx context.Context, workspacePath, pulseRunID string) error {
@@ -2730,7 +2720,7 @@ func (s *SchedulerService) selectedPostRunMonitorModuleSteps(ctx context.Context
 			selectedModules = append(selectedModules, module)
 		}
 	}
-	selected := make([]postRunMonitorStep, 0, len(selectedModules)+3)
+	selected := make([]postRunMonitorStep, 0, len(selectedModules)+4)
 	if len(selectedModules) > 0 {
 		reviewRunID := pulseReviewRunID(pulseRunID, time.Now())
 		selected = append(selected, postRunMonitorPreBackupStep(pulseRunID))
@@ -2739,6 +2729,7 @@ func (s *SchedulerService) selectedPostRunMonitorModuleSteps(ctx context.Context
 				selected = append(selected, step)
 			}
 		}
+		selected = append(selected, postRunMonitorConsolidatedFixStep(pulseRunID, reviewRunID, selectedModules))
 	}
 	selected = append(selected, postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
 	return selected

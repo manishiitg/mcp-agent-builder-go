@@ -8,8 +8,9 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { isScheduledWorkflowSession, openActiveSession } from '../utils/workflowSessionRestore'
 import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
-import { hasIdleAliveCodingAgent, hasLiveBackgroundAgents, nonWorkflowActivityTitle, normalizedActivityStatus } from '../utils/activitySessions'
+import { hasIdleAliveCodingAgent, hasLiveBackgroundAgents, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
+import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 
 // This matches useChatStore's active-session cache TTL. A longer store TTL also
 // increases the monitor's effective freshness window and should be changed here.
@@ -19,10 +20,6 @@ const MAX_INLINE_ACTIVITY_ITEMS = 2
 type ActivityMonitorItem =
   | { type: 'session'; id: string; session: ActiveSessionInfo }
   | { type: 'builder-tab'; id: string; tab: ChatTab }
-
-function normalizedStatus(status?: string): string {
-  return normalizedActivityStatus(status)
-}
 
 function isWorkflowSession(session: ActiveSessionInfo): boolean {
   return session.agent_mode?.toLowerCase().includes('workflow') ?? false
@@ -120,40 +117,6 @@ function displaySessionTitle(
 
 function shortText(value: string, limit = 72): string {
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
-}
-
-function headerStatusLabel(session: ActiveSessionInfo, workflow?: RunningWorkflowInfo): string {
-  if (runtimeNeedsUserInput(session)) return 'waiting for input'
-  const hasBackgroundAgents = hasLiveBackgroundAgents(session)
-  if (session.runtime_state) {
-    const status = sessionRuntimeStatus(session)
-    if (status === 'idle') return hasBackgroundAgents ? 'waiting for background agents' : 'idle'
-    if (status === 'stopped') return 'stopped'
-    return hasBackgroundAgents && !session.runtime_state.foreground_turn.busy
-      ? 'background running'
-      : 'running'
-  }
-  const status = normalizedStatus(workflow?.status || session.status)
-  if (status === 'paused') return 'paused'
-  if (status === 'idle') return 'idle'
-  if ((status === 'waiting' || status === 'waiting_feedback') && hasBackgroundAgents) return 'waiting for background agents'
-  if (status === 'waiting' || status === 'waiting_feedback') return 'waiting'
-  if ((status === 'completed' || status === 'idle') && hasBackgroundAgents) return 'background running'
-  // Idle-but-alive coding CLI (backend marked it completed once the turn ended, but
-  // the tmux agent is still up waiting for input): show it as idle (clock), never as
-  // a spinner. Precedence: a genuinely-running/busy session keeps status "running".
-  if ((status === 'completed' || status === 'idle') && hasIdleAliveCodingAgent(session)) return 'idle'
-  if (status === 'completed' && isWorkflowSession(session)) return 'idle'
-  return status || 'running'
-}
-
-function statusTone(session: ActiveSessionInfo, workflow?: RunningWorkflowInfo): 'running' | 'needs-input' | 'paused' | 'background' | 'idle' {
-  const status = headerStatusLabel(session, workflow)
-  if (status === 'waiting for input') return 'needs-input'
-  if (status === 'idle' || status === 'waiting') return 'idle'
-  if (status === 'paused') return 'paused'
-  if (status === 'background running' || status === 'waiting for background agents') return 'background'
-  return 'running'
 }
 
 function normalizedActivityIdentity(value?: string | null): string {

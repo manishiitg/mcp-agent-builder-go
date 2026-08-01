@@ -21,7 +21,7 @@ Fix focus: {{.Focus}}.{{end}}
 3. Recheck the cited evidence before mutation. If the evidence is stale,
    contradictory, unsafe to verify, or no longer reproducible, preserve or
    disposition the existing finding instead of forcing a change.
-4. Group selected findings by owning Pulse module and call
+4. Collect the owning Pulse modules and call
    `begin_pulse_fixer_run(workspace_path, modules)` exactly once. Use its returned
    `pulse_run_id` for every lifecycle write. If it reports that a module belongs
    to an unresolved automatic Pulse run, stop rather than taking it over.
@@ -40,13 +40,17 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   recipients, destinations, credentials, and broad plan changes require the
   existing exact approved human-input request. A free-form or unrelated answer
   is not approval.
-- Run the repair itself as one `call_generic_agent` with `role="fixer"` per
-  selected module, passing the `pulse_run_id` from `begin_pulse_fixer_run` and
-  that `module`; the backend derives the review identity. Start one at a time —
-  it is the single writer. This is the same stage scheduled Pulse uses, so a
+- Run the entire repair pass as exactly one `call_generic_agent` with
+  `role="fixer"`, `module="pulse_fixer"`, the selected module list in its
+  instructions, and the `pulse_run_id` from `begin_pulse_fixer_run`; the backend
+  derives the stage identity. This is the same single-writer stage scheduled Pulse uses, so a
   manual run exercises the real path rather than a parallel one, and it runs on
   the maintenance model tier instead of this chat turn's model. Do not apply
-  fixes inline here, and do not run an externally side-effecting workflow merely
+  fixes inline here. Have it semantically consolidate the selected findings into
+  a short priority-ordered list of coherent repair bundles. Group only the same
+  root cause with compatible target changes and one verification condition;
+  preserve every finding link and keep conflicts or waiting items separate. Do
+  not run an externally side-effecting workflow merely
   to verify a repair.
 - Run targeted side-effect-free validation after every change and accept it only
   under the `fix-verification` contract: verify the real runtime consumer reads
@@ -57,8 +61,10 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   evidence boundary, and do not claim the finding is fixed.
 
 Before each mutation call `start_pulse_fix_attempt` with the exact existing
-fingerprint/finding ID, intended files, and before references. Do not mutate a
-finding that cannot be linked to its durable identity.
+pair from `get_pulse_finding_backlog`: pass `issue.id` as `finding_id` and the
+`fingerprint` from that same item, plus intended files and before references.
+The issue ID is an address, not duplicate-detection evidence. Do not mutate a
+finding that cannot be linked to both values.
 
 ## Close out
 
