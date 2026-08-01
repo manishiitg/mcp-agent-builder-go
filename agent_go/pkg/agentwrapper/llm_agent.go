@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,15 +28,17 @@ import (
 
 // LLMAgentWrapper wraps the complex MCP Agent to provide a simple LLM-like interface
 type LLMAgentWrapper struct {
-	agent   *mcpagent.Agent
-	name    string
-	mu      sync.RWMutex
-	closed  bool
-	config  LLMAgentConfig
-	metrics *agentMetricsImpl
-	tracer  observability.Tracer
-	traceID observability.TraceID
-	logger  loggerv2.Logger
+	agent     *mcpagent.Agent
+	name      string
+	mu        sync.RWMutex
+	closed    bool
+	config    LLMAgentConfig
+	metrics   *agentMetricsImpl
+	tracer    observability.Tracer
+	traceID   observability.TraceID
+	logger    loggerv2.Logger
+	runtime   mcpagent.RuntimeConfig
+	finalized bool
 
 	// In-memory conversation history for multi-turn state
 	history    []llmtypes.MessageContent
@@ -640,6 +644,7 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		tracer:  tracer,
 		traceID: traceID,
 		logger:  logger,
+		runtime: mcpagent.RuntimeConfig{Model: llm, MCPConfigPath: config.ConfigPath, LegacyOptions: options},
 	}
 
 	// Don't end the trace immediately - let it be ended after conversation completion
@@ -678,6 +683,9 @@ func (w *LLMAgentWrapper) Invoke(ctx context.Context, prompt string) (string, er
 
 // InvokeWithHistory allows multi-turn conversation by passing a full message history.
 func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmtypes.MessageContent) (string, error) {
+	if err := w.FinalizeDefinition(ctx); err != nil {
+		return "", err
+	}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -772,6 +780,81 @@ func (w *LLMAgentWrapper) GetUnderlyingAgent() *mcpagent.Agent {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.agent
+}
+
+// FinalizeDefinition converts the legacy incremental chat/server assembly into
+// one immutable definition before the first turn. It is idempotent. Callers may
+// continue reading the underlying runtime afterward, but identity mutations
+// must happen before this boundary.
+func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("agent is closed")
+	}
+	if w.finalized {
+		return nil
+	}
+	if w.agent == nil {
+		return errors.New("underlying agent is nil")
+	}
+
+	view := w.agent.Definition()
+	direct := make([]mcpagent.ToolDefinition, 0)
+	customTools := w.agent.GetCustomTools()
+	names := make([]string, 0, len(customTools))
+	for name := range customTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tool := customTools[name]
+		if tool.Definition.Function == nil || tool.Execution == nil {
+			continue
+		}
+		var schema map[string]interface{}
+		if tool.Definition.Function.Parameters != nil {
+			encoded, err := json.Marshal(tool.Definition.Function.Parameters)
+			if err != nil {
+				return fmt.Errorf("encode tool schema %q: %w", name, err)
+			}
+			if err := json.Unmarshal(encoded, &schema); err != nil {
+				return fmt.Errorf("decode tool schema %q: %w", name, err)
+			}
+		}
+		direct = append(direct, mcpagent.ToolDefinition{
+			Name:         name,
+			Description:  tool.Definition.Function.Description,
+			InputSchema:  schema,
+			Execute:      tool.Execution,
+			Timeout:      tool.Timeout,
+			DisplayGroup: tool.Category,
+		})
+	}
+
+	runtime := w.runtime
+	runtime.ResumeHandle = w.lastResult.Handle
+	next, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
+		Instructions: view.Instructions,
+		Skills:       view.SkillDefinitions,
+		Tools:        mcpagent.ToolSet{Direct: direct},
+	}, runtime)
+	if err != nil {
+		return fmt.Errorf("finalize immutable agent definition: %w", err)
+	}
+	for _, observer := range view.Observers {
+		if observer != nil {
+			next.AddEventListener(observer)
+		}
+	}
+	next.PromptLogLabel = w.agent.PromptLogLabel
+	next.APIKeys = w.agent.APIKeys
+	next.CodingAgentWorkingDir = w.agent.CodingAgentWorkingDir
+	old := w.agent
+	w.agent = next
+	w.finalized = true
+	mcpagent.RetireReplacedAgent(old)
+	return nil
 }
 
 // AgentMetricsSnapshot is a read-only snapshot of agent metrics
@@ -977,6 +1060,9 @@ func (w *LLMAgentWrapper) emitEvent(eventData events.EventData) {
 // StreamWithEvents streams text chunks from the agent during execution
 // Events are handled separately via the EventObserver and polling API
 func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (<-chan string, error) {
+	if err := w.FinalizeDefinition(ctx); err != nil {
+		return nil, err
+	}
 	w.mu.RLock()
 	if w.closed {
 		w.mu.RUnlock()

@@ -491,7 +491,7 @@ func (ba *BaseAgent) replaceDefinition(ctx context.Context, nextDefinition mcpag
 	}
 	nextAgent.PromptLogLabel = ba.agent.PromptLogLabel
 	nextAgent.APIKeys = ba.agent.APIKeys
-	ba.agent.Close()
+	mcpagent.RetireReplacedAgent(ba.agent)
 	ba.agent = nextAgent
 	ba.definition = nextDefinition
 	ba.instructions = nextDefinition.Instructions

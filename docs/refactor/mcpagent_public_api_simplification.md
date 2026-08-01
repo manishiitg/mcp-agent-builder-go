@@ -475,17 +475,24 @@ The branch-level cutover now has a working end-to-end spine:
 - workflow supplementary skills and prompt sections are applied by creating a
   replacement immutable definition before the turn, while preserving the MCP
   session and provider continuation handle; and
+- the main chat and delegation wrappers now finalize their incrementally
+  assembled legacy drafts into one immutable definition before the first turn;
+  the freeze includes static prompt supplements, cloned skill definitions,
+  direct tool executors/schemas, and observers, while replacement retirement
+  preserves shared tracers and MCP/provider state;
+- the gRPC adapter now owns an explicit `Session` and returns response, history,
+  usage, and costs from `Result` instead of calling legacy `Ask*`, token getters,
+  or raw tool maps; and
 - dead legacy exports have been made internal, reducing the concrete `Agent`
   surface from 70 to 53 methods so far.
 
-The remaining `Agent` methods still have live chat/server, gRPC, event,
-dynamic-tool, or provider-adapter callers. In particular, the main chat server
-still assembles prompt sections, skills, tools, and observers after creating its
-wrapper. Those five compatibility mutators remain public until that factory is
-changed to collect all identity inputs first; deleting them earlier would lose
-observers/tools during repeated reconstruction. The public-surface golden test
-prevents either accidental regrowth or undocumented removal while that final
-factory migration continues.
+The remaining `Agent` methods still have live chat/server assembly, examples,
+tests, event, dynamic-tool, or provider-adapter callers. The chat path is now
+frozen before execution, but it still uses compatibility mutators to build the
+draft. The next deletion pass replaces those calls with a dedicated assembly
+object, after which the mutators can be removed without changing runtime
+behavior. The public-surface golden test prevents either accidental regrowth or
+undocumented removal while that caller migration continues.
 
 ## Review (2026-08-01)
 

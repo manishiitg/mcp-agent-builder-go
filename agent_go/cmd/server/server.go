@@ -5412,6 +5412,23 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Secret values stay in the tool environment; only their names belong in
+		// the immutable identity. Assemble that section before finalization.
+		identitySecrets := mergeGlobalSecrets(req.DecryptedSecrets, req.SelectedGlobalSecrets)
+		if len(identitySecrets) > 0 && req.PhaseID == "" {
+			if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
+				underlyingAgent.AddInstructions(buildSecretNamesPrompt(identitySecrets))
+			}
+		}
+
+		// Freeze the incrementally assembled chat identity before observers are
+		// attached or any turn can run. Finalization rebuilds one immutable
+		// definition containing every prompt section, skill, and direct tool.
+		if err := llmAgent.FinalizeDefinition(streamCtx); err != nil {
+			sendError(fmt.Sprintf("Failed to finalize agent definition: %v", err), true)
+			return
+		}
+
 		// Attach the in-memory event observer for real-time SSE/polling, plus
 		// the cost observer that persists immutable per-call usage events.
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
@@ -5603,12 +5620,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 			logfWithContext(queryLogCtx, "[SECRETS] Injected %d secrets as environment variables for shell execution", len(allChatSecrets))
 
-			// Only inject secret names (not values) into the system prompt — values are in env vars
-			secretPrompt := buildSecretNamesPrompt(allChatSecrets)
-			if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
-				underlyingAgent.AddInstructions(secretPrompt)
-				logfWithContext(queryLogCtx, "[SECRETS] Injected %d secret names (not values) into system prompt", len(allChatSecrets))
-			}
+			logfWithContext(queryLogCtx, "[SECRETS] Injected %d secret names (not values) into immutable agent definition", len(allChatSecrets))
 		}
 
 		if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
