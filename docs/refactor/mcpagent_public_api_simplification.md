@@ -487,16 +487,31 @@ The branch-level cutover now has a working end-to-end spine:
 - the gRPC adapter now owns an explicit `Session` and returns response, history,
   usage, and costs from `Result` instead of calling legacy `Ask*`, token getters,
   or raw tool maps; and
-- dead legacy exports have been made internal, reducing the concrete `Agent`
-  surface from 70 to 53 methods so far.
+- the concrete `Agent` surface is now the final four methods: `Start`, `Run`,
+  `Definition`, and `Close`; the golden test pins that exact list;
+- workflow, chat, delegation, and gRPC tool factories assemble one cached
+  `DefinitionAssembly`, which is sealed at the first-turn boundary and rejects
+  later instruction, skill, tool, or observer changes;
+- workflow and chat permissions are passed as `Turn.ToolPolicy`, while folder
+  guards live in `RuntimeConfig` rather than mutable agent identity;
+- workflow steering now goes through the active `Session`, whose delivery path
+  remains available while a serialized `Run` is in flight; and
+- gRPC custom tools are constructed into the immutable definition. Their stable
+  executors proxy to the currently bound stream callback, so a new conversation
+  changes runtime routing without replacing tool schemas or mutating the Agent;
+- structured-output completion tools are now declared before the builder seals
+  its definition. The compatibility helper may still add one dynamically only
+  for legacy `NewAgent` instances with no `AgentDefinition`; it rejects that
+  fallback for immutable agents; and
+- cleanup ticker shutdown now detaches lifecycle state under a mutex and uses
+  goroutine-local channels, removing the construction/close race exposed by the
+  new definition tests.
 
-The remaining `Agent` methods still have live chat/server assembly, examples,
-tests, event, dynamic-tool, or provider-adapter callers. The chat path is now
-frozen before execution, but it still uses compatibility mutators to build the
-draft. The next deletion pass replaces those calls with a dedicated assembly
-object, after which the mutators can be removed without changing runtime
-behavior. The public-surface golden test prevents either accidental regrowth or
-undocumented removal while that caller migration continues.
+Focused runtime and diagnostic package functions remain for bridge internals,
+legacy command examples, and synthetic tests. They do not mutate agent identity
+and are deliberately outside the concrete `Agent` method set. The remaining
+cleanup is structural (moving those helpers into narrower internal services),
+not a blocker for the immutable construction/session cutover.
 
 ## Review (2026-08-01)
 

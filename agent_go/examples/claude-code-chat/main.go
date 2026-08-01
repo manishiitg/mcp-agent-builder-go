@@ -195,7 +195,7 @@ func run(ctx context.Context, log loggerv2.Logger) error {
 
 	// Register a dummy human tool to test that custom tools appear
 	// in the tool index when UseCodeExecutionMode is true.
-	if err := agent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(agent,
 		"human_feedback",
 		"Request feedback from a human operator",
 		map[string]interface{}{
@@ -220,7 +220,7 @@ func run(ctx context.Context, log loggerv2.Logger) error {
 	log.Info("Registered dummy human_feedback tool (category: human_tools)")
 
 	// Step 12: Register CLI event listener (shows tool calls in terminal)
-	agent.AddEventListener(&cliEventListener{})
+	mcpagent.ObserveAgent(agent, &cliEventListener{})
 
 	// Step 13: Verify bridge config (should have exactly shell + browser + get_api_spec)
 	if err := verifyBridge(agent, log); err != nil {
@@ -500,7 +500,7 @@ func registerTools(
 		paramBytes, _ := json.Marshal(tool.Function.Parameters)
 		json.Unmarshal(paramBytes, &schema)
 	}
-	if err := agent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(agent,
 		tool.Function.Name,
 		tool.Function.Description,
 		schema,
@@ -522,7 +522,7 @@ func registerTools(
 		bParamBytes, _ := json.Marshal(bTool.Function.Parameters)
 		json.Unmarshal(bParamBytes, &bSchema)
 	}
-	if err := agent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(agent,
 		bTool.Function.Name,
 		bTool.Function.Description,
 		bSchema,
@@ -539,7 +539,7 @@ func registerTools(
 // ---------- Bridge verification ----------
 
 func verifyBridge(agent *mcpagent.Agent, log loggerv2.Logger) error {
-	configJSON, err := agent.BuildBridgeMCPConfig()
+	configJSON, err := mcpagent.BuildAgentBridgeConfig(agent)
 	if err != nil {
 		return fmt.Errorf("BuildBridgeMCPConfig: %w", err)
 	}
@@ -668,7 +668,7 @@ func runChat(ctx context.Context, agent *mcpagent.Agent) error {
 		})
 
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		answer, updated, err := agent.AskWithHistory(turnCtx, history)
+		answer, updated, err := mcpagent.RunHistory(turnCtx, agent, history)
 		turnCancel()
 
 		if err != nil {
@@ -692,7 +692,7 @@ func runChat(ctx context.Context, agent *mcpagent.Agent) error {
 }
 
 func printUsageSummary(agent *mcpagent.Agent) {
-	promptTokens, completionTokens, totalTokens, cacheTokens, _, llmCalls, _ := agent.GetTokenUsage()
+	promptTokens, completionTokens, totalTokens, cacheTokens, _, llmCalls, _ := mcpagent.AgentTokenUsage(agent)
 
 	// Show session ID if captured
 	sessionTag := ""
@@ -730,7 +730,7 @@ func handleCommand(input string, history *[]llm.MessageContent, agent *mcpagent.
 		fmt.Printf("Messages in history: %d\n", len(*history))
 		return true, false
 	case "/usage":
-		promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCalls, _ := agent.GetTokenUsage()
+		promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCalls, _ := mcpagent.AgentTokenUsage(agent)
 		fmt.Printf("Token Usage (cumulative):\n")
 		fmt.Printf("  Input tokens:     %d", promptTokens)
 		if cacheTokens > 0 {

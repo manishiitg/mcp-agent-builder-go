@@ -1450,7 +1450,7 @@ func registerReportPlanValidationTools(
 	}`
 	params, _ := parseSchemaForToolParameters(schema)
 
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"validate_report_plan",
 		"Validate reports/report_plan.json after editing it. It checks file-source path allowlists and formats plus interaction questions, response kinds, and option IDs. Returns structured per-widget errors + warnings + suggestions plus a parsed dump showing exactly what the validator saw.",
 		params,
@@ -1491,7 +1491,7 @@ func registerReportPlanManagementTools(
 	}`
 	getPlanParams, _ := parseSchemaForToolParameters(getPlanSchema)
 
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"get_report_plan",
 		"Read the current report plan from reports/report_plan.json and return its section, entry, row, and widget IDs. Call this before move/remove/toggle operations so you have stable IDs.",
 		getPlanParams,
@@ -1581,7 +1581,7 @@ func registerReportPlanManagementTools(
 	}`, widgetConfigSchema)
 	upsertParams, _ := parseSchemaForToolParameters(upsertSchema)
 
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"upsert_report_widget",
 		"Create or update one report widget in reports/report_plan.json. If widget_id exists, this merges the provided config into the existing widget. If widget_id is omitted, it creates a new widget in the target section; pass row_id to insert into an existing row entry.\n\n"+
 			"Report documents remain HTML: create an HTML document under `db/reports/` and register it with `kind:\"file\"`, `renderFormat:\"html\"`, and `source` set to that file. Add `kind:\"interaction\"` only when the user explicitly asks to configure a durable input/decision control in the Report page. Interaction widgets are native app controls, not agent-authored JavaScript; their answers are stored in db/db.sqlite table report_widget_responses for later workflow steps.\n\n"+
@@ -1698,7 +1698,7 @@ func registerReportPlanManagementTools(
 		"additionalProperties": false
 	}`
 	removeParams, _ := parseSchemaForToolParameters(removeSchema)
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"remove_report_widget",
 		"Remove one widget from reports/report_plan.json by widget_id. If the widget was the last item in a row, the empty row is removed too. Empty sections are cleaned up automatically.",
 		removeParams,
@@ -1742,7 +1742,7 @@ func registerReportPlanManagementTools(
 		"additionalProperties": false
 	}`
 	moveParams, _ := parseSchemaForToolParameters(moveSchema)
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"move_report_widget",
 		"Move one widget to a different section position or into an existing row. Use target_row_id to place it inside a row entry; otherwise it becomes a single full-width widget entry in the target section.",
 		moveParams,
@@ -1803,7 +1803,7 @@ func registerReportPlanManagementTools(
 		"additionalProperties": false
 	}`
 	toggleParams, _ := parseSchemaForToolParameters(toggleSchema)
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"toggle_report_widget",
 		"Set a widget's hidden state in reports/report_plan.json without deleting it. Hidden widgets stay in the plan but do not render in the frontend.",
 		toggleParams,
@@ -1857,7 +1857,7 @@ func registerReportPlanManagementTools(
 		"additionalProperties": false
 	}`
 	themeParams, _ := parseSchemaForToolParameters(themeSchema)
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"set_report_theme",
 		"Set the plan-level theme on reports/report_plan.json. Two ways to use this:\n\n"+
 			"1. **Named theme** — pass theme: \"anthropic\" / \"brand\" / \"warm\" / \"cool\". The bundled CSS blocks override --chart-1..5, --primary, --accent, and surface tints across the report. Quickest path; no color authoring needed. \"anthropic\" is the recommended default: a warm editorial \"paper\" palette (ivory surfaces, warm near-black text, a single clay/terracotta accent, muted earthy charts) that overrides the full surface + semantic token set.\n\n"+
@@ -1965,7 +1965,7 @@ func registerReportPlanManagementTools(
 		"additionalProperties": false
 	}`
 	sectionLayoutParams, _ := parseSchemaForToolParameters(sectionLayoutSchema)
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"set_section_layout",
 		"Set or clear a section's layout. mode=grid keeps the normal grid layout; mode=tabs renders entries grouped by their entry tab label, useful for workflow routes. For routed workflows, prefer one shared conceptual section in mode=tabs with each route's widgets assigned the route name via upsert_report_widget(tab=...). When columns is set (1–24), the active tab/grid entries flow into a CSS Grid of that width and individual widgets honor layout.span. Pass mode:null and columns:null (or omit both) to clear layout. Identify the section via section_id (preferred — call get_report_plan first) or section_heading.",
 		sectionLayoutParams,
@@ -2035,7 +2035,7 @@ func registerReportRenderPreviewTool(
 	}`
 	params, _ := parseSchemaForToolParameters(schema)
 
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"preview_report_render",
 		"Preview how reports/report_plan.json resolves against the current workspace. Returns validation output, a human-readable preview markdown, and per-widget previews so you can inspect what the final report would show before asking the user to open the Report tab.",
 		params,

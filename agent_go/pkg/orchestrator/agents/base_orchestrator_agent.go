@@ -301,6 +301,15 @@ func ExecuteStructuredWithInputProcessorViaTool[T any](boa *BaseOrchestratorAgen
 		var zero T
 		return zero, nil, fmt.Errorf("base agent is not initialized - Initialize() must be called before executing agent %s", boa.agentType)
 	}
+	outputTool, toolErr := mcpagent.NewStructuredOutputTool(toolName, toolDescription, schema)
+	if toolErr != nil {
+		var zero T
+		return zero, nil, toolErr
+	}
+	if toolErr := baseAgent.ApplyTool(agentCtx, outputTool); toolErr != nil {
+		var zero T
+		return zero, nil, toolErr
+	}
 
 	// Prepare messages with conversation history and user message
 	messages := make([]llmtypes.MessageContent, len(conversationHistory))
@@ -600,7 +609,7 @@ func (boa *BaseOrchestratorAgent) emitAgentEndEventWithStructuredResponse(ctx co
 	// Get token usage from agent if available
 	var promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCallCount, cacheEnabledCallCount int
 	if boa.baseAgent != nil && boa.baseAgent.agent != nil {
-		promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCallCount, cacheEnabledCallCount = boa.baseAgent.agent.GetTokenUsage()
+		promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCallCount, cacheEnabledCallCount = mcpagent.AgentTokenUsage(boa.baseAgent.agent)
 	}
 
 	eventData := &events.OrchestratorAgentEndEvent{

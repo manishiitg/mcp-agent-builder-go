@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 
@@ -157,7 +157,7 @@ Example:
 				}
 
 				// Register the tool
-				agent.RegisterCustomTool(
+				mcpagent.AddDefinitionTool(agent,
 					toolName,
 					tool.Function.Description,
 					params,
@@ -177,7 +177,7 @@ Example:
 		logger.Info(fmt.Sprintf("🔍 This should trigger the read_image tool"))
 
 		// Invoke the agent
-		response, err := agent.Ask(ctx, prompt)
+		response, err := mcpagent.RunText(ctx, agent, prompt)
 		if err != nil {
 			logger.Error(fmt.Sprintf("❌ Read secure access image test failed: %v", err), nil)
 			return fmt.Errorf("read secure access image test failed: %w", err)
@@ -195,7 +195,7 @@ Example:
 		fmt.Print(strings.Repeat("=", 80) + "\n")
 
 		// Show agent capabilities
-		servers := agent.GetServerNames()
+		servers := mcpagent.AgentServerNames(agent)
 		fmt.Printf("\n📊 Connected Servers: %v\n", servers)
 
 		logger.Info(fmt.Sprintf("✅ Read secure access image test completed successfully"))

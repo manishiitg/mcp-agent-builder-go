@@ -8,9 +8,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
+
+type activeTurnSender interface {
+	Send(context.Context, string) error
+}
 
 // activeTurn tracks the ONE currently in-flight agent turn against a given
 // conversation, so a concurrent request for the SAME conversation can inject a
@@ -28,7 +30,7 @@ var (
 	activeTurnMu sync.Mutex
 	activeTurn   *struct {
 		conversationID string
-		agent          *mcpagent.Agent
+		sender         activeTurnSender
 	}
 )
 
@@ -36,12 +38,12 @@ var (
 // so a concurrent steer attempt for the same conversation id can find it.
 // Call right before the blocking Ask/turn call; pair with a deferred
 // clearActiveTurn.
-func registerActiveTurn(conversationID string, agent *mcpagent.Agent) {
+func registerActiveTurn(conversationID string, sender activeTurnSender) {
 	activeTurnMu.Lock()
 	activeTurn = &struct {
 		conversationID string
-		agent          *mcpagent.Agent
-	}{conversationID, agent}
+		sender         activeTurnSender
+	}{conversationID, sender}
 	activeTurnMu.Unlock()
 }
 
@@ -99,11 +101,7 @@ func trySteer(ctx context.Context, conversationID, message string) bool {
 	}
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err := at.agent.DeliverUserMessage(sctx, mcpagent.UserMessageDeliveryRequest{
-		SessionID: conversationID,
-		Message:   message,
-		Intent:    mcpagent.UserMessageDeliveryIntentAuto,
-	})
+	err := at.sender.Send(sctx, message)
 	if err != nil {
 		log.Printf("[steer] %q: delivery failed: %v", conversationID, err)
 		return false

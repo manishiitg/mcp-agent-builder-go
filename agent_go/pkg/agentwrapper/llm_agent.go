@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,18 +26,19 @@ import (
 
 // LLMAgentWrapper wraps the complex MCP Agent to provide a simple LLM-like interface
 type LLMAgentWrapper struct {
-	agent     *mcpagent.Agent
-	name      string
-	mu        sync.RWMutex
-	closed    bool
-	config    LLMAgentConfig
-	metrics   *agentMetricsImpl
-	tracer    observability.Tracer
-	traceID   observability.TraceID
-	logger    loggerv2.Logger
-	runtime   mcpagent.RuntimeConfig
-	finalized bool
-	assembly  *mcpagent.DefinitionAssembly
+	agent      *mcpagent.Agent
+	name       string
+	mu         sync.RWMutex
+	closed     bool
+	config     LLMAgentConfig
+	metrics    *agentMetricsImpl
+	tracer     observability.Tracer
+	traceID    observability.TraceID
+	logger     loggerv2.Logger
+	runtime    mcpagent.RuntimeConfig
+	finalized  bool
+	assembly   *mcpagent.DefinitionAssembly
+	toolPolicy mcpagent.ToolPolicy
 
 	// In-memory conversation history for multi-turn state
 	history    []llmtypes.MessageContent
@@ -693,6 +692,8 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 		w.mu.Unlock()
 		return "", errors.New("agent is closed")
 	}
+	runtimeAgent := w.agent
+	toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 	// Use the passed messages directly, don't overwrite internal history
 	w.mu.Unlock()
 
@@ -745,7 +746,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if providerNeedsPlainTextHistory(w.config.Provider) {
 		messages = sanitizeHistoryForPlainTextProvider(messages)
 	}
-	result, err := w.agent.Run(timeoutCtx, mcpagent.Turn{History: messages})
+	result, err := runtimeAgent.Run(timeoutCtx, mcpagent.Turn{History: messages, ToolPolicy: toolPolicy})
 	response := result.Text
 	updatedMessages := result.History
 	duration := time.Since(startTime)
@@ -796,6 +797,16 @@ func (w *LLMAgentWrapper) AttachSkill(skill *llmtypes.Skill) error {
 	return w.assembly.AddSkill(skill)
 }
 
+func (w *LLMAgentWrapper) AddObserver(observer mcpagent.AgentEventListener) error {
+	return w.assembly.AddObserver(observer)
+}
+
+func (w *LLMAgentWrapper) SetToolPolicy(toolNames []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
+}
+
 func (w *LLMAgentWrapper) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), category string) error {
 	return w.assembly.AddTool(name, description, parameters, execute, 0, category)
 }
@@ -825,61 +836,15 @@ func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
 		return errors.New("underlying agent is nil")
 	}
 
-	view := w.assembly.Snapshot()
-	direct := make([]mcpagent.ToolDefinition, 0)
-	customTools := w.agent.GetCustomTools()
-	names := make([]string, 0, len(customTools))
-	for name := range customTools {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		tool := customTools[name]
-		if tool.Definition.Function == nil || tool.Execution == nil {
-			continue
-		}
-		var schema map[string]interface{}
-		if tool.Definition.Function.Parameters != nil {
-			encoded, err := json.Marshal(tool.Definition.Function.Parameters)
-			if err != nil {
-				return fmt.Errorf("encode tool schema %q: %w", name, err)
-			}
-			if err := json.Unmarshal(encoded, &schema); err != nil {
-				return fmt.Errorf("decode tool schema %q: %w", name, err)
-			}
-		}
-		direct = append(direct, mcpagent.ToolDefinition{
-			Name:         name,
-			Description:  tool.Definition.Function.Description,
-			InputSchema:  schema,
-			Execute:      tool.Execution,
-			Timeout:      tool.Timeout,
-			DisplayGroup: tool.Category,
-		})
-	}
-
 	runtime := w.runtime
 	runtime.ResumeHandle = w.lastResult.Handle
-	next, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
-		Instructions: view.Instructions,
-		Skills:       view.SkillDefinitions,
-		Tools:        mcpagent.ToolSet{Direct: direct},
-	}, runtime)
+	next, _, err := w.assembly.Build(ctx, runtime)
 	if err != nil {
 		return fmt.Errorf("finalize immutable agent definition: %w", err)
 	}
-	for _, observer := range view.Observers {
-		if observer != nil {
-			next.AddEventListener(observer)
-		}
-	}
-	next.PromptLogLabel = w.agent.PromptLogLabel
-	next.APIKeys = w.agent.APIKeys
-	next.CodingAgentWorkingDir = w.agent.CodingAgentWorkingDir
 	old := w.agent
 	w.agent = next
 	w.finalized = true
-	w.assembly.Seal()
 	mcpagent.RetireReplacedAgent(old)
 	return nil
 }
@@ -1215,7 +1180,11 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		// Execute through the single turn API. It selects fresh versus provider-
 		// native continuation internally and returns history, handle, and usage
 		// as one result.
-		result, err := w.agent.Run(ctx, mcpagent.Turn{History: messages})
+		w.mu.RLock()
+		runtimeAgent := w.agent
+		toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
+		w.mu.RUnlock()
+		result, err := runtimeAgent.Run(ctx, mcpagent.Turn{History: messages, ToolPolicy: toolPolicy})
 		response := result.Text
 		updatedMessages := result.History
 

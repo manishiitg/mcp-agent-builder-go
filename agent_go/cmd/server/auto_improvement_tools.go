@@ -65,7 +65,7 @@ func RegisterCaptureContextTool(agent *mcpagent.Agent, workspacePath string, log
 		return string(body), nil
 	}
 
-	if err := agent.RegisterCustomTool("capture_context", desc, params, handler, "auto_improvement"); err != nil {
+	if err := mcpagent.AddDefinitionTool(agent, "capture_context", desc, params, handler, "auto_improvement"); err != nil {
 		if logger != nil {
 			logger.Warn(fmt.Sprintf("Failed to register capture_context: %v", err))
 		}

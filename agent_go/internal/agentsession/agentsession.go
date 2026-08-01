@@ -579,6 +579,12 @@ func (s *Session) Ask(ctx context.Context, history []Message) (string, error) {
 	return strings.TrimSpace(sanitizeReply(result.Text)), nil
 }
 
+// Send injects input into the active turn without exposing the concrete Agent.
+func (s *Session) Send(ctx context.Context, input string) error {
+	_, err := s.runtime.Send(ctx, input)
+	return err
+}
+
 // sanitizeReply strips internal CLI/transport notices that occasionally bleed
 // into the captured assistant text. The coding CLI prints a line like
 // "Shell cwd was reset to <dir>" when a command leaves the working directory

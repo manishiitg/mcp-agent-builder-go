@@ -1071,7 +1071,7 @@ func RegisterReorganizeKnowledgebaseTool(
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"reorganize_knowledgebase",
 		"Apply a natural-language transformation to the knowledgebase notes only. Supported operations: merge two topic files, drop sections from a bad run, compact a topic file, rename a topic and rewrite cross-references, drop a topic entirely. Takes one argument 'instruction' describing what to do. The agent reads knowledgebase/notes/_index.json, scopes to the relevant topic files, applies the transformation, and resyncs the index. It must not read or write knowledgebase/context/. Serialized against post-step KB updates — safe to call while a workflow is running. Returns the agent's summary line describing what changed.",
 		map[string]interface{}{
@@ -1127,7 +1127,7 @@ func RegisterConsolidateKnowledgebaseTool(
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"consolidate_knowledgebase",
 		"Run a holistic cross-step consolidation pass over knowledgebase/notes/. Use this AFTER multiple steps have contributed to catch drift that per-step KB updates can't see: two steps creating topic files under different slugs for the same entity, cross-step patterns that need a `pattern-*.md` note, contradictions between steps on the same subject. The agent reads every step's knowledgebase_contribution plus step output folders from the selected run. Takes one argument 'objective' describing the consolidation goal — be specific; the agent scopes work to it and won't opportunistically reorganize beyond. Returns the agent's summary line.",
 		map[string]interface{}{
@@ -1172,7 +1172,7 @@ func RegisterRunFullEvaluationTool(
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"run_full_evaluation",
 		"Run the full evaluation pipeline: execute all evaluation steps against a target execution run, then publish their outputs into evaluation_report.json for review. Evaluation always targets iteration-0 (the default execution run). Runs in background — you will be notified when complete.",
 		map[string]interface{}{
@@ -1653,7 +1653,7 @@ func RegisterRunFullWorkflowTool(
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"run_full_workflow",
 		"Execute the complete workflow: load the plan, resolve variables, and run all steps for a single variable group. Always uses iteration-0 and starts from the beginning. Runs in background - you will be notified when complete. Use send_step_message with the returned execution_id to steer whichever workflow child-agent turn is currently active. If the plan contains human_input steps on the selected path, you MUST provide human_inputs with a response for each one. If the plan contains deterministic routing steps and the user's request already selected a branch, pass route_selections keyed by routing step ID. Pass disable_eval=true to skip the automatic evaluation pass after the workflow completes.",
 		map[string]interface{}{

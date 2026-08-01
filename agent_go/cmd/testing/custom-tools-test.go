@@ -121,7 +121,7 @@ This test demonstrates:
 
 		// Now register the weather tool directly with the external agent
 		// This maintains proper encapsulation while allowing custom tool registration
-		agent.RegisterCustomTool(
+		mcpagent.AddDefinitionTool(agent,
 			"get_weather",
 			"Get current weather information for a specific location. This tool provides real-time weather data including temperature, humidity, wind speed, pressure, and weather conditions. Use this tool when users ask about weather, temperature, or weather forecasts for any city or location.",
 			map[string]interface{}{
@@ -164,7 +164,7 @@ This test demonstrates:
 		weatherQuestion := "What's the weather like in New York City?"
 		logger.Info(fmt.Sprintf("Testing weather tool with question: %s", weatherQuestion))
 
-		response, err := agent.Ask(ctx, weatherQuestion)
+		response, err := mcpagent.RunText(ctx, agent, weatherQuestion)
 		if err != nil {
 			logger.Error(fmt.Sprintf("❌ Weather tool test failed: %v", err), nil)
 			return fmt.Errorf("weather tool test failed: %w", err)
@@ -187,7 +187,7 @@ This test demonstrates:
 		fmt.Printf("\n📊 Available Tools: %v\n", toolNames)
 
 		// Show connected servers
-		serverNames := agent.GetServerNames()
+		serverNames := mcpagent.AgentServerNames(agent)
 		fmt.Printf("\n🛠️ Connected Servers: %v\n", serverNames)
 
 		// Close the agent

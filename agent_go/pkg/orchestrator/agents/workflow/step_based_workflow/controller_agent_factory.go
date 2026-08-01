@@ -1119,15 +1119,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.Or
 		return nil // No base agent, nothing to configure
 	}
 
-	mcpAgent := baseAgent.Agent()
-	if mcpAgent == nil {
-		return nil // No MCP agent, nothing to configure
-	}
-
 	// Set folder guard paths on MCP agent (required for both code execution mode and simple mode)
 	// This ensures path validation works at the tool executor level
 	readPaths, writePaths := hcpo.GetFolderGuardPaths()
-	mcpAgent.SetFolderGuardPaths(readPaths, writePaths)
+	baseAgent.SetWorkspacePolicy(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Folder guard paths set for %s agent - Read: %v, Write: %v", agentName, readPaths, writePaths))
 
 	return nil

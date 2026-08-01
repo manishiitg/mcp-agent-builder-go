@@ -2006,7 +2006,7 @@ func (api *StreamingAPI) steerBackgroundAgentCompletion(sessionID, agentID strin
 
 	provider := string(delivery.Provider)
 	if provider == "" {
-		provider = string(runningAgent.GetProvider())
+		provider = string(mcpagent.AgentProvider(runningAgent))
 	}
 	deliveryStatus := string(delivery.DeliveryStatus)
 	if deliveryStatus == "" {

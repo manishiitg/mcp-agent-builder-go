@@ -39,7 +39,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent *mcpagent.Agent, us
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return agent.RegisterCustomTool(name, description, params, exec, toolCategory)
+		return mcpagent.AddDefinitionTool(agent, name, description, params, exec, toolCategory)
 	}
 
 	encryptValue := func(plaintext string) (string, error) {

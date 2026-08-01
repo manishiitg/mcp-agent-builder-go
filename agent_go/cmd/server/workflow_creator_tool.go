@@ -55,7 +55,7 @@ func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent *mcpagent.A
 
 	description := "Create a new workflow at Workflow/<folder_name>/ with the given workflow.json and planning/plan.json. Use one large message_sequence per shared-context span, with proof/provenance, evidence-based double-checking, repair, and final validation inside it; create another large sequence only when its context should be isolated. Put deterministic API/SDK/CLI/data-fetch/parse/persist work in coherent scripted-fetcher candidates with authoritative validated outputs. Never use one regular step per endpoint, routine action, or proof check. This tool writes structure only; after creation tell the user to open Workshop so deterministic steps are declared scripted and main.py is authored/tested before production. The tool validates the complete plan graph before writing anything and refuses dangling targets or overwrite."
 
-	return underlyingAgent.RegisterCustomTool(
+	return mcpagent.AddDefinitionTool(underlyingAgent,
 		"create_workflow",
 		description,
 		params,

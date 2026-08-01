@@ -375,7 +375,7 @@ func RegisterGuidanceTool(agent *mcpagent.Agent, currentMode string, logger logg
 		return string(envelope), nil
 	}
 
-	if err := agent.RegisterCustomTool("get_workflow_command_guidance", desc, params, handler, "auto_improvement"); err != nil {
+	if err := mcpagent.AddDefinitionTool(agent, "get_workflow_command_guidance", desc, params, handler, "auto_improvement"); err != nil {
 		if logger != nil {
 			logger.Warn(fmt.Sprintf("Failed to register get_workflow_command_guidance: %v", err))
 		}
@@ -611,7 +611,7 @@ func RegisterReferenceDocTool(agent *mcpagent.Agent, currentMode string, logger 
 		return string(envelope), nil
 	}
 
-	if err := agent.RegisterCustomTool("get_reference_doc", desc, params, handler, "auto_improvement"); err != nil {
+	if err := mcpagent.AddDefinitionTool(agent, "get_reference_doc", desc, params, handler, "auto_improvement"); err != nil {
 		if logger != nil {
 			logger.Warn(fmt.Sprintf("Failed to register get_reference_doc: %v", err))
 		}

@@ -10,11 +10,11 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/workspace/handlers"
+	"github.com/manishiitg/coding-agent-loop/workspace/models"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
-	"github.com/manishiitg/coding-agent-loop/workspace/handlers"
-	"github.com/manishiitg/coding-agent-loop/workspace/models"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -156,7 +156,7 @@ This test:
 				}
 
 				// Register the tool with direct executor
-				if err := agent.RegisterCustomTool(
+				if err := mcpagent.AddDefinitionTool(agent,
 					toolName,
 					tool.Function.Description,
 					params,
@@ -279,7 +279,7 @@ IMPORTANT: When using diff_patch_workspace_file:
 	logger.Info(fmt.Sprintf("Prompt: %s", testPrompt))
 
 	// Execute the agent
-	response, err := agent.Ask(ctx, testPrompt)
+	response, err := mcpagent.RunText(ctx, agent, testPrompt)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Agent execution failed: %v", err), nil)
 		return fmt.Errorf("agent execution failed: %w", err)
@@ -428,7 +428,7 @@ func runMarkdownTest(ctx context.Context, agent *mcpagent.Agent, tempDir string,
 	logger.Info(fmt.Sprintf("Prompt: %s", testPrompt))
 
 	// Execute the agent
-	response, err := agent.Ask(ctx, testPrompt)
+	response, err := mcpagent.RunText(ctx, agent, testPrompt)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Agent execution failed: %v", err), nil)
 		return fmt.Errorf("agent execution failed: %w", err)

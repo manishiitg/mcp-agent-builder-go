@@ -294,7 +294,9 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		if toolCb, ok := ctx.Value(virtualtools.ToolEventCallbackKey).(events.ToolEventCallback); ok && toolCb != nil {
 			subAgentObserver.OnToolEvent = toolCb
 		}
-		underlyingAgent.AddEventListener(subAgentObserver)
+		if err := subAgent.AddObserver(subAgentObserver); err != nil {
+			return "", fmt.Errorf("attach delegation event observer: %w", err)
+		}
 		parentUserID, _ := ctx.Value(common.UserIDKey).(string)
 		subAgentCostObserver := newCostObserver(
 			api.costLedger,
@@ -309,9 +311,9 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 				delegationID,
 			),
 		)
-		underlyingAgent.AddEventListener(subAgentCostObserver)
-		defer underlyingAgent.RemoveEventListener(subAgentObserver)
-		defer underlyingAgent.RemoveEventListener(subAgentCostObserver)
+		if err := subAgent.AddObserver(subAgentCostObserver); err != nil {
+			return "", fmt.Errorf("attach delegation cost observer: %w", err)
+		}
 		log.Printf("[DELEGATION] Added event observers for sub-agent at depth %d", currentDepth)
 
 		// Phase 6 explicit-pass: sub-agents inherit NO skills from the
@@ -399,7 +401,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		}
 		// Inject LLM config fallback for read_image HTTP calls (e.g., from claude CLI subprocess)
 		if underlying := subAgent.GetUnderlyingAgent(); underlying != nil {
-			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, underlying.GetLLMModelConfig())
+			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.AgentLLMConfig(underlying))
 		}
 
 		// Conditional grants already resolved above into subResolvedGrants.

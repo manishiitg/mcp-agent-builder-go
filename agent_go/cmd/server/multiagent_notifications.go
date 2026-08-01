@@ -156,7 +156,7 @@ func (api *StreamingAPI) registerMultiAgentNotificationTool(agent *mcpagent.Agen
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
-	return agent.RegisterCustomTool(
+	return mcpagent.AddDefinitionTool(agent,
 		"update_chief_of_staff_notifications",
 		"Configure or disable the Chief of Staff Slack Incoming Webhook destination. Pass the name of an existing encrypted user secret containing an official Slack Incoming Webhook URL; never pass or expose the URL itself. This updates both interactive Chief of Staff chat and scheduled Chief/Org Pulse runs. Pass an empty secret name to disable the dedicated webhook.",
 		map[string]interface{}{

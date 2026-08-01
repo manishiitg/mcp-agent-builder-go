@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/utils"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 var toolOutputHandlerTestCmd = &cobra.Command{
@@ -176,7 +176,7 @@ func testLargeOutputVirtualTools(testDir string) error {
 	agent := &mcpagent.Agent{
 		EnableContextOffloading: true,
 	}
-	agent.SetToolOutputHandler(mcpagent.NewToolOutputHandler())
+	mcpagent.ConfigureAgentToolOutput(agent, mcpagent.NewToolOutputHandler())
 
 	// Test 1: Check if large output virtual tools are enabled by default
 	logger.Info("Test 1: Default Configuration")
@@ -184,10 +184,10 @@ func testLargeOutputVirtualTools(testDir string) error {
 
 	// Test 2: Create virtual tools and check if large output tools are included
 	logger.Info("Test 2: Virtual Tools Creation")
-	virtualTools := agent.CreateVirtualTools()
+	virtualTools := mcpagent.CreateAgentVirtualTools(agent)
 	logger.Info(fmt.Sprintf("Total virtual tools: %d", len(virtualTools)))
 
-	largeOutputTools := agent.CreateLargeOutputVirtualTools()
+	largeOutputTools := mcpagent.CreateAgentLargeOutputTools(agent)
 	logger.Info(fmt.Sprintf("Large output virtual tools: %d", len(largeOutputTools)))
 
 	for _, tool := range virtualTools {
@@ -199,7 +199,7 @@ func testLargeOutputVirtualTools(testDir string) error {
 	// Test 3: Test with disabled large output virtual tools
 	logger.Info("Test 3: Disabled Configuration")
 	agent.EnableContextOffloading = false
-	disabledTools := agent.CreateLargeOutputVirtualTools()
+	disabledTools := mcpagent.CreateAgentLargeOutputTools(agent)
 	logger.Info(fmt.Sprintf("Large output virtual tools when disabled: %d", len(disabledTools)))
 
 	// Test 4: Test file path building
@@ -208,14 +208,14 @@ func testLargeOutputVirtualTools(testDir string) error {
 	// Create a test tool output handler
 	toolOutputHandler := mcpagent.NewToolOutputHandler()
 	toolOutputHandler.SetSessionID("test-session")
-	agent.SetToolOutputHandler(toolOutputHandler)
+	mcpagent.ConfigureAgentToolOutput(agent, toolOutputHandler)
 
 	// Test valid filename
-	validPath := agent.BuildLargeOutputFilePath("tool_20250721_091511_tavily-search.json")
+	validPath := mcpagent.BuildAgentLargeOutputPath(agent, "tool_20250721_091511_tavily-search.json")
 	logger.Info(fmt.Sprintf("Valid filename path: %s", validPath))
 
 	// Test invalid filename
-	invalidPath := agent.BuildLargeOutputFilePath("invalid_filename.txt")
+	invalidPath := mcpagent.BuildAgentLargeOutputPath(agent, "invalid_filename.txt")
 	logger.Info(fmt.Sprintf("Invalid filename path: %s", invalidPath))
 
 	// Test 5: Test virtual tool handling
@@ -224,7 +224,7 @@ func testLargeOutputVirtualTools(testDir string) error {
 	ctx := context.Background()
 
 	// Test get_prompt tool (should work)
-	result, err := agent.HandleVirtualTool(ctx, "get_prompt", map[string]interface{}{
+	result, err := mcpagent.InvokeAgentVirtualTool(ctx, agent, "get_prompt", map[string]interface{}{
 		"server": "test-server",
 		"name":   "test-prompt",
 	})
@@ -245,11 +245,11 @@ func testLargeOutputVirtualTools(testDir string) error {
 	}
 
 	// Set the tool output handler to use our test directory
-	handler := agent.GetToolOutputHandler()
+	handler := mcpagent.AgentToolOutput(agent)
 	handler.OutputFolder = testDir
 	handler.SessionID = "test-session"
 
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
+	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
 		"filename":  "tool_20250731_143800_test_tool.json",
 		"operation": "read",
 		"start":     float64(1),
@@ -259,7 +259,7 @@ func testLargeOutputVirtualTools(testDir string) error {
 
 	// Test large output tool when disabled (should fail)
 	agent.EnableContextOffloading = false
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
+	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
 		"filename":  "test.json",
 		"operation": "read",
 		"start":     float64(1),

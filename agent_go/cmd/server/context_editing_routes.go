@@ -135,7 +135,7 @@ func (api *StreamingAPI) handleCompactContext(w http.ResponseWriter, r *http.Req
 	// Attach event observer to capture context editing events
 	if api.eventStore != nil {
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
-		tempAgent.AddEventListener(eventObserver)
+		mcpagent.ObserveAgent(tempAgent, eventObserver)
 		log.Printf("[CONTEXT_EDITING] Attached event observer to capture context editing events for session %s", sessionID)
 	} else {
 		log.Printf("[CONTEXT_EDITING] Warning: eventStore is nil, events will not be captured")

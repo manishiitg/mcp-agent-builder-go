@@ -235,7 +235,7 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 		// Ensure iteration folder is applied to bridge (for token persistence)
 		// This ensures all agents automatically get the iteration folder if it's been set
 		bo.applyIterationFolderToBridge()
-		mcpAgent.AddEventListener(cab)
+		mcpagent.AddDefinitionObserver(mcpAgent, cab)
 		// Removed verbose logging
 	} else {
 		// Fallback for interface-based bridge
@@ -250,7 +250,7 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 		}
 		// Ensure iteration folder is applied to bridge (for token persistence)
 		bo.applyIterationFolderToBridge()
-		mcpAgent.AddEventListener(eventBridge)
+		mcpagent.AddDefinitionObserver(mcpAgent, eventBridge)
 		bo.GetLogger().Info(fmt.Sprintf("🔗 Reused context-aware bridge connected to %s (step %d, agent %s)", phase, step+1, baseAgentName))
 		bo.GetLogger().Info(fmt.Sprintf("ℹ️ Skipping StartAgentSession for %s - handled at orchestrator level", phase))
 	}

@@ -146,7 +146,7 @@ func testContextCancellationDuringLLMGeneration(provider string, logger loggerv2
 		examples of AI tools, their benefits and limitations, and future trends in the field." Please be thorough and 
 		comprehensive in your response, covering multiple aspects and providing concrete examples.`
 
-		result, err := agent.Ask(ctx, complexPrompt)
+		result, err := mcpagent.RunText(ctx, agent, complexPrompt)
 		if err != nil {
 			errChan <- err
 			return

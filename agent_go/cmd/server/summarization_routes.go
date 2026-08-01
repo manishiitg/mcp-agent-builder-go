@@ -238,7 +238,7 @@ func (api *StreamingAPI) handleSummarizeConversation(w http.ResponseWriter, r *h
 	// Attach event observer to capture summarization events
 	if api.eventStore != nil {
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
-		tempAgent.AddEventListener(eventObserver)
+		mcpagent.ObserveAgent(tempAgent, eventObserver)
 		log.Printf("[SUMMARIZATION] Attached event observer to capture summarization events for session %s", sessionID)
 	} else {
 		log.Printf("[SUMMARIZATION] Warning: eventStore is nil, events will not be captured")

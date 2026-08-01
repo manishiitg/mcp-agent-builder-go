@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/utils"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 var largeOutputIntegrationTestCmd = &cobra.Command{
@@ -128,7 +128,7 @@ func testVirtualToolsForLargeOutput(testDir string) error {
 	toolOutputHandler.Threshold = mcpagent.DefaultLargeToolOutputThreshold
 
 	// Set the tool output handler using the setter method
-	agent.SetToolOutputHandler(toolOutputHandler)
+	mcpagent.ConfigureAgentToolOutput(agent, toolOutputHandler)
 
 	// Create a test file with large content
 	testFileName := "tool_20250802_213000_test_large_tool.json"
@@ -147,7 +147,7 @@ func testVirtualToolsForLargeOutput(testDir string) error {
 
 	// Test 1: read operation
 	logger.Info("Testing search_large_output read operation...")
-	result, err := agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
+	result, err := mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
 		"filename":  testFileName,
 		"operation": "read",
 		"start":     float64(1),
@@ -163,7 +163,7 @@ func testVirtualToolsForLargeOutput(testDir string) error {
 
 	// Test 2: search_large_output tool
 	logger.Info("Testing search_large_output tool...")
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
+	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
 		"filename":       testFileName,
 		"operation":      "search",
 		"pattern":        "test",
@@ -184,7 +184,7 @@ func testVirtualToolsForLargeOutput(testDir string) error {
 		return fmt.Errorf("failed to write JSON test file: %w", err)
 	}
 
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
+	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
 		"filename":  jsonFileName,
 		"operation": "query",
 		"query":     ".items[0].value",
@@ -221,7 +221,7 @@ func testRealAgentConversation(testDir string) error {
 	toolOutputHandler.OutputFolder = testDir
 	toolOutputHandler.SessionID = "test-session-agent"
 	toolOutputHandler.Threshold = 1000 // Lower threshold for testing
-	agent.SetToolOutputHandler(toolOutputHandler)
+	mcpagent.ConfigureAgentToolOutput(agent, toolOutputHandler)
 
 	// Create a mock tool that produces large output
 	largeOutput := generateLargeOutput(2000) // Over the 1000 character threshold

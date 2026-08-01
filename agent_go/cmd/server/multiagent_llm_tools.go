@@ -1163,7 +1163,7 @@ func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent *mcpagent.Ag
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return underlyingAgent.RegisterCustomTool(name, description, params, exec, "llm_config_tools")
+		return mcpagent.AddDefinitionTool(underlyingAgent, name, description, params, exec, "llm_config_tools")
 	}
 
 	if err := registerLLMCapabilityTools(registerTool); err != nil {
@@ -1267,7 +1267,7 @@ func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent *mcpa
 		return fmt.Errorf("underlying agent is nil")
 	}
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return underlyingAgent.RegisterCustomTool(name, description, params, exec, "llm_config_tools")
+		return mcpagent.AddDefinitionTool(underlyingAgent, name, description, params, exec, "llm_config_tools")
 	}
 	return registerLLMCapabilityDiscoveryTools(registerTool)
 }

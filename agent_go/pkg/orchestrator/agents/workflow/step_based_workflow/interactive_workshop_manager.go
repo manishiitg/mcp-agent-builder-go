@@ -1748,7 +1748,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 	if mcpAgent == nil {
 		return fmt.Errorf("nil mcp agent")
 	}
-	return mcpAgent.RegisterCustomTool(
+	return mcpagent.AddDefinitionTool(mcpAgent,
 		"mark_changelog_artifact_reviewed",
 		"Mark planning/changelog entries as fully inspected after the parent Pulse/workshop agent has recorded the Artifact Review in builder/improve.html. Generic read-only reviewers must only propose exact marks and must not call this tool. This is the only supported way to set artifact_review.done=true; do not edit changelog JSON directly.",
 		map[string]interface{}{
@@ -2835,7 +2835,7 @@ func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedW
 
 // registerInteractiveWorkshopTools registers the custom workshop tools on the agent.
 func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent *mcpagent.Agent, logger loggerv2.Logger) {
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_cost_summary",
 		"Show token usage and cost breakdown for the current run plus builder/Pulse overhead. Displays per-step, per-model, and phase-level totals with USD costs when priced.",
 		map[string]interface{}{
@@ -3011,7 +3011,7 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent *mcpag
 
 func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagent.Agent, logger loggerv2.Logger) {
 	// Tool 1: execute_step — start step in background
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"execute_step",
 		"Start a workflow step in the background, including a normal plan step, nested route step, or plan-local orphan utility step. Returns an execution_id immediately. You will be automatically notified when it completes. Idempotent while running: if the step already has a running execution, this returns that existing execution_id instead of starting a duplicate — use send_step_message with the returned execution_id to steer its currently active agent turn. Learnings follow the step's persistent config (`learnings_access`, `learning_objective`, `lock_learnings`). When learning writes are enabled, SKILL.md updates run as the step agent's direct post-completion continuation before the step is fully finalized. Workshop mode only: set fast_path_only=true to run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback when testing scripted patches.",
 		map[string]interface{}{
@@ -3395,7 +3395,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: run_in_background — spawn independent background agent (not tied to a workflow step)
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"run_in_background",
 		"Spawn an independent background agent to run a task with the same tools as the workflow. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator with call_generic_agent — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
 		map[string]interface{}{
@@ -3550,7 +3550,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// phase until the child result has returned. This executor is registered
 	// on the exact workshop session, preventing another workflow's todo_task
 	// executor from being selected through the global code-exec registry.
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"call_generic_agent",
 		"Run one isolated Pulse stage through the documented MCP API bridge. role=reviewer is strictly read-only, persists complete Markdown plus structured verification markers in SQLite, and returns a compact review identity. role=fixer is the single bounded writer for a Pulse pass, does not create a review artifact, and may process every due module when module=pulse_fixer. Every stage is tracked as a child execution. If the outer bridge call backgrounds, stop and await automatic notification rather than polling. Incomplete provider snapshots are rejected and retried once. Do not add a completion marker; this tool owns it.",
 		map[string]interface{}{
@@ -3860,7 +3860,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop call_generic_agent tool: %v", err))
 	}
 
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_pulse_review_result",
 		"Load one Pulse review from SQLite as JSON with markdown and validated structured verifications. Call this after call_generic_agent returns its review_run_id and module. Pulse review Markdown files are no longer created.",
 		map[string]interface{}{
@@ -3903,7 +3903,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: run_goal_advisor_review — dedicated strategic review background pipeline.
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"run_goal_advisor_review",
 		"Start the dedicated background Goal Advisor pipeline. Use this for Pulse-selected strategic review: goal recovery, healthy 10x/headroom exploration, advancing or measuring the one active advisor experiment, approved proposal application, and Chief of Staff strategic recommendations. The pipeline runs advisor -> critic -> finalizer in separate background agents. It is analysis-first: advisor and critic never format HTML, and the finalizer may make only one bounded in-place Advisor log update when state materially changes. The durable experiment lifecycle lives in builder/improve.html; the parent Pulse turn should capture the returned execution_id and end its turn. Automatic completion notification will resume the session so it can record mark_pulse_module_result; do not poll query_step/list_executions while waiting.",
 		map[string]interface{}{
@@ -4032,7 +4032,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool 2: query_step — execution status + structured MCP tool call visibility
 	// When running: shows status + captured structured tool calls (auto-enriched)
 	// When done/failed/cancelled: shows result
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"query_step",
 		"One-off live status check for a tracked execution. For a workflow step, pass step_id and the backend resolves its latest execution automatically. For call_generic_agent/Pulse reviewers, pass the execution_id from the start notification; step_id is not required. When running, shows registry status and structured MCP tool calls captured so far. Important: coding CLI providers can show terminal/TUI activity before structured tool_call events exist, so 'no tool calls observed yet' does NOT mean the execution failed to start or is stuck. When a coding-CLI provider runs in tmux, query_step also captures the latest terminal lines and the tmux session name. After one running-status check, end the current agent turn; automatic completion notification will resume the session. Never alternate query_step and list_executions as a polling loop. Do not stop or re-run solely because no tool calls are listed. Pass tool_call_id to get full input/output for a specific tool call. Use debug_step for workflow-step file insights.",
 		map[string]interface{}{
@@ -4224,7 +4224,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 	// Tool 2a: send_step_message — steer the exact child agent currently active
 	// inside a running execution. This never starts or resumes an execution.
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"send_step_message",
 		"Send a follow-up message to the active agent turn inside one exact running workflow execution. Use the execution_id returned by execute_step or run_full_workflow. This is live steering only: it never starts, restarts, or resumes a completed step. Coding CLI agents receive provider-native live input; API agents queue the message for the next safe turn boundary. If the execution is currently validating or running script-only work, the result is no_active_agent and you should wait rather than retry in a loop.",
 		map[string]interface{}{
@@ -4257,7 +4257,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 2b: debug_step — rich insights about a step's execution
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"debug_step",
 		"Get detailed insights about a step's execution: learning status, validation result, iteration details for complex steps (todo_task/orchestration), and log paths. Use after a step completes or to inspect a running complex step's progress.",
 		map[string]interface{}{
@@ -4414,7 +4414,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 2b: list_executions — list all tracked background executions
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"list_executions",
 		"One-off execution lookup for finding an execution_id or resolving ambiguity. Shows execution_id, step_id, status (running/done/failed/cancelled), and whether a running execution currently accepts send_step_message. Do not use it as a progress poll. After a result shows running work, end the current agent turn; automatic completion notification will resume the session. Never alternate list_executions and query_step as a polling loop.",
 		map[string]interface{}{
@@ -4528,7 +4528,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 3: stop_step — cancel a running step
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"stop_step",
 		"Cancel a tracked workflow step, call_generic_agent execution, or Pulse reviewer only after query_step currently reports that exact execution_id as running. A wait timeout does not prove the execution is still running because completion notifications can be delayed. Never use this as cleanup for completed, failed, or already-cancelled work; those states are rejected.",
 		map[string]interface{}{
@@ -4577,7 +4577,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 3b: stop_all_executions — cancel all running background executions at once
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"stop_all_executions",
 		"Cancel ALL running background executions (steps, learnings, optimizations, background agents). Use this when the user asks to stop, cancel, or abort everything.",
 		map[string]interface{}{
@@ -4621,7 +4621,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	declaredExecutionModeEnum := []interface{}{"agentic", "scripted"}
 	declaredExecutionModeDescription := "Required mode declaration for this step. Always set this intentionally so the improve pass records the final decision explicitly. Set scripted from initial design for deterministic API/SDK calls, CLI commands, data fetching, stable parsing/normalization/transforms, and mechanical persistence; no run-history threshold is required to choose scripted. Keep judgment, adaptive discovery, and browser/UI work agentic. Freezing a saved script afterwards with lock_code still requires 10+ successful representative scenario-covering runs."
 	lockCodeDescription := "If true, lock the saved main.py script — prevents LLM-rewritten scripts from being saved back to learnings, and skips the fix loop (falls back directly to agentic mode). Only applies to scripted steps. Use only when the user explicitly wanted scripted, the script is deterministic, and script_metadata/eval evidence shows 10+ successful scenario-covering runs."
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"update_step_config",
 		"Update step_config.json for a specific workflow or evaluation step. The tool auto-detects whether step_id belongs to planning/plan.json or evaluation/evaluation_plan.json, then writes planning/step_config.json or evaluation/step_config.json accordingly. Changes take effect on the next execute_step or run_full_evaluation call. To REMOVE a field (so the step falls back to preset/default behavior where that field has a fallback, or removes the explicit setting otherwise), list its name in clear_fields — sending null in a value field does NOT clear; it's ignored.",
 		map[string]interface{}{
@@ -5326,7 +5326,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 5: get_step_prompts — read saved system prompt + user message for a step run
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_step_prompts",
 		"Get the system prompt and user message for a step. Works both during execution (prompts saved at start) and after completion. Useful for debugging what instructions the agent received. For sub-agent steps, pass the inner step ID directly (e.g., 'step-icici-login') or use route_id with the parent step.",
 		map[string]interface{}{
@@ -5531,7 +5531,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Tools: analyze, learn, optimize, background tasks ===
 
 	// Tool 7f: review_plan — background agent that critically reviews current workflow design and artifacts
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"review_plan",
 		"Start a background agent that critically reviews the current workflow design and dependent artifacts: plan structure, step descriptions, context flow, validation, learnings, saved scripts, knowledgebase notes, db/db.sqlite table contracts, report wiring, evaluation coverage, portability, and whether decisions are justified by objective, success criteria, and optional run evidence. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
 		map[string]interface{}{
@@ -5645,7 +5645,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	const registerRetiredCostTimingReviewers = false
 	if registerRetiredCostTimingReviewers {
 		// Tool 7f3: review_workflow_timing — retired in favor of /ops-review
-		if err := mcpAgent.RegisterCustomTool(
+		if err := mcpagent.AddDefinitionTool(mcpAgent,
 			"review_workflow_timing",
 			"Start a background agent that reviews workflow runtime and step timing from actual run evidence, identifies the main latency bottlenecks, and recommends how to make the workflow faster without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
 			map[string]interface{}{
@@ -5784,7 +5784,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		}
 
 		// Tool 7f4: review_workflow_costs — retired in favor of /ops-review
-		if err := mcpAgent.RegisterCustomTool(
+		if err := mcpagent.AddDefinitionTool(mcpAgent,
 			"review_workflow_costs",
 			"Start a background agent that reviews workflow token/cost data from actual run evidence, identifies the biggest cost drivers, and recommends how to reduce cost without compromising the objective or success criteria. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
 			map[string]interface{}{
@@ -5924,7 +5924,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: review_step_code — background agent that checks if saved scripts match step descriptions
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"review_step_code",
 		"Start a background agent that compares saved main.py scripts with current descriptions to detect drift. Reviews workflow steps and evaluation steps. Over time, descriptions get updated but scripts don't — this tool finds where they've gone out of sync. Read-only. Returns execution_id immediately — you will be automatically notified when it completes.",
 		map[string]interface{}{
@@ -6058,7 +6058,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Tools: background tasks, LLM config, workflow config ===
 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_llm_config",
 		"Show the current LLM configuration for the workflow: tiered config (tier 1/2/3 with fallbacks), phase LLM, and any per-step LLM overrides from step_config.json.",
 		map[string]interface{}{
@@ -6132,7 +6132,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	updateVariableParams, parseErr := parseSchemaForToolParameters(updateVariableSchema)
 	if parseErr != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to parse update_variable schema: %v", parseErr))
-	} else if err := mcpAgent.RegisterCustomTool(
+	} else if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"update_variable",
 		"Update, add, or delete variables in variables/variables.json. Provide action (required: 'update', 'add', or 'delete'), existing_variable_name (required for update/delete), and fields to update (name, value, description). The variables/variables.json file is updated immediately.",
 		updateVariableParams,
@@ -6149,7 +6149,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: add_group — create a new variable group
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"add_group",
 		"Create a new variable group. Optionally provide a name and initial values. The new group will have all defined variables with empty values by default.",
 		map[string]interface{}{
@@ -6215,7 +6215,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: update_group — update an existing variable group's name, values, or enabled status
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"update_group",
 		"Update a variable group. Provide name (required) and fields to change: new_name, values (key-value map), enabled (true/false). Only provided fields are updated.",
 		map[string]interface{}{
@@ -6317,7 +6317,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: delete_group — remove a variable group
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"delete_group",
 		"Delete a variable group by name. Cannot delete the last remaining group.",
 		map[string]interface{}{
@@ -6369,7 +6369,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: get_workflow_config — read-only view of workflow-level settings (MCP servers, skills, secrets, LLM config)
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_workflow_config",
 		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), workflow-scoped notification content instructions and one-way destinations, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
 		map[string]interface{}{
@@ -6621,7 +6621,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 	// === Tool: update_workflow_config ===
 	// Tool: update_workflow_config — add/remove MCP servers, skills, secrets, and workflow-level knobs
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"update_workflow_config",
 		"Update workflow configuration: add/remove MCP servers, workflow-level tool allowlist entries, skills and secrets; save workflow-scoped notification content instructions; configure a one-way Slack Incoming Webhook by encrypted secret name; set browser mode and optional specialized multi-profile CDP ports; and set run retention. Use get_workflow_config to inspect current workflow settings and list_skills to discover installed skill folder names. Most changes take effect immediately for subsequent steps; changing cdp_ports or Slack webhook configuration takes effect on the next workflow execution.",
 		map[string]interface{}{
@@ -7593,7 +7593,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Schedule management tools ===
 
 	// Tool: list_schedules — List schedules for this workflow
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"list_schedules",
 		"List all schedules for this workflow from workflow.json, including IDs, type, cron/calendar shape, timezone, enabled state, mode, workshop_mode, groups, and recent runtime state. Use this before update_schedule/delete_schedule/trigger_schedule/get_schedule_runs.",
 		map[string]interface{}{
@@ -7615,7 +7615,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: create_schedule — Create a new cron schedule
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"create_schedule",
 		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule.",
 		map[string]interface{}{
@@ -7718,7 +7718,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: create_calendar_schedule — Create dated one-time runs for content calendars
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"create_calendar_schedule",
 		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'.",
 		map[string]interface{}{
@@ -7802,7 +7802,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: update_schedule — Update a schedule
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"update_schedule",
 		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values.",
 		map[string]interface{}{
@@ -7918,7 +7918,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: delete_schedule — Delete a schedule
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"delete_schedule",
 		"Permanently delete a schedule. This cannot be undone.",
 		map[string]interface{}{
@@ -7950,7 +7950,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: trigger_schedule — Manually trigger a schedule run
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"trigger_schedule",
 		"Manually trigger a schedule to run immediately, outside its normal cron timing.",
 		map[string]interface{}{
@@ -7979,7 +7979,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: get_schedule_runs — Get run history for a schedule
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"get_schedule_runs",
 		"View the execution history for a specific schedule, including status, duration, and errors.",
 		map[string]interface{}{
@@ -8020,7 +8020,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Skill management tools ===
 
 	// Tool: list_skills — List all available skills in the workspace
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"list_skills",
 		"List all available skills in the workspace. Shows both selected skills (used by this workflow) and all discovered skills.",
 		map[string]interface{}{
@@ -8039,7 +8039,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: import_skill — Import a skill from GitHub
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"import_skill",
 		"Import a skill from GitHub into the workspace. The skill will be downloaded and available for use in workflows. Use list_skills first to see what's already available.",
 		map[string]interface{}{
@@ -8073,7 +8073,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: uninstall_skill — Uninstall a skill from the workspace
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"uninstall_skill",
 		"Uninstall a skill from the workspace. Removes skill files and version tracking. Use list_skills first to see available skills and their folder names.",
 		map[string]interface{}{
@@ -8105,7 +8105,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: search_skills — Search the skills registry
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"search_skills",
 		"Search for skills in the public skills registry. Returns matching skills with install commands. Use install_skill to install a result.",
 		map[string]interface{}{
@@ -8134,7 +8134,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: install_skill — Install a skill via the skills CLI
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"install_skill",
 		"Install a skill from the public skills registry using owner/repo@skill-name format. Use search_skills first to find available skills.",
 		map[string]interface{}{
@@ -8229,7 +8229,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 	cb := iwm.llmToolsFuncs
 
 	// list_published_llms
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"list_published_llms",
 		"List all published LLMs available for selection in the workflow tier config.",
 		map[string]interface{}{
@@ -8245,7 +8245,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 	}
 
 	// list_provider_models
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"list_provider_models",
 		"List the frontend-visible models for a provider. Fixed providers use shared metadata; dynamic providers use the same dynamic picker source as the UI.",
 		map[string]interface{}{
@@ -8271,7 +8271,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 	}
 
 	// test_llm
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"test_llm",
 		"Validate an LLM provider/model configuration. Uses workspace-backed provider auth by default, but temporary overrides can be provided.",
 		map[string]interface{}{
@@ -8341,7 +8341,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent *mcpagen
 
 	// set_workflow_llm_config saves either a provider profile or fully explicit
 	// workflow role configuration directly to workflow.json.
-	if err := mcpAgent.RegisterCustomTool(
+	if err := mcpagent.AddDefinitionTool(mcpAgent,
 		"set_workflow_llm_config",
 		"Save the workflow's LLM configuration to workflow.json capabilities.llm_config. Requires get_reference_doc(kind=\"llm-selection\") first. In provider_profile mode, provide one coding-agent provider and its current Builder, execution-tier, Maintenance, and Pulse defaults resolve at runtime. In explicit mode, provide builder_llm, maintenance_llm, pulse_llm, and all three execution tiers; each entry directly pins provider, model_id, options, and optional fallbacks. Saved model-library entries are optional reusable shortcuts, not a prerequisite.",
 		map[string]interface{}{

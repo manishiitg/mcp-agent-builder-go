@@ -592,7 +592,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	// Register this turn as steerable for its whole duration, so a follow-up
 	// message sent on ANY channel while it's still running can be injected
 	// live (see steer.go) instead of only ever being queued for afterward.
-	registerActiveTurn(convID, sess.Agent())
+	registerActiveTurn(convID, sess)
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)

@@ -15,6 +15,7 @@ import (
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 // installWorkflowPhaseTools registers the phase-specific tool set on an agent
@@ -39,6 +40,7 @@ import (
 func (api *StreamingAPI) installWorkflowPhaseTools(
 	ctx context.Context,
 	underlyingAgent *mcpagent.Agent,
+	setToolPolicy func([]string),
 	sessionID, userID, workflowPhaseID, phaseWorkspacePath, phaseRunFolder string,
 	phaseTemplateVars map[string]string,
 	selectedServers []string,
@@ -424,7 +426,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// not implement SkillProjector — they get only the name +
 			// description listing in the system prompt — so for them
 			// get_reference_doc is the ONLY way to reach the bodies.
-			guidance.AttachReferenceSurface(workshopMode, underlyingAgent.AttachSkill)
+			guidance.AttachReferenceSurface(workshopMode, func(skill *llmtypes.Skill) {
+				_ = mcpagent.AddDefinitionSkill(underlyingAgent, skill)
+			})
 		}
 	default:
 		// planning: plan modification tools
@@ -460,11 +464,11 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 			workshopMode := phaseTemplateVars["WorkshopMode"]
 			allowedTools := todo_creation_human.GetToolsForWorkshopMode(workshopMode)
-			underlyingAgent.SetToolAccess(allowedTools)
+			setToolPolicy(allowedTools)
 			log.Printf("[WORKSHOP_TOOLS] Applied tool allow list for mode=%s (%d tools): %v", workshopMode, len(allowedTools), allowedTools)
 		} else {
 			// Non-workshop phases get all tools
-			underlyingAgent.SetToolAccess(nil)
+			setToolPolicy(nil)
 		}
 	}
 

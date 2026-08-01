@@ -65,7 +65,7 @@ func (api *StreamingAPI) registerActivityStatusTool(underlyingAgent *mcpagent.Ag
 	}
 	description := "Return a JSON snapshot of currently running workflow executions and currently running schedules. Use this when the user asks what workflows, background runs, cron jobs, or multi-agent schedules are running right now."
 
-	return underlyingAgent.RegisterCustomTool(
+	return mcpagent.AddDefinitionTool(underlyingAgent,
 		"get_activity_status",
 		description,
 		params,

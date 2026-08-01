@@ -113,7 +113,7 @@ func registerEvaluationValidationTools(
 	}`
 	validationParams, _ := parseSchemaForToolParameters(validationSchema)
 
-	mcpAgent.RegisterCustomTool(
+	mcpagent.AddDefinitionTool(mcpAgent,
 		"validate_evaluation_plan",
 		"Validate evaluation/evaluation_plan.json after editing it via shell/file tools.",
 		validationParams,

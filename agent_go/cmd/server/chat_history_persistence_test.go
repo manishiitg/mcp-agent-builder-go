@@ -1443,7 +1443,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPromp
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	currentPrompt := "<current>mode=auto; query agent_browser status</current>"
-	agent.SetInstructions(currentPrompt)
+	mcpagent.SetAgentInstructionsForTesting(agent, currentPrompt)
 
 	// Old conversation files may still contain persisted prompts and a resolved
 	// browser_mode. JSON decoding must ignore those legacy fields, and native
@@ -1466,7 +1466,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPromp
 	if !api.seedCodingAgentRuntimeFromRestoredConversation("pi-ui-session", "pi-cli", "", runtime, agent) {
 		t.Fatal("expected Pi resume state to be seeded")
 	}
-	if got := agent.Instructions(); got != currentPrompt {
+	if got := agent.Definition().Instructions; got != currentPrompt {
 		t.Fatalf("native resume overwrote current prompt: got %q want %q", got, currentPrompt)
 	}
 }
@@ -1481,8 +1481,10 @@ func TestCaptureChatHistoryAgentRuntimeOmitsPromptAndBrowserAvailability(t *test
 			Model:           "pi-cli",
 		},
 	}
-	agent.SetInstructions("<current>mode=cdp</current>")
-	agent.AddInstructions("<dynamic-browser-state>")
+	mcpagent.SetAgentInstructionsForTesting(agent, "<current>mode=cdp</current>")
+	if err := mcpagent.AddDefinitionInstructions(agent, "<dynamic-browser-state>"); err != nil {
+		t.Fatalf("AddDefinitionInstructions: %v", err)
+	}
 	common.SetSessionBrowserMode("pi-ui-session", "cdp")
 
 	runtime := api.captureChatHistoryAgentRuntime("pi-ui-session", "pi-cli", "pi-cli", "Workflow/example", agent)
@@ -1505,7 +1507,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t 
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	preExisting := "default agent prompt set elsewhere"
-	agent.SetInstructions(preExisting)
+	mcpagent.SetAgentInstructionsForTesting(agent, preExisting)
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:              "coding_agent",
 		Provider:          "pi-cli",
@@ -1518,7 +1520,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t 
 		t.Fatal("expected Pi resume state to be seeded")
 	}
 
-	if got := agent.Instructions(); got != preExisting {
+	if got := agent.Definition().Instructions; got != preExisting {
 		t.Fatalf("agent.Instructions() = %q, want %q unchanged — empty runtime SystemPrompt must NOT clobber a prompt set elsewhere", got, preExisting)
 	}
 }

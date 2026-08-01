@@ -109,6 +109,9 @@ type BaseAgent struct {
 	definition   mcpagent.AgentDefinition
 	runtime      mcpagent.RuntimeConfig
 	lastHandle   *mcpagent.AgentSessionHandle
+	assembly     *mcpagent.DefinitionAssembly
+	finalized    bool
+	session      *mcpagent.Session
 }
 
 // NewBaseAgent creates a new BaseAgent instance with comprehensive functionality
@@ -397,6 +400,7 @@ func NewBaseAgent(
 		mcpSessionID: mcpSessionID,
 		definition:   definition,
 		runtime:      runtime,
+		assembly:     mcpagent.NewDefinitionAssembly(agent),
 	}, nil
 }
 
@@ -410,6 +414,9 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 			return "", nil, err
 		}
 	}
+	if err := ba.finalizeDefinition(ctx); err != nil {
+		return "", nil, err
+	}
 
 	startTime := time.Now()
 
@@ -421,7 +428,7 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		// scoped folder guard instead of falling back to the parent workflow guard.
 		orchestratorCtx = context.WithValue(orchestratorCtx, common.ChatSessionIDKey, ba.mcpSessionID)
 	}
-	result, err := ba.agent.Run(orchestratorCtx, mcpagent.Turn{
+	result, err := ba.session.Run(orchestratorCtx, mcpagent.Turn{
 		Input:      userMessage,
 		History:    conversationHistory,
 		ToolPolicy: ba.toolPolicy,
@@ -447,6 +454,21 @@ func (ba *BaseAgent) ApplyInstructions(ctx context.Context, systemPrompt string,
 	if strings.TrimSpace(systemPrompt) == "" {
 		return nil
 	}
+	if !ba.finalized {
+		var err error
+		if overwrite {
+			err = ba.assembly.ResetInstructions(systemPrompt)
+		} else {
+			err = ba.assembly.AddInstructions(systemPrompt)
+		}
+		if err != nil {
+			return fmt.Errorf("assemble agent instructions: %w", err)
+		}
+		ba.definition.Instructions = ba.assembly.Snapshot().Instructions
+		ba.instructions = ba.definition.Instructions
+		return nil
+	}
+
 	nextInstructions := systemPrompt
 	if !overwrite && strings.TrimSpace(ba.definition.Instructions) != "" {
 		nextInstructions = ba.definition.Instructions + "\n\n" + systemPrompt
@@ -464,6 +486,22 @@ func (ba *BaseAgent) ApplyInstructions(ctx context.Context, systemPrompt string,
 // and prompt supplements. It exists for workflow factories that resolve these
 // inputs after their base configuration is loaded but before the first turn.
 func (ba *BaseAgent) ApplyIdentity(ctx context.Context, skills []*llmtypes.Skill, supplements ...string) error {
+	if !ba.finalized {
+		for _, skill := range skills {
+			if err := ba.assembly.AddSkill(skill); err != nil {
+				return fmt.Errorf("assemble agent skill: %w", err)
+			}
+		}
+		if err := ba.assembly.AddInstructions(supplements...); err != nil {
+			return fmt.Errorf("assemble agent instructions: %w", err)
+		}
+		view := ba.assembly.Snapshot()
+		ba.definition.Instructions = view.Instructions
+		ba.definition.Skills = view.SkillDefinitions
+		ba.instructions = view.Instructions
+		return nil
+	}
+
 	nextDefinition := ba.definition
 	nextDefinition.Skills = append(append([]*llmtypes.Skill(nil), nextDefinition.Skills...), skills...)
 	for _, supplement := range supplements {
@@ -479,6 +517,61 @@ func (ba *BaseAgent) ApplyIdentity(ctx context.Context, skills []*llmtypes.Skill
 	return ba.replaceDefinition(ctx, nextDefinition, false)
 }
 
+// ApplyTool adds a construction-time tool to the immutable definition. The
+// structured-output path uses this for its completion contract before the
+// first turn; a later contract change rebuilds the definition rather than
+// mutating the live Agent registry.
+func (ba *BaseAgent) ApplyTool(ctx context.Context, tool mcpagent.ToolDefinition) error {
+	for _, existing := range ba.definition.Tools.Direct {
+		if existing.Name == tool.Name {
+			return nil
+		}
+	}
+	if !ba.finalized {
+		if err := ba.assembly.AddTool(
+			tool.Name,
+			tool.Description,
+			tool.InputSchema,
+			tool.Execute,
+			tool.Timeout,
+			tool.DisplayGroup,
+		); err != nil {
+			return fmt.Errorf("assemble agent tool %q: %w", tool.Name, err)
+		}
+		ba.definition.Tools.Direct = append(ba.definition.Tools.Direct, tool)
+		return nil
+	}
+
+	nextDefinition := ba.definition
+	nextDefinition.Tools.Direct = append(append([]mcpagent.ToolDefinition(nil), nextDefinition.Tools.Direct...), tool)
+	return ba.replaceDefinition(ctx, nextDefinition, true)
+}
+
+func (ba *BaseAgent) finalizeDefinition(ctx context.Context) error {
+	if ba.finalized {
+		return nil
+	}
+	runtime := ba.runtime
+	runtime.ResumeHandle = ba.lastHandle
+	nextAgent, definition, err := ba.assembly.Build(ctx, runtime)
+	if err != nil {
+		return fmt.Errorf("finalize immutable agent definition: %w", err)
+	}
+	old := ba.agent
+	nextSession, err := nextAgent.Start(ctx)
+	if err != nil {
+		nextAgent.Close()
+		return fmt.Errorf("start finalized agent session: %w", err)
+	}
+	ba.agent = nextAgent
+	ba.session = nextSession
+	ba.definition = definition
+	ba.instructions = definition.Instructions
+	ba.finalized = true
+	mcpagent.RetireReplacedAgent(old)
+	return nil
+}
+
 func (ba *BaseAgent) replaceDefinition(ctx context.Context, nextDefinition mcpagent.AgentDefinition, force bool) error {
 	if !force && nextDefinition.Instructions == ba.definition.Instructions && len(nextDefinition.Skills) == len(ba.definition.Skills) {
 		return nil
@@ -491,10 +584,20 @@ func (ba *BaseAgent) replaceDefinition(ctx context.Context, nextDefinition mcpag
 	}
 	nextAgent.PromptLogLabel = ba.agent.PromptLogLabel
 	nextAgent.APIKeys = ba.agent.APIKeys
+	nextSession, err := nextAgent.Start(ctx)
+	if err != nil {
+		nextAgent.Close()
+		return fmt.Errorf("start rebuilt agent session: %w", err)
+	}
+	if ba.session != nil {
+		_ = ba.session.Close()
+	}
 	mcpagent.RetireReplacedAgent(ba.agent)
 	ba.agent = nextAgent
+	ba.session = nextSession
 	ba.definition = nextDefinition
 	ba.instructions = nextDefinition.Instructions
+	ba.finalized = true
 	return nil
 }
 
@@ -517,6 +620,22 @@ func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
 // does not mutate the agent definition or its request-time tool registry.
 func (ba *BaseAgent) SetToolPolicy(toolNames []string) {
 	ba.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
+}
+
+// SetWorkspacePolicy configures filesystem enforcement as runtime policy,
+// separate from immutable instructions, skills, and tools.
+func (ba *BaseAgent) SetWorkspacePolicy(readPaths, writePaths []string) {
+	ba.runtime.FolderGuardReadPaths = append([]string(nil), readPaths...)
+	ba.runtime.FolderGuardWritePaths = append([]string(nil), writePaths...)
+}
+
+// Send routes input into the active runtime session without exposing Agent
+// transport internals to workflow callers.
+func (ba *BaseAgent) Send(ctx context.Context, input string) (mcpagent.DeliveryResult, error) {
+	if ba.session == nil {
+		return mcpagent.DeliveryResult{}, fmt.Errorf("agent session is not running")
+	}
+	return ba.session.Send(ctx, input)
 }
 
 // Agent returns the underlying MCP agent
@@ -551,6 +670,9 @@ func (ba *BaseAgent) GetServerNames() []string {
 
 // Close closes the agent
 func (ba *BaseAgent) Close() error {
+	if ba.session != nil {
+		_ = ba.session.Close()
+	}
 	if ba.agent != nil {
 		ba.agent.Close()
 	}

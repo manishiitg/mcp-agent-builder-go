@@ -19,7 +19,7 @@ func TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery(t *testing
 
 	sessionID := "busy-steerable-session"
 	runningAgent := &mcpagent.Agent{ModelID: "codex-cli"}
-	runningAgent.SetProvider(llm.ProviderCodexCLI)
+	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
 
 	api := &StreamingAPI{
 		eventStore:       store,
@@ -58,7 +58,7 @@ func TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery(t *testing
 		t.Fatal("agent.notified = true after queued injection; want false so the queue path can retry")
 	}
 
-	queued := runningAgent.DrainSteerMessages()
+	queued := mcpagent.DrainAgentSteerMessagesForTesting(runningAgent)
 	if len(queued) != 0 {
 		t.Fatalf("steered messages = %d, want 0 because the caller owns retries: %#v", len(queued), queued)
 	}
@@ -98,7 +98,7 @@ func TestSteerBackgroundAgentCompletionDefersPlainDelegation(t *testing.T) {
 
 	sessionID := "busy-chief-session"
 	runningAgent := &mcpagent.Agent{ModelID: "claude-code"}
-	runningAgent.SetProvider(llm.ProviderClaudeCode)
+	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
 
 	api := &StreamingAPI{
 		eventStore:       store,
@@ -129,7 +129,7 @@ func TestSteerBackgroundAgentCompletionDefersPlainDelegation(t *testing.T) {
 	if notified {
 		t.Fatal("plain delegation completion was marked notified before the synthetic turn")
 	}
-	if got := runningAgent.DrainSteerMessages(); len(got) != 0 {
+	if got := mcpagent.DrainAgentSteerMessagesForTesting(runningAgent); len(got) != 0 {
 		t.Fatalf("plain delegation completion should not be delivered to the active turn, got %#v", got)
 	}
 }

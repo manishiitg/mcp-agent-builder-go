@@ -34,14 +34,14 @@ func TestRegisterWorkshopChatToolsIncludesArtifactReviewMarker(t *testing.T) {
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
 
-	tool, ok := agent.GetCustomTools()["mark_changelog_artifact_reviewed"]
+	tool, ok := mcpagent.FindDefinitionTool(agent, "mark_changelog_artifact_reviewed")
 	if !ok {
 		t.Fatal("actual workshop agent registry is missing mark_changelog_artifact_reviewed")
 	}
-	if tool.Category != "workflow" {
-		t.Fatalf("mark_changelog_artifact_reviewed category = %q, want workflow", tool.Category)
+	if tool.DisplayGroup != "workflow" {
+		t.Fatalf("mark_changelog_artifact_reviewed category = %q, want workflow", tool.DisplayGroup)
 	}
-	if agent.GetCustomToolExecutor("mark_changelog_artifact_reviewed") == nil {
+	if mcpagent.DefinitionToolExecutor(agent, "mark_changelog_artifact_reviewed") == nil {
 		t.Fatal("mark_changelog_artifact_reviewed has no registered executor")
 	}
 }
@@ -70,8 +70,8 @@ func TestRunningStatusToolsShareRapidPollGuard(t *testing.T) {
 	}
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
-	queryStep := agent.GetCustomToolExecutor("query_step")
-	listExecutions := agent.GetCustomToolExecutor("list_executions")
+	queryStep := mcpagent.DefinitionToolExecutor(agent, "query_step")
+	listExecutions := mcpagent.DefinitionToolExecutor(agent, "list_executions")
 	if queryStep == nil || listExecutions == nil {
 		t.Fatal("running-status tools were not registered")
 	}
@@ -127,8 +127,8 @@ func TestGenericAgentCanBeQueriedAndStoppedByExecutionID(t *testing.T) {
 	}
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
-	queryStep := agent.GetCustomToolExecutor("query_step")
-	stopStep := agent.GetCustomToolExecutor("stop_step")
+	queryStep := mcpagent.DefinitionToolExecutor(agent, "query_step")
+	stopStep := mcpagent.DefinitionToolExecutor(agent, "stop_step")
 	if queryStep == nil || stopStep == nil {
 		t.Fatal("generic execution control tools were not registered")
 	}

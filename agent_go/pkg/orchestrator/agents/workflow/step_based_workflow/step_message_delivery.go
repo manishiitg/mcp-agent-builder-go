@@ -7,7 +7,6 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
@@ -161,19 +160,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) withWorkshopMessageTarget(
 	if baseAgent == nil || baseAgent.Agent() == nil || agent.GetConfig() == nil {
 		return run()
 	}
-	underlyingAgent := baseAgent.Agent()
-	sessionID := strings.TrimSpace(agent.GetConfig().MCPSessionID)
 	provider := strings.TrimSpace(agent.GetConfig().LLMConfig.Primary.Provider)
 	target := workshopStepMessageTarget{
 		provider: provider,
 		phase:    strings.TrimSpace(phase),
 		deliver: func(deliveryCtx context.Context, message string) (string, error) {
-			delivery, err := underlyingAgent.DeliverUserMessage(deliveryCtx, mcpagent.UserMessageDeliveryRequest{
-				SessionID: sessionID,
-				Message:   message,
-				Intent:    mcpagent.UserMessageDeliveryIntentLiveInput,
-			})
-			return string(delivery.DeliveryStatus), err
+			delivery, err := baseAgent.Send(deliveryCtx, message)
+			return string(delivery.Status), err
 		},
 	}
 	token, err := hcpo.workshopStepRegistry.bindMessageTarget(executionID, target)
