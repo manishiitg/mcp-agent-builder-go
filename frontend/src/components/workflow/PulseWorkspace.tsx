@@ -170,6 +170,130 @@ function Metric({
   )
 }
 
+/**
+ * Everything already known about one finding, shown in place.
+ *
+ * The row carries the one-line trackable form of a finding, and that is all the
+ * workspace ever showed — so a well-evidenced finding looked like a bare
+ * sentence and there was no way to check a fixer's reasoning without querying
+ * SQLite. The attempts, per-check verdicts and event history were already
+ * loaded here and simply never rendered.
+ */
+function FindingEvidence({
+  finding,
+  onOpenModule,
+}: {
+  finding: PulseFindingLifecycle
+  onOpenModule: () => void
+}) {
+  const verdictTone = (verdict: string) => (
+    verdict === 'passed'
+      ? 'text-emerald-700 dark:text-emerald-300'
+      : verdict === 'failed'
+        ? 'text-red-700 dark:text-red-300'
+        : 'text-amber-700 dark:text-amber-300'
+  )
+  return (
+    <div
+      className="mt-2 space-y-3 rounded-lg border bg-muted/30 p-3 text-[11px] leading-5"
+      onClick={(event) => event.stopPropagation()}
+    >
+      {finding.resolution_note && (
+        <div>
+          <div className="font-semibold text-foreground">Why it is in this state</div>
+          <div className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">{finding.resolution_note}</div>
+        </div>
+      )}
+
+      {(finding.external_owner || finding.reopen_condition) && (
+        <div>
+          <div className="font-semibold text-foreground">Handed off</div>
+          <div className="mt-0.5 text-muted-foreground">
+            {finding.external_owner && <>Owner: {finding.external_owner}. </>}
+            {finding.reason_code && <>Reason: {finding.reason_code}. </>}
+            {finding.reopen_condition && <>Comes back when: {finding.reopen_condition}</>}
+          </div>
+        </div>
+      )}
+
+      {finding.verifications.length > 0 && (
+        <div>
+          <div className="font-semibold text-foreground">Checks run</div>
+          <div className="mt-1 space-y-1.5">
+            {finding.verifications.map((check, index) => (
+              <div key={`${check.check}-${index}`} className="rounded border bg-background p-2">
+                <div className={`font-semibold ${verdictTone(check.verdict)}`}>
+                  {check.verdict} — {check.check}
+                </div>
+                {(check.expected || check.observed) && (
+                  <div className="mt-0.5 text-muted-foreground">
+                    {check.expected && <div>Expected: {check.expected}</div>}
+                    {check.observed && <div>Observed: {check.observed}</div>}
+                  </div>
+                )}
+                {(check.evidence || []).length > 0 && (
+                  <div className="mt-0.5 break-words font-mono text-[10px] text-muted-foreground">
+                    {(check.evidence || []).join(' · ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {finding.fix_attempts.length > 0 && (
+        <div>
+          <div className="font-semibold text-foreground">Fix attempts</div>
+          <div className="mt-1 space-y-1.5">
+            {finding.fix_attempts.map((attempt) => (
+              <div key={attempt.attempt_id} className="rounded border bg-background p-2">
+                <div className="text-foreground">{attempt.summary || attempt.attempt_id}</div>
+                <div className="mt-0.5 text-muted-foreground">
+                  {attempt.status} · {formatDate(attempt.started_at)}
+                </div>
+                {attempt.changed_files.length > 0 && (
+                  <div className="mt-0.5 break-words font-mono text-[10px] text-muted-foreground">
+                    {attempt.changed_files.join(' · ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {finding.events.length > 0 && (
+        <div>
+          <div className="font-semibold text-foreground">History</div>
+          <div className="mt-1 space-y-0.5 text-muted-foreground">
+            {finding.events.map((event, index) => (
+              <div key={`${event.event_type}-${index}`}>
+                <span className="capitalize text-foreground">{readable(event.event_type)}</span>
+                {event.recorded_at && <> · {formatDate(event.recorded_at)}</>}
+                {event.summary && <> — {event.summary}</>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+        <button
+          type="button"
+          onClick={onOpenModule}
+          className="rounded border px-2 py-1 text-[10px] font-semibold text-foreground hover:bg-muted"
+        >
+          Open {finding.module || 'module'} review
+        </button>
+        <span className="font-mono text-[10px] text-muted-foreground">
+          {finding.step_id} · seen {finding.seen_count}× · first {formatDate(finding.first_seen_at)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function PulseWorkspace({
   workspacePath,
   monitorOn,
@@ -200,6 +324,7 @@ export function PulseWorkspace({
   // one module as that effect re-fired. This is only ever set by an explicit
   // click, and cleared means cleared.
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
+  const [expandedFinding, setExpandedFinding] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -539,12 +664,12 @@ export function PulseWorkspace({
                     tabIndex={0}
                     onClick={() => {
                       if ((window.getSelection()?.toString() || '').length > 0) return
-                      if (finding.module) setSelectedModule(finding.module)
+                      setExpandedFinding(expandedFinding === finding.fingerprint ? null : finding.fingerprint)
                     }}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' && event.key !== ' ') return
                       event.preventDefault()
-                      if (finding.module) setSelectedModule(finding.module)
+                      setExpandedFinding(expandedFinding === finding.fingerprint ? null : finding.fingerprint)
                     }}
                     className="block w-full cursor-pointer select-text px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
@@ -561,7 +686,13 @@ export function PulseWorkspace({
                     <div className="mt-1.5 whitespace-pre-wrap break-words text-xs leading-5 text-foreground">{finding.text}</div>
                     <div className="mt-1 text-[10px] text-muted-foreground">
                       {finding.finding_id || finding.fingerprint} · {formatDate(finding.last_seen_at)}
+                      <span className="ml-1.5 text-primary">
+                        {expandedFinding === finding.fingerprint ? 'hide evidence' : 'show evidence'}
+                      </span>
                     </div>
+                    {expandedFinding === finding.fingerprint && (
+                      <FindingEvidence finding={finding} onOpenModule={() => finding.module && setSelectedModule(finding.module)} />
+                    )}
                   </div>
                 )
               })}
