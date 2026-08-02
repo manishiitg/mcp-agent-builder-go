@@ -1177,6 +1177,14 @@ audio.fl-viewer-media { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) { .fl-mic-live-dot { animation: none; } }
 .fl-mic-live-label { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #ffd479; }
 .fl-mic-live-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-secondary); line-height: 1.4; }
+/* The banner above is position:absolute (so it can overlay full-width without
+   disturbing the composer's own grid), which means it doesn't reserve any
+   space of its own — left alone, it floats directly over the last message in
+   the thread above. Reserve room for it here instead, only while it's
+   actually present, so the thread just gets a bit more scroll room rather
+   than a fixed value being wasted on every ordinary reply. */
+.fl-thread:has(~ .fl-composer .fl-mic-live-banner) { padding-bottom: 78px; }
+.fl-child-thread:has(~ .fl-child-composer .fl-mic-live-banner) { padding-bottom: 78px; }
 
 /* "This Week" tab — recurring schedule + real activity log + Veracross deadlines, see week.go */
 .fl-week { display: flex; flex-direction: column; gap: 14px; }
