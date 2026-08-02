@@ -2713,11 +2713,13 @@ export default function LearningApp() {
     const modelExtra = guideNote
       ? `(For you, Quill — not from ${childName || 'the child'}: the parent's own instructions for${activityTitle ? ` "${activityTitle}"` : ' this'}: ${guideNote} Follow this pacing/order exactly.${newSession ? ` Open your very first reply with one short, plain sentence stating the actual plan in your own words (e.g. "Here's our plan: ...") before anything else — this is the only place ${childName || 'the child'} sees what this session is about, so state it concretely, not generically.` : ''})`
       : undefined
+    // Resume (newSession === false) only ever targets the activity already
+    // open in this session — childMessages already holds its real
+    // conversation, so there's nothing to send here: just the screen switch
+    // above, and the child sees exactly where they left off.
     if (newSession) {
       setChildMessages([])
       sendChildKickoff(greeting, [], modelExtra)
-    } else {
-      sendChildKickoff(greeting, childMessages, modelExtra)
     }
   }
 
