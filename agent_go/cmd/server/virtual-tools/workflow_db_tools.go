@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -28,16 +29,15 @@ type WorkflowDBToolRegistry struct {
 func workflowDBQueryToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "query_workflow_db",
-		Description: "Read the current workflow SQLite database through the guarded backend. Use action=describe before querying an unfamiliar table. The backend resolves the database; never pass a path. Queries are single-statement, row-bounded, WAL-aware, and cannot mutate data.",
+		Description: "Read the current workflow SQLite database. Pass sql to run one statement; it opens read-only and cannot mutate. Use action=describe to inspect an unfamiliar table first. The backend resolves the database; never pass a path. Single-statement, row-bounded, WAL-aware.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query"}, "description": "describe lists schemas or columns; query executes one bounded read-only SQL statement."},
+				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query"}, "description": "Optional. Omit it and pass sql to run a statement. Use describe to list schemas or columns."},
 				"table":    map[string]any{"type": "string", "description": "Optional table name for action=describe. Omit to list all table/view definitions."},
-				"sql":      map[string]any{"type": "string", "description": "Required for action=query. One SELECT, read-only WITH/EXPLAIN, or safe schema PRAGMA statement."},
+				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or safe schema PRAGMA statement. This is the normal way to use the tool."},
 				"max_rows": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum rows to return for action=query. Default 500."},
 			},
-			"required": []string{"action"},
 		}),
 	}}
 }
@@ -45,7 +45,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 func workflowDBMutateToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "mutate_workflow_db",
-		Description: "Atomically mutate rows in the current workflow SQLite database. Available only with trusted DB write authority. Accepts 1-20 INSERT, UPDATE, or DELETE statements, including statements prefixed by WITH CTEs; commits all or rolls all back and returns affected-row receipts. Schema changes use workflow migrations, not this tool.",
+		Description: "Mutate rows in the current workflow SQLite database. Needs trusted DB write authority. Pass sql (and optional params) for one statement, same shape as query_workflow_db; pass statements with 1-20 entries for an all-or-nothing batch. INSERT, UPDATE, DELETE, optionally WITH CTEs; returns affected-row receipts. Schema changes use migrations.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -60,8 +60,9 @@ func workflowDBMutateToolDefinition() llmtypes.Tool {
 						"required": []string{"sql"},
 					},
 				},
+				"sql":    map[string]any{"type": "string", "description": "One INSERT, UPDATE, or DELETE statement for the single-statement form. Same shape as query_workflow_db. Use ? placeholders for values."},
+				"params": map[string]any{"type": "array", "description": "Optional positional values for the ? placeholders in sql."},
 			},
-			"required": []string{"statements"},
 		}),
 	}}
 }
@@ -95,6 +96,19 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		if maxRows > 1000 {
 			maxRows = 1000
 		}
+		// Raw SQL is the contract, exactly as on mutate_workflow_db; the only
+		// difference between the two tools is that this one opens the database with
+		// query_only(true). `action` is an optional convenience, not a required
+		// preamble — requiring it produced "action must be describe or query" and
+		// "sql is required for action=query" failures from callers that had already
+		// supplied valid SQL.
+		if action == "" {
+			if raw, _ := args["sql"].(string); strings.TrimSpace(raw) != "" {
+				action = "query"
+			} else if _, hasTable := args["table"]; hasTable {
+				action = "describe"
+			}
+		}
 		switch action {
 		case "describe":
 			table, _ := args["table"].(string)
@@ -113,7 +127,10 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 				return "", fmt.Errorf("sql is required for action=query")
 			}
 		default:
-			return "", fmt.Errorf("action must be describe or query")
+			return "", fmt.Errorf(
+				"pass sql to run a read-only statement, or action=\"describe\" (with optional table) to list schemas. Received top-level keys %v",
+				sortedArgumentKeys(args),
+			)
 		}
 		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, MaxRows: maxRows})
 		if err != nil {
@@ -148,8 +165,32 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		if err := json.Unmarshal(encodedArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid mutation arguments: %w", err)
 		}
+		// Single-statement form: sql at the top level, identical in shape to
+		// query_workflow_db. The two tools now differ only in how the database is
+		// opened — query_only(true) for reads, read-write here. Requiring a
+		// `statements` wrapper for one UPDATE made callers that had just used
+		// query_workflow_db reach for sql=, set=, and upsert= instead.
 		if len(payload.Statements) == 0 {
-			return "", fmt.Errorf("statements must contain at least one mutation")
+			if raw, _ := args["sql"].(string); strings.TrimSpace(raw) != "" {
+				statement := workspace.WorkflowDBMutationStatement{SQL: raw}
+				if rawParams, ok := args["params"].([]interface{}); ok {
+					statement.Params = rawParams
+				}
+				payload.Statements = []workspace.WorkflowDBMutationStatement{statement}
+			}
+		}
+		if len(payload.Statements) == 0 {
+			// A bare "statements must contain at least one mutation" told the caller
+			// nothing about the shape it wanted, so agents guessed: sql=, set=, and
+			// upsert= at top level produced 10 failures in a single run. Show the
+			// contract and what actually arrived.
+			return "", fmt.Errorf(
+				"no mutation supplied. Received top-level keys %v. "+
+					"Pass sql for one statement, exactly like query_workflow_db: "+
+					`{"sql":"UPDATE t SET c = ? WHERE id = ?","params":["value",1]}. `+
+					"For an all-or-nothing batch pass statements with 1-20 entries of the same shape. There is no `set` or `upsert` argument",
+				sortedArgumentKeys(args),
+			)
 		}
 		result, err := client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{DBPath: dbPath, Statements: payload.Statements})
 		if err != nil {
@@ -241,4 +282,15 @@ func workflowDBPathFromCandidate(candidate string) string {
 		}
 	}
 	return ""
+}
+
+// sortedArgumentKeys lists the top-level argument names a caller supplied, so a
+// contract error can show what arrived next to what was required.
+func sortedArgumentKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
