@@ -60,7 +60,19 @@ func makeBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
     return buffer
 }
 
-let engine = StreamingEouAsrManager(chunkSize: .ms160)
+// Chunk size selects a genuinely DIFFERENT model (parakeetEou160/320/1280),
+// not just a buffering parameter — so transcript quality, not only latency,
+// varies with it. Configurable here so the variants can be compared on the
+// same audio; see docs/refactor/native_streaming_stt.md.
+let chunkSize: StreamingChunkSize = {
+    switch ProcessInfo.processInfo.environment["VOICE_HELPER_CHUNK_MS"] {
+    case "1280": return .ms1280
+    case "320": return .ms320
+    default: return .ms160
+    }
+}()
+
+let engine = StreamingEouAsrManager(chunkSize: chunkSize)
 var modelsLoaded = false
 
 // Go waits for this exact line on stderr before sending any request — the

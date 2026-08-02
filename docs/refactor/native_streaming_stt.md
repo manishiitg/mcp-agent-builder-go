@@ -124,24 +124,41 @@ The core claim holds and then some: per-chunk cost is flat-to-falling in
 recording length, and `finish()` is effectively free because it flushes live
 state instead of re-decoding. Text appears while the speaker is still talking.
 
-**The real risk is transcript quality, not speed.** The same run showed:
+### Word accuracy is fine — two earlier "defects" were a bad test
 
-- **No punctuation and no capitalization at all.** Output was one unbroken
-  lowercase run-on. The current MLX Parakeet path returns punctuated, cased
-  text. For a chat composer this is the most serious gap — it is what the
-  parent or child actually sends.
-- **A dropped leading word.** "The quick brown fox…" transcribed from "quick".
-- **A seam artifact:** "photosynthesis" came back as "photosynthesythesis",
-  a duplication across a chunk boundary.
-- **A cold-start cliff:** the first `audio` call took 3.6s (JIT), so the helper
-  needs the same pre-warm the Python path already does via `/api/voice/warm`.
+The first run appeared to drop a leading word ("The quick brown fox…" → "quick")
+and to garble "photosynthesis" into "photosynthesythesis". **Both were artifacts
+of the test audio, not the engine.** That clip began speaking at sample 0; real
+microphone input always has a moment of quiet first. Re-run with 0.5s of lead-in
+silence, the same model returns:
 
-Next investigations, in order: FluidAudio's `Documentation/ASR/PostProcessing.md`
-(does it restore punctuation/casing?), the larger `.ms320`/`.ms1280` chunk sizes
-(likely better seam behaviour for some added latency — with 18ms of headroom
-there is a lot to spend), and `LastChunkHandling.md` for the dropped-word
-behaviour. If punctuation cannot be restored, this path is not viable for the
-composer as-is regardless of how fast it is.
+> the quick brown fox jumps over the lazy dog photosynthesis is how plants make
+> their own food using sunlight water and carbon dioxide
+
+Correct throughout, including "jumps" and "photosynthesis". Recorded here
+because the original claim is wrong and would otherwise have argued against a
+sound approach. Any future test must include lead-in silence.
+
+### The one real gap: no punctuation
+
+Confirmed across **all three** streaming variants — `.ms160`, `.ms320`,
+`.ms1280` — on the same padded audio: byte-identical output, no punctuation, no
+capitalization. This is a property of FluidAudio's streaming EOU Parakeet
+models, not a chunk-size tradeoff, so there is nothing to tune here.
+`Documentation/ASR/PostProcessing.md` does not address it either: that is
+Inverse Text Normalization (numbers, dates, currency), not punctuation.
+
+Capitalization has been confirmed acceptable for this product. Punctuation is
+the open decision, and there is an obvious way out that costs nothing already
+decided: **stream for the live preview, batch for the final text.** The preview
+is explicitly allowed to revise itself, so unpunctuated live text is fine; the
+committed message can come from a punctuating model. This also matches a choice
+already made independently — that the final transcription should always be a
+full, accurate pass rather than a reused preview.
+
+A cold-start cliff remains: the first `audio` call after load took 3.6s (JIT),
+so the helper needs the same pre-warm the Python path already does via
+`/api/voice/warm`. Subsequent loads with weights cached took 0.6s.
 
 ## Risks and open questions
 
