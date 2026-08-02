@@ -274,7 +274,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-zoom-btn.is-on { width: auto; padding: 0 7px; border-color: #e6d9bd; background: var(--sun-soft, #fdeecb); color: #8a6114; }
 .fl-zoom-badge { font-size: 10px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .fl-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 26px clamp(12px, 1.5vw, 20px); }
-.fl-composer { position: relative; display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
+.fl-composer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto auto; gap: 8px; align-items: end; margin: 0 clamp(12px, 1.5vw, 20px) 10px; padding: 8px; border: 1px solid #cbd7e8; border-radius: 15px; background: var(--surface-2); }
 .fl-composer-menu { position: relative; display: flex; align-items: center; align-self: center; }
 .fl-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
 .fl-menu { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 21; min-width: 232px; padding: 6px; border: 1px solid #e0d7c5; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); display: flex; flex-direction: column; gap: 2px; }
@@ -1003,7 +1003,7 @@ audio.fl-viewer-media { background: var(--surface); }
 }
 @media (prefers-reduced-motion: reduce) { .fl-start-burst { display: none; } }
 @keyframes fl-star-pop { 0% { opacity: 0; transform: scale(0) rotate(-25deg); } 60% { opacity: 1; transform: scale(1.25) rotate(8deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
-.fl-child-composer { position: relative; display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
+.fl-child-composer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto auto; gap: 8px; align-items: end; padding: 9px; border: 1px solid #cfdcec; border-radius: 16px; background: var(--surface); box-shadow: 0 8px 20px rgba(13, 35, 76, .06); }
 .fl-child-composer textarea { min-width: 0; min-height: 42px; max-height: 160px; padding: 10px 0 10px 8px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-child-composer textarea::placeholder { color: #6a7c95; }
 .fl-child-side { display: flex; flex-direction: column; gap: 14px; }

@@ -3296,27 +3296,6 @@ export default function LearningApp() {
             <form className="fl-composer" onSubmit={sendParentMessage}>
               <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf" onChange={onFilesSelected} style={{ display: 'none' }} />
               <button className="composer-icon" type="button" aria-label="Attach a photo or PDF" onClick={onPickFiles} disabled={uploading}><Paperclip size={19} /></button>
-              <button
-                type="button"
-                className={`composer-icon ${fastMode ? 'is-active' : ''}`}
-                aria-label="Fast mode"
-                aria-pressed={fastMode}
-                title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                onClick={() => toggleFastMode(!fastMode)}
-                disabled={savingFastMode}
-              >
-                <Zap size={19} />
-              </button>
-              <MicButton
-                onText={(text) => {
-                  setFocusInput((cur) => (cur ? `${cur} ${text}` : text))
-                  // So Enter immediately sends — without this the composer
-                  // stays unfocused after dictation and Enter does nothing.
-                  focusTextareaRef.current?.focus()
-                }}
-                disabled={uploading}
-                shortcutEnabled={screen === 'parent'}
-              />
               <textarea
                 ref={focusTextareaRef}
                 aria-label="Message the learning guide"
@@ -3343,6 +3322,27 @@ export default function LearningApp() {
                   </div>
                 )}
               </div>
+              <button
+                type="button"
+                className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                aria-label="Fast mode"
+                aria-pressed={fastMode}
+                title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                onClick={() => toggleFastMode(!fastMode)}
+                disabled={savingFastMode}
+              >
+                <Zap size={19} />
+              </button>
+              <MicButton
+                onText={(text) => {
+                  setFocusInput((cur) => (cur ? `${cur} ${text}` : text))
+                  // So Enter immediately sends — without this the composer
+                  // stays unfocused after dictation and Enter does nothing.
+                  focusTextareaRef.current?.focus()
+                }}
+                disabled={uploading}
+                shortcutEnabled={screen === 'parent'}
+              />
               <button className="composer-send" type="submit" aria-label="Send message" disabled={!focusInput.trim()}><Send size={18} /></button>
             </form>
             <p className="fl-disclaimer">SparkQuill can make mistakes. Please review important content before sharing it with {childName || 'your child'}.</p>
@@ -4375,27 +4375,6 @@ export default function LearningApp() {
               <form className="fl-child-composer" onSubmit={sendChildMessage}>
                 <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
                 <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>
-                <button
-                  type="button"
-                  className={`composer-icon ${fastMode ? 'is-active' : ''}`}
-                  aria-label="Fast mode"
-                  aria-pressed={fastMode}
-                  title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                  onClick={() => toggleFastMode(!fastMode)}
-                  disabled={savingFastMode}
-                >
-                  <Zap size={19} />
-                </button>
-                <MicButton
-                  onText={(text) => {
-                    setChildInput((cur) => (cur ? `${cur} ${text}` : text))
-                    // So Enter immediately sends — without this the composer
-                    // stays unfocused after dictation and Enter does nothing.
-                    childTextareaRef.current?.focus()
-                  }}
-                  disabled={childUploading}
-                  shortcutEnabled={screen === 'tutor'}
-                />
                 <textarea
                   ref={childTextareaRef}
                   aria-label="Message your tutor"
@@ -4422,6 +4401,27 @@ export default function LearningApp() {
                     </div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                  aria-label="Fast mode"
+                  aria-pressed={fastMode}
+                  title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                  onClick={() => toggleFastMode(!fastMode)}
+                  disabled={savingFastMode}
+                >
+                  <Zap size={19} />
+                </button>
+                <MicButton
+                  onText={(text) => {
+                    setChildInput((cur) => (cur ? `${cur} ${text}` : text))
+                    // So Enter immediately sends — without this the composer
+                    // stays unfocused after dictation and Enter does nothing.
+                    childTextareaRef.current?.focus()
+                  }}
+                  disabled={childUploading}
+                  shortcutEnabled={screen === 'tutor'}
+                />
                 <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
             </section>
