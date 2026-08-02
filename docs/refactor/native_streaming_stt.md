@@ -224,10 +224,11 @@ The Python path stays fully working until the Swift path is verified.
 
 ### Known-unverified, in likely-to-bite order
 
-- **Chunk upload keeping up with speech.** Chunks queue and upload strictly in
-  order (never dropped — the batch pass needs the whole utterance). At ~20ms
-  per upload against 160ms of audio there is ~8x headroom, but this has only
-  been reasoned about, not measured under a real recording.
+- ~~**Chunk upload keeping up with speech.**~~ Measured through the running
+  app (62 chunks of real speech over the HTTP endpoints): **28.6ms average,
+  231.8ms worst case** against 160ms of audio per chunk — ~5.6x headroom, and
+  the one outlier is the first-call JIT. The queue drains comfortably. Final
+  committed text came back punctuated in 193ms.
 - **`AudioContext({sampleRate: 16000})`.** Chromium honours it; if a device
   refuses, the worklet would emit at another rate and the helper would receive
   mis-timed audio. No resampling guard exists yet.
