@@ -28,6 +28,13 @@ import Foundation
 
 let sampleRate = 16000.0
 
+/// Joins closed-out segments with whatever the engine is mid-way through.
+func runningPreview(_ segments: [String], _ partial: String) -> String {
+    (segments + [partial.trimmingCharacters(in: .whitespaces)])
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+}
+
 func emit(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object),
         let json = String(data: data, encoding: .utf8)
@@ -86,6 +93,17 @@ var batchLoaded = false
 /// Every sample seen since `start`, for the batch pass to re-read on finish.
 var utterance: [Float] = []
 
+// Text from utterances the streaming engine has already closed out.
+//
+// StreamingEouAsrManager is built for voice-assistant turn-taking: it detects
+// End-of-Utterance after sustained silence and then expects to be reset for
+// the next turn. Dictation is not turn-taking — someone pausing mid-sentence
+// is still dictating — and left alone the engine stops emitting new tokens
+// entirely after the first pause. Observed live: a partial froze on one word
+// for 100+ chunks of loud speech. So harvest the transcript at each boundary
+// and reset, then report finalized + in-flight text as one running preview.
+var finalizedSegments: [String] = []
+
 // Go waits for this exact line on stderr before sending any request — the
 // signal that setup finished, kept distinct from stdout (which carries only
 // JSON responses, and would be corrupted by anything else landing on it).
@@ -120,6 +138,7 @@ while let line = readLine(strippingNewline: true) {
         case "start":
             await engine.reset()
             utterance.removeAll(keepingCapacity: true)
+            finalizedSegments.removeAll(keepingCapacity: true)
             emit(["status": "ok"])
 
         case "audio":
@@ -135,14 +154,26 @@ while let line = readLine(strippingNewline: true) {
                 try await engine.appendAudio(buffer)
                 try await engine.processBufferedAudio()
             }
-            emit(["partial": await engine.getPartialTranscript()])
+            var partial = await engine.getPartialTranscript()
+            if await engine.eouDetected {
+                // The speaker paused. Bank what this segment produced and give
+                // the engine a clean slate, so speech after the pause is still
+                // transcribed instead of silently ignored.
+                let trimmed = partial.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { finalizedSegments.append(trimmed) }
+                await engine.reset()
+                partial = ""
+            }
+            emit(["partial": runningPreview(finalizedSegments, partial)])
 
         case "finish":
             // Streaming state is flushed regardless (cheap, and it must be
             // reset for the next utterance), but the batch pass over the whole
             // utterance is what gets returned as the committed text.
-            let streamed = try await engine.finish()
+            let tail = try await engine.finish()
+            let streamed = runningPreview(finalizedSegments, tail)
             await engine.reset()
+            finalizedSegments.removeAll(keepingCapacity: true)
             var response: [String: Any] = ["streamed": streamed, "final": true]
             if batchLoaded, !utterance.isEmpty {
                 response["text"] = try await batch.transcribe(utterance)

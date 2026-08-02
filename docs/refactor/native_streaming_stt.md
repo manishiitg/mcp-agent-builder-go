@@ -222,6 +222,27 @@ The Python path stays fully working until the Swift path is verified.
 5. Then: accuracy/latency comparison against the Python path on family audio.
 6. Only then: WhatsApp migration and Python removal.
 
+### Fixed after the first real-microphone test: the preview froze at a pause
+
+The first live test looked like "streaming is wrong". Per-chunk logging
+(`SPARKQUILL_VOICE_DEBUG`) made it unambiguous: the transport was perfect —
+`samples=2560` every chunk, ~40ms each, 125 chunks, no errors, real audio
+(rms to 0.085) — but the partial froze on one word at chunk #23 and never
+changed through chunk #125, including plenty of loud speech.
+
+The freeze began right after ~2s of silence. `StreamingEouAsrManager` is built
+for voice-assistant **turn-taking**: it detects End-of-Utterance after
+sustained quiet and expects a reset for the next turn. Dictation is not
+turn-taking — someone pausing mid-sentence is still dictating — so past the
+first pause the engine simply stopped emitting tokens. The synthetic test
+missed this entirely because that clip had no pauses; **any future voice test
+must include a mid-sentence pause.**
+
+The helper now harvests the transcript whenever `eouDetected` fires, resets the
+engine, and reports finalized segments plus the in-flight partial as one
+running preview. Verified against speech with a deliberate 3s mid-sentence
+pause: both halves survive, where previously the second was lost.
+
 ### Known-unverified, in likely-to-bite order
 
 - ~~**Chunk upload keeping up with speech.**~~ Measured through the running
