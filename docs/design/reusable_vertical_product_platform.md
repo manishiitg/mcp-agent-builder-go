@@ -75,19 +75,22 @@ Pulse, scheduler, frontend, and connectors cannot simply be plugged into it.
 Measured current shape:
 
 ```text
-family-server backend       11,020 lines / 54 non-test Go files
-learning frontend            7,224 lines
+family-server backend       11,296 lines / 56 non-test Go files
 LearningApp.tsx alone         4,837 lines
-family-server HTTP routes        33
-embedded Family skills           14
-family-server direct tests         0
+family-server HTTP routes        44  (all but one under /api)
+family-server direct tests         1  (opt-in; see below)
 learning-frontend direct tests     0
 ```
 
-`go test ./cmd/family-server` compiles, but reports `[no test files]`. The
-SparkQuill release workflow builds the frontend, Go server, and Electron
-package; it does not exercise their behavior. Characterization tests are a
-precondition for extraction, not a cleanup task after it.
+`go test ./cmd/family-server` now passes rather than reporting `[no test
+files]`, but that is one opt-in integration test for the native voice path
+(`SPARKQUILL_VOICE_STREAM_TEST=1`), skipped by default. It is not
+characterization coverage of parent chat, child chat, handoff, activity
+isolation, streaming, or WhatsApp routing — none of which any test exercises.
+The SparkQuill release workflow builds the frontend, Go server, Swift voice
+helper, and Electron package; it does not exercise their behavior.
+Characterization tests remain a precondition for extraction, not a cleanup
+task after it.
 
 The audited ownership split is:
 
@@ -106,7 +109,7 @@ The audited ownership split is:
 | `@parent`/`@child`, self-chat, activity ingestion | Family routing and policy |
 | Desktop/WhatsApp notification mechanics | Shared delivery interfaces |
 | Hugging Face backup target and Family summary policy | Family adapters and policy |
-| Voice/MLX/Parakeet transcription | Family native capability initially |
+| Voice transcription (native Swift/CoreML; MLX/Python for WhatsApp notes) | Family native capability initially |
 | Conversation/event transport | Shared only after a normalized product-facing contract exists |
 | SparkQuill navigation, activity viewer, academic map | Fully custom Family frontend |
 
@@ -569,9 +572,11 @@ E2E should exercise the same bridge and event path used in production.
 
 The second consumer defines the boundary, so it should be the one that stresses
 it honestly at the lowest cost of being wrong. **Voice is not that second
-product.** SparkQuill's voice code is on-device speech-to-text (MLX, Parakeet,
-hardware detection, a persistent Python worker, and settings); the cited
-AgentWorks audio/music tools generate media. They share artifact/process
+product.** SparkQuill's voice code is on-device speech-to-text — as of
+2026-08-02 a native Swift/CoreML helper for live dictation, with the MLX/Python
+worker retained only for WhatsApp voice notes (see
+`docs/refactor/native_streaming_stt.md`) — while the cited AgentWorks
+audio/music tools generate media. They share artifact/process
 primitives but not one product capability, so adding their line counts would
 repeat the same-name/same-semantics mistake this audit found in Pulse.
 
@@ -601,15 +606,17 @@ The twelve steps above are written primarily around `cmd/family-server`,
 which is the smallest of the three masses involved:
 
 ```text
-frontend/src           147,006 lines
-agent_go/cmd/server     89,225 lines
-agent_go/cmd/family-server  11,020 lines
+frontend/src               141,664 lines
+agent_go/cmd/server         89,241 lines
+agent_go/cmd/family-server  11,296 lines
 ```
 
-Those steps begin with roughly 4% of the code this architecture ultimately
-touches. Two questions are load-bearing and currently unanswered:
+All three counts exclude test files; an earlier revision compared a
+tests-included frontend number (147,006) against a tests-excluded server
+number, which is not a like-for-like ratio. Those steps begin with roughly 5%
+of the code this architecture ultimately touches. Two questions are load-bearing and currently unanswered:
 
-**What becomes of `cmd/server`?** At 89,225 lines it holds the Pulse, scheduler,
+**What becomes of `cmd/server`?** At 89,241 lines it holds the Pulse, scheduler,
 and workflow machinery this document proposes to share, so it is simultaneously
 the largest source of platform code and the largest product. "AgentWorks composes
 all enabled products" implies it splits into platform plus a workflow product,
@@ -636,6 +643,30 @@ Extracting shared infrastructure from code that is still changing means the
 extraction rebases continuously. Either freeze the interfaces being extracted for
 the duration of each step, or accept that steps 1–4 will be redone. Naming which
 is the point; discovering it mid-migration is not.
+
+## Open contradictions
+
+Two places where the plan argues against itself. Both matter because the point
+of this document is to make the *second* product cheap, not to tidy the first.
+
+**The migration defines the boundary with one consumer, which the reuse rule
+forbids.** The rule is explicit: extract a shared abstraction *after* a second
+real consumer demonstrates the common behavior. But step 10 converts Family
+onto the platform boundary and step 11 builds the second product after it. A
+boundary drawn against Family alone will be Family-shaped, and the second
+product pays for that — exactly the outcome this document exists to prevent.
+"Scope realism" half-concedes this ("proves the boundary on the smaller
+consumer without proving it can carry the bigger one") without resolving it.
+Either state an explicit first-consumer exemption and accept one rewrite after
+product two, or interleave steps 10 and 11 so the first shared seam is proven
+against both consumers before it is called a platform.
+
+**Characterization tests are scheduled before the freeze that makes them
+stable.** Step 1 writes characterization tests; step 2 freezes the contracts
+being extracted. "The target is moving" then warns that steps 1-4 will
+otherwise be redone. Tests written against a contract that is still changing
+are the first thing invalidated, so the freeze belongs before the tests, per
+slice, not after.
 
 ## Explicit non-goals
 
