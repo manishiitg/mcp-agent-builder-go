@@ -147,6 +147,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'SparkQuill',
+    icon: path.join(resourcesDir(), 'icons', 'icon.png'),
     backgroundColor: '#fbf7ef', // the app's own cream — avoids a white flash on load
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -219,6 +220,12 @@ importLoginShellEnv()
 
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'light' // the app is designed light-first
+  // The window's own `icon` option (see createWindow) doesn't affect the
+  // macOS Dock icon while running unpackaged (`npm start` / `electron .`) —
+  // that's a separate API, and without this the Dock just shows the generic
+  // Electron logo instead of SparkQuill's own icon. Packaged builds don't
+  // need this (electron-builder bakes the icon into the .app bundle itself).
+  if (!app.isPackaged) app.dock?.setIcon(path.join(resourcesDir(), 'icons', 'icon.png'))
   buildMenu()
   try {
     // DEV_URL points at the Vite dev server and skips spawning entirely, so
