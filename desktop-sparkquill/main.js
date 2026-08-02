@@ -18,6 +18,7 @@ const detect = require('detect-port')
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const { checkForUpdates, startUpdateChecks, openReleaseNotes } = require('./updater')
 
 const PREFERRED_PORT = 8010
 const HEALTH_TIMEOUT_MS = 90000
@@ -241,6 +242,9 @@ function buildMenu() {
     {
       role: 'help',
       submenu: [
+        { label: 'Check for Updates…', click: () => checkForUpdates(true) },
+        { label: 'Release Notes', click: openReleaseNotes },
+        { type: 'separator' },
         {
           label: 'Open Logs',
           click: () => shell.openPath(path.join(app.getPath('userData'), 'logs')),
@@ -285,6 +289,7 @@ app.whenReady().then(async () => {
     await startServer()
     await waitForServer()
     createWindow()
+    startUpdateChecks()
   } catch (err) {
     failFast(err)
   }

@@ -130,10 +130,16 @@ ensure_mcpbridge() {
 VERSION="${RUNLOOP_VERSION:-}"
 if [ -z "$VERSION" ]; then
   log "Looking up the latest release…"
-  # Use the redirect from /releases/latest to find the tag — avoids needing jq
-  # and works without a GitHub token (rate-limited but fine for installs).
-  VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" \
-              | sed -E 's|.*/tag/||')"
+  # NOT the /releases/latest redirect. This repository also ships SparkQuill,
+  # tagged `sparkquill-v*`, and that endpoint returns whichever app released
+  # most recently — so it can resolve to a SparkQuill tag and send this script
+  # looking for an AgentWorks dmg that does not exist. Confirmed live on
+  # 2026-08-02. Filter the release list to plain `v<digit>` tags instead.
+  # Captured to a variable rather than piped into grep -m1: grep exiting early
+  # would SIGPIPE curl and fail the pipeline under `set -o pipefail`.
+  RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=30")"
+  VERSION="$(grep -o '"tag_name": *"v[0-9][^"]*"' <<<"$RELEASES_JSON" \
+              | head -1 | sed -E 's/.*"(v[^"]+)"/\1/')"
   [ -n "$VERSION" ] || die "Could not determine latest release."
 fi
 log "Installing version $VERSION"

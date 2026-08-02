@@ -1,7 +1,7 @@
 {
   "name": "sparkquill-desktop",
   "version": "0.1.0",
-  "description": "SparkQuill desktop app — family learning, on your own computer.",
+  "description": "SparkQuill desktop app \u2014 family learning, on your own computer.",
   "main": "main.js",
   "private": true,
   "repository": "github:manishiitg/coding-agent-loop",
@@ -22,19 +22,40 @@
   "build": {
     "appId": "com.sparkquill.desktop",
     "productName": "SparkQuill",
-    "publish": ["github"],
+    "publish": [
+      "github"
+    ],
     "mac": {
       "icon": "resources/icons/icon.png",
       "category": "public.app-category.education",
       "identity": null,
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "extraResources": [
-      { "from": "resources/family-server", "to": "family-server" },
-      { "from": "resources/voice-helper", "to": "voice-helper" },
-      { "from": "resources/web", "to": "web" },
-      { "from": "resources/icons", "to": "icons" }
+      {
+        "from": "resources/family-server",
+        "to": "family-server"
+      },
+      {
+        "from": "resources/voice-helper",
+        "to": "voice-helper"
+      },
+      {
+        "from": "resources/web",
+        "to": "web"
+      },
+      {
+        "from": "resources/icons",
+        "to": "icons"
+      }
     ],
-    "files": ["main.js", "preload.js"]
+    "files": [
+      "main.js",
+      "preload.js",
+      "updater.js"
+    ]
   }
 }

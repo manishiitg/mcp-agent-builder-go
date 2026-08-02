@@ -1427,8 +1427,23 @@ function checkForUpdates(manual = false) {
     return;
   }
 
-  fetchJsonWithRedirects('https://api.github.com/repos/manishiitg/coding-agent-loop/releases/latest')
-    .then(async (release) => {
+  // NOT /releases/latest. This repository also ships SparkQuill, whose tags are
+  // namespaced `sparkquill-v*`, and /releases/latest returns whichever app
+  // released most recently regardless of app. When a SparkQuill release is
+  // newest that endpoint returns it, its tag parses to a garbage version, the
+  // comparison below says "not newer", and AgentWorks silently stops seeing its
+  // OWN updates. Confirmed live on 2026-08-02. Filter to plain `v<digit>` tags.
+  fetchJsonWithRedirects('https://api.github.com/repos/manishiitg/coding-agent-loop/releases?per_page=30')
+    .then(async (releases) => {
+      const release = Array.isArray(releases)
+        ? releases.find((r) => r && !r.draft && /^v\d/.test(r.tag_name || ''))
+        : null;
+      if (!release) {
+        if (manual) {
+          dialog.showMessageBox({ type: 'info', title: 'Updates', message: 'No AgentWorks releases found.', buttons: ['OK'] });
+        }
+        return;
+      }
       const latestVersion = (release.tag_name || '').replace(/^v/, '');
       const currentVersion = app.getVersion();
       if (!latestVersion || !isNewerVersion(latestVersion, currentVersion)) {
