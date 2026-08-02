@@ -267,11 +267,19 @@ func (iso *Isolator) generateSandboxProfile() string {
 	workDir := canonicalPath(iso.WorkDir)
 	if workDir != "" {
 		sb.WriteString("; Allow working directory read access for getcwd\n")
-		sb.WriteString(fmt.Sprintf("(allow file-read* (literal \"%s\"))\n", sandboxQuoted(workDir)))
-		for dir := filepath.Dir(workDir); strings.HasPrefix(dir, baseDir+string(filepath.Separator)); dir = filepath.Dir(dir) {
-			sb.WriteString(fmt.Sprintf("(allow file-read* (literal \"%s\"))\n", sandboxQuoted(dir)))
+		written := make(map[string]bool)
+		writeLiteralRead := func(path string) {
+			if path == "" || written[path] {
+				return
+			}
+			written[path] = true
+			sb.WriteString(fmt.Sprintf("(allow file-read* (literal \"%s\"))\n", sandboxQuoted(path)))
 		}
-		sb.WriteString(fmt.Sprintf("(allow file-read* (literal \"%s\"))\n", sandboxQuoted(baseDir)))
+		writeLiteralRead(workDir)
+		for dir := filepath.Dir(workDir); strings.HasPrefix(dir, baseDir+string(filepath.Separator)); dir = filepath.Dir(dir) {
+			writeLiteralRead(dir)
+		}
+		writeLiteralRead(baseDir)
 		sb.WriteString("\n")
 	}
 
