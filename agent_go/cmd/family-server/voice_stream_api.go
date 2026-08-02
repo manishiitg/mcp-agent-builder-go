@@ -2,10 +2,41 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"os"
+	"sync/atomic"
+	"time"
 )
+
+// Per-chunk diagnostics are opt-out rather than always-on: one line per 160ms
+// of speech is exactly what's wanted while bringing this path up, and far too
+// much once it's routine. Set SPARKQUILL_VOICE_DEBUG=0 to silence.
+func voiceStreamDebug() bool { return os.Getenv("SPARKQUILL_VOICE_DEBUG") != "0" }
+
+var voiceChunkSeq atomic.Int64
+
+// pcmStats reports loudness of a raw little-endian Float32 buffer, plus the
+// sample count — enough to tell silence from real speech, and to catch a
+// client sending the wrong sample rate or a truncated chunk.
+func pcmStats(b []byte) (rms, peak float64, samples int) {
+	samples = len(b) / 4
+	if samples == 0 {
+		return 0, 0, 0
+	}
+	var sum float64
+	for i := 0; i+4 <= len(b); i += 4 {
+		v := float64(math.Float32frombits(binary.LittleEndian.Uint32(b[i:])))
+		sum += v * v
+		if a := math.Abs(v); a > peak {
+			peak = a
+		}
+	}
+	return math.Sqrt(sum / float64(samples)), peak, samples
+}
 
 // Incremental dictation endpoints, backed by the native helper
 // (see docs/refactor/native_streaming_stt.md).
@@ -53,6 +84,8 @@ func handleVoiceStreamStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start dictation", http.StatusInternalServerError)
 		return
 	}
+	voiceChunkSeq.Store(0)
+	log.Printf("[voice-native] stream start (helper=%s)", nativeVoiceHelperPath())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -66,10 +99,23 @@ func handleVoiceStreamChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not read audio", http.StatusBadRequest)
 		return
 	}
+	started := time.Now()
+	seq := voiceChunkSeq.Add(1)
 	resp, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{
 		"cmd": "audio",
 		"pcm": base64.StdEncoding.EncodeToString(pcm),
 	})
+	// Diagnostic line per chunk. rms/peak are computed from the bytes actually
+	// received, which separates the failure modes that otherwise look alike
+	// from the UI: silence or a wrong sample rate (rms≈0, or a sample count
+	// that isn't 2560) versus real audio the model simply transcribes poorly
+	// (healthy rms, empty or wrong partial).
+	if voiceStreamDebug() {
+		rms, peak, n := pcmStats(pcm)
+		partial, _ := resp["partial"].(string)
+		log.Printf("[voice-native] chunk#%d samples=%d rms=%.4f peak=%.4f took=%s partial=%q err=%v",
+			seq, n, rms, peak, time.Since(started).Round(time.Millisecond), partial, err)
+	}
 	if err != nil {
 		// A dropped preview tick is not worth surfacing to the speaker — the
 		// next one carries the same audio's transcript anyway, since the
@@ -93,6 +139,10 @@ func handleVoiceStreamFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not finish transcribing", http.StatusInternalServerError)
 		return
 	}
+	streamed, _ := resp["streamed"].(string)
+	final, _ := resp["text"].(string)
+	log.Printf("[voice-native] finish after %d chunks\n  streamed=%q\n  final=%q",
+		voiceChunkSeq.Load(), streamed, final)
 	// "text" is the batch pass — punctuated and capitalised. "streamed" is the
 	// raw streaming transcript, returned too so the client can fall back to it
 	// if the batch stage ever comes back empty.
