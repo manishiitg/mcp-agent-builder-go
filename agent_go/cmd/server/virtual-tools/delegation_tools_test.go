@@ -291,8 +291,8 @@ func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testin
 		"never echo / print / log a plaintext secret",
 		// Pointers to the reference docs — agent needs these to know to
 		// load the deep guide before scheduling / managing secrets.
-		`read_skill(skill_name="builder-reference", path="references/schedule-management.md")`,
-		`read_skill(skill_name="builder-reference", path="references/secret-management.md")`,
+		`read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}])`,
+		`read_skill(skills=[{"name":"builder-reference","path":"references/secret-management.md"}])`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {

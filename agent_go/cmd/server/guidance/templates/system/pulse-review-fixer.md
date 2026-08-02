@@ -46,7 +46,7 @@ records the terminal module result.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response
 contract, loading each named doc with
-`read_skill(skill_name="builder-reference", path="references/<name>.md")`:
+`read_skill(skills=[{"name":"builder-reference","path":"references/<name>.md"}])`:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
 `llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
 DB/run evidence; or the Auditor diagnosis plus goal/experiment evidence for Goal
@@ -148,7 +148,7 @@ actionable bundle, `start_pulse_fix_attempt` is the durable queue record: link
 every affected finding before mutation, process bundles sequentially, and
 checkpoint/disposition one bundle before beginning the next.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
-`read_skill(skill_name="builder-reference", path="references/fix-verification.md")`;
+`read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`;
 old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint

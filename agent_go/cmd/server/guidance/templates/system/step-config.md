@@ -14,7 +14,7 @@ A step's access to each store is independent and defaults differently. Grant the
 
 - **DB contract:** agentic steps use `query_workflow_db` and, when `db_access=read-write`, `mutate_workflow_db`; they do not receive raw SQLite access. Saved scripted/application code retains the absolute `$DB_PATH` compatibility variable and must never use a relative `db/db.sqlite` path.
 - **Rule of thumb:** routing, validation, mechanical transforms, aggregation/report-shaping, human approval, pure db/KB readers, and mature scripted steps should stay read-only on learnings (and often `db_access: read`).
-- Deep dive on what belongs in each store and the write contracts: `read_skill(skill_name="builder-reference", path="references/stores.md")`.
+- Deep dive on what belongs in each store and the write contracts: `read_skill(skills=[{"name":"builder-reference","path":"references/stores.md"}])`.
 
 ### The three locks
 
@@ -35,7 +35,7 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
   - **Workshop mode selection** → move or create obviously deterministic API/CLI/data work as scripted immediately. The 10+ representative-run threshold applies only before freezing it with `lock_code`, not before choosing scripted mode.
   - Set `declared_execution_mode_reason` either way.
 - **`use_code_execution_mode`**: per-step override of the preset's code-execution toggle (nil = inherit).
-- **Model selection**: `execution_tier` (`high`/`medium`/`low`) maps to the workflow's tiered allocation; `execution_llm` / `validation_llm` pin a specific published model for that role. Prefer tiers over hard pins. Full framework: `read_skill(skill_name="builder-reference", path="references/llm-selection.md")`.
+- **Model selection**: `execution_tier` (`high`/`medium`/`low`) maps to the workflow's tiered allocation; `execution_llm` / `validation_llm` pin a specific published model for that role. Prefer tiers over hard pins. Full framework: `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
 
 ### Other common fields
 
@@ -49,4 +49,4 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
 
 1. `update_step_config(step_id, <field>=<value>, ...)` to set; `update_step_config(step_id, clear=["<field>", ...])` to revert to default.
 2. Pair access grants with their prerequisite (`learnings_access: read-write` ⇒ `learning_objective`; KB write ⇒ `knowledgebase_contribution`).
-3. For the reliability/strategy decision-making that drives most config changes: `read_skill(skill_name="builder-reference", path="references/optimize-playbook.md")`.
+3. For the reliability/strategy decision-making that drives most config changes: `read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])`.

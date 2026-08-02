@@ -427,7 +427,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 	kindList := "(no reference docs are available in this mode)\n"
 	if hasKinds {
 		refSkillName := referenceSkillSpecForMode(mode).Name
-		kindList = "The full catalog is the `references/` list in the `" + refSkillName + "` skill. Read a topic with `read_skill(skill_name=\"" + refSkillName + "\", path=\"references/<kind>.md\")`.\n"
+		kindList = "The full catalog is the `references/` list in the `" + refSkillName + "` skill. Read a topic with `read_skill(skills=[{\"name\":\"" + refSkillName + "\",\"path\":\"references/<kind>.md\"}])`.\n"
 	}
 
 	configAccess := buildConfigurationAccessGuidance(mode)
@@ -437,7 +437,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 ## Tool / API discovery
 
 - ` + "`get_api_spec(server_name, tool_name)`" + ` — when you do not know an MCP tool's parameters or response shape, call this first.
-- ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/<kind>.md\")`" + ` — load system reference docs before deep actions (for example ` + "`post-run-monitor`" + ` before Pulse work, ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `, or ` + "`llm-selection`" + ` before changing workflow models). This intrinsic mcpagent tool works on API and coding-CLI transports; native CLI skill files are the same bundle.
+- ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/<kind>.md\"}])`" + ` — load system reference docs before deep actions (for example ` + "`post-run-monitor`" + ` before Pulse work, ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `, or ` + "`llm-selection`" + ` before changing workflow models). This intrinsic mcpagent tool works on API and coding-CLI transports; native CLI skill files are the same bundle.
 - ` + "`get_workflow_command_guidance(kind, focus?)`" + ` — canonical procedural flows (design-plan, improve-evaluation, goal-advisor, define-success, etc.). The returned text is your instructions for that turn; follow it verbatim.
 - ` + "`run_goal_advisor_review(pulse_run_id?, focus?)`" + ` — when available, spawn Goal Advisor as a dedicated background agent instead of doing expensive strategic review inline in the parent Pulse/workshop turn.
 
@@ -486,13 +486,13 @@ Call the right discovery tool above before guessing. Hallucinated tool names or 
 
 func buildConfigurationAccessGuidance(mode string) string {
 	var parts []string
-	parts = append(parts, "LLM/provider configuration is tool-managed. For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate. Do not read or edit `config/` files with shell or file tools; load `read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")` before publishing or changing provider auth.")
+	parts = append(parts, "LLM/provider configuration is tool-managed. For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate. Do not read or edit `config/` files with shell or file tools; load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-provider-config.md\"}])` before publishing or changing provider auth.")
 
 	if modeAllowedIn("llm-selection", mode, referenceKinds) {
-		parts = append(parts, "For workflow execution tiers and per-step model choices, use `get_llm_config` and `set_workflow_llm_config`; load `read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")` before changing workflow execution models.")
+		parts = append(parts, "For workflow execution tiers and per-step model choices, use `get_llm_config` and `set_workflow_llm_config`; load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}])` before changing workflow execution models.")
 	}
 	if modeAllowedIn("workspace-media-tools", mode, referenceKinds) {
-		parts = append(parts, "For media/search provider tools, load `read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")`.")
+		parts = append(parts, "For media/search provider tools, load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`.")
 	}
 
 	return strings.Join(parts, " ")

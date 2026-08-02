@@ -95,7 +95,7 @@ func TestSystemToolsSkillTeachesConfigToolOnlyAccess(t *testing.T) {
 	if skill == nil {
 		t.Fatal("expected system-tools skill")
 	}
-	for _, want := range []string{"## Configuration access", "LLM/provider configuration is tool-managed", "Do not read or edit `config/` files", "read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")", "read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")", "read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")"} {
+	for _, want := range []string{"## Configuration access", "LLM/provider configuration is tool-managed", "Do not read or edit `config/` files", "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-provider-config.md\"}])", "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}])", "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])"} {
 		if !strings.Contains(skill.Content, want) {
 			t.Fatalf("system-tools skill should contain %q\n%s", want, skill.Content)
 		}
@@ -107,12 +107,12 @@ func TestSystemToolsSkillDoesNotPointMultiAgentAtWorkflowOnlyLLMSelection(t *tes
 	if skill == nil {
 		t.Fatal("expected system-tools skill")
 	}
-	for _, want := range []string{"read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")", "list_published_llms", "save_published_llm"} {
+	for _, want := range []string{"read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-provider-config.md\"}])", "list_published_llms", "save_published_llm"} {
 		if !strings.Contains(skill.Content, want) {
 			t.Fatalf("multi-agent system-tools skill should contain %q\n%s", want, skill.Content)
 		}
 	}
-	if strings.Contains(skill.Content, "read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")") {
+	if strings.Contains(skill.Content, "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}])") {
 		t.Fatalf("multi-agent system-tools should not mention workflow-only llm-selection\n%s", skill.Content)
 	}
 }
@@ -130,7 +130,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	if prompt == "" {
 		t.Fatalf("pulse-review-fixer rendered empty")
 	}
-	if !strings.Contains(prompt, `read_skill(skill_name="builder-reference"`) {
+	if !strings.Contains(prompt, `read_skill(skills=[{"name":"builder-reference"`) {
 		t.Fatalf("pulse-review-fixer names reference docs but never says how to load them")
 	}
 	if strings.Contains(prompt, "get_reference_doc") {

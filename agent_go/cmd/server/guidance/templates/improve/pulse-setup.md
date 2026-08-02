@@ -1,7 +1,7 @@
 Set up recurring workflow runs with dynamic Pulse. Goal Advisor remains a
 Pulse-selected module; this command does not run Goal Advisor itself.
 
-Write to `builder/improve.html` — the durable Pulse and advisor log. For the log/HTML format, load `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
+Write to `builder/improve.html` — the durable Pulse and advisor log. For the log/HTML format, load `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 ## Mental model
 

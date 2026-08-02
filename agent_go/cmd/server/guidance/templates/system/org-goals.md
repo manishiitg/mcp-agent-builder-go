@@ -91,7 +91,7 @@ chat.
 
 Update `pulse/goals.html` when a run or Org Pulse pass provides concrete new evidence that
 changes the scorecard (status, latest evidence, confidence, freshness/last-reviewed, or history).
-Before editing, load `read_skill(skill_name="builder-reference", path="references/org-html.md")`, preserve existing goal history, and add
+Before editing, load `read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}])`, preserve existing goal history, and add
 a compact history row for the run or pulse pass. If the evidence is incomplete, leave the
 scorecard unchanged and report the gap instead.
 
@@ -106,13 +106,13 @@ retire, or redesign the workflow.
 ### 4. HTML Contract For `pulse/goals.html`
 
 Before writing or materially changing `pulse/goals.html`, load and follow
-`read_skill(skill_name="builder-reference", path="references/org-html.md")`. Also follow `read_skill(skill_name="builder-reference", path="references/html-output.md")`
+`read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}])`. Also follow `read_skill(skills=[{"name":"builder-reference","path":"references/html-output.md"}])`
 for the generic self-contained HTML rules.
 
 Before writing, also follow the same safety contract as Org Pulse:
 
 - read `pulse/backup.json` and `pulse/backup/status.json` when present,
-- call `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")`,
+- call `read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}])`,
 - back up org-level artifacts using the workflow-style org backup contract before changing
   `pulse/goals.html`,
 - if backup is not configured, set up the zero-config local-git default and create or update

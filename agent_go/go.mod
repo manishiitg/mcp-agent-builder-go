@@ -16,7 +16,7 @@ require (
 	github.com/invopop/jsonschema v0.13.0
 	github.com/joho/godotenv v1.5.1
 	github.com/manishiitg/coding-agent-loop/workspace v0.0.0
-	github.com/manishiitg/mcpagent v1.7.12-0.20260727121856-c1eeea17caae
+	github.com/manishiitg/mcpagent v1.7.12-0.20260802174444-ea1703149750
 	github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260729042543-946bfc3e65f3
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/openai/openai-go/v3 v3.36.0

@@ -137,7 +137,7 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 		backlog.Changes = append(backlog.Changes, p.change)
 	}
 	backlog.Note = fmt.Sprintf(
-		"%d plan-mod change(s) have not been stamped artifact_review.done, so their knock-on effects across downstream steps, evals, the report dashboard, db contracts, KB notes and learnings may not have been reconciled. Evidence, not a verdict: many changes have no blast radius at all. Consider marking artifact_review due so its reviewer can trace each surface against the real artifacts — read_skill(skill_name=\"builder-reference\", path=\"references/plan-change-impact.md\") is the procedure. Entries stay listed until mark_changelog_artifact_reviewed stamps them, so deferring loses nothing.",
+		"%d plan-mod change(s) have not been stamped artifact_review.done, so their knock-on effects across downstream steps, evals, the report dashboard, db contracts, KB notes and learnings may not have been reconciled. Evidence, not a verdict: many changes have no blast radius at all. Consider marking artifact_review due so its reviewer can trace each surface against the real artifacts — read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/plan-change-impact.md\"}]) is the procedure. Entries stay listed until mark_changelog_artifact_reviewed stamps them, so deferring loses nothing.",
 		len(pending))
 	if len(pending) > len(backlog.Changes) {
 		backlog.Note += fmt.Sprintf(" Showing the %d most recent; the rest are in planning/changelog/.", len(backlog.Changes))

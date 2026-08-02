@@ -408,7 +408,7 @@ For workflow publish, read the destination's `provider`, `method`, and `site` fr
    For a person at the keyboard, prefer interactive `<cli> login`.)*
 2. **Git-push-to-deploy** (`method: git`) — commit the static files to the repo/branch the
    host auto-builds (Netlify/Vercel/Pages/Render watch a branch). Use the git discipline from
-   `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")` (atomic commit, `--force-with-lease`).
+   `read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}])` (atomic commit, `--force-with-lease`).
 3. **Object-store / file sync** (`method: sync`) — the catch-all for any host that serves
    files from a bucket or directory: `aws s3 sync <dir> s3://<bucket>` (+ CloudFront),
    `rclone copy <dir> <remote>:<path>`, or `rsync` to a server+nginx.

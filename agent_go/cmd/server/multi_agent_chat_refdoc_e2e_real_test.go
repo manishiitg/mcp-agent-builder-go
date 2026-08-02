@@ -25,7 +25,7 @@ import (
 // TestMultiAgentChatPromptSteersToReferenceDocs is a real-LLM e2e test for
 // the multi-agent chat prompt refactor. It verifies that the new
 // schedule/secret cheat-sheet+pointer pattern actually steers the LLM to
-// call read_skill(skill_name="builder-reference", path="references/....md") before performing rare-path actions,
+// call read_skill(skills=[{"name":"builder-reference","path":"references/....md"}]) before performing rare-path actions,
 // instead of inventing the file format / tool semantics from memory.
 //
 // What it does:
@@ -36,7 +36,7 @@ import (
 //     user message via the Anthropic API with claude-haiku.
 //  4. Asserts the model's first response contains a tool_use block for
 //     read_skill with the expected bundled path. The system prompt pointer
-//     ("call read_skill(skill_name=\"builder-reference\", path=\"references/schedule-management.md\") first") only
+//     ("call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedule-management.md\"}]) first") only
 //     produces correct behavior if the LLM actually parses and acts on it.
 //
 // Gating:
@@ -158,11 +158,11 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 			}
 
 			if !foundRefDocCall {
-				t.Errorf("expected read_skill(builder-reference, references/%s.md) before performing action; calledPath=%q stop_reason=%q",
+				t.Errorf("expected read_skill skills item for builder-reference/references/%s.md before performing action; calledPath=%q stop_reason=%q",
 					tc.expectKind, calledPath, msg.StopReason)
 				t.Logf("Full response blocks: %s", dumpBlocks(msg.Content))
 			} else {
-				t.Logf("✅ agent called read_skill(path=references/%s.md) before action", tc.expectKind)
+				t.Logf("✅ agent called read_skill with path references/%s.md before action", tc.expectKind)
 			}
 		})
 	}
@@ -202,7 +202,7 @@ func dumpBlocks(blocks []anthropic.ContentBlockUnion) string {
 // via MCP servers configured externally; the adapter does NOT accept
 // inline tool definitions. So this test can't verify a literal tool_use
 // block was emitted. Instead it verifies the **model's stated intent** —
-// does the text response mention calling `read_skill(skill_name="builder-reference", path="references/....md")`
+// does the text response mention calling `read_skill(skills=[{"name":"builder-reference","path":"references/....md"}])`
 // with the expected kind? That proves the inline cheat-sheet pointer is
 // strong enough to steer the LLM's plan, which is what we care about.
 //
@@ -288,7 +288,7 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 				}
 			}
 			if refDocMentioned && kindMentioned {
-				t.Logf("✅ model stated intent to call read_skill(path=references/%s.md) before action", tc.expectKind)
+				t.Logf("✅ model stated intent to call read_skill with path references/%s.md before action", tc.expectKind)
 			}
 		})
 	}

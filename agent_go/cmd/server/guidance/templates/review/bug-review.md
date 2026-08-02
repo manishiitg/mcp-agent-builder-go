@@ -7,10 +7,10 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
-   `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")`,
-   `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`, and
-   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. Use the `bug_review` triggers
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`, and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. Use the `bug_review` triggers
    from `post-run-monitor` plus the Exploratory QA, observable execution-trace,
    and control-path reachability contract in `pulse-bug-review` as the audit
    contract. These references belong to the parent. Do

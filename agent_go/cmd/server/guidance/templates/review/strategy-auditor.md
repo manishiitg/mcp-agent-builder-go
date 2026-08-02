@@ -8,10 +8,10 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 Use `{{.RunFolder}}` as the newest evidence anchor, then compare it with the
 smallest useful retained window.{{end}}
 
-1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
-   `read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`,
-   `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`, and
-   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. The Strategy Auditor
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`, and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. The Strategy Auditor
    reference is the classification and evidence contract. These references
    belong to the parent; never give the reviewer HTML/CSS/formatting work.
 2. Read the objective and success criteria from `soul/soul.md`, then inspect the

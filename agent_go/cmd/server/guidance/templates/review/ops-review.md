@@ -9,9 +9,9 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
-   `read_skill(skill_name="builder-reference", path="references/llm-selection.md")`, and
-   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. These references belong to
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`, and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. These references belong to
    the parent. Do not pass HTML style, skeleton, CSS, migration, or card-format
    work to the reviewer.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval

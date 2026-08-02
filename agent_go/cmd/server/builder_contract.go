@@ -121,7 +121,7 @@ const (
 	// InvChatPromptSteering: builder-level system prompts (cheat-sheet +
 	// reference-doc pointer pattern) successfully steer LLMs toward the
 	// canonical workflow tools — for example calling
-	// read_skill(skill_name="builder-reference", path="references/....md") before performing rare-path actions
+	// read_skill(skills=[{"name":"builder-reference","path":"references/....md"}]) before performing rare-path actions
 	// instead of inventing tool semantics from training memory.
 	InvChatPromptSteering BuilderInvariantID = "chat_prompt_steering"
 )
@@ -258,7 +258,7 @@ var builderInvariantCertifications = map[BuilderInvariantID]BuilderInvariantCert
 		TestFile:    "agent_go/cmd/server/multi_agent_chat_refdoc_e2e_real_test.go",
 		TestName:    "TestMultiAgentChatPromptSteersToReferenceDocs",
 		Env:         []string{"RUN_MULTIAGENT_REFDOC_E2E=1"},
-		Description: "Real-LLM test: the builder's attached-reference pointer steers the model to call read_skill(skill_name=\"builder-reference\", path=...) before invoking rare-path tools, instead of fabricating tool semantics from memory. Claude-Code variant TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode under RUN_MULTIAGENT_REFDOC_CC_E2E.",
+		Description: "Real-LLM test: the builder's attached-reference pointer steers the model to call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":...}]) before invoking rare-path tools, instead of fabricating tool semantics from memory. Claude-Code variant TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode under RUN_MULTIAGENT_REFDOC_CC_E2E.",
 		RealE2E:     true,
 	},
 }

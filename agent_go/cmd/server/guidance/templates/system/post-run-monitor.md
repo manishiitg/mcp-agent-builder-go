@@ -170,7 +170,7 @@ state. The Fixer is the only writer and records every due module's result.
    verdict, next-check condition, findings, evidence, bounded recommended fix,
    verification, and whether user judgment is required with a reason.
    For Bug Review, also include the suspect step ids/attempts and tell the
-   reviewer to load `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the
+   reviewer to load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])` for the
    Exploratory QA and observable execution-trace contract whenever Gate evidence
    points to a specific step.
    Explicitly forbid file edits, config or plan changes, publishing,
@@ -246,7 +246,7 @@ state. The Fixer is the only writer and records every due module's result.
    state, and the Fixer creates no HTML recovery ledger.
 7. The Fixer applies bounded repair bundles sequentially with normal direct
    tools; never launch a second mutating maintenance agent. Load
-   `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`. Before mutation,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`. Before mutation,
    capture exact targets, time, hashes/versions, and latest baseline ids; a write
    or any pre-boundary artifact is not proof. Re-read `get_pulse_module_state`,
    map each actionable issue to its backlog record, and call
@@ -484,7 +484,7 @@ The read-only reviewer scopes the defect from run/eval evidence, execution logs,
 validation, prompts/config, stale artifacts, and evidence-chain breakage, then
 returns exact findings and verification steps; the Pulse Fixer applies and
 verifies the bounded repair directly. The reviewer and Pulse Fixer load
-`read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the full read-only contract:
+`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])` for the full read-only contract:
 the Exploratory QA behavioral-contract and risk-matrix method, the control-path
 reachability check (`wrong_store_write`, `shadow_store_drift`,
 `dead_configuration`), the observable execution-trace review, and the finding
@@ -714,7 +714,7 @@ Keep the next Auditor checkpoint no later than Advisor's and normally require a
 fresh Auditor result between Advisor runs. A user answer/experiment may override
 that order. After a bug fix, wait for verification plus new valid outcome data.
 
-Load `read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`. The reviewer reconstructs
+Load `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`. The reviewer reconstructs
 the goal-to-action-to-target/source-to-outcome causal chain and uses bounded
 read-only queries against existing workflow tables plus retained run/eval
 evidence. It compares comparable windows and plan versions, reports counts and

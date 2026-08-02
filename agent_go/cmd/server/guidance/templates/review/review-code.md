@@ -3,11 +3,11 @@
 The active Workshop turn is the parent coordinator. Treat `review_step_code` as
 a read-only specialist: it audits and returns findings, but it must not edit
 files, update `builder/improve.html`, create questions, or mark module state.
-Load `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")` for the shared
+Load `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` for the shared
 reviewer/writer boundary. Do not load `html-output` or the HTML skeleton for the
 specialist, inspect Pulse CSS, or ask it to format cards.
 
-Load `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")` and apply its code lens. Flag unjustified literals, fixed providers/channels/sources, and temporary workarounds that make a revisable design choice behave like a permanent constraint. Preserve verified platform constraints with evidence/freshness; parameterize or surface consequential assumptions rather than copying them into more code.
+Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])` and apply its code lens. Flag unjustified literals, fixed providers/channels/sources, and temporary workarounds that make a revisable design choice behave like a permanent constraint. Preserve verified platform constraints with evidence/freshness; parameterize or surface consequential assumptions rather than copying them into more code.
 
 The code must actually deliver what the description promises, do it dynamically (not via hardcoded shortcuts), and follow durable patterns when it touches a browser. Flag findings by severity (CRITICAL / WARNING / INFO).
 
