@@ -13,6 +13,7 @@ import (
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 )
 
 // extractWorkspacePathFromObjective extracts the workspace path from the objective string
@@ -653,6 +654,18 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 					if paramValue, exists := args[paramName]; exists {
 						if pathStr, ok := paramValue.(string); ok && pathStr != "" {
 							cleanedPath := filepath.Clean(pathStr)
+
+							// Allow entries are workspace-relative ("Workflow/social-media"),
+							// so an absolute argument could never prefix-match and was denied
+							// even when it pointed inside an allowed folder. The workspace
+							// client normalizes the same way, but only after this guard runs,
+							// so it never got the chance. Prompts actively encourage absolute
+							// paths, which is how a legitimate write to
+							// Workflow/social-media/builder/improve.html was rejected against
+							// an allow list that contained Workflow/social-media.
+							if relPath, ok := orchestrator.NormalizeAbsoluteWorkspaceDocsPath(cleanedPath); ok {
+								cleanedPath = filepath.Clean(relPath)
+							}
 
 							if isPathBlockedWrite(cleanedPath) {
 								log.Printf("[%s] Blocked WRITE to '%s' (cleaned: '%s') for tool %s — path is under a blocked-write prefix (%v)", logPrefix, pathStr, cleanedPath, toolNameCopy, blockedWritePrefixes)

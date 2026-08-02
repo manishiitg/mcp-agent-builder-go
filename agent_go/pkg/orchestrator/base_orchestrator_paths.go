@@ -160,6 +160,16 @@ func normalizePathForWorkspace(workspacePath, inputPath string) (string, error) 
 	return rel, nil
 }
 
+// NormalizeAbsoluteWorkspaceDocsPath converts an absolute path under any known
+// workspace-docs root into its workspace-relative form. Exported because the
+// folder guard in cmd/server needs the same normalization: it compares tool
+// path arguments against relative allow entries like "Workflow/social-media",
+// so an absolute argument could never match and was denied even when it pointed
+// inside an allowed folder.
+func NormalizeAbsoluteWorkspaceDocsPath(inputPath string) (string, bool) {
+	return normalizeAbsoluteWorkspaceDocsPath(inputPath)
+}
+
 func normalizeAbsoluteWorkspaceDocsPath(inputPath string) (string, bool) {
 	if !filepath.IsAbs(inputPath) {
 		return "", false

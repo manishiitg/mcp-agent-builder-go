@@ -5979,10 +5979,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				legacyTokenFilePath := filepath.Join(workflowRoot, "token_usage.json")
 				tokenFilePath := filepath.Join(workflowRoot, "costs", "phase", "token_usage.json")
 				var tokenFile orchestrator.PhaseTokenUsageFile
+				// Whether the pre-migration file is actually present. The delete
+				// below is a one-time migration cleanup, but it used to run on
+				// every write: once the legacy file was gone (or never existed),
+				// each turn issued a DELETE that 404'd. deleteWorkspaceFile
+				// swallows that, so the only trace was the workspace access log —
+				// 15 wasted round-trips in one run, and a real delete failure
+				// would have looked identical.
+				legacyTokenFileExists := false
 				if existingData, exists, err := readFileFromWorkspace(context.Background(), tokenFilePath); err == nil && exists {
 					_ = json.Unmarshal([]byte(existingData), &tokenFile)
 				} else if existingData, exists, err := readFileFromWorkspace(context.Background(), legacyTokenFilePath); err == nil && exists {
 					_ = json.Unmarshal([]byte(existingData), &tokenFile)
+					legacyTokenFileExists = true
 				}
 				now := time.Now()
 				modelID := mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig.ModelID
@@ -5992,8 +6001,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					if err := writeRawFileToWorkspace(context.Background(), tokenFilePath, string(tokenJSON)); err != nil {
 						log.Printf("[BUILDER LOG] Failed to write phase token usage: %v", err)
 					} else {
-						if err := deleteWorkspaceFile(context.Background(), legacyTokenFilePath); err != nil {
-							log.Printf("[BUILDER LOG] Failed to delete legacy token_usage.json: %v", err)
+						if legacyTokenFileExists {
+							if err := deleteWorkspaceFile(context.Background(), legacyTokenFilePath); err != nil {
+								log.Printf("[BUILDER LOG] Failed to delete legacy token_usage.json: %v", err)
+							}
 						}
 						log.Printf("[BUILDER LOG] Updated %s (phase=%s, $%.4f this turn)", tokenFilePath, phaseKey, totalCost)
 					}

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formatToolCallArguments, formatToolCallResult } from './toolCallFormatting'
+import {
+  formatToolCallArguments,
+  formatToolCallResult,
+  normalizeToolCallResultValue,
+  toolCallValueToText,
+} from './toolCallFormatting'
 
 describe('formatToolCallArguments', () => {
   it('pretty-prints JSON arguments', () => {
@@ -20,6 +25,35 @@ describe('formatToolCallArguments', () => {
 })
 
 describe('formatToolCallResult', () => {
+  it('accepts an object-valued MCP shell result without assuming it is a string', () => {
+    const result = {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({ stdout: 'ok\n', stderr: '', exit_code: 0 }),
+      }],
+      structured_content: null,
+    }
+
+    expect(normalizeToolCallResultValue(result)).toEqual({
+      stdout: 'ok\n',
+      stderr: '',
+      exit_code: 0,
+    })
+    expect(formatToolCallResult(result)).toEqual({
+      format: 'shell',
+      text: 'exit code 0\n\nstdout\nok\n',
+      isError: false,
+    })
+  })
+
+  it('renders non-text content arrays as JSON instead of leaking an array to string methods', () => {
+    const result = { content: [{ type: 'image', data: 'abc' }] }
+
+    expect(toolCallValueToText(normalizeToolCallResultValue(result))).toBe(
+      '{\n  "content": [\n    {\n      "type": "image",\n      "data": "abc"\n    }\n  ]\n}',
+    )
+  })
+
   it('unwraps an MCP text envelope and formats JSON stdout', () => {
     const shellResult = JSON.stringify({
       stdout: JSON.stringify({

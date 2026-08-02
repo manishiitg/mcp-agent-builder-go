@@ -72,7 +72,22 @@ function unwrapMcpTextEnvelope(value: unknown): unknown {
 }
 
 function prettyJson(value: unknown): string {
-  return JSON.stringify(expandNestedJson(value), null, 2)
+  const rendered = JSON.stringify(expandNestedJson(value), null, 2)
+  return rendered ?? String(value)
+}
+
+export function normalizeToolCallResultValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const parsed = tryParseJson(value)
+    return unwrapMcpTextEnvelope(parsed === undefined ? value : parsed)
+  }
+  return unwrapMcpTextEnvelope(value)
+}
+
+export function toolCallValueToText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  return prettyJson(value)
 }
 
 /**
@@ -180,11 +195,8 @@ export function formatToolCallArguments(value: string): FormattedToolCallValue {
   return formatTextThatMayBeJson(value)
 }
 
-export function formatToolCallResult(value: string): FormattedToolCallValue {
-  const initiallyParsed = tryParseJson(value)
-  if (initiallyParsed === undefined) return { text: value, format: 'text', isError: false }
-
-  const unwrapped = unwrapMcpTextEnvelope(initiallyParsed)
+export function formatToolCallResult(value: unknown): FormattedToolCallValue {
+  const unwrapped = normalizeToolCallResultValue(value)
   if (isShellResult(unwrapped)) {
     return {
       text: shellResultText(unwrapped),

@@ -7,6 +7,7 @@ import { Plus, Minus } from 'lucide-react'
 import { MarkdownRenderer } from '../../../ui/MarkdownRenderer'
 import { CsvRenderer } from '../../../ui/CsvRenderer'
 import { getLogicalToolName, getMCPServerName } from '../../../../utils/event-helpers'
+import { normalizeToolCallResultValue, toolCallValueToText } from '../../../../utils/toolCallFormatting'
 
 type OutputFormat = 'markdown' | 'json' | 'csv' | null
 
@@ -43,6 +44,10 @@ function detectOutputFormat(text: string): OutputFormat {
 
 interface CodeExecutionToolCallEndDisplayProps {
   event: ToolCallEndEvent
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 // Format duration from nanoseconds
@@ -106,25 +111,17 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
   const logicalToolName = getLogicalToolName(toolName)
   const mcpServerName = getMCPServerName(toolName)
 
-  let parsedResult: Record<string, unknown> = {}
-  let resultText = event.result || ''
-
-  if (event.result) {
-    try {
-      parsedResult = JSON.parse(event.result)
-      // Try to extract text content if it's a structured response
-      if (parsedResult.text) {
-        resultText = parsedResult.text as string
-      } else if (parsedResult.content) {
-        resultText = parsedResult.content as string
-      } else {
-        resultText = JSON.stringify(parsedResult, null, 2)
-      }
-    } catch {
-      // Not JSON, use as-is
-      resultText = event.result
-    }
-  }
+  // Runtime bridge events can carry result as an already-decoded object even
+  // though the generated schema currently declares a string. Normalize first
+  // so no renderer can leak an object/content-block array into string methods.
+  const normalizedResult = normalizeToolCallResultValue(event.result as unknown)
+  const parsedResult: Record<string, unknown> = isRecord(normalizedResult) ? normalizedResult : {}
+  const eventResultText = toolCallValueToText(event.result as unknown)
+  const resultText = typeof parsedResult.text === 'string'
+    ? parsedResult.text
+    : typeof parsedResult.content === 'string'
+      ? parsedResult.content
+      : toolCallValueToText(normalizedResult)
 
   // Handle get_api_spec tool response (also handles mcp__*__get_api_spec)
   if (logicalToolName === 'get_api_spec') {
@@ -134,7 +131,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
 
     // Try to extract server name and count endpoints from the spec
     try {
-      const specText = resultText || event.result || ''
+      const specText = resultText || eventResultText
       // Count endpoint paths (lines like "  /tools/mcp/..." or paths in OpenAPI)
       const pathMatches = specText.match(/^\s+\/tools\//gm)
       endpointCount = pathMatches ? pathMatches.length : 0
@@ -145,8 +142,8 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
       }
     } catch { /* ignore */ }
 
-    const specLength = (resultText || event.result || '').length
-    const lineCount = (resultText || event.result || '').split('\n').length
+    const specLength = (resultText || eventResultText).length
+    const lineCount = (resultText || eventResultText).split('\n').length
 
     return (
       <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded p-2">
@@ -190,7 +187,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
                 </div>
               </div>
               <pre className="text-xs text-gray-800 dark:text-gray-200 font-mono whitespace-pre-wrap overflow-x-auto bg-gray-50 dark:bg-gray-900 p-3 rounded max-h-48 overflow-y-auto">
-                {resultText || event.result}
+                {resultText || eventResultText}
               </pre>
             </div>
           </div>
@@ -201,7 +198,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
 
   // Handle execute_shell_command tool response
   if (logicalToolName === 'execute_shell_command') {
-    const rawOutput = resultText || event.result || ''
+    const rawOutput = resultText || eventResultText
 
     // Extract stdout/stderr from parsed JSON if available
     const stdout = typeof parsedResult.stdout === 'string' && parsedResult.stdout
@@ -336,9 +333,11 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
     let serverListData: unknown = null
 
     try {
-      const parsed = JSON.parse(event.result || '')
-      if (parsed.servers || parsed.custom_tools || parsed.virtual_tools) {
+      const parsed = normalizedResult
+      if (isRecord(parsed) && (parsed.servers || parsed.custom_tools || parsed.virtual_tools)) {
         serverListData = parsed
+      } else {
+        throw new Error('result is not a code-structure response')
       }
     } catch {
       // If it's not valid JSON, show error
@@ -357,7 +356,7 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
           
           {isOutputExpanded && (
             <div className="mt-2 text-xs text-red-600 dark:text-red-400">
-              Invalid JSON response: {event.result}
+              Invalid JSON response: {eventResultText}
             </div>
           )}
         </div>
@@ -502,8 +501,8 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
     let serverListData: unknown = null
 
     try {
-      const parsed = JSON.parse(event.result || '')
-      if (parsed.servers || parsed.custom_tools || parsed.virtual_tools) {
+      const parsed = normalizedResult
+      if (isRecord(parsed) && (parsed.servers || parsed.custom_tools || parsed.virtual_tools)) {
         // It's a server list JSON
         isServerList = true
         serverListData = parsed

@@ -1711,11 +1711,6 @@ func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent
 	}
 	registerInteractiveWorkshopTools(iwm, mcpAgentRef, logger)
 	guidance.RegisterGuidanceTool(mcpAgentRef, "workshop", logger)
-	if referenceSkill := guidance.MaterializeReferenceSkill("workshop"); referenceSkill != nil {
-		if err := mcpAgentRef.AttachSkill(referenceSkill); err != nil {
-			logger.Warn(fmt.Sprintf("⚠️ %s: failed to attach builder reference skill: %v", agentName, err))
-		}
-	}
 	if err := RegisterEvaluationValidationTools(
 		mcpAgentRef,
 		workspacePath,
@@ -3928,6 +3923,21 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			artifact, err := LoadPulseReviewArtifactForRun(
 				ctx, iwm.controller.GetWorkspacePath(), reviewRunID, module,
 			)
+			if errors.Is(err, sql.ErrNoRows) {
+				// The reviewer is asynchronous, so "not saved yet" is an ordinary
+				// state, not a defect. Returning the raw driver string told the
+				// agent nothing it could act on — 10 of these in one run, across
+				// two Pulse sessions, each followed by a blind retry. Name the
+				// identity that missed and the two things that actually explain
+				// it.
+				return "", fmt.Errorf(
+					"no saved Pulse review yet for review_run_id=%q module=%q. "+
+						"The reviewer persists its result only when it finishes, so either it is still running "+
+						"— resume from its completion notification rather than polling — or this identity pair is wrong. "+
+						"Use the review_run_id and module exactly as reported by the call_generic_agent completion notification",
+					reviewRunID, module,
+				)
+			}
 			if err != nil {
 				return "", err
 			}
@@ -10145,9 +10155,10 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	// workshop-only. read_skill is in additionalBridgeTools, so the content is
 	// reachable over the bridge even though projection lands in an isolated cwd.
 	if base := agent.GetBaseAgent(); base != nil {
-		if err := guidance.AttachReferenceSurface("workshop", func(skill *llmtypes.Skill) error {
-			return base.ApplyIdentity(ctx, []*llmtypes.Skill{skill})
-		}); err != nil {
+		missingSkills, surfaceErr := missingWorkshopReferenceSurfaceSkills(base.AttachedSkills())
+		if surfaceErr != nil {
+			logger.Warn(fmt.Sprintf("⚠️ %s: failed to build reference surface: %v", stageAgentIdentity, surfaceErr))
+		} else if err := base.ApplyIdentity(ctx, missingSkills); err != nil {
 			logger.Warn(fmt.Sprintf("⚠️ %s: failed to attach reference surface: %v", stageAgentIdentity, err))
 		}
 	}
@@ -10171,6 +10182,23 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 		return "", fmt.Errorf("%s agent failed: %w", name, err)
 	}
 	return result, nil
+}
+
+// missingWorkshopReferenceSurfaceSkills returns the complete workshop
+// reference surface minus any skill identities already attached to the stage.
+// Tool registration and identity assembly are separate concerns, but keeping
+// this boundary idempotent prevents a future caller from making an otherwise
+// valid Pulse stage fail immutable-definition validation because the same
+// skill name was supplied twice.
+func missingWorkshopReferenceSurfaceSkills(existing []*llmtypes.Skill) ([]*llmtypes.Skill, error) {
+	var surface []*llmtypes.Skill
+	if err := guidance.AttachReferenceSurface("workshop", func(skill *llmtypes.Skill) error {
+		surface = append(surface, skill)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return missingBackgroundSkills(existing, surface), nil
 }
 
 func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.Context, pulseRunID, focus string) (result string, resultErr error) {
