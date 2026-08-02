@@ -222,7 +222,40 @@ The Python path stays fully working until the Swift path is verified.
 5. Then: accuracy/latency comparison against the Python path on family audio.
 6. Only then: WhatsApp migration and Python removal.
 
-### Fixed after the first real-microphone test: the preview froze at a pause
+### Outcome: the streaming EOU model was abandoned for the batch model
+
+Two real-microphone tests killed the two-model design, and the second one was
+decisive. Both failures are inherent to `StreamingEouAsrManager`, not tuning:
+
+1. **Frozen at pauses** (below) — it is a turn-taking model, so a mid-sentence
+   pause ended transcription.
+2. **Nothing at all for short speech** — it needs ~2s of audio before emitting
+   its first token, so dictating a single word produced no preview whatsoever.
+
+The fix was to stop using it. The batch model (`UnifiedAsrManager`) runs ~120x
+realtime, so simply re-transcribing everything said so far is cheap enough to
+drive the preview: ~60ms at five seconds of speech. Measured with real-time
+chunk pacing:
+
+| | Preview behaviour |
+|---|---|
+| Single word ("Photosynthesis") | text at 1.12s, correct by 1.60s |
+| Sentence with a 3s mid-sentence pause | builds continuously through the pause |
+
+The preview is now **punctuated and identical to the final text**, so stopping
+no longer rewrites what the user was reading — and one model ships instead of
+two.
+
+The cost profile is the honest tradeoff: it grows with recording length, where
+a true streaming decoder's would not. `previewInterval` scales the gap between
+passes with length to keep each pass a small fraction of the interval.
+
+Note both bad findings came from tests that were unrealistic in the same way —
+first no lead-in silence, then no real-time pacing (feeding a clip as fast as
+the pipe allows runs exactly one preview pass, making a working preview look
+dead). **Voice tests must pace chunks in real time and include a pause.**
+
+### The pause failure, in detail
 
 The first live test looked like "streaming is wrong". Per-chunk logging
 (`SPARKQUILL_VOICE_DEBUG`) made it unambiguous: the transport was perfect —

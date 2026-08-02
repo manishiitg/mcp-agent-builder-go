@@ -5,35 +5,39 @@ import Foundation
 // Persistent native STT worker. Deliberately speaks the SAME shape of protocol
 // as the Python worker it replaces (voice_worker.py): one JSON object per line
 // on stdin, one JSON object per line on stdout, and the literal line
-// "WORKER_READY" on stderr once imports/setup are done. voice_worker.go's
-// handshake, warm-idle timeout, and teardown logic therefore carry over
-// unchanged rather than being rewritten against a new transport.
-//
-// The difference that matters is statefulness: `audio` appends only the NEW
-// samples to a live decoder and reads the running transcript back, instead of
-// re-transcribing the whole recording from the start every time. Cost per
-// refresh is flat in recording length rather than growing with it — the whole
-// point of this helper (see docs/refactor/native_streaming_stt.md).
+// "WORKER_READY" on stderr once setup is done. voice_worker.go's handshake,
+// warm-idle timeout, and teardown logic therefore carry over unchanged.
 //
 // Commands:
 //   {"cmd":"load"}                  -> {"status":"ok"}   (downloads/loads weights)
 //   {"cmd":"start"}                 -> {"status":"ok"}   (begin a new utterance)
-//   {"cmd":"audio","pcm":"<b64>"}   -> {"partial":"..."} (b64 of little-endian Float32, 16kHz mono)
+//   {"cmd":"audio","pcm":"<b64>"}   -> {"partial":"..."} (b64 little-endian Float32, 16kHz mono)
 //   {"cmd":"finish"}                -> {"text":"...","final":true}
 //
-// Audio is base64 rather than a binary side-channel on purpose: it keeps the
-// one-JSON-object-per-line contract debuggable by hand (the existing worker's
-// stated reason for that shape), and at 16kHz mono a 160ms chunk is ~10KB raw
-// — the encoding overhead is not a real cost at this rate.
+// WHY ONE MODEL, NOT TWO
+//
+// This originally ran FluidAudio's StreamingEouAsrManager for the live preview
+// and used the batch model only at the end. Two problems killed that, both
+// found against a real microphone rather than synthetic audio:
+//
+//  1. It is built for voice-assistant TURN-TAKING. After sustained silence it
+//     declares End-of-Utterance and expects a reset, so a mid-sentence pause
+//     stopped transcription dead — observed live as a partial frozen on one
+//     word for 100+ chunks of loud speech.
+//  2. It needs ~2s of audio before emitting anything, so dictating a single
+//     word produced no preview at all, which simply reads as broken.
+//
+// Both are inherent to that model, not tuning. The batch model runs ~120x
+// realtime, so re-transcribing everything said so far costs ~60ms at five
+// seconds of speech — cheap enough to drive the preview directly. That gives
+// text immediately even for one word, punctuated, and IDENTICAL to the final
+// text (no jarring rewrite when the user stops), from one model rather than
+// two.
+//
+// The tradeoff is honest: cost grows with recording length, where a true
+// streaming decoder's would not. previewInterval below keeps that bounded.
 
 let sampleRate = 16000.0
-
-/// Joins closed-out segments with whatever the engine is mid-way through.
-func runningPreview(_ segments: [String], _ partial: String) -> String {
-    (segments + [partial.trimmingCharacters(in: .whitespaces)])
-        .filter { !$0.isEmpty }
-        .joined(separator: " ")
-}
 
 func emit(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object),
@@ -42,71 +46,25 @@ func emit(_ object: [String: Any]) {
     FileHandle.standardOutput.write(Data((json + "\n").utf8))
 }
 
-/// FluidAudio takes AVAudioPCMBuffer; the wire carries raw Float32 samples.
-func makeBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
-    guard
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: 1,
-            interleaved: false
-        ),
-        let buffer = AVAudioPCMBuffer(
-            pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(samples.count)
-        )
-    else { return nil }
-
-    buffer.frameLength = AVAudioFrameCount(samples.count)
-    if let channel = buffer.floatChannelData {
-        samples.withUnsafeBufferPointer { source in
-            guard let base = source.baseAddress else { return }
-            channel[0].update(from: base, count: samples.count)
-        }
-    }
-    return buffer
-}
-
-// Chunk size selects a genuinely DIFFERENT model (parakeetEou160/320/1280),
-// not just a buffering parameter — so transcript quality, not only latency,
-// varies with it. Configurable here so the variants can be compared on the
-// same audio; see docs/refactor/native_streaming_stt.md.
-let chunkSize: StreamingChunkSize = {
-    switch ProcessInfo.processInfo.environment["VOICE_HELPER_CHUNK_MS"] {
-    case "1280": return .ms1280
-    case "320": return .ms320
-    default: return .ms160
-    }
-}()
-
-let engine = StreamingEouAsrManager(chunkSize: chunkSize)
+let engine = UnifiedAsrManager()
 var modelsLoaded = false
 
-// Second stage. The streaming EOU models emit no punctuation at any chunk size
-// (measured — see the refactor doc), which is fine for a live preview that is
-// allowed to revise itself, but not for the message the user actually sends.
-// parakeet-tdt-0.6b-v2 is the same model family as the MLX checkpoint currently
-// in use, which does punctuate, and runs ~120x realtime — so the committed text
-// can be both punctuated and fast.
-let batch = UnifiedAsrManager()
-var batchLoaded = false
-/// Every sample seen since `start`, for the batch pass to re-read on finish.
+/// Every sample since `start` — both the preview and the final read this.
 var utterance: [Float] = []
+var lastPreview = ""
+var lastPreviewAt = Date.distantPast
+var lastPreviewSamples = 0
 
-// Text from utterances the streaming engine has already closed out.
-//
-// StreamingEouAsrManager is built for voice-assistant turn-taking: it detects
-// End-of-Utterance after sustained silence and then expects to be reset for
-// the next turn. Dictation is not turn-taking — someone pausing mid-sentence
-// is still dictating — and left alone the engine stops emitting new tokens
-// entirely after the first pause. Observed live: a partial froze on one word
-// for 100+ chunks of loud speech. So harvest the transcript at each boundary
-// and reset, then report finalized + in-flight text as one running preview.
-var finalizedSegments: [String] = []
+/// How long to wait between preview passes.
+///
+/// A pass costs roughly duration/120, so a fixed interval would eventually let
+/// passes outrun it on a long dictation and back the request queue up. Scaling
+/// the gap with length keeps each pass a small fraction of the interval: ~0.4s
+/// apart for short speech, stretching out as the recording grows.
+func previewInterval(forSamples count: Int) -> TimeInterval {
+    max(0.4, (Double(count) / sampleRate) / 20.0)
+}
 
-// Go waits for this exact line on stderr before sending any request — the
-// signal that setup finished, kept distinct from stdout (which carries only
-// JSON responses, and would be corrupted by anything else landing on it).
 FileHandle.standardError.write(Data("WORKER_READY\n".utf8))
 
 while let line = readLine(strippingNewline: true) {
@@ -124,21 +82,17 @@ while let line = readLine(strippingNewline: true) {
     do {
         switch cmd {
         case "load":
-            // Downloads the CoreML weights on first run, then loads them.
             if !modelsLoaded {
                 try await engine.loadModels()
                 modelsLoaded = true
             }
-            if !batchLoaded {
-                try await batch.loadModels()
-                batchLoaded = true
-            }
             emit(["status": "ok"])
 
         case "start":
-            await engine.reset()
             utterance.removeAll(keepingCapacity: true)
-            finalizedSegments.removeAll(keepingCapacity: true)
+            lastPreview = ""
+            lastPreviewAt = .distantPast
+            lastPreviewSamples = 0
             emit(["status": "ok"])
 
         case "audio":
@@ -148,47 +102,32 @@ while let line = readLine(strippingNewline: true) {
                 emit(["error": "missing or invalid pcm"])
                 continue
             }
-            let samples = raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
-            if !samples.isEmpty, let buffer = makeBuffer(samples) {
-                utterance.append(contentsOf: samples)
-                try await engine.appendAudio(buffer)
-                try await engine.processBufferedAudio()
+            utterance.append(contentsOf: raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) })
+
+            // Re-read the whole utterance, but only when due and only if new
+            // audio actually arrived since the last pass.
+            let due =
+                Date().timeIntervalSince(lastPreviewAt) >= previewInterval(forSamples: utterance.count)
+            if due, utterance.count > lastPreviewSamples, !utterance.isEmpty {
+                lastPreview = try await engine.transcribe(utterance)
+                lastPreviewAt = Date()
+                lastPreviewSamples = utterance.count
             }
-            var partial = await engine.getPartialTranscript()
-            if await engine.eouDetected {
-                // The speaker paused. Bank what this segment produced and give
-                // the engine a clean slate, so speech after the pause is still
-                // transcribed instead of silently ignored.
-                let trimmed = partial.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty { finalizedSegments.append(trimmed) }
-                await engine.reset()
-                partial = ""
-            }
-            emit(["partial": runningPreview(finalizedSegments, partial)])
+            emit(["partial": lastPreview])
 
         case "finish":
-            // Streaming state is flushed regardless (cheap, and it must be
-            // reset for the next utterance), but the batch pass over the whole
-            // utterance is what gets returned as the committed text.
-            let tail = try await engine.finish()
-            let streamed = runningPreview(finalizedSegments, tail)
-            await engine.reset()
-            finalizedSegments.removeAll(keepingCapacity: true)
-            var response: [String: Any] = ["streamed": streamed, "final": true]
-            if batchLoaded, !utterance.isEmpty {
-                response["text"] = try await batch.transcribe(utterance)
-            } else {
-                response["text"] = streamed
-            }
+            // Always a fresh pass: the last preview can predate the final
+            // moments of speech, and this is the text the user actually sends.
+            let text = utterance.isEmpty ? "" : try await engine.transcribe(utterance)
             utterance.removeAll(keepingCapacity: true)
-            emit(response)
+            lastPreview = ""
+            lastPreviewSamples = 0
+            emit(["text": text, "streamed": text, "final": true])
 
         default:
             emit(["error": "unknown cmd \(cmd)"])
         }
     } catch {
-        // Reported to the caller rather than swallowed, matching the Python
-        // worker's error contract.
         emit(["error": "\(type(of: error)): \(error)"])
     }
 }
