@@ -1,7 +1,10 @@
 # Reusable Platform for Dedicated Agent Products
 
 **Status:** Proposed architecture  
-**Scope:** AgentWorks, SparkQuill/family-server, and future dedicated products such as social-media and trading applications
+**Scope:** AgentWorks (workflow engine), SparkQuill/family-server (first vertical),
+and 3-10 further dedicated products, each substantially custom. See
+"Designing for ten products, not two" — the target count changes the bar for
+every abstraction here.
 
 ## Decision
 
@@ -643,6 +646,107 @@ Extracting shared infrastructure from code that is still changing means the
 extraction rebases continuously. Either freeze the interfaces being extracted for
 the duration of each step, or accept that steps 1–4 will be redone. Naming which
 is the point; discovering it mid-migration is not.
+
+## Designing for ten products, not two
+
+**Stated goal (2026-08-02):** AgentWorks remains the workflow engine; SparkQuill
+is the first vertical; the intent is 3-10 more like it. Every one of them will
+be genuinely custom, with substantial unique features of its own — none is a
+skin over a shared product.
+
+That target changes what "success" means here. The Evidence section above
+justifies extraction from a *second* consumer. A tenth consumer is a different
+bar: an abstraction that is merely tolerable is paid for nine more times.
+
+### The metric: unique domain as a share of product size
+
+Products being large is not the problem. Products being large *because they
+rebuilt the plumbing* is. SparkQuill's backend, classified by filename
+(2026-08-02, crude but directional):
+
+```text
+mechanism that belongs to a platform   7,260   64%
+genuinely Family domain                1,633   14%
+main / composition / other             2,403   21%
+total                                 11,296
+```
+
+A rich, fully custom product turns out to contain roughly **1,633 lines of
+genuinely unique backend**. Everything else is WhatsApp, Pulse plumbing,
+secrets, browser, shell, streaming, steering, and voice — rebuilt because there
+was no platform to inherit them from.
+
+So ten custom products should not cost ten times SparkQuill:
+
+```text
+wrong    10 x 17,500 lines  (server + frontend, each product standalone)
+right    platform once  +  10 x (~2,000 domain lines + its own screens)
+```
+
+**This is the number to hold the migration to.** If a new product approaches
+SparkQuill's current size, the platform boundary is in the wrong place. Track
+the domain share per product; it should rise toward 100% of what a product
+team actually writes, not sit at 14%.
+
+Nothing here argues for thinner or more uniform products. It argues that
+"custom" should mean *its own domain*, not *its own copy of the mechanism*.
+
+### The frontend is where this is least true
+
+`LearningApp.tsx` is 4,837 lines of a 6,210-line product frontend — 78% in one
+file. That file is not 4,837 lines of unique teaching behavior: it interleaves
+streaming, the composer, mic capture, tool cards, SSE subscriptions, scroll
+management, and file trees with Family-specific UI. It is the mechanism/meaning
+split violated at file level, which is why unrelated changes keep landing in it.
+
+Step 9's ordering (normalize events, then extract clients, reducers, and hooks
+before visual components) is right, and "keep the SparkQuill UI fully custom" is
+right for SparkQuill. Neither is sufficient at ten products, because it leaves
+each new product writing chat mechanics again. The platform additionally needs a
+composable **application shell** — chat surface, composer, tool-result rendering,
+run status — so a product's UI is hundreds of lines of arrangement and its own
+screens, with personalization living in theme, layout, copy, and domain
+components rather than in a re-implemented chat surface.
+
+### Shipping is platform surface, and this is already proven
+
+The document covers composition (`Deployment modes`) but not distribution. At
+ten products that gap is larger than it looks. Two products today already carry
+duplicated shipping surface:
+
+```text
+.github/workflows/desktop-release.yml      .github/workflows/sparkquill-desktop.yml
+install.sh                                 install-sparkquill.sh
+desktop/                                   desktop-sparkquill/
+tag namespace  v*                          tag namespace  sparkquill-v*
+```
+
+This is not hypothetical risk. On 2026-08-02, publishing the first real
+SparkQuill releases silently broke AgentWorks' updater in production: GitHub's
+`/releases/latest` returns whichever app shipped most recently regardless of
+which app is asking, so AgentWorks began reading a `sparkquill-v*` tag, parsing
+it to a garbage version, concluding "not newer", and never reporting its own
+updates again. `install.sh` had the same fault, where a *fresh install* would
+chase a dmg that does not exist. Both failed silently; neither errored.
+
+Two products produced that with one shared endpoint. Ten products have
+forty-five pairs to collide in. Release pipeline, installer, updater, tag
+discipline, signing, and icon/branding pipeline should be one parameterized
+platform capability with a per-product manifest — not per-product shell scripts
+maintained by copy.
+
+### What this implies for sequencing
+
+The reuse rule ("extract after a second real consumer") and the ten-product goal
+pull in opposite directions, and the tension should be named rather than
+averaged away. Two consumers prove an abstraction is *possible*; they do not
+prove it is *right* for the eight after them. The practical resolution is to
+keep the rule, but choose the second consumer for how differently it stresses
+each seam — and to treat the first two products as still-provisional, budgeting
+one deliberate revision of the boundary after product three rather than
+discovering the need for it at product six. See also "Open contradictions"
+below, which records the sharper problem that the current step order reaches
+step 10 with only *one* consumer.
 
 ## Open contradictions
 
