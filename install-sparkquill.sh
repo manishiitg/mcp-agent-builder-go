@@ -41,8 +41,14 @@ else
   # so filter the release list to that prefix and take the newest (the API
   # returns releases newest-first). No jq dependency: a plain grep/sed on the
   # JSON is enough for one field, and this is a one-off, unauthenticated call.
-  VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases" \
-    | grep -m1 -o '"tag_name": *"sparkquill-v[^"]*"' | sed -E 's/.*"(sparkquill-v[^"]+)"/\1/')"
+  # Captured to a variable and fed to grep via a here-string rather than a
+  # live pipe: grep -m1 exits right after its first match, and a process
+  # still writing to the read end of a pipe when that happens gets SIGPIPE,
+  # which fails the whole pipeline under `set -o pipefail`. A here-string has
+  # no such concurrent writer.
+  RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases")"
+  VERSION="$(grep -m1 -o '"tag_name": *"sparkquill-v[^"]*"' <<<"$RELEASES_JSON" \
+    | sed -E 's/.*"(sparkquill-v[^"]+)"/\1/')"
   [ -n "$VERSION" ] || die "Could not determine the latest version."
 fi
 log "Installing $APP_NAME $VERSION"
