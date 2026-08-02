@@ -12,7 +12,7 @@
 // here rather than abstracted, since two ~200-line files are easier to reason
 // about than one parameterized 2000-line one.
 
-const { app, BrowserWindow, shell, dialog, nativeTheme, Menu } = require('electron')
+const { app, BrowserWindow, shell, dialog, nativeTheme, Menu, Tray, nativeImage } = require('electron')
 const { spawn, spawnSync } = require('child_process')
 const detect = require('detect-port')
 const path = require('path')
@@ -27,6 +27,12 @@ const LOG_MAX_BYTES = 25 * 1024 * 1024
 let serverProcess = null
 let mainWindow = null
 let serverPort = PREFERRED_PORT
+let tray = null
+// Closing the window only HIDES it (see the 'close' handler in createWindow),
+// so the server keeps running and the menu-bar icon stays. This flag is what
+// distinguishes "the parent closed the window" from a real quit, which is the
+// only time the window is allowed to actually close.
+let isQuitting = false
 
 // --- login-shell environment -------------------------------------------------
 // A GUI-launched .app inherits a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
@@ -173,7 +179,46 @@ function createWindow() {
   })
   // A renderer crash should recover, not strand the user on a blank window.
   mainWindow.webContents.on('render-process-gone', () => mainWindow?.webContents.reload())
+  // Closing hides rather than quits: the family-server keeps running, so
+  // Pulse check-ins and WhatsApp stay live, and reopening from the menu bar
+  // is instant (no server start, no health wait). Only a real quit — the tray
+  // item, Cmd-Q, or a system shutdown — is allowed through.
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return
+    e.preventDefault()
+    mainWindow?.hide()
+  })
   mainWindow.on('closed', () => { mainWindow = null })
+}
+
+// Reopen from the menu bar / Dock. The window is usually still alive and just
+// hidden, so this is normally a show(); it only rebuilds when the window was
+// genuinely destroyed.
+function showWindow() {
+  if (mainWindow) {
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  if (serverProcess || process.env.DEV_URL) createWindow()
+}
+
+function createTray() {
+  if (tray) return
+  const iconPath = path.join(resourcesDir(), 'icons', 'icon.png')
+  if (!fs.existsSync(iconPath)) return
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) return
+  // 18px is the usable height of the macOS menu bar — the source icon is
+  // 1024px square, and handing Tray the full-size image gets it scaled badly.
+  tray = new Tray(icon.resize({ width: 18, height: 18 }))
+  tray.setToolTip('SparkQuill')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open SparkQuill', click: showWindow },
+    { type: 'separator' },
+    { label: 'Quit SparkQuill', click: () => { isQuitting = true; app.quit() } },
+  ]))
+  tray.on('click', showWindow)
 }
 
 function buildMenu() {
@@ -227,6 +272,7 @@ app.whenReady().then(async () => {
   // need this (electron-builder bakes the icon into the .app bundle itself).
   if (!app.isPackaged) app.dock?.setIcon(path.join(resourcesDir(), 'icons', 'icon.png'))
   buildMenu()
+  createTray()
   try {
     // DEV_URL points at the Vite dev server and skips spawning entirely, so
     // desktop chrome can be worked on against a hot-reloading frontend.
@@ -244,10 +290,11 @@ app.whenReady().then(async () => {
   }
 })
 
-app.on('activate', () => { if (mainWindow === null && serverProcess) createWindow() })
-// Quitting on last window closed is right here (unlike AgentWorks, which keeps
-// servers alive for scheduled work): SparkQuill's Pulse check-ins are driven by
-// the running server, and a parent closing the window means they're done.
-app.on('window-all-closed', () => app.quit())
-app.on('before-quit', stopServer)
+app.on('activate', showWindow)
+// Deliberately NOT quitting when the last window goes: closing only hides the
+// window (see createWindow), and the running family-server is what drives
+// Pulse check-ins and holds the WhatsApp connection — so it stays up, reachable
+// from the menu bar, until the parent actually quits.
+app.on('window-all-closed', () => {})
+app.on('before-quit', () => { isQuitting = true; stopServer() })
 app.on('will-quit', stopServer)
