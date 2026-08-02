@@ -42,7 +42,7 @@ func ParseGitHubURL(rawURL string) (*GitHubURLInfo, error) {
 	repo := pathParts[1]
 	typePart := pathParts[2]
 	branch := pathParts[3]
-	
+
 	if typePart != "tree" && typePart != "blob" {
 		return nil, fmt.Errorf("invalid GitHub URL format, expected tree or blob, got: %s", typePart)
 	}

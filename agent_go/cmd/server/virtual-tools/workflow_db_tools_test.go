@@ -38,6 +38,20 @@ func TestWorkflowDBMutationExecutorDeniesReadOnlySession(t *testing.T) {
 	}
 }
 
+func TestWorkflowDBMutationExecutorDeniesSessionWithoutExplicitAccess(t *testing.T) {
+	sessionID := "workflow-db-missing-access"
+	defer common.ClearSessionShellConfig(sessionID)
+	common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo/db"}, []string{"Workflow/demo/db"})
+
+	registry := CreateWorkflowDBToolRegistry("http://127.0.0.1:1", "", sessionID)
+	_, err := registry.Executors["mutate_workflow_db"](context.Background(), map[string]any{
+		"statements": []any{map[string]any{"sql": "DELETE FROM facts"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "explicit db_access=read-write is required") {
+		t.Fatalf("missing-access mutation error=%v", err)
+	}
+}
+
 func TestResolveCurrentWorkflowDBPathNeverAcceptsArbitraryDBPath(t *testing.T) {
 	sessionID := "workflow-db-path"
 	defer common.ClearSessionShellConfig(sessionID)

@@ -17,17 +17,17 @@ type SkillFrontmatter struct {
 // Skill represents a complete skill with parsed content
 type Skill struct {
 	Frontmatter SkillFrontmatter `json:"frontmatter"`
-	Content     string           `json:"content"`                // Markdown content after frontmatter
-	FolderName  string           `json:"folder_name"`            // Skill folder name
-	FilePath    string           `json:"file_path"`              // Relative path in workspace
-	SourceURL   string           `json:"source_url,omitempty"`   // Source URL (populated from lock file)
-	LockInfo    *CLILockEntry    `json:"lock_info,omitempty"`    // Version tracking from skills-lock.json
+	Content     string           `json:"content"`              // Markdown content after frontmatter
+	FolderName  string           `json:"folder_name"`          // Skill folder name
+	FilePath    string           `json:"file_path"`            // Relative path in workspace
+	SourceURL   string           `json:"source_url,omitempty"` // Source URL (populated from lock file)
+	LockInfo    *CLILockEntry    `json:"lock_info,omitempty"`  // Version tracking from skills-lock.json
 }
 
 // ImportSkillRequest represents a request to import a skill from GitHub
 type ImportSkillRequest struct {
-	GitHubURL   string `json:"github_url"`              // e.g., https://github.com/user/repo/tree/main/skills/my-skill
-	GitHubToken string `json:"github_token,omitempty"`  // Optional PAT for private repos
+	GitHubURL   string `json:"github_url"`             // e.g., https://github.com/user/repo/tree/main/skills/my-skill
+	GitHubToken string `json:"github_token,omitempty"` // Optional PAT for private repos
 }
 
 // ImportSkillResponse represents the response from importing a skill

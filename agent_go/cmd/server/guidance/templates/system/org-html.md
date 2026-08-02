@@ -10,7 +10,7 @@ logs, markdown replacements, or decorative pages. A CEO should understand the st
 org in the first screen: what is on track, what is drifting, what is unknown, and how
 workflows align with explicit goals.
 
-Also load `get_reference_doc(kind="html-output")` for the generic HTML rules. This doc is
+Also load `read_skill(skill_name="builder-reference", path="references/html-output.md")` for the generic HTML rules. This doc is
 the org-specific structure and visual system.
 
 ### Non-negotiables

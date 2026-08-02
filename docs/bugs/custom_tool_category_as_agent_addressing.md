@@ -87,6 +87,9 @@ ERROR: tool(s) [get_pulse_module_state] not found in category "auto_improvement"
 Available tools in "auto_improvement": [get_reference_doc get_workflow_command_guidance]
 ```
 
+This is a historical log from before reference access moved to mcpagent's
+intrinsic `read_skill`; it is intentionally quoted verbatim.
+
 Six consecutive failures — `get_pulse_module_state`,
 `get_pulse_finding_backlog`, `get_pulse_review_result`, `report_human_inputs`,
 `start_pulse_fix_attempt`, `mark_pulse_module_result` — each naming a tool that

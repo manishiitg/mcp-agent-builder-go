@@ -3,16 +3,50 @@
 Apply and verify bounded fixes from findings that already exist in the
 workflow's SQLite Pulse backlog or are named in the user's focus. This command
 is the single writer; it does not rerun Pulse Gate, launch review agents, or
-write the Dashboard HTML.{{if .Focus}}
+write the Dashboard HTML.
 
-Fix focus: {{.Focus}}.{{end}}
+Work the **whole active backlog across every module**, not a slice of it. Do not
+scope by module, and do not treat a module's Pulse cadence as a reason to skip
+its findings — a finding whose owning module has not been reviewed for a week is
+usually the one most in need of attention, not least.{{if .Focus}}
+
+The user additionally asked you to prioritise: {{.Focus}}. Order that work first;
+it does not narrow the pass.{{end}}
+
+## Size the work before choosing an order
+
+`get_pulse_finding_backlog` returns a flat list, which hides shape. Before
+selecting anything, query the backlog with `query_workflow_db` and decide how to
+work from what you find:
+
+- **How much is there** — counts by status, module, and age.
+- **What clusters** — group by `step_id`. Many findings on one step are usually
+  one defect filed once per field it names; repair the cause once rather than
+  triaging the symptoms separately.
+- **What recurs** — `seen_count >= 3` and still open means earlier passes did not
+  actually fix it. Recurrence outranks recency.
+- **What is already owed to the operator** — `report_human_inputs` rows with
+  status `answered` are decisions the user already made that nothing has acted
+  on. These need no reviewer and no fresh evidence; the answer *is* the evidence.
+  Drain them first.
+- **What is waiting on evidence that does not exist yet** — anything whose
+  `next_check` names a run that has not happened. Leave it, and say so.
+
+Then state the plan before acting: how many findings, how many coherent repair
+bundles, what you are doing first and why. A pass that repairs five symptoms of
+one cause, or that spends its budget on fresh trivia while a six-day-old answered
+decision sits unconsumed, has chosen badly even if every individual fix is
+correct.
+
+Read the schema before writing SQL against it, in a separate call — the lifecycle
+tables do not use the column names an agent would guess.
 
 ## Select work
 
-1. Load `get_reference_doc(kind="pulse-review-fixer")` and
-   `get_reference_doc(kind="fix-verification")`.
-2. Call `get_pulse_module_state`, then `get_pulse_finding_backlog` for the
-   selected owning modules. Treat active concerns, finding lifecycles, attempts,
+1. Load `read_skill(skill_name="builder-reference", path="references/pulse-review-fixer.md")` and
+   `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`.
+2. Call `get_pulse_module_state`, then `get_pulse_finding_backlog` with no module
+   filter so it returns the complete active backlog. Treat active concerns, finding lifecycles, attempts,
    verification history, decisions, and saved review identities as the source of
    truth. The Dashboard is a projection, never the backlog. Select only existing
    findings with precise evidence and a bounded recommended fix. If the user
@@ -27,7 +61,7 @@ Fix focus: {{.Focus}}.{{end}}
    to an unresolved automatic Pulse run, stop rather than taking it over.
 
 Before each mutation, establish a **post-change evidence boundary** per
-`get_reference_doc(kind="fix-verification")`: record the mutation start time,
+`read_skill(skill_name="builder-reference", path="references/fix-verification.md")`: record the mutation start time,
 canonical target identity, pre-change hash or version, and the latest relevant
 pre-change run/artifact ids. Old artifacts are baseline only, never proof.
 
@@ -46,7 +80,9 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   derives the stage identity. This is the same single-writer stage scheduled Pulse uses, so a
   manual run exercises the real path rather than a parallel one, and it runs on
   the maintenance model tier instead of this chat turn's model. Do not apply
-  fixes inline here. Have it semantically consolidate the selected findings into
+  fixes inline here. Record the returned `execution_id`, end the current turn,
+  and resume only from its automatic completion notification. Have it
+  semantically consolidate the selected findings into
   a short priority-ordered list of coherent repair bundles. Group only the same
   root cause with compatible target changes and one verification condition;
   preserve every finding link and keep conflicts or waiting items separate. Do
@@ -78,5 +114,6 @@ Do not call `record_pulse_worklist` or final-command status tools. Do not update
 `builder/improve.html` or `builder/card.health.html`; the next Dashboard render
 projects SQLite review, finding, fix, verification, decision, and module state.
 
-Finish with changes applied, verification performed, findings not changed and
-why, approvals still needed, and the next real-run evidence required.
+Only after the Fixer's completion notification, finish with changes applied,
+verification performed, findings not changed and why, approvals still needed,
+and the next real-run evidence required.

@@ -203,42 +203,30 @@ func (api *StreamingAPI) handleSummarizeConversation(w http.ResponseWriter, r *h
 
 	// No observer ID needed - events are stored by sessionID
 
-	// Build agent options
-	agentOptions := []mcpagent.AgentOption{
-		mcpagent.WithServerName(mcpclient.NoServers), // No MCP servers needed for summarization
-		mcpagent.WithLogger(api.logger),
+	runtime := mcpagent.RuntimeConfig{
+		Model: summarizationLLM, MCPConfigPath: api.mcpConfigPath,
+		Context: mcpagent.ContextRuntimeConfig{
+			SummarizationEnabled:      enableContextSummarization,
+			SummarizeOnTokenThreshold: summarizeOnTokenThreshold,
+			TokenThresholdPercent:     tokenThresholdPercent,
+			SummarizeOnFixedThreshold: summarizeOnFixedTokenThreshold,
+			FixedTokenThreshold:       fixedTokenThreshold,
+			SummaryKeepLastMessages:   keepLastMessages,
+		},
+		Observability: mcpagent.ObservabilityRuntimeConfig{Logger: api.logger},
 	}
-
-	// Add context summarization configuration
-	if enableContextSummarization {
-		agentOptions = append(agentOptions, mcpagent.WithContextSummarization(true))
-		if summarizeOnTokenThreshold {
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnTokenThreshold(true, tokenThresholdPercent))
-		}
-		if summarizeOnFixedTokenThreshold && fixedTokenThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnFixedTokenThreshold(true, fixedTokenThreshold))
-		}
-		if keepLastMessages > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummaryKeepLastMessages(keepLastMessages))
-		}
+	if api.eventStore != nil {
+		runtime.Observability.Observers = []mcpagent.AgentEventListener{events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)}
 	}
-
-	// Create minimal agent with NO_SERVERS to avoid connecting to MCP servers
-	tempAgent, err := mcpagent.NewAgent(
-		ctx,
-		summarizationLLM,
-		api.mcpConfigPath,
-		agentOptions...,
-	)
+	tempAgent, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
+		Tools: mcpagent.ToolSet{MCP: []mcpagent.MCPToolSource{{Name: mcpclient.NoServers}}},
+	}, runtime)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create agent for summarization: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Attach event observer to capture summarization events
 	if api.eventStore != nil {
-		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
-		mcpagent.ObserveAgent(tempAgent, eventObserver)
 		log.Printf("[SUMMARIZATION] Attached event observer to capture summarization events for session %s", sessionID)
 	} else {
 		log.Printf("[SUMMARIZATION] Warning: eventStore is nil, events will not be captured")

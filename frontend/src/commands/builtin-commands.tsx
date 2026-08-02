@@ -258,7 +258,7 @@ export const builtinCommands: CommandDefinition[] = [
     requiredWorkshopMode: 'workshop',
     source: 'builtin',
     execute: (ctx) => {
-      const instruction = `Help me set up or run backup for this workflow. Call get_reference_doc(kind="backup-strategy"), then read workflow.json.backup and backup/status.json.
+      const instruction = `Help me set up or run backup for this workflow. Call read_skill(skill_name="builder-reference", path="references/backup-strategy.md"), then read workflow.json.backup and backup/status.json.
 - If backup is NOT configured yet: recommend a private GitHub repository or another off-device destination first. Ask for the account/org, private visibility, and repository/bucket name before creating or connecting it. A local Git checkpoint is acceptable temporarily, but label it local-only and not durable; do not report it as a healthy backup.
 - If backup IS configured: run a backup now and report the result (destinations, commit/ref).
 - If I asked to restore: restore the tracked files from the latest backup (or a commit I name) instead.
@@ -275,7 +275,7 @@ Always write backup/status.json; never write operational status into workflow.js
     requiredWorkshopMode: 'workshop',
     source: 'builtin',
     execute: (ctx) => {
-      const instruction = `Help me set up or run publish for this workflow. Call get_reference_doc(kind="publish-strategy") and follow it exactly, then read workflow.json.publish and publish/status.json.
+      const instruction = `Help me set up or run publish for this workflow. Call read_skill(skill_name="builder-reference", path="references/publish-strategy.md") and follow it exactly, then read workflow.json.publish and publish/status.json.
 - If publish is NOT configured: set it up — ask me which static host (Netlify / Vercel / Cloudflare Pages / Cloudflare R2 / S3 / any). As soon as I pick one, AUTO-CHECK its CLI (command -v) and INSTALL it for me if missing (announce it, e.g. "Installing the Vercel CLI…", then run npm i -g <cli>); do NOT ask me for an access token/API key — the path is install CLI → I run <cli> login once → you deploy. Default visibility is PRIVATE via a simple password gate (StatiCrypt with $SECRET_PUBLISH_PASSWORD and the Runloop dark gate styling from the reference doc); ask me to set a PUBLISH_PASSWORD secret, or confirm if I want it fully public instead. Then write workflow.json.publish and publish/status.json with state "configured_not_verified". Do not publish yet.
 - If publish IS configured: publish now. Publish BOTH artifacts — bake the report dashboard to static HTML AND publish the Pulse log (builder/improve.html); deploy dashboard.html + pulse.html + the nav index.html wrapper per the reference doc. If publish.targets only lists one, update it to include both first. Force every page to **DARK only** (matching the app) — set BOTH class="dark" and data-theme="dark" on the html element per the reference doc; no toggle, do NOT use prefers-color-scheme. Stage the files in a /tmp dir; if visibility is private, encrypt them with StatiCrypt ($SECRET_PUBLISH_PASSWORD) and apply the Runloop dark password-gate styling before deploying; run the deploy CLI from /tmp. Then give me the URL and confirm visibility + what's public.
 CRITICAL — after deploying, come BACK to the workflow folder and persist state there (never in the /tmp staging dir): set workflow.json.publish.enabled=true with the destination + top-level url, AND write publish/status.json with state "published", the url, and last_source_hash (= the current_source_hash the backend reports; leave empty if unknown). A deploy that doesn't write these shows a grey "not configured" dot even though the site is live.
@@ -330,7 +330,7 @@ Always write publish/status.json.`
       const focus = ctx.beforeSlash.trim()
       const instruction = `Set up org goals and Daily Org Pulse.
 
-Call get_reference_doc(kind="org-goals") and follow it. Before writing or changing goals HTML, also call get_reference_doc(kind="backup-strategy") and back up org-level artifacts using pulse/backup.json and pulse/backup/status.json, then call get_reference_doc(kind="org-html") and use its Goals skeleton.
+Call read_skill(skill_name="builder-reference", path="references/org-goals.md") and follow it. Before writing or changing goals HTML, also call read_skill(skill_name="builder-reference", path="references/backup-strategy.md") and back up org-level artifacts using pulse/backup.json and pulse/backup/status.json, then call read_skill(skill_name="builder-reference", path="references/org-html.md") and use its Goals skeleton.
 Read pulse/goals.html if it exists.
 Review existing workflows and employees, then classify workflows as aligned, supporting/maintenance, or unaligned.
 
@@ -370,12 +370,12 @@ Also ask whether I want to set up org-level backup and publish:
       const focus = ctx.beforeSlash.trim()
       const instruction = `Set up Daily Org Pulse.
 
-Call get_reference_doc(kind="org-pulse") and follow it for what Daily Org Pulse should do. Before writing or changing pulse/org-pulse.html, also call get_reference_doc(kind="backup-strategy") and confirm org backup status in pulse/backup.json and pulse/backup/status.json, then call get_reference_doc(kind="org-html") and use its Org Pulse skeleton.
+Call read_skill(skill_name="builder-reference", path="references/org-pulse.md") and follow it for what Daily Org Pulse should do. Before writing or changing pulse/org-pulse.html, also call read_skill(skill_name="builder-reference", path="references/backup-strategy.md") and confirm org backup status in pulse/backup.json and pulse/backup/status.json, then call read_skill(skill_name="builder-reference", path="references/org-html.md") and use its Org Pulse skeleton.
 Read pulse/goals.html if it exists, and read pulse/org-pulse.html if it exists.
 Read pulse/backup.json, pulse/backup/status.json, pulse/publish.json, and pulse/publish/status.json if they exist.
 First call list_multiagent_schedules and find the existing Org Pulse schedule — the built-in builtin-org-pulse AND any other schedule that is really an Org Pulse (its name/description/query mentions "Org Pulse"). Report whether it is enabled, its cron, timezone, and last/next run state.
 To enable or configure Daily Org Pulse, ALWAYS call update_multiagent_schedule on builtin-org-pulse (this owns/materializes the built-in). NEVER call create_multiagent_schedule for Org Pulse — a freshly-minted UUID schedule becomes a duplicate that the Org Pulse pill and the scheduler can disagree about. If a duplicate non-builtin Org Pulse schedule already exists, consolidate: enable builtin-org-pulse and disable (or delete) the duplicate so exactly one Org Pulse schedule remains.
-Before editing any multi-agent schedule file directly, call get_reference_doc(kind="schedule-management").
+Before editing any multi-agent schedule file directly, call read_skill(skill_name="builder-reference", path="references/schedule-management.md").
 
 If pulse/goals.html is missing or has no measurable goals, explain that Daily Org Pulse can only measure org progress after goals exist. Ask whether I want to run /org-setup first or enable a workflow-health-only pulse temporarily. Do not create goals from this command unless I explicitly ask.
 
@@ -405,7 +405,7 @@ Only enable or change the built-in Org Pulse schedule after I confirm the cadenc
       const focus = ctx.beforeSlash.trim()
       const instruction = `Help me set up or run org-level backup.
 
-Call get_reference_doc(kind="backup-strategy") and follow its org-level workflow-style contract. Read pulse/backup.json and pulse/backup/status.json if they exist.
+Call read_skill(skill_name="builder-reference", path="references/backup-strategy.md") and follow its org-level workflow-style contract. Read pulse/backup.json and pulse/backup/status.json if they exist.
 
 Scope:
 - pulse/goals.html
@@ -436,7 +436,7 @@ Always write pulse/backup/status.json. Never write org backup state into any wor
       const focus = ctx.beforeSlash.trim()
       const instruction = `Help me set up or run org-level publish.
 
-Call get_reference_doc(kind="publish-strategy") and follow its org-level workflow-style contract. Read pulse/publish.json and pulse/publish/status.json if they exist.
+Call read_skill(skill_name="builder-reference", path="references/publish-strategy.md") and follow its org-level workflow-style contract. Read pulse/publish.json and pulse/publish/status.json if they exist.
 
 Publish scope:
 - pulse/goals.html as goals.html

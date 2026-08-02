@@ -100,77 +100,37 @@ This test:
 		}
 		defer os.Remove(tempConfigFile)
 
-		// Create minimal agent with empty MCP config
-		agent, err := mcpagent.NewAgent(
-			ctx,
-			llmModel,
-			tempConfigFile, // Minimal config path
-			mcpagent.WithMaxTurns(15),
-			mcpagent.WithLogger(logger),
-		)
+		workspaceTools := virtualtools.CreateWorkspaceAdvancedTools()
+		directExecutors := createDirectWorkspaceExecutors(tempDir)
+		requiredTools := map[string]bool{"read_workspace_file": true, "diff_patch_workspace_file": true}
+		directTools := make([]mcpagent.ToolDefinition, 0, len(requiredTools))
+		for _, tool := range workspaceTools {
+			if tool.Function == nil || !requiredTools[tool.Function.Name] {
+				continue
+			}
+			executor, ok := directExecutors[tool.Function.Name]
+			if !ok {
+				continue
+			}
+			var params map[string]interface{}
+			encoded, err := json.Marshal(tool.Function.Parameters)
+			if err != nil {
+				return fmt.Errorf("encode parameters for %s: %w", tool.Function.Name, err)
+			}
+			if err := json.Unmarshal(encoded, &params); err != nil {
+				return fmt.Errorf("decode parameters for %s: %w", tool.Function.Name, err)
+			}
+			directTools = append(directTools, mcpagent.ToolDefinition{
+				Name: tool.Function.Name, Description: tool.Function.Description,
+				InputSchema: params, Execute: executor, DisplayGroup: "workspace_tools",
+			})
+		}
+		agent, err := createTestingAgent(ctx, llmModel, tempConfigFile, "", 15, logger, directTools)
 		if err != nil {
 			return fmt.Errorf("failed to create agent: %w", err)
 		}
 		defer agent.Close()
-
-		// Register only the tools needed for diff testing
-		workspaceTools := virtualtools.CreateWorkspaceAdvancedTools()
-		directExecutors := createDirectWorkspaceExecutors(tempDir)
-		workspaceCategory := "workspace_tools"
-
-		// Only register read_workspace_file and diff_patch_workspace_file
-		requiredTools := []string{"read_workspace_file", "diff_patch_workspace_file"}
-
-		logger.Info("Registering diff testing tools with direct file access...")
-
-		registeredCount := 0
-		for _, tool := range workspaceTools {
-			if tool.Function == nil {
-				continue
-			}
-			toolName := tool.Function.Name
-
-			// Only register required tools
-			isRequired := false
-			for _, required := range requiredTools {
-				if toolName == required {
-					isRequired = true
-					break
-				}
-			}
-			if !isRequired {
-				continue
-			}
-
-			if executor, exists := directExecutors[toolName]; exists {
-				// Convert Parameters to map[string]interface{}
-				var params map[string]interface{}
-				if tool.Function.Parameters != nil {
-					paramsBytes, err := json.Marshal(tool.Function.Parameters)
-					if err == nil {
-						json.Unmarshal(paramsBytes, &params)
-					}
-				}
-				if params == nil {
-					params = make(map[string]interface{})
-				}
-
-				// Register the tool with direct executor
-				if err := mcpagent.AddDefinitionTool(agent,
-					toolName,
-					tool.Function.Description,
-					params,
-					executor,
-					workspaceCategory,
-				); err != nil {
-					logger.Error(fmt.Sprintf("Failed to register workspace tool %s: %v", toolName, err), nil)
-					return fmt.Errorf("failed to register workspace tool %s: %w", toolName, err)
-				}
-				registeredCount++
-			}
-		}
-
-		logger.Info(fmt.Sprintf("✅ Registered %d diff testing tools", registeredCount))
+		logger.Info(fmt.Sprintf("✅ Registered %d diff testing tools", len(directTools)))
 
 		// ---------------------------------------------------------
 		// PHASE 2A: Comprehensive JSON Test
@@ -279,7 +239,7 @@ IMPORTANT: When using diff_patch_workspace_file:
 	logger.Info(fmt.Sprintf("Prompt: %s", testPrompt))
 
 	// Execute the agent
-	response, err := mcpagent.RunText(ctx, agent, testPrompt)
+	response, err := runAgentText(ctx, agent, testPrompt)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Agent execution failed: %v", err), nil)
 		return fmt.Errorf("agent execution failed: %w", err)
@@ -428,7 +388,7 @@ func runMarkdownTest(ctx context.Context, agent *mcpagent.Agent, tempDir string,
 	logger.Info(fmt.Sprintf("Prompt: %s", testPrompt))
 
 	// Execute the agent
-	response, err := mcpagent.RunText(ctx, agent, testPrompt)
+	response, err := runAgentText(ctx, agent, testPrompt)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Agent execution failed: %v", err), nil)
 		return fmt.Errorf("agent execution failed: %w", err)

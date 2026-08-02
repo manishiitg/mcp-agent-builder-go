@@ -37,7 +37,8 @@ type LLMAgentWrapper struct {
 	logger     loggerv2.Logger
 	runtime    mcpagent.RuntimeConfig
 	finalized  bool
-	assembly   *mcpagent.DefinitionAssembly
+	definition mcpagent.AgentDefinition
+	observers  []mcpagent.AgentEventListener
 	toolPolicy mcpagent.ToolPolicy
 
 	// In-memory conversation history for multi-turn state
@@ -66,6 +67,70 @@ func configuredServerNames(raw string) []string {
 		}
 	}
 	return result
+}
+
+func runtimeBool(value bool) *bool { return &value }
+
+func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, tracer observability.Tracer, traceID observability.TraceID, logger loggerv2.Logger) mcpagent.RuntimeConfig {
+	llmConfig := mcpagent.AgentLLMConfiguration{
+		Primary:   mcpagent.LLMModel{Provider: string(config.Provider), ModelID: config.ModelID, Options: config.Options},
+		Fallbacks: make([]mcpagent.LLMModel, 0, len(config.Fallbacks)),
+	}
+	for _, fallback := range config.Fallbacks {
+		provider := strings.TrimSpace(fallback.Provider)
+		if provider == "" {
+			provider = string(config.Provider)
+		}
+		if modelID := strings.TrimSpace(fallback.ModelID); modelID != "" {
+			llmConfig.Fallbacks = append(llmConfig.Fallbacks, mcpagent.LLMModel{Provider: provider, ModelID: modelID, Options: fallback.Options})
+		}
+	}
+
+	runtime := mcpagent.RuntimeConfig{
+		Model: model, MCPConfigPath: config.ConfigPath,
+		Generation: mcpagent.GenerationRuntimeConfig{
+			Provider: config.Provider, LLM: llmConfig, Temperature: config.Temperature,
+			ToolChoice: config.ToolChoice, MaxTurns: config.MaxTurns, APIKeys: config.APIKeys,
+		},
+		Tools: mcpagent.ToolRuntimeConfig{
+			SelectedTools: config.SelectedTools, SelectedServers: configuredServerNames(config.ServerName),
+			CodeExecution: config.UseCodeExecutionMode, ParallelExecution: config.EnableParallelToolExecution,
+			Timeout: config.ToolTimeout,
+		},
+		Context: mcpagent.ContextRuntimeConfig{
+			LargeOutputThreshold:      config.LargeOutputThreshold,
+			SummarizationEnabled:      config.EnableContextSummarization,
+			SummarizeOnTokenThreshold: config.SummarizeOnTokenThreshold,
+			TokenThresholdPercent:     config.TokenThresholdPercent,
+			SummarizeOnFixedThreshold: config.SummarizeOnFixedTokenThreshold,
+			FixedTokenThreshold:       config.FixedTokenThreshold,
+			SummaryKeepLastMessages:   config.SummaryKeepLastMessages,
+			EditingEnabled:            config.EnableContextEditing,
+			EditingThreshold:          config.ContextEditingThreshold,
+			EditingTurnThreshold:      config.ContextEditingTurnThreshold,
+		},
+		Coding: mcpagent.CodingRuntimeConfig{
+			ClaudeCodeTransport:  config.ClaudeCodeTransport,
+			PersistentClaudeCode: config.ClaudeCodePersistentInteractiveSession,
+			PersistentCodex:      config.CodexPersistentInteractiveSession,
+			PersistentCursor:     config.CursorPersistentInteractiveSession,
+			PersistentPi:         config.PiPersistentInteractiveSession,
+			CursorBridgeTools:    config.CursorBridgeToolsMode,
+			CLISecurityPolicy:    config.CLISecurityPolicy,
+		},
+		MCP: mcpagent.MCPRuntimeConfig{
+			SessionID: config.SessionID, UserID: config.UserID, RuntimeOverrides: config.RuntimeOverrides,
+		},
+		Workspace: mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: config.CodingAgentWorkingDir},
+		Observability: mcpagent.ObservabilityRuntimeConfig{
+			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
+			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(false),
+		},
+	}
+	if config.ForceStructuredCodingAgent {
+		runtime.Coding.Transport = mcpllm.CodingAgentTransportStructured
+	}
+	return runtime
 }
 
 func sanitizeHistoryForPlainTextProvider(messages []llmtypes.MessageContent) []llmtypes.MessageContent {
@@ -306,17 +371,20 @@ type agentMetricsImpl struct {
 	LastError       error
 }
 
-// NewLLMAgentWrapper creates a new LLM agent wrapper
+// NewLLMAgentWrapper creates a new LLM agent wrapper.
 func NewLLMAgentWrapper(ctx context.Context, config LLMAgentConfig, tracer observability.Tracer, logger loggerv2.Logger) (*LLMAgentWrapper, error) {
-	// If no tracer is provided, automatically get one based on environment configuration
 	if tracer == nil {
 		tracer = observability.GetTracer("noop")
 	}
 	return NewLLMAgentWrapperWithTrace(ctx, config, tracer, "", logger)
 }
 
-// NewLLMAgentWrapperWithTrace creates a new LLM agent wrapper with hierarchical tracing support
+// NewLLMAgentWrapperWithTrace creates a wrapper from one immutable definition
+// and one grouped runtime configuration.
 func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tracer observability.Tracer, mainTraceID observability.TraceID, logger loggerv2.Logger) (*LLMAgentWrapper, error) {
+	if logger == nil {
+		logger = loggerv2.NewDefault()
+	}
 	logger.Info(fmt.Sprintf("NewLLMAgentWrapper received config: %+v", config))
 	if providerUsesNativeContextManagement(config.Provider) {
 		if config.EnableContextSummarization {
@@ -328,338 +396,62 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 			config.EnableContextEditing = false
 		}
 	}
-	logger.Info(fmt.Sprintf("Creating agent with config path: %s", config.ConfigPath))
 	if config.Name == "" {
 		config.Name = "mcp-agent"
 	}
-
-	// Set default tool timeout if not specified
 	if config.ToolTimeout == 0 {
 		config.ToolTimeout = 5 * time.Minute
-		logger.Info(fmt.Sprintf("Setting default tool timeout to %v", config.ToolTimeout))
 	}
 
-	// Create trace ID for agent initialization
-	var traceID observability.TraceID
-	if mainTraceID != "" {
-		// Use the main trace ID for hierarchical tracing
-		traceID = mainTraceID
-	} else {
-		// Create a new trace ID for this agent
+	traceID := mainTraceID
+	if traceID == "" {
 		traceID = observability.TraceID(fmt.Sprintf("agent-init-%s-%d", config.Name, time.Now().UnixNano()))
 	}
-
-	// Initialize the LLM externally (using Bedrock as default)
-	logger.Info(fmt.Sprintf("NewLLMAgentWrapper initializing LLM with provider: %s, model_id: %s", config.Provider, config.ModelID))
-	llm, err := initializeLLMWithConfig(config, logger, traceID)
+	model, err := initializeLLMWithConfig(config, logger, traceID)
 	if err != nil {
-		// Emit error event instead of ending trace
 		if tracer != nil && mainTraceID == "" {
-			// Create error event for standalone agent
-			errorEvent := &events.AgentErrorEvent{
-				BaseEventData: events.BaseEventData{
-					TraceID: string(traceID),
-				},
-				Error:    "failed to initialize LLM: " + err.Error(),
-				Turn:     0,
-				Context:  "agent_initialization",
-				Duration: 0,
-			}
-			// Convert to AgentEvent and emit
-			agentEvent := events.NewAgentEvent(errorEvent)
-			agentEvent.TraceID = string(traceID)
-			tracer.EmitEvent(agentEvent)
+			event := events.NewAgentEvent(&events.AgentErrorEvent{
+				BaseEventData: events.BaseEventData{TraceID: string(traceID)},
+				Error:         "failed to initialize LLM: " + err.Error(), Context: "agent_initialization",
+			})
+			event.TraceID = string(traceID)
+			tracer.EmitEvent(event)
 		}
 		return nil, fmt.Errorf("failed to initialize LLM: %w", err)
 	}
 
-	// Initialize the underlying MCP agent with the new API
-	var agent *mcpagent.Agent
-
-	// Build agent options.
-	agentOptions := []mcpagent.AgentOption{
-		mcpagent.WithTemperature(config.Temperature),
-		mcpagent.WithMaxTurns(config.MaxTurns),
-		mcpagent.WithToolTimeout(config.ToolTimeout),
+	definition := mcpagent.AgentDefinition{}
+	for _, name := range configuredServerNames(config.ServerName) {
+		definition.Tools.MCP = append(definition.Tools.MCP, mcpagent.MCPToolSource{Name: name})
 	}
-	// Only set tool_choice when non-empty — Azure/OpenAI reject tool_choice when no tools are present
-	if config.ToolChoice != "" {
-		agentOptions = append(agentOptions, mcpagent.WithToolChoice(config.ToolChoice))
-	}
-
-	// Use unified LLM config (primary + fallbacks) as the single source of truth.
-	mcpLLMConfig := mcpagent.AgentLLMConfiguration{
-		Primary: mcpagent.LLMModel{
-			Provider: string(config.Provider),
-			ModelID:  config.ModelID,
-			Options:  config.Options,
-		},
-		Fallbacks: make([]mcpagent.LLMModel, 0, len(config.Fallbacks)),
-	}
-	for _, fb := range config.Fallbacks {
-		fallbackProvider := strings.TrimSpace(fb.Provider)
-		if fallbackProvider == "" {
-			fallbackProvider = string(config.Provider)
-		}
-		fallbackModelID := strings.TrimSpace(fb.ModelID)
-		if fallbackModelID == "" {
-			continue
-		}
-		mcpLLMConfig.Fallbacks = append(mcpLLMConfig.Fallbacks, mcpagent.LLMModel{
-			Provider: fallbackProvider,
-			ModelID:  fallbackModelID,
-			Options:  fb.Options,
-		})
-	}
-	agentOptions = append(agentOptions, mcpagent.WithLLMConfig(mcpLLMConfig))
-	logger.Info(fmt.Sprintf("🔄 LLMConfig configured - Primary: %s/%s, Fallbacks: %d",
-		mcpLLMConfig.Primary.Provider, mcpLLMConfig.Primary.ModelID, len(mcpLLMConfig.Fallbacks)))
-
-	// Add selected servers for tool filtering
-	// Parse ServerName (comma-separated string) into array for WithSelectedServers
-	if config.ServerName != "" && config.ServerName != "all" {
-		// Split comma-separated server names and trim whitespace
-		serverNames := strings.Split(config.ServerName, ",")
-		trimmedServers := make([]string, 0, len(serverNames))
-		for _, name := range serverNames {
-			trimmed := strings.TrimSpace(name)
-			if trimmed != "" {
-				trimmedServers = append(trimmedServers, trimmed)
-			}
-		}
-		if len(trimmedServers) > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSelectedServers(trimmedServers))
-			logger.Info(fmt.Sprintf("🔧 Selected servers configured: %v", trimmedServers))
-		}
-	}
-
-	// Add selected tools if provided
-	if len(config.SelectedTools) > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithSelectedTools(config.SelectedTools))
-		logger.Info(fmt.Sprintf("🔧 Selected tools configured: %d tools", len(config.SelectedTools)))
-	}
-
-	// Add code execution mode if enabled
-	if config.UseCodeExecutionMode {
-		agentOptions = append(agentOptions, mcpagent.WithCodeExecutionMode(true))
-		logger.Info("🔧 Code execution mode enabled - MCP tools will be accessed through generated scripts and HTTP APIs")
-	}
-	if config.ClaudeCodePersistentInteractiveSession {
-		agentOptions = append(agentOptions, mcpagent.WithClaudeCodePersistentInteractiveSession(true))
-		logger.Info("🔗 Claude Code persistent interactive tmux session enabled")
-	}
-	if config.ClaudeCodeTransport != "" {
-		agentOptions = append(agentOptions, mcpagent.WithClaudeCodeTransport(config.ClaudeCodeTransport))
-		logger.Info(fmt.Sprintf("🔗 Claude Code transport override: %s", config.ClaudeCodeTransport))
-	}
-	if strings.TrimSpace(config.CodingAgentWorkingDir) != "" {
-		agentOptions = append(agentOptions, mcpagent.WithCodingAgentWorkingDir(config.CodingAgentWorkingDir))
-		logger.Info(fmt.Sprintf("🔗 Coding agent working directory: %s", config.CodingAgentWorkingDir))
-	}
-	if config.CLISecurityPolicy != nil {
-		agentOptions = append(agentOptions, mcpagent.WithCLISecurityPolicy(*config.CLISecurityPolicy))
-		logger.Info(fmt.Sprintf("🔒 Coding agent CLI security mode: %s", config.CLISecurityPolicy.Mode))
-	}
-	if config.CodexPersistentInteractiveSession {
-		agentOptions = append(agentOptions, mcpagent.WithCodexPersistentInteractiveSession(true))
-		logger.Info("🔗 Codex CLI persistent interactive tmux session enabled")
-	}
-	if config.CursorPersistentInteractiveSession {
-		agentOptions = append(agentOptions, mcpagent.WithCursorPersistentInteractiveSession(true))
-		logger.Info("🔗 Cursor CLI persistent interactive tmux session enabled")
-	}
-	if config.PiPersistentInteractiveSession {
-		agentOptions = append(agentOptions, mcpagent.WithPiPersistentInteractiveSession(true))
-		logger.Info("🔗 Pi CLI persistent interactive tmux session enabled")
-	}
-	if config.CursorBridgeToolsMode {
-		agentOptions = append(agentOptions, mcpagent.WithCursorBridgeToolsMode(true))
-		logger.Info("🔗 Cursor CLI bridge tools mode enabled (--mode ask blocks built-in Write/Shell)")
-	}
-	if config.ForceStructuredCodingAgent {
-		agentOptions = append(agentOptions, mcpagent.WithCodingAgentTransport(mcpllm.CodingAgentTransportStructured))
-		logger.Info("🔧 Coding-agent CLI: structured (JSON / --print) transport selected for this agent")
-	}
-	// Add session ID for stateful MCP connection reuse.
-	if config.SessionID != "" {
-		agentOptions = append(agentOptions, mcpagent.WithSessionID(config.SessionID))
-		logger.Info(fmt.Sprintf("🔗 MCP session ID configured for connection reuse: %s", config.SessionID))
-	}
-
-	// Add user ID for per-user OAuth token isolation
-	if config.UserID != "" {
-		agentOptions = append(agentOptions, mcpagent.WithUserID(config.UserID))
-		logger.Info(fmt.Sprintf("👤 User ID configured for per-user OAuth isolation: %s", config.UserID))
-	}
-
-	// Pass runtime overrides to mcpagent so it can modify MCP server config at startup.
-	// Apply any runtime overrides required by shared workspace MCP servers.
-	if len(config.RuntimeOverrides) > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithRuntimeOverrides(config.RuntimeOverrides))
-		logger.Info(fmt.Sprintf("[BROWSER_UPLOAD] Runtime overrides configured for %d servers", len(config.RuntimeOverrides)))
-	}
-
-	// Add parallel tool execution if enabled
-	if config.EnableParallelToolExecution {
-		agentOptions = append(agentOptions, mcpagent.WithParallelToolExecution(true))
-		logger.Info("⚡ Parallel tool execution enabled - multiple tool calls will run concurrently")
-	}
-
-	// Add context summarization options if enabled
-	if config.EnableContextSummarization {
-		agentOptions = append(agentOptions, mcpagent.WithContextSummarization(true))
-		if config.SummarizeOnTokenThreshold {
-			thresholdPercent := config.TokenThresholdPercent
-			if thresholdPercent <= 0 || thresholdPercent > 1.0 {
-				thresholdPercent = 0.8 // Default to 80%
-			}
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnTokenThreshold(true, thresholdPercent))
-		}
-		if config.SummarizeOnFixedTokenThreshold && config.FixedTokenThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnFixedTokenThreshold(true, config.FixedTokenThreshold))
-		}
-		if config.SummaryKeepLastMessages > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummaryKeepLastMessages(config.SummaryKeepLastMessages))
-		}
-		logger.Info(fmt.Sprintf("📝 Context summarization enabled - Token threshold: %v (%.0f%%), Fixed threshold: %v (%d tokens), Keep last messages: %d",
-			config.SummarizeOnTokenThreshold, config.TokenThresholdPercent*100, config.SummarizeOnFixedTokenThreshold, config.FixedTokenThreshold, config.SummaryKeepLastMessages))
-	}
-
-	// Add context editing options if enabled
-	if config.EnableContextEditing {
-		agentOptions = append(agentOptions, mcpagent.WithContextEditing(true))
-		if config.ContextEditingThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithContextEditingThreshold(config.ContextEditingThreshold))
-		}
-		if config.ContextEditingTurnThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithContextEditingTurnThreshold(config.ContextEditingTurnThreshold))
-		}
-		logger.Info(fmt.Sprintf("✂️ Context editing enabled - Token threshold: %d, Turn threshold: %d",
-			config.ContextEditingThreshold, config.ContextEditingTurnThreshold))
-	}
-
-	// Add large output threshold for context offloading if specified
-	if config.LargeOutputThreshold > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithLargeOutputThreshold(config.LargeOutputThreshold))
-		logger.Info(fmt.Sprintf("📦 Large output threshold set to %d tokens", config.LargeOutputThreshold))
-	}
-
-	// Use logger directly (already loggerv2.Logger)
-	var v2Logger loggerv2.Logger
-	if logger != nil {
-		v2Logger = logger
-	} else {
-		v2Logger = loggerv2.NewDefault()
-	}
-
-	// Build options from parameters
-	options := agentOptions
-	if config.ServerName != "" && config.ServerName != "all" {
-		options = append(options, mcpagent.WithServerName(config.ServerName))
-	}
-	if tracer != nil {
-		options = append(options, mcpagent.WithTracer(tracer))
-	}
-	if traceID != "" {
-		options = append(options, mcpagent.WithTraceID(traceID))
-	}
-	if v2Logger != nil {
-		options = append(options, mcpagent.WithLogger(v2Logger))
-	}
-
-	// Keep the provider stream channel enabled for CLI tool observability/history
-	// capture and terminal snapshots, but do not emit chat text generation events
-	// into the app event store.
-	options = append(options,
-		mcpagent.WithStreaming(true),
-		mcpagent.WithGenerationStreamingEvents(false),
-	)
-
-	if config.AgentMode == mcpagent.SimpleAgent {
-		// Create Simple agent
-		// modelID is automatically extracted from llm
-		agent, err = mcpagent.NewSimpleAgent(
-			ctx,
-			llm,
-			config.ConfigPath,
-			options...,
-		)
-	} else {
-		// Create Simple agent (default)
-		// modelID is automatically extracted from llm
-		agent, err = mcpagent.NewSimpleAgent(
-			ctx,
-			llm,
-			config.ConfigPath,
-			options...,
-		)
-	}
+	runtime := runtimeConfigForLLMAgent(config, model, tracer, traceID, logger)
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, definition, runtime)
 	if err != nil {
-		// Emit error event instead of ending trace
 		if tracer != nil && mainTraceID == "" {
-			// Create error event for standalone agent
-			errorEvent := &events.AgentErrorEvent{
-				BaseEventData: events.BaseEventData{
-					TraceID: string(traceID),
-				},
-				Error:    err.Error(),
-				Turn:     0,
-				Context:  "agent_creation",
-				Duration: 0,
-			}
-			// Convert to AgentEvent and emit
-			agentEvent := events.NewAgentEvent(errorEvent)
-			agentEvent.TraceID = string(traceID)
-			tracer.EmitEvent(agentEvent)
+			event := events.NewAgentEvent(&events.AgentErrorEvent{
+				BaseEventData: events.BaseEventData{TraceID: string(traceID)},
+				Error:         err.Error(), Context: "agent_creation",
+			})
+			event.TraceID = string(traceID)
+			tracer.EmitEvent(event)
 		}
 		return nil, fmt.Errorf("failed to create MCP agent: %w", err)
 	}
 
-	// Set prompt log label for agent prompt logging
-	if config.Name != "" {
-		agent.PromptLogLabel = config.Name
-	}
-
-	// Set the agent's API keys for fallback LLM creation
-	if config.APIKeys != nil {
-		agent.APIKeys = config.APIKeys.Clone()
-		logger.Info("🔑 API keys configured for agent fallback LLM creation")
-	}
-
-	// Note: Event bridge integration will be added later to avoid import cycles
-	// For now, the agent will use its own event system which is compatible with Langfuse
-
-	// Initialize metrics
-	metrics := &agentMetricsImpl{
-		MinLatency:      time.Duration(^uint64(0) >> 1), // Max duration value
-		IsHealthy:       true,
-		LastRequestTime: time.Now(),
-	}
-
 	wrapper := &LLMAgentWrapper{
-		agent:   agent,
-		name:    config.Name,
-		config:  config,
-		metrics: metrics,
-		tracer:  tracer,
-		traceID: traceID,
-		logger:  logger,
-		runtime: mcpagent.RuntimeConfig{Model: llm, MCPConfigPath: config.ConfigPath, LegacyOptions: options},
+		agent: agent, name: config.Name, config: config,
+		metrics: &agentMetricsImpl{
+			MinLatency: time.Duration(^uint64(0) >> 1),
+			IsHealthy:  true, LastRequestTime: time.Now(),
+		},
+		tracer: tracer, traceID: traceID, logger: logger,
+		runtime: runtime, definition: definition,
 	}
-	wrapper.assembly = mcpagent.NewDefinitionAssembly(agent)
-
-	// Don't end the trace immediately - let it be ended after conversation completion
 	if mainTraceID == "" {
-		// For standalone agent traces, we'll end them after conversation completion
 		logger.Info(fmt.Sprintf("Created agent trace for conversation: %s", traceID))
-	} else {
-		// For hierarchical tracing, don't end the main trace - let the parent handle it
-		if tracer != nil {
-			// Just log that we're using hierarchical tracing
-			logger.Info(fmt.Sprintf("Using hierarchical tracing, main_trace_id: %s", mainTraceID))
-		}
+	} else if tracer != nil {
+		logger.Info(fmt.Sprintf("Using hierarchical tracing, main_trace_id: %s", mainTraceID))
 	}
-
 	return wrapper, nil
 }
 
@@ -786,19 +578,74 @@ func (w *LLMAgentWrapper) GetUnderlyingAgent() *mcpagent.Agent {
 }
 
 func (w *LLMAgentWrapper) AddInstructions(instructions ...string) error {
-	return w.assembly.AddInstructions(instructions...)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ensureDefinitionMutable(); err != nil {
+		return err
+	}
+	for _, instruction := range instructions {
+		instruction = strings.TrimSpace(instruction)
+		if instruction == "" {
+			continue
+		}
+		if w.definition.Instructions != "" {
+			w.definition.Instructions += "\n\n"
+		}
+		w.definition.Instructions += instruction
+	}
+	return nil
 }
 
 func (w *LLMAgentWrapper) ResetInstructions(base string, supplements ...string) error {
-	return w.assembly.ResetInstructions(base, supplements...)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ensureDefinitionMutable(); err != nil {
+		return err
+	}
+	w.definition.Instructions = strings.TrimSpace(base)
+	for _, supplement := range supplements {
+		supplement = strings.TrimSpace(supplement)
+		if supplement == "" {
+			continue
+		}
+		if w.definition.Instructions != "" {
+			w.definition.Instructions += "\n\n"
+		}
+		w.definition.Instructions += supplement
+	}
+	return nil
 }
 
 func (w *LLMAgentWrapper) AttachSkill(skill *llmtypes.Skill) error {
-	return w.assembly.AddSkill(skill)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ensureDefinitionMutable(); err != nil {
+		return err
+	}
+	if skill == nil {
+		return errors.New("skill cannot be nil")
+	}
+	w.definition.Skills = append(w.definition.Skills, skill)
+	return nil
+}
+
+func (w *LLMAgentWrapper) AttachedSkills() []*llmtypes.Skill {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return append([]*llmtypes.Skill(nil), w.definition.Skills...)
 }
 
 func (w *LLMAgentWrapper) AddObserver(observer mcpagent.AgentEventListener) error {
-	return w.assembly.AddObserver(observer)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ensureDefinitionMutable(); err != nil {
+		return err
+	}
+	if observer == nil {
+		return errors.New("observer cannot be nil")
+	}
+	w.observers = append(w.observers, observer)
+	return nil
 }
 
 func (w *LLMAgentWrapper) SetToolPolicy(toolNames []string) {
@@ -807,16 +654,49 @@ func (w *LLMAgentWrapper) SetToolPolicy(toolNames []string) {
 	w.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
 }
 
+// SetCodingAgentWorkingDir updates construction-time runtime state before the
+// immutable Agent is finalized. It deliberately does not mutate a live Agent.
+func (w *LLMAgentWrapper) SetCodingAgentWorkingDir(dir string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.finalized {
+		return errors.New("agent definition is already finalized")
+	}
+	w.runtime.Workspace.CodingAgentWorkingDir = strings.TrimSpace(dir)
+	return nil
+}
+
 func (w *LLMAgentWrapper) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), category string) error {
-	return w.assembly.AddTool(name, description, parameters, execute, 0, category)
+	return w.RegisterCustomToolWithTimeout(name, description, parameters, execute, 0, category)
 }
 
 func (w *LLMAgentWrapper) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, category string) error {
-	return w.assembly.AddTool(name, description, parameters, execute, timeout, category)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.ensureDefinitionMutable(); err != nil {
+		return err
+	}
+	w.definition.Tools.Direct = append(w.definition.Tools.Direct, mcpagent.ToolDefinition{
+		Name: name, Description: description, InputSchema: parameters,
+		Execute: execute, Timeout: timeout, DisplayGroup: category,
+	})
+	return nil
 }
 
 func (w *LLMAgentWrapper) AssemblyInstructions() string {
-	return w.assembly.Snapshot().Instructions
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.definition.Instructions
+}
+
+func (w *LLMAgentWrapper) ensureDefinitionMutable() error {
+	if w.closed {
+		return errors.New("agent is closed")
+	}
+	if w.finalized {
+		return errors.New("agent definition is already finalized")
+	}
+	return nil
 }
 
 // FinalizeDefinition converts the legacy incremental chat/server assembly into
@@ -838,7 +718,8 @@ func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
 
 	runtime := w.runtime
 	runtime.ResumeHandle = w.lastResult.Handle
-	next, _, err := w.assembly.Build(ctx, runtime)
+	runtime.Observability.Observers = append([]mcpagent.AgentEventListener(nil), w.observers...)
+	next, err := mcpagent.NewAgentFromDefinition(ctx, w.definition, runtime)
 	if err != nil {
 		return fmt.Errorf("finalize immutable agent definition: %w", err)
 	}
@@ -1080,9 +961,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		var streamedAny atomic.Bool
 		var streamedChunks atomic.Int64
 
-		w.mu.Lock()
-		prevCallback := w.agent.StreamingCallback
-		w.agent.StreamingCallback = func(chunk llmtypes.StreamChunk) {
+		streamingCallback := func(chunk llmtypes.StreamChunk) {
 			if chunk.Type == llmtypes.StreamChunkTypeContent && chunk.Content != "" && !chanClosed.Load() {
 				if !streamedAny.Load() {
 					w.logger.Info(fmt.Sprintf("[STREAMING] First real-time chunk received (len=%d), streaming callback active", len(chunk.Content)))
@@ -1094,12 +973,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 				case textChan <- chunk.Content:
 				}
 			}
-			// Chain to previous callback if any
-			if prevCallback != nil {
-				prevCallback(chunk)
-			}
 		}
-		w.mu.Unlock()
 		w.logger.Info("[STREAMING] Real-time streaming callback installed")
 
 		// Clear any stale tool call records from a previous canceled run for this session
@@ -1108,11 +982,8 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			toolcalllog.Clear(w.config.SessionID)
 		}
 
-		// Restore previous callback on exit
+		// Report the per-turn callback outcome on exit.
 		defer func() {
-			w.mu.Lock()
-			w.agent.StreamingCallback = prevCallback
-			w.mu.Unlock()
 			if streamedAny.Load() {
 				w.logger.Info(fmt.Sprintf("[STREAMING] Streamed %d chunks in real-time", streamedChunks.Load()))
 			} else {
@@ -1146,8 +1017,8 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						tc.Name,
 						events.ToolParams{Arguments: tc.ArgsJSON},
 						"http-bridge",
-						string(w.agent.TraceID),
-						string(w.agent.TraceID),
+						string(w.traceID),
+						string(w.traceID),
 					)
 					ev.ToolCallID = tc.ID
 					w.emitEvent(ev)
@@ -1184,7 +1055,11 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		runtimeAgent := w.agent
 		toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 		w.mu.RUnlock()
-		result, err := runtimeAgent.Run(ctx, mcpagent.Turn{History: messages, ToolPolicy: toolPolicy})
+		result, err := runtimeAgent.Run(ctx, mcpagent.Turn{
+			History:           messages,
+			ToolPolicy:        toolPolicy,
+			StreamingCallback: streamingCallback,
+		})
 		response := result.Text
 		updatedMessages := result.History
 

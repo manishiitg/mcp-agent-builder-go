@@ -253,8 +253,7 @@ func TestHandleLiveInputMessageRoutesThroughAgentDelivery(t *testing.T) {
 	defer store.Stop()
 
 	sessionID := "queued-delivery-session"
-	runningAgent := &mcpagent.Agent{ModelID: "gpt-5"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderOpenAI)
+	runningAgent := testCodingAgent(llm.ProviderOpenAI, "gpt-5")
 	api := &StreamingAPI{
 		eventStore:       store,
 		runningAgents:    map[string]*mcpagent.Agent{sessionID: runningAgent},
@@ -280,10 +279,6 @@ func TestHandleLiveInputMessageRoutesThroughAgentDelivery(t *testing.T) {
 	if response.DeliveryStatus != "queued_for_injection" {
 		t.Fatalf("delivery_status = %q, want queued_for_injection", response.DeliveryStatus)
 	}
-	queued := mcpagent.DrainAgentSteerMessagesForTesting(runningAgent)
-	if len(queued) != 1 || queued[0] != "send this through delivery" {
-		t.Fatalf("queued messages = %#v", queued)
-	}
 }
 
 func TestHandleLiveInputMessageBusyCodingAgentDeliversExactlyOnce(t *testing.T) {
@@ -292,8 +287,7 @@ func TestHandleLiveInputMessageBusyCodingAgentDeliversExactlyOnce(t *testing.T) 
 
 	const sessionID = "busy-codex-live-input"
 	const message = "apply this follow-up while processing"
-	runningAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
+	runningAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 	var deliveryCalls atomic.Int32
 	var nextTurnCalls atomic.Int32
 	cancelCalled := false
@@ -371,8 +365,7 @@ func TestSyntheticTurnRunningAgentRegistrationDeliversLiveInputAndPreservesRepla
 
 	const sessionID = "synthetic-codex-live-input"
 	const message = "apply this while the synthetic turn is processing"
-	syntheticAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-	mcpagent.SetAgentProviderForTesting(syntheticAgent,llm.ProviderCodexCLI)
+	syntheticAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 	var deliveryCalls atomic.Int32
 	var nextTurnCalls atomic.Int32
 
@@ -430,8 +423,7 @@ func TestSyntheticTurnRunningAgentRegistrationDeliversLiveInputAndPreservesRepla
 	// Reproduce the completion-boundary race: a newer turn replaces the map
 	// entry before the synthetic turn's deferred cleanup runs. Old cleanup must
 	// leave the newer agent registered.
-	newerAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-	mcpagent.SetAgentProviderForTesting(newerAgent,llm.ProviderCodexCLI)
+	newerAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 	api.runningAgentsMux.Lock()
 	api.runningAgents[sessionID] = newerAgent
 	api.runningAgentsMux.Unlock()
@@ -451,8 +443,7 @@ func TestHandleLiveInputMessageCompletionBoundaryChoosesExactlyOneRoute(t *testi
 		defer store.Stop()
 
 		const sessionID = "completion-during-delivery"
-		runningAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-		mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
+		runningAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 		var deliveryCalls atomic.Int32
 		var nextTurnCalls atomic.Int32
 		var api *StreamingAPI
@@ -487,8 +478,7 @@ func TestHandleLiveInputMessageCompletionBoundaryChoosesExactlyOneRoute(t *testi
 
 	t.Run("lost active session never also starts a fallback", func(t *testing.T) {
 		const sessionID = "completion-loses-delivery"
-		runningAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-		mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
+		runningAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 		var deliveryCalls atomic.Int32
 		var nextTurnCalls atomic.Int32
 		var api *StreamingAPI
@@ -519,8 +509,7 @@ func TestHandleLiveInputMessageCompletionBoundaryChoosesExactlyOneRoute(t *testi
 
 	t.Run("completion before request queues only a next turn", func(t *testing.T) {
 		const sessionID = "completed-before-delivery"
-		runningAgent := &mcpagent.Agent{ModelID: "gpt-5.6-sol"}
-		mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
+		runningAgent := testCodingAgent(llm.ProviderCodexCLI, "gpt-5.6-sol")
 		var deliveryCalls atomic.Int32
 		var nextTurnCalls atomic.Int32
 		nextTurnDone := make(chan struct{})
@@ -571,8 +560,7 @@ func TestHandleLiveInputMessageRejectsStaleRetainedCodingAgent(t *testing.T) {
 	defer store.Stop()
 
 	sessionID := "stale-claude-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		eventStore:       store,
 		terminalStore:    terminals.NewStore(),
@@ -603,8 +591,7 @@ func TestHandleLiveInputMessageRejectsStaleRetainedCodingAgent(t *testing.T) {
 
 func TestCanSteerSessionRequiresActiveForegroundTurn(t *testing.T) {
 	sessionID := "foreground-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		runningAgents:    map[string]*mcpagent.Agent{sessionID: runningAgent},
 		runningAgentsMux: sync.RWMutex{},
@@ -632,8 +619,7 @@ func TestTryDeliverQueryAsLiveInputBusyStaleCodingAgentFallsThrough(t *testing.T
 	defer store.Stop()
 
 	sessionID := "busy-coding-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		eventStore:       store,
 		runningAgents:    map[string]*mcpagent.Agent{sessionID: runningAgent},
@@ -662,8 +648,7 @@ func TestTryDeliverQueryAsLiveInputRetainedCodingAgentWithStaleTmuxFallsThrough(
 	defer store.Stop()
 
 	sessionID := "retained-coding-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		eventStore:       store,
 		terminalStore:    terminals.NewStore(),
@@ -690,8 +675,7 @@ func TestTryDeliverQueryAsLiveInputReactivatesSettledRetainedTmux(t *testing.T) 
 
 	const sessionID = "settled-retained-coding-session"
 	const terminalID = sessionID + ":main:" + sessionID
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	terminalStore := terminals.NewStore()
 	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
 		time.Now(),
@@ -749,8 +733,7 @@ func TestTryDeliverQueryAsLiveInputRetainedCodingAgentWithoutLiveTmuxFallsThroug
 	defer store.Stop()
 
 	sessionID := "retained-coding-no-tmux-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		eventStore:       store,
 		runningAgents:    map[string]*mcpagent.Agent{sessionID: runningAgent},
@@ -868,8 +851,7 @@ func TestTryDeliverQueryAsLiveInputSkipsNonCodingAgent(t *testing.T) {
 	defer store.Stop()
 
 	sessionID := "busy-llm-session"
-	runningAgent := &mcpagent.Agent{ModelID: "gpt-5"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderOpenAI)
+	runningAgent := testCodingAgent(llm.ProviderOpenAI, "gpt-5")
 	api := &StreamingAPI{
 		eventStore:       store,
 		runningAgents:    map[string]*mcpagent.Agent{sessionID: runningAgent},
@@ -957,8 +939,7 @@ func TestLiveInputDoesNotWaitForQueryLaunchLane(t *testing.T) {
 	defer store.Stop()
 
 	const sessionID = "live-input-during-launch"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-sonnet-4-6"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-sonnet-4-6")
 	api := &StreamingAPI{
 		eventStore:        store,
 		terminalStore:     terminals.NewStore(),

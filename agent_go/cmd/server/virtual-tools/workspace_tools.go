@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
+	"github.com/manishiitg/mcpagent/events"
 )
 
 // getWorkspaceAPIURL returns the workspace API base URL from environment or default

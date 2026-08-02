@@ -88,7 +88,7 @@ HTTP URL.
 For the operational cheat sheet on creating / editing / deleting schedules
 (cron syntax and workshop run payload shape), see this section. For the
 multi-agent-only schedule cron flow, see
-`get_reference_doc(kind="schedule-management")` instead.
+`read_skill(skill_name="builder-reference", path="references/schedule-management.md")` instead.
 
 - **Tools**: `list_schedules`, `create_schedule`, `create_calendar_schedule`, `update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`.
 - To view existing schedules, call `list_schedules`; it includes schedule IDs, type, mode, workshop mode, cron/calendar shape, timezone, enabled state, groups, and recent runtime state. `get_workflow_config` also includes a Schedules section when you are already inspecting broader workflow settings.
@@ -128,7 +128,7 @@ Every schedule in `workflow.json` has a `schedule_type` — `"cron"` (default) o
 - **Mode is the same as cron**: workflow schedules use `mode="workshop"`. Supply per-item `messages` or a top-level default `messages` array when the default full-workflow run instruction is not specific enough.
 - Past-dated items are skipped — only future items get registered. To change a calendar schedule, update its `calendar_items` (add/remove dates); editing tools (`update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`) work on calendar schedules too.
 
-> The cron flow for **multi-agent chat** schedules (`multiagent-schedules.json`, edited via shell) is separate and cron-only — see `get_reference_doc(kind="schedule-management")`. Calendar schedules are a **workflow-schedule** feature and live in `workflow.json`.
+> The cron flow for **multi-agent chat** schedules (`multiagent-schedules.json`, edited via shell) is separate and cron-only — see `read_skill(skill_name="builder-reference", path="references/schedule-management.md")`. Calendar schedules are a **workflow-schedule** feature and live in `workflow.json`.
 
 ### How workflow schedules execute
 
@@ -142,7 +142,7 @@ Workflow schedules always use the workshop builder execution path. Do not create
 
 ### Back up scheduled workflows
 
-Scheduled runs execute unattended and accumulate state (`workflow.json`, `planning/`, `knowledgebase/`, `learnings/`, `db/`, reports) that otherwise lives only on local disk. **Whenever you set up a recurring schedule, also arrange a backup** so each run persists its output off-box. Load `get_reference_doc(kind="backup-strategy")`, follow it once to initialise the workflow's backup destination, and persist the result in `workflow.json.backup`.
+Scheduled runs execute unattended and accumulate state (`workflow.json`, `planning/`, `knowledgebase/`, `learnings/`, `db/`, reports) that otherwise lives only on local disk. **Whenever you set up a recurring schedule, also arrange a backup** so each run persists its output off-box. Load `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")`, follow it once to initialise the workflow's backup destination, and persist the result in `workflow.json.backup`.
 
 - Set `workflow.json.backup.enabled=true`, `mode="agent"`, `triggers.after_scheduled_run=true`, and a `destinations` entry for each backup target (git/github for config, R2/S3/B2/HuggingFace for large artifacts as needed).
 - After each backup attempt, write `backup/status.json` with the destination results, timestamps, summary, and errors. Do not put changing backup status in `workflow.json`.

@@ -172,3 +172,52 @@ describe('bridge tool failures that exit 0', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe('folder-guard denials that exit 0', () => {
+  // A denial may be wrapped in a result carrying exit_code 0, including a
+  // pipeline whose final command determines the status. The detector must use
+  // the returned stderr rather than assume that exit_code represents the
+  // denied inner command.
+  it('flags a permission denial on stderr despite exit_code 0', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stdout: '',
+      stderr: 'find: Workflow/social-media: Operation not permitted',
+      exit_code: 0,
+      execution_time_ms: 14,
+    }))
+
+    expect(result.isError).toBe(true)
+  })
+
+  it('flags lowercase permission denied too', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stderr: 'ls: /Users/x/db: Permission denied',
+      exit_code: 0,
+    }))
+
+    expect(result.isError).toBe(true)
+  })
+
+  // "No such file or directory" is deliberately not a denial: probing for a
+  // path that may not exist is ordinary, and flagging it would train the
+  // operator to ignore the marker.
+  it('does not flag a missing path', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stderr: 'ls: runs/iteration-0/default/inputs: No such file or directory',
+      exit_code: 0,
+    }))
+
+    expect(result.isError).toBe(false)
+  })
+
+  // Only stderr counts. A denial quoted in stdout is usually a log being read.
+  it('does not flag a denial quoted in stdout', () => {
+    const result = formatToolCallResult(JSON.stringify({
+      stdout: '2026-08-02 log line: Operation not permitted (from an earlier run)',
+      stderr: '',
+      exit_code: 0,
+    }))
+
+    expect(result.isError).toBe(false)
+  })
+})

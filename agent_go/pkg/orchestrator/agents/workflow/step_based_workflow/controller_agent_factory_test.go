@@ -14,6 +14,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	mcpllm "github.com/manishiitg/mcpagent/llm"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
@@ -65,8 +66,14 @@ func TestConfigureWorkflowDBSessionBlocksRawSQLiteForManagedAgents(t *testing.T)
 	if cfg == nil || cfg.Env[workflowDBAccessEnv] != DBAccessReadWrite {
 		t.Fatalf("trusted DB access not recorded: %+v", cfg)
 	}
-	if len(cfg.BlockedPaths) != 1 || cfg.BlockedPaths[0] != "Workflow/demo/db/db.sqlite" {
-		t.Fatalf("raw SQLite path not blocked: %+v", cfg.BlockedPaths)
+	for _, want := range []string{
+		"Workflow/demo/db/db.sqlite",
+		"Workflow/demo/db/db.sqlite-wal",
+		"Workflow/demo/db/db.sqlite-shm",
+	} {
+		if !slices.Contains(cfg.BlockedPaths, want) {
+			t.Fatalf("raw SQLite path %q not blocked: %+v", want, cfg.BlockedPaths)
+		}
 	}
 }
 
@@ -77,6 +84,44 @@ func TestConfigureWorkflowDBSessionRetainsScriptedCompatibility(t *testing.T) {
 	cfg := common.GetSessionShellConfig(sessionID)
 	if cfg == nil || len(cfg.BlockedPaths) != 0 {
 		t.Fatalf("scripted compatibility unexpectedly blocked: %+v", cfg)
+	}
+}
+
+func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
+	base.WorkspaceTools = []llmtypes.Tool{
+		tool("execute_shell_command"), tool("diff_patch_workspace_file"),
+		tool("query_workflow_db"), tool("mutate_workflow_db"),
+	}
+	base.WorkspaceToolExecutors = map[string]interface{}{
+		"execute_shell_command":     noop,
+		"diff_patch_workspace_file": noop,
+		"query_workflow_db":         noop,
+		"mutate_workflow_db":        noop,
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+	tools, executors := hcpo.prepareWorkspaceToolsOnly()
+	names := make([]string, 0, len(tools))
+	for _, definition := range tools {
+		if definition.Function != nil {
+			names = append(names, definition.Function.Name)
+		}
+	}
+	if !slices.Contains(names, "query_workflow_db") || executors["query_workflow_db"] == nil {
+		t.Fatalf("KB maintenance missing query_workflow_db: tools=%v executors=%v", names, executors)
+	}
+	if slices.Contains(names, "mutate_workflow_db") || executors["mutate_workflow_db"] != nil {
+		t.Fatalf("KB maintenance received DB mutation authority: tools=%v executors=%v", names, executors)
 	}
 }
 
@@ -933,5 +978,49 @@ func TestExecutionFolderGuardGrantsPlanningReadNeverWrite(t *testing.T) {
 		if strings.Contains(w, "/planning") {
 			t.Fatalf("planning/ must never be writable by a step, got write path %q in %v", w, writePaths)
 		}
+	}
+}
+
+// A step is told its outputs live at runs/<run>/execution/<step>/, and confirming
+// that path means walking down to it. Granting only the execution/ leaf made the
+// walk fail: `ls runs/iteration-0/default` returned "Operation not permitted"
+// while the deeper path would have worked. A CDP test step on 2026-08-02 spent
+// four calls discovering that. The run folder also holds logs/ and
+// run_metadata.json, which are ordinary evidence for a step reasoning about its
+// own run.
+func TestExecutionFolderGuardGrantsTheRunFolderNotOnlyItsExecutionChild(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/testing")
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "iteration-0/default",
+	}
+
+	readPaths, _ := hcpo.setupExecutionFolderGuard(
+		"step-0-cdp-test", "step-0-cdp-test", KBAccessNone, LearningsAccessNone,
+		resolveEffectiveDBAccess(nil, false, false),
+		nil,
+	)
+
+	runPath := "Workflow/testing/runs/iteration-0/default"
+	if !slices.Contains(readPaths, runPath) {
+		t.Fatalf("step cannot list its own run folder %q; got %v", runPath, readPaths)
+	}
+	// The narrower grant must remain — widening to the run folder should not have
+	// replaced the execution grant that sibling-step results depend on.
+	execPath := runPath + "/execution"
+	if !slices.Contains(readPaths, execPath) {
+		t.Fatalf("execution read grant was lost, got %v", readPaths)
+	}
+	// Read must not reach the workflow root: that was denied before and should
+	// stay denied — this fix widens by exactly one level, not to everything.
+	if slices.Contains(readPaths, "Workflow/testing") {
+		t.Fatalf("read scope widened to the workflow root, got %v", readPaths)
 	}
 }

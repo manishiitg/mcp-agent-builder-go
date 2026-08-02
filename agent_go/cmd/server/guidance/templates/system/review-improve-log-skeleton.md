@@ -1,6 +1,6 @@
 ## Starter HTML skeleton for `builder/improve.html`
 
-Use this document only when creating a new `builder/improve.html` or doing the required one-time upgrade from an old-format Pulse/improve log. For log semantics, entry kinds, close-out rules, and migration triggers, first load `get_reference_doc(kind="review-improve-log")`.
+Use this document only when creating a new `builder/improve.html` or doing the required one-time upgrade from an old-format Pulse/improve log. For log semantics, entry kinds, close-out rules, and migration triggers, first load `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`.
 
 ### Starter HTML skeleton
 

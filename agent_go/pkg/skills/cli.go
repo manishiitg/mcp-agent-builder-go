@@ -17,7 +17,7 @@ import (
 // CLILockEntry matches one entry in skills-lock.json
 type CLILockEntry struct {
 	Source       string `json:"source"`
-	SourceType  string `json:"sourceType"`
+	SourceType   string `json:"sourceType"`
 	ComputedHash string `json:"computedHash"`
 }
 
@@ -29,9 +29,9 @@ type CLILockFile struct {
 
 // CLIImportResult contains the results of a CLI import operation
 type CLIImportResult struct {
-	InstalledSkills []string               `json:"installed_skills"`
+	InstalledSkills []string                `json:"installed_skills"`
 	LockEntries     map[string]CLILockEntry `json:"lock_entries,omitempty"`
-	Errors          []string               `json:"errors,omitempty"`
+	Errors          []string                `json:"errors,omitempty"`
 }
 
 // CLIUpdateInfo represents update availability for one skill

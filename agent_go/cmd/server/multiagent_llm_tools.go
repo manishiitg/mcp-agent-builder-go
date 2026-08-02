@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 )
@@ -1157,13 +1156,13 @@ func estimateLLMCost(args map[string]interface{}) (map[string]interface{}, error
 	}, nil
 }
 
-func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return mcpagent.AddDefinitionTool(underlyingAgent, name, description, params, exec, "llm_config_tools")
+		return underlyingAgent.RegisterCustomTool(name, description, params, exec, "llm_config_tools")
 	}
 
 	if err := registerLLMCapabilityTools(registerTool); err != nil {
@@ -1262,12 +1261,12 @@ func registerLLMCapabilityDiscoveryTools(registerTool func(string, string, map[s
 	return nil
 }
 
-func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return mcpagent.AddDefinitionTool(underlyingAgent, name, description, params, exec, "llm_config_tools")
+		return underlyingAgent.RegisterCustomTool(name, description, params, exec, "llm_config_tools")
 	}
 	return registerLLMCapabilityDiscoveryTools(registerTool)
 }

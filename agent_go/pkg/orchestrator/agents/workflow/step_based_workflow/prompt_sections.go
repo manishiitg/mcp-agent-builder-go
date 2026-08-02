@@ -60,7 +60,7 @@ func BuildStepFilesListing(folderPath string) string {
 // system prompt. All agent types (execution, todo task, evaluation) should
 // use these common builders for consistency.
 type PromptSections struct {
-	CodeExecution string // Code execution or tool search mode instructions
+	CodeExecution string // Code execution instructions
 	Learnings     string // Formatted learning history section
 	PreviousSteps string // Previous steps context section
 }
@@ -145,12 +145,12 @@ func contextOutputMatchesDependency(output string, dep string) bool {
 //
 // The workshop chat agent prompt does NOT call this anymore — it gets a short
 // cheat sheet and loads the full rules on demand via
-// get_reference_doc(kind="code-authoring") when it actually needs to patch.
+// read_skill(skill_name="builder-reference", path="references/code-authoring.md") when it actually needs to patch.
 //
 // Source of truth lives in cmd/server/guidance/templates/system/code-authoring.md.
 // This wrapper is the inline fallback for API agents and non-execution review
 // surfaces; coding CLI execution agents read the same document from the
-// projected workflow-reference skill instead.
+// projected builder-reference skill instead.
 func BuildMainPyAuthoringRules() string {
 	return guidance.RenderSystemDoc("code-authoring") + "\n"
 }

@@ -5,7 +5,7 @@ package instructions
 // generation, image/video/PDF reading, transcription, web search, capability
 // discovery). The full reference — signatures, parameters, defaults,
 // provider-setup discipline — lives in the workspace-media-tools skill
-// loaded on demand via get_reference_doc(kind="workspace-media-tools").
+// loaded on demand via read_skill(skill_name="builder-reference", path="references/workspace-media-tools.md").
 //
 // Used by both chat agents and workflow-builder agents.
 func GetSpecialWorkspaceToolsInstructions() string {
@@ -23,18 +23,18 @@ Available tools:
 
 Provider-setup essentials (do not hand-edit provider-auth storage — it's encrypted and managed via ` + "`set_provider_auth`" + `; audio/video/image/music providers are workspace **tool** capabilities, not published-LLM entries — call ` + "`list_llm_capabilities(capability=\"...\")`" + ` for the authoritative availability answer).
 
-These tools cover each provider's **basic** parameters only. For a capability a tool doesn't expose (e.g. multi-image composition, conversational editing, voice cloning), call ` + "`get_reference_doc(kind=\"workspace-media-tools\")`" + ` — it covers writing Python against the provider directly, including the credential gap (` + "`set_provider_auth`" + ` keys aren't shell-visible; use ` + "`set_workflow_secret`" + `/` + "`set_user_secret`" + ` instead).
+These tools cover each provider's **basic** parameters only. For a capability a tool doesn't expose (e.g. multi-image composition, conversational editing, voice cloning), call ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")`" + ` — it covers writing Python against the provider directly, including the credential gap (` + "`set_provider_auth`" + ` keys aren't shell-visible; use ` + "`set_workflow_secret`" + `/` + "`set_user_secret`" + ` instead).
 
-**For the full reference — every tool's parameters, defaults, provider routing rules, model-ID lists, and common-mistake gotchas — call:** ` + "`get_reference_doc(kind=\"workspace-media-tools\")`" + `.`
+**For the full reference — every tool's parameters, defaults, provider routing rules, model-ID lists, and common-mistake gotchas — call:** ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")`" + `.`
 }
 
 // GetSpecialWorkspaceToolsPointer returns the compact coding-CLI form of the
 // workspace media/search guidance. Coding CLIs receive the complete
-// workspace-media-tools reference through the projected workflow-reference
+// workspace-media-tools reference through the projected builder-reference
 // skill, so repeating the full catalog in CLAUDE.md/AGENTS.md wastes the
 // provider's fixed instruction budget.
 func GetSpecialWorkspaceToolsPointer() string {
 	return `## Special Workspace Tools
 
-Provider-backed text, web search, image, video, audio, music, and media-reading tools are available through the MCP bridge. Before selecting a provider/model, handling provider auth, or using one of these tools, read the attached ` + "`workflow-reference`" + ` skill's ` + "`references/workspace-media-tools.md`" + ` (or call ` + "`get_reference_doc(kind=\"workspace-media-tools\")`" + `). Use ` + "`list_llm_capabilities`" + ` as the authoritative availability source and ` + "`set_provider_auth`" + ` for credentials; never place credentials in shell commands or files.`
+Provider-backed text, web search, image, video, audio, music, and media-reading tools are available through the MCP bridge. Before selecting a provider/model, handling provider auth, or using one of these tools, read the attached ` + "`builder-reference`" + ` skill's ` + "`references/workspace-media-tools.md`" + ` (or call ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")`" + `). Use ` + "`list_llm_capabilities`" + ` as the authoritative availability source and ` + "`set_provider_auth`" + ` for credentials; never place credentials in shell commands or files.`
 }

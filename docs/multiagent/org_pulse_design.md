@@ -96,13 +96,13 @@ writes a CoS file, that's an import — make it a line in the reference doc inst
    Scheduled Tasks popup since the builtin is registered.)*
 2. **Daily builtin schedule** — ✅ Built (2026-06-21). `builtin-org-pulse` added to
    `DefaultBuiltinSchedules()` (`builtin_schedules.go`): **`Enabled:false` (opt-in)**, cron
-   `0 8 * * *` (daily, editable), mode multi-agent, query loads `get_reference_doc(kind="org-pulse")`.
+   `0 8 * * *` (daily, editable), mode multi-agent, query loads `read_skill(skill_name="builder-reference", path="references/org-pulse.md")`.
    Turning it on = a same-ID user override with `enabled:true` + chosen cron (via
    `MergeBuiltinSchedules`). **No Go pre-fire check** — Org Pulse self-gates agentically
    (wakes daily, cheap "anything new?" check, exits if not), unlike enrich-memory's Go gate.
    Idle-day behavior: a clean no-op (writes nothing, stops). Build + tests pass.
 3. **The Org Pulse reference doc** — ✅ Drafted (2026-06-21):
-   `guidance/templates/system/org-pulse.md`, registered as `get_reference_doc(kind="org-pulse")`
+   `guidance/templates/system/org-pulse.md`, registered as `read_skill(skill_name="builder-reference", path="references/org-pulse.md")`
    (multi-agent mode) in `guidance.go`. 5-step agentic contract: gather → judge endgame →
    harvest (curate/merge, never import) → spot promotions → record everything in the
    single **`pulse/org-pulse.html`** log (HTML-only, no JSON — decided 2026-06-22), notify

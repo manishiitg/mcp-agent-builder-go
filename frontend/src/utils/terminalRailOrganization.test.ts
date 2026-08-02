@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalSnapshot } from '../services/api-types'
 import {
+  canonicalTerminalRailSelection,
   hiddenSelectedTerminalRailGroup,
   organizeTerminalRail,
   terminalRailLogicalKey,
@@ -316,13 +317,71 @@ describe('terminal rail organization', () => {
 
     const groups = organize([lifecycle, transcript, fullWorkflow])
 
-    expect(groups).toHaveLength(2)
+    expect(groups).toHaveLength(1)
     const evaluation = groups.find(group => group.key === 'step:eval-engagement-actions')
     expect(evaluation?.title).toBe('Engagement actions met minimums')
     expect(evaluation?.representative.terminal_id).toBe(transcript.terminal_id)
     expect(evaluation?.terminals).toHaveLength(1)
     expect(evaluation?.members).toHaveLength(2)
-    expect(groups.some(group => group.title === 'Full Workflow Execution')).toBe(true)
+    expect(groups.some(group => group.title === 'Full Workflow Execution')).toBe(false)
+  })
+
+  it('merges a differently named background lifecycle root into its one real transcript', () => {
+    const lifecycle = terminal('session-1:review-plan-12345', {
+      session_id: 'session-1',
+      owner_id: 'review-plan-12345',
+      execution_id: 'review-plan-12345',
+      execution_kind: 'sub_agent',
+      agent_name: 'Review Workflow Plan',
+      display_title: 'Review Workflow Plan',
+      step_id: undefined,
+    })
+    const transcript = terminal('session-1:workflow-step:review-plan-12345:review-plan', {
+      session_id: 'session-1',
+      owner_id: 'workflow-step:review-plan-12345:review-plan',
+      execution_id: 'review-plan-12345',
+      execution_kind: 'workflow_step',
+      step_id: 'review-plan',
+      step_name: 'Review plan',
+      agent_name: 'Review Plan Agent',
+    })
+
+    const groups = organize([lifecycle, transcript])
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0].title).toBe('Review plan')
+    expect(groups[0].representative.terminal_id).toBe(transcript.terminal_id)
+    expect(groups[0].terminals).toEqual([transcript])
+    expect(groups[0].members).toHaveLength(2)
+    expect(canonicalTerminalRailSelection(groups, lifecycle)).toBe(transcript)
+    expect(canonicalTerminalRailSelection(groups, transcript)).toBe(transcript)
+  })
+
+  it('keeps a lifecycle root when it owns several concrete child transcripts', () => {
+    const lifecycle = terminal('session-1:review-bundle-1', {
+      session_id: 'session-1',
+      owner_id: 'review-bundle-1',
+      execution_id: 'review-bundle-1',
+      execution_kind: 'sub_agent',
+      agent_name: 'Review bundle',
+      step_id: undefined,
+    })
+    const children = ['plan', 'artifacts'].map(stepID => terminal(
+      `session-1:workflow-step:review-bundle-1:${stepID}`,
+      {
+        session_id: 'session-1',
+        owner_id: `workflow-step:review-bundle-1:${stepID}`,
+        execution_id: 'review-bundle-1',
+        execution_kind: 'workflow_step',
+        step_id: stepID,
+        step_name: `Review ${stepID}`,
+      },
+    ))
+
+    const groups = organize([lifecycle, ...children])
+
+    expect(groups).toHaveLength(3)
+    expect(groups.some(group => group.title === 'Review bundle')).toBe(true)
   })
 
   it('groups Pulse reviewer retries while excluding raw turn companions from attempt counts', () => {
@@ -463,7 +522,7 @@ describe('terminal rail organization', () => {
 
     const groups = organize([...workflowSteps, ...evaluationPairs, fullWorkflow])
 
-    expect(groups).toHaveLength(9)
+    expect(groups).toHaveLength(8)
     expect(groups.map(group => group.title)).toEqual(expect.arrayContaining([
       'Resolve Run Mode > Route',
       'LinkedIn Engagement: Scan for Targets',
@@ -473,10 +532,10 @@ describe('terminal rail organization', () => {
       'Workflow Complete',
       'Engagement actions met minimums',
       'DB schema + merge rule integrity',
-      'Full Workflow Execution',
     ]))
     expect(groups.filter(group => group.title === 'Engagement actions met minimums')).toHaveLength(1)
     expect(groups.filter(group => group.title === 'DB schema + merge rule integrity')).toHaveLength(1)
+    expect(groups.some(group => group.title === 'Full Workflow Execution')).toBe(false)
   })
 
   it('puts live, failed, workflow, and reviewer tasks in distinct sections', () => {

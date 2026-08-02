@@ -21,8 +21,8 @@ type TodoItem struct {
 	ID            string    `json:"id"`
 	Title         string    `json:"title"`
 	Description   string    `json:"description"`
-	Priority      string    `json:"priority"` // high, medium, low
-	Status        string    `json:"status"`   // open, in_progress, completed, blocked
+	Priority      string    `json:"priority"`                 // high, medium, low
+	Status        string    `json:"status"`                   // open, in_progress, completed, blocked
 	AssignedAgent string    `json:"assigned_agent,omitempty"` // route_id or "generic"
 	Result        string    `json:"result,omitempty"`
 	Notes         string    `json:"notes,omitempty"`
@@ -32,9 +32,9 @@ type TodoItem struct {
 
 // TodoFile represents the structure of the todos.json file
 type TodoFile struct {
-	StepID    string     `json:"step_id"`
-	Objective string     `json:"objective"`
-	Todos     []TodoItem `json:"todos"`
+	StepID    string      `json:"step_id"`
+	Objective string      `json:"objective"`
+	Todos     []TodoItem  `json:"todos"`
 	Summary   TodoSummary `json:"summary"`
 }
 
@@ -423,12 +423,12 @@ func handleListTodos(ctx context.Context, args map[string]interface{}) (string, 
 	}
 
 	result := map[string]interface{}{
-		"success":       true,
-		"total_count":   len(todoFile.Todos),
+		"success":        true,
+		"total_count":    len(todoFile.Todos),
 		"filtered_count": len(filteredTodos),
-		"filter":        statusFilter,
-		"todos":         filteredTodos,
-		"summary":       todoFile.Summary,
+		"filter":         statusFilter,
+		"todos":          filteredTodos,
+		"summary":        todoFile.Summary,
 	}
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
 	return string(resultJSON), nil

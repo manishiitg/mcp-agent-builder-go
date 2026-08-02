@@ -13,7 +13,7 @@ func TestWorkspaceMapForbidsWebFetchForLocalArtifacts(t *testing.T) {
 		"LOCAL paths RELATIVE to the docs root",
 		"Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs",
 		"/tmp/workspace-docs/pulse/",
-		`get_reference_doc(kind="...")`,
+		`read_skill(skill_name="builder-reference", path="references/....md")`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {

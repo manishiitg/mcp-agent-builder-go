@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/chathistory"
+	"github.com/manishiitg/mcpagent/events"
 )
 
 type testBotConnector struct {

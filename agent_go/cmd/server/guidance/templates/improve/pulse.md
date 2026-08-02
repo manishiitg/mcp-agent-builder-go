@@ -14,8 +14,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
 ## Canonical contract
 
-	1. Call `get_reference_doc(kind="post-run-monitor")` and
-	   `get_reference_doc(kind="review-improve-log")`. Follow the same evidence
+	1. Call `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")` and
+	   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. Follow the same evidence
 	   review and independent read-only reviewer contracts. If bounded repairs are
 	   warranted, use the same one consolidated Pulse Fixer as scheduled Pulse.
 2. Select the latest meaningful retained run when no run folder was supplied.
@@ -29,15 +29,19 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 4. Run every module this standalone review selects. Process modules independently
    in registry order. Reconcile and drain each module's retained backlog before
    deciding whether fresh discovery is warranted. If it is, issue exactly one
-   synchronous `call_generic_agent` reviewer call for that module; never combine
-   reviewers in one shell command or use a background shell/wait group. Every
-   reviewer is read-only. Goal Advisor uses a separate read-only critic after
-   its strategy draft.
+   asynchronous `call_generic_agent` reviewer call for that module. Record the
+   returned `execution_id`, end the current turn, and resume only from its
+   automatic completion notification before starting the next reviewer. Never
+   combine reviewers in one shell command or use a background shell/wait group.
+   Every reviewer is read-only. Goal Advisor uses a separate read-only critic
+   after its strategy draft.
 	5. After all selected reviews, run exactly one `call_generic_agent` with
 	   `role="fixer"`, `module="pulse_fixer"`, the trusted manual `pulse_run_id`,
 	   and the full selected module list. It builds one short ordered queue of
 	   compatible repair bundles, applies them sequentially, verifies them, and
-	   calls `mark_pulse_module_result` once per selected module. Do not fix inline.
+	   calls `mark_pulse_module_result` once per selected module. After launch,
+	   end the current turn and wait for its automatic completion notification
+	   before producing the final summary. Do not fix inline.
 	6. Keep review, finding, attempt, verification, and module outcomes in SQLite.
 	   Do not write `builder/improve.html` from reviewers or the Fixer; the Pulse
 	   Dashboard is the presentation owner and projects this state on its next render.

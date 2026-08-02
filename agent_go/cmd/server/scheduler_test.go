@@ -685,7 +685,7 @@ func TestBuildChiefTaskReportUpdateMessageUsesSingleSharedTaskHTML(t *testing.T)
 
 	msg := buildChiefTaskReportUpdateMessage(sctx, "run-123", "success", "", 120000, startedAt, completedAt, "session-abc")
 	for _, want := range []string{
-		`get_reference_doc(kind="chief-task-report")`,
+		`read_skill(skill_name="builder-reference", path="references/chief-task-report.md")`,
 		"Update the single shared Tasks page at pulse/task.html",
 		"Do not create per-task files",
 		"Do not edit pulse/org-pulse.html, pulse/goals.html",
@@ -861,9 +861,9 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	finalizer = finalizer + "\n" + finalizerContract +
 		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
 	for _, pair := range []struct{ prompt, ref string }{
-		{gatePrompt, `get_reference_doc(kind="pulse-gate")`},
-		{dashboardPrompt, `get_reference_doc(kind="review-improve-log")`},
-		{finalizerPrompt, `get_reference_doc(kind="pulse-finalizer")`},
+		{gatePrompt, `read_skill(skill_name="builder-reference", path="references/pulse-gate.md")`},
+		{dashboardPrompt, `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`},
+		{finalizerPrompt, `read_skill(skill_name="builder-reference", path="references/pulse-finalizer.md")`},
 	} {
 		if !strings.Contains(pair.prompt, pair.ref) {
 			t.Fatalf("compact stage prompt missing focused reference %q: %s", pair.ref, pair.prompt)
@@ -1058,7 +1058,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PULSE MODULE — OPS REVIEW",
-		"get_reference_doc(kind=\"llm-selection\")",
+		"read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")",
 		"agentic READ-ONLY REVIEW",
 		"raw execution/evaluation/Pulse cost ledgers",
 		"representative conversation/tool traces",
@@ -1091,7 +1091,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PULSE MODULE — STRATEGY AUDITOR",
-		`get_reference_doc(kind="strategy-auditor")`,
+		`read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`,
 		"retained cross-run evidence",
 		"goal-to-action-to-target/source-to-outcome causal chain",
 		"repetition, concentration, saturation, exploration gaps",
@@ -1136,7 +1136,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	for _, want := range []string{
 		"PULSE DASHBOARD",
 		"This stage alone owns Pulse render",
-		`get_reference_doc(kind="review-improve-log")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
 		"get_pulse_finding_backlog without a module filter",
 		"builder/improve.html",
 		"builder/card.health.html",
@@ -1279,7 +1279,7 @@ func TestPulseStoreHealthModulesLoadAssumptionAudit(t *testing.T) {
 			continue
 		}
 		found = true
-		if !strings.Contains(step.step.query, `get_reference_doc(kind="assumption-audit")`) {
+		if !strings.Contains(step.step.query, `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`) {
 			t.Fatalf("%s module does not load assumption-audit:\n%s", step.module, step.step.query)
 		}
 		if !strings.Contains(step.step.query, "Assumptions challenged") {
@@ -1309,8 +1309,8 @@ func TestPostRunMonitorPrependsWorkflowVersionUpgradeForOldManifest(t *testing.T
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.0 -> v1.0.1",
 		`workflow.json "version" to "1.0.1"`,
-		`get_reference_doc(kind="review-improve-log")`,
-		`get_reference_doc(kind="publish-strategy")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
+		`read_skill(skill_name="builder-reference", path="references/publish-strategy.md")`,
 		"password-protected static publish contract",
 		"named secret only",
 		"StatiCrypt",
@@ -1457,7 +1457,7 @@ func TestPostRunMonitorPrependsPublishGateUpgradeForVersion101Manifest(t *testin
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.1 -> v1.0.2",
 		`workflow.json "version" to "1.0.2"`,
-		`get_reference_doc(kind="publish-strategy")`,
+		`read_skill(skill_name="builder-reference", path="references/publish-strategy.md")`,
 		"Runloop dark password-gate contract",
 		"default green/white StatiCrypt page",
 		"normal verified publish turn will republish with the new gate",
@@ -1572,7 +1572,7 @@ func TestPostRunMonitorPrependsPulseReadabilityUpgradeForVersion103Manifest(t *t
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.3 -> v1.0.4",
 		`builder/improve.html`,
-		`get_reference_doc(kind="review-improve-log")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
 		"What matters now",
 		"recent runs: metadata row first",
 		"full-width second row",
@@ -1626,7 +1626,7 @@ func TestPostRunMonitorPrependsPulseFilterUpgradeForVersion104Manifest(t *testin
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.4 -> v1.0.5",
 		`builder/improve.html`,
-		`get_reference_doc(kind="review-improve-log")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
 		"Kind, Search, Reset",
 		"do not add a date picker",
 		`data-date="YYYY-MM-DD"`,
@@ -1678,7 +1678,7 @@ func TestPostRunMonitorPrependsRichPulseWidgetUpgradeForVersion105Manifest(t *te
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.5 -> v1.0.6",
 		`builder/improve.html`,
-		`get_reference_doc(kind="review-improve-log")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
 		"What matters now widget cards",
 		"color-coded signal tiles",
 		".tile.ok",
@@ -1894,8 +1894,8 @@ func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(
 	}
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.10 -> v1.0.11",
-		`get_reference_doc(kind="review-improve-log")`,
-		`get_reference_doc(kind="review-improve-log-skeleton")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`,
+		`read_skill(skill_name="builder-reference", path="references/review-improve-log-skeleton.md")`,
 		`data-pulse-schema="2"`,
 		"Issues and reviews",
 		"Decisions and analysis",
@@ -2240,7 +2240,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	for index, module := range []string{pulseModuleBugReview, pulseModuleLLMOpsReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
 		query := steps[index+1].query
 		for _, required := range []string{
-			`get_reference_doc(kind="pulse-review-fixer")`,
+			`read_skill(skill_name="builder-reference", path="references/pulse-review-fixer.md")`,
 			`module="` + module + `"`,
 			`role="reviewer"`,
 			"exactly one call_generic_agent",
@@ -2301,7 +2301,7 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 	if step.label != "bug-review" {
 		t.Fatalf("label = %q", step.label)
 	}
-	if !strings.Contains(step.query, `get_reference_doc(kind="pulse-review-fixer")`) {
+	if !strings.Contains(step.query, `read_skill(skill_name="builder-reference", path="references/pulse-review-fixer.md")`) {
 		t.Fatalf("independent prompt missing focused reviewer reference:\n%s", step.query)
 	}
 	for _, required := range []string{"complete active retained backlog", "do not launch a duplicate reviewer", "never combine reviewers"} {
@@ -2342,11 +2342,11 @@ func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ prompt, ref string }{
-		{archive, `get_reference_doc(kind="pulse-archive")`},
-		{gate, `get_reference_doc(kind="pulse-gate")`},
-		{moduleStep.query, `get_reference_doc(kind="pulse-review-fixer")`},
-		{dashboard, `get_reference_doc(kind="review-improve-log")`},
-		{finalizer, `get_reference_doc(kind="pulse-finalizer")`},
+		{archive, `read_skill(skill_name="builder-reference", path="references/pulse-archive.md")`},
+		{gate, `read_skill(skill_name="builder-reference", path="references/pulse-gate.md")`},
+		{moduleStep.query, `read_skill(skill_name="builder-reference", path="references/pulse-review-fixer.md")`},
+		{dashboard, `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`},
+		{finalizer, `read_skill(skill_name="builder-reference", path="references/pulse-finalizer.md")`},
 	} {
 		if !strings.Contains(tc.prompt, tc.ref) {
 			t.Fatalf("compact prompt missing focused reference %q: %s", tc.ref, tc.prompt)
@@ -2396,12 +2396,12 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 func TestPulseBackupRunsOnlyInParentTurn(t *testing.T) {
 	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
 	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
-	for _, required := range []string{"directly in this parent turn", "never delegate Git/backup work", `get_reference_doc(kind="backup-strategy")`} {
+	for _, required := range []string{"directly in this parent turn", "never delegate Git/backup work", `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")`} {
 		if !strings.Contains(preBackup, required) {
 			t.Fatalf("pre-backup message missing parent-only backup guard %q", required)
 		}
 	}
-	if !strings.Contains(finalizer, `get_reference_doc(kind="pulse-finalizer")`) {
+	if !strings.Contains(finalizer, `read_skill(skill_name="builder-reference", path="references/pulse-finalizer.md")`) {
 		t.Fatalf("finalizer does not load its focused contract: %s", finalizer)
 	}
 	raw, err := os.ReadFile(filepath.Join(findRepoRoot(t), "agent_go/cmd/server/guidance/templates/system/pulse-finalizer.md"))
@@ -3830,7 +3830,7 @@ func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 				t.Fatalf("module step %q missing single-renderer guard %q:\n%s", step.label, want, step.query)
 			}
 		}
-		if strings.Contains(step.query, `get_reference_doc(kind="review-improve-log")`) {
+		if strings.Contains(step.query, `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`) {
 			t.Fatalf("module step %q still loads the presentation contract:\n%s", step.label, step.query)
 		}
 	}

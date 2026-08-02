@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
-
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 // kebabCaseWorkflowName matches a kebab-case workflow folder name:
@@ -27,7 +25,7 @@ var kebabCaseWorkflowName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 //   - no-overwrite of existing workflows
 //
 // Registered only for multi-agent chat (not workflow phase).
-func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}
@@ -55,7 +53,7 @@ func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent *mcpagent.A
 
 	description := "Create a new workflow at Workflow/<folder_name>/ with the given workflow.json and planning/plan.json. Use one large message_sequence per shared-context span, with proof/provenance, evidence-based double-checking, repair, and final validation inside it; create another large sequence only when its context should be isolated. Put deterministic API/SDK/CLI/data-fetch/parse/persist work in coherent scripted-fetcher candidates with authoritative validated outputs. Never use one regular step per endpoint, routine action, or proof check. This tool writes structure only; after creation tell the user to open Workshop so deterministic steps are declared scripted and main.py is authored/tested before production. The tool validates the complete plan graph before writing anything and refuses dangling targets or overwrite."
 
-	return mcpagent.AddDefinitionTool(underlyingAgent,
+	return underlyingAgent.RegisterCustomTool(
 		"create_workflow",
 		description,
 		params,

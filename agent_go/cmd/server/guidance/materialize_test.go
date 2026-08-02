@@ -1,6 +1,7 @@
 package guidance
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -24,12 +25,12 @@ func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string
 func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 	skill := MaterializeReferenceSkill("workshop")
 	if skill == nil {
-		t.Fatal("expected workflow-reference skill")
+		t.Fatal("expected builder-reference skill")
 	}
 
 	for _, want := range []string{"LLM/provider configuration via tools", "not by reading or editing `config/` files", "references/llm-selection.md", "references/workspace-media-tools.md"} {
 		if !strings.Contains(skill.Description+skill.Content, want) {
-			t.Fatalf("workflow-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
+			t.Fatalf("builder-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
 		}
 	}
 
@@ -61,19 +62,19 @@ func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 func TestMaterializedReferenceSkillUsesMultiAgentSurface(t *testing.T) {
 	skill := MaterializeReferenceSkill("multi-agent")
 	if skill == nil {
-		t.Fatal("expected multiagent-reference skill")
+		t.Fatal("expected builder-reference skill")
 	}
-	if skill.Name != "multiagent-reference" {
-		t.Fatalf("skill name = %q, want multiagent-reference", skill.Name)
+	if skill.Name != "builder-reference" {
+		t.Fatalf("skill name = %q, want builder-reference", skill.Name)
 	}
 
 	for _, want := range []string{"Multi-agent chat reference docs", "references/llm-provider-config.md", "references/delegation.md"} {
 		if !strings.Contains(skill.Description+skill.Content, want) {
-			t.Fatalf("multiagent-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
+			t.Fatalf("builder-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
 		}
 	}
 	if strings.Contains(skill.Content, "references/llm-selection.md") {
-		t.Fatalf("multiagent-reference should not expose workflow-only llm-selection\n%s", skill.Content)
+		t.Fatalf("builder-reference should not expose workflow-only llm-selection\n%s", skill.Content)
 	}
 
 	llmProviderConfig := materializedFileContent(t, skill, "references/llm-provider-config.md")
@@ -94,7 +95,7 @@ func TestSystemToolsSkillTeachesConfigToolOnlyAccess(t *testing.T) {
 	if skill == nil {
 		t.Fatal("expected system-tools skill")
 	}
-	for _, want := range []string{"## Configuration access", "LLM/provider configuration is tool-managed", "Do not read or edit `config/` files", "get_reference_doc(kind=\"llm-provider-config\")", "get_reference_doc(kind=\"llm-selection\")", "get_reference_doc(kind=\"workspace-media-tools\")"} {
+	for _, want := range []string{"## Configuration access", "LLM/provider configuration is tool-managed", "Do not read or edit `config/` files", "read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")", "read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")", "read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")"} {
 		if !strings.Contains(skill.Content, want) {
 			t.Fatalf("system-tools skill should contain %q\n%s", want, skill.Content)
 		}
@@ -106,12 +107,87 @@ func TestSystemToolsSkillDoesNotPointMultiAgentAtWorkflowOnlyLLMSelection(t *tes
 	if skill == nil {
 		t.Fatal("expected system-tools skill")
 	}
-	for _, want := range []string{"get_reference_doc(kind=\"llm-provider-config\")", "list_published_llms", "save_published_llm"} {
+	for _, want := range []string{"read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")", "list_published_llms", "save_published_llm"} {
 		if !strings.Contains(skill.Content, want) {
 			t.Fatalf("multi-agent system-tools skill should contain %q\n%s", want, skill.Content)
 		}
 	}
-	if strings.Contains(skill.Content, "get_reference_doc(kind=\"llm-selection\")") {
+	if strings.Contains(skill.Content, "read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")") {
 		t.Fatalf("multi-agent system-tools should not mention workflow-only llm-selection\n%s", skill.Content)
+	}
+}
+
+// Pulse reviewers and Fixers run as stage agents whose prompt names five
+// reference docs. That worked while get_reference_doc was a global tool needing
+// no attachment. read_skill replaced it and resolves only against attached
+// skills, so a stage with none attached gets "available skills: " — an empty
+// list — for every one of them. The stage runs in an isolated tmp cwd with no
+// MCP servers and no shell built-ins, so a doc it cannot load is a doc it cannot
+// reach at all. This pins both halves: the prompt must say how to load, and the
+// bundle must actually carry what it names.
+func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
+	prompt := RenderSystemDoc("pulse-review-fixer")
+	if prompt == "" {
+		t.Fatalf("pulse-review-fixer rendered empty")
+	}
+	if !strings.Contains(prompt, `read_skill(skill_name="builder-reference"`) {
+		t.Fatalf("pulse-review-fixer names reference docs but never says how to load them")
+	}
+	if strings.Contains(prompt, "get_reference_doc") {
+		t.Fatalf("pulse-review-fixer still references the removed get_reference_doc tool")
+	}
+
+	// The docs are split across bundles — review-artifact-drift is in
+	// workflow-commands, the rest in builder-reference — so the whole surface
+	// must be attached, not just the reference skill.
+	var attached []*llmtypes.Skill
+	if err := AttachReferenceSurface("workshop", func(s *llmtypes.Skill) error {
+		attached = append(attached, s)
+		return nil
+	}); err != nil {
+		t.Fatalf("attach reference surface: %v", err)
+	}
+	for _, kind := range []string{
+		"fix-verification", "strategy-auditor", "pulse-bug-review",
+		"llm-selection", "review-artifact-drift",
+	} {
+		want := "references/" + kind + ".md"
+		found := false
+		for _, skill := range attached {
+			for _, f := range skill.SupportingFiles {
+				if f.RelPath == want {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no attached skill carries %s, which pulse-review-fixer tells the agent to read", want)
+		}
+	}
+}
+
+// The standalone Fixer is the single writer for a pass, so it must see the whole
+// backlog before choosing an order. Scoping by module produced the failure this
+// change addresses: two focused runs on 2026-08-02 both landed on stores_health
+// while six operator answers and five recurring deliver-briefing concerns —
+// neither of which needs a reviewer first — went untouched for six days.
+func TestStandalonePulseFixerWorksTheWholeBacklog(t *testing.T) {
+	raw, err := os.ReadFile("templates/improve/pulse-fixer.md")
+	if err != nil {
+		t.Fatalf("read pulse-fixer template: %v", err)
+	}
+	prompt := string(raw)
+	for _, want := range []string{
+		"whole active backlog across every module",
+		"query_workflow_db",
+		"seen_count",
+		"answered",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("pulse-fixer prompt is missing %q — the Fixer cannot size or prioritize the backlog without it", want)
+		}
+	}
+	if strings.Contains(prompt, "for the\n   selected owning modules") {
+		t.Errorf("pulse-fixer still scopes the backlog to selected modules")
 	}
 }

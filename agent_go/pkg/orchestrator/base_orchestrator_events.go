@@ -101,4 +101,3 @@ func (bo *BaseOrchestrator) EmitOrchestratorAgentError(ctx context.Context, agen
 
 	bo.emitEvent(ctx, orchestrator_events.OrchestratorAgentError, eventData)
 }
-

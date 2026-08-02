@@ -470,8 +470,8 @@ func (p *SupabaseProvider) ExchangeCode(ctx context.Context, code, redirectURI s
 		ExpiresIn    int    `json:"expires_in"`
 		TokenType    string `json:"token_type"`
 		User         struct {
-			ID    string `json:"id"`
-			Email string `json:"email"`
+			ID          string `json:"id"`
+			Email       string `json:"email"`
 			AppMetadata struct {
 				Provider string `json:"provider"`
 			} `json:"app_metadata"`
@@ -546,8 +546,8 @@ func (p *SupabaseProvider) ValidateCredentials(username, password string) (*Exte
 
 	var signInResp struct {
 		User struct {
-			ID    string `json:"id"`
-			Email string `json:"email"`
+			ID           string `json:"id"`
+			Email        string `json:"email"`
 			UserMetadata struct {
 				Name     string `json:"name"`
 				FullName string `json:"full_name"`

@@ -13,7 +13,7 @@ Start with the operator journey, then use the subsystem references when you need
 - [Organization and Agents](multiagent/README.md): delegation, Org Pulse, shared memory, and agent-to-agent coordination.
 - [Core](core/README.md): providers, MCP, browser sessions, connectors, secrets, security, and shared runtime services.
 
-`docs/bugs/` is an incident archive. `docs/refactor/` records implementation migrations. Neither folder is the recommended entry point for operators.
+`docs/bugs/` is an incident archive — see [its index](bugs/README.md), which groups the 2026-08-01/02 investigations into how the agent-facing tool and permission contract actually behaves. `docs/refactor/` records implementation migrations — see [its index](refactor/README.md), where status distinguishes a shipped design from one still being built. Neither folder is the recommended entry point for operators, but the bugs index is the fastest way to understand why an agent is told one thing and the runtime does another.
 
 ## Placement Rules
 

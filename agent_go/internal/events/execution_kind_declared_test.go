@@ -28,6 +28,49 @@ func backgroundStartedEvent(agentID, name string, kind orchEvents.ExecutionKind)
 	}
 }
 
+func backgroundCompletedEvent(agentID, name string, kind orchEvents.ExecutionKind) Event {
+	return Event{
+		ID:        "e2",
+		Type:      "background_agent_completed",
+		Timestamp: time.Now(),
+		SessionID: "s1",
+		Data: &unifiedevents.AgentEvent{
+			Type:      "background_agent_completed",
+			SessionID: "s1",
+			Component: "background-agent",
+			Data: &orchEvents.BackgroundAgentCompletedEvent{
+				BaseEventData: unifiedevents.BaseEventData{Timestamp: time.Now(), SessionID: "s1"},
+				AgentID:       agentID,
+				Name:          name,
+				Status:        "failed",
+				Kind:          kind,
+			},
+		},
+	}
+}
+
+func autoNotificationSteeredEvent(agentID, name string, kind orchEvents.ExecutionKind) Event {
+	return Event{
+		ID:        "e3",
+		Type:      string(orchEvents.AutoNotificationSteered),
+		Timestamp: time.Now(),
+		SessionID: "s1",
+		Data: &unifiedevents.AgentEvent{
+			Type:      orchEvents.AutoNotificationSteered,
+			SessionID: "s1",
+			Component: "background-agent",
+			Data: &orchEvents.AutoNotificationSteeredEvent{
+				BaseEventData: unifiedevents.BaseEventData{Timestamp: time.Now(), SessionID: "s1"},
+				AgentID:       agentID,
+				Name:          name,
+				Status:        "failed",
+				Provider:      "codex-cli",
+				Kind:          kind,
+			},
+		},
+	}
+}
+
 // A full run declares ExecutionKindFullRun because it is a CONTAINER with no
 // conversation of its own. Flattening every background_agent_* event to
 // "background_agent" discarded that declaration -- exactly what
@@ -47,6 +90,37 @@ func TestDeclaredExecutionKindSurvivesBackgroundAgentEvents(t *testing.T) {
 	}
 	if got[0].ExecutionID != "workflow-full-abc" {
 		t.Errorf("ExecutionID = %q, want the agent id", got[0].ExecutionID)
+	}
+}
+
+func TestDeclaredExecutionKindSurvivesBackgroundAgentCompletion(t *testing.T) {
+	store := NewEventStore(10)
+	store.AddEvent("s1", backgroundCompletedEvent(
+		"workflow-full-abc", "Full Workflow Execution", orchEvents.ExecutionKindFullRun))
+
+	got := store.GetAllEventsRaw("s1")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(got))
+	}
+	if got[0].ExecutionKind != string(orchEvents.ExecutionKindFullRun) {
+		t.Errorf("ExecutionKind = %q, want the declared %q", got[0].ExecutionKind, orchEvents.ExecutionKindFullRun)
+	}
+	if got[0].ExecutionID != "workflow-full-abc" {
+		t.Errorf("ExecutionID = %q, want the agent id", got[0].ExecutionID)
+	}
+}
+
+func TestDeclaredExecutionKindSurvivesAutoNotification(t *testing.T) {
+	store := NewEventStore(10)
+	store.AddEvent("s1", autoNotificationSteeredEvent(
+		"workflow-full-abc", "full-run [job-search / iteration-0]", orchEvents.ExecutionKindFullRun))
+
+	got := store.GetAllEventsRaw("s1")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(got))
+	}
+	if got[0].ExecutionKind != string(orchEvents.ExecutionKindFullRun) {
+		t.Errorf("ExecutionKind = %q, want the declared %q", got[0].ExecutionKind, orchEvents.ExecutionKindFullRun)
 	}
 }
 

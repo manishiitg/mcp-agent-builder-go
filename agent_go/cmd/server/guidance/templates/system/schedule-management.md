@@ -4,7 +4,7 @@ You can create scheduled tasks that run automatically on a cron schedule. Multi-
 
 > **Never edit `multiagent-schedules.json` directly** (no `execute_shell_command`, `python3`, `jq`, or file writes). That path is protected by the workspace folder guard, and direct edits can silently drop built-in/system entries (e.g. a memory-enrich schedule) or corrupt the file. Always use the tools — they read-modify-write the whole file server-side, preserving entries you are not changing, and immediately (re)activate the schedule in the running scheduler.
 
-> Scope: this doc covers **multi-agent chat** schedules only, which are **cron-only** (a repeating cadence). To schedule a **workflow** — including dated, one-time **calendar** schedules (a fixed list of specific date/time runs, e.g. a content calendar) — use the workflow-schedule tools (`create_workflow_schedule` / `create_calendar_workflow_schedule`) documented in `get_reference_doc(kind="workflow-tools")`; those live in the workflow's `workflow.json`, not here.
+> Scope: this doc covers **multi-agent chat** schedules only, which are **cron-only** (a repeating cadence). To schedule a **workflow** — including dated, one-time **calendar** schedules (a fixed list of specific date/time runs, e.g. a content calendar) — use the workflow-schedule tools (`create_workflow_schedule` / `create_calendar_workflow_schedule`) documented in `read_skill(skill_name="builder-reference", path="references/workflow-tools.md")`; those live in the workflow's `workflow.json`, not here.
 
 ### Tools
 

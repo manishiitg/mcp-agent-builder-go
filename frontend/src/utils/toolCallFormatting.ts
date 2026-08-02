@@ -97,6 +97,21 @@ function prettyJson(value: unknown): string {
  */
 const HARNESS_TOOL_ERROR = /tool execution (?:failed|canceled|timed out): layer=/
 
+/**
+ * A folder-guard denial on stderr, which the exit code does not report.
+ *
+ * Permission denials have been observed inside shell results carrying
+ * exit_code 0, including pipelines where the final command determines the
+ * status. The underlying `find`/`ls` command normally returns non-zero for a
+ * direct denial, but the UI only sees the returned envelope. A CDP test step on
+ * 2026-08-02 produced eleven green-looking denial results.
+ *
+ * Matched on the two denial phrases only. "No such file or directory" is
+ * deliberately excluded: probing for a path that may not exist is ordinary
+ * behaviour, and flagging it would train the operator to ignore the marker.
+ */
+const SHELL_PERMISSION_DENIED = /(?:Operation not permitted|[Pp]ermission denied)/
+
 function textCarriesHarnessError(value: unknown): boolean {
   return typeof value === 'string' && HARNESS_TOOL_ERROR.test(value)
 }
@@ -130,6 +145,10 @@ function jsonValueIsError(value: unknown): boolean {
   if (value.success === false || value.isError === true || value.is_error === true) return true
   if (typeof value.exit_code === 'number' && value.exit_code !== 0) return true
   if (typeof value.error === 'string' && value.error.trim().length > 0) return true
+  // Checked on stderr specifically, not anywhere in the payload: a denial
+  // quoted inside stdout is usually a log or a findings table being read, not
+  // this command being refused.
+  if (typeof value.stderr === 'string' && SHELL_PERMISSION_DENIED.test(value.stderr)) return true
   // A bridge failure rides in stdout with exit_code 0, and nests: the shell
   // result wraps an MCP envelope which wraps the failing tool's own payload.
   // Recursing is what finds it at whatever depth this particular tool landed.

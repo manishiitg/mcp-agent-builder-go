@@ -45,7 +45,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 func workflowDBMutateToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "mutate_workflow_db",
-		Description: "Atomically mutate rows in the current workflow SQLite database. Available only with trusted DB write authority. Accepts 1-20 INSERT, UPDATE, or DELETE statements, commits all or rolls all back, and returns affected-row receipts. Schema changes use workflow migrations, not this tool.",
+		Description: "Atomically mutate rows in the current workflow SQLite database. Available only with trusted DB write authority. Accepts 1-20 INSERT, UPDATE, or DELETE statements, including statements prefixed by WITH CTEs; commits all or rolls all back and returns affected-row receipts. Schema changes use workflow migrations, not this tool.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -54,7 +54,7 @@ func workflowDBMutateToolDefinition() llmtypes.Tool {
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"sql":    map[string]any{"type": "string", "description": "One INSERT, UPDATE, or DELETE statement. Use ? placeholders for values."},
+							"sql":    map[string]any{"type": "string", "description": "One INSERT, UPDATE, or DELETE statement, optionally prefixed by WITH CTEs. Use ? placeholders for values."},
 							"params": map[string]any{"type": "array", "description": "Optional positional values for ? placeholders."},
 						},
 						"required": []string{"sql"},
@@ -131,8 +131,8 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		if err != nil {
 			return "", err
 		}
-		if access := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); access != "" && access != "read-write" {
-			return "", fmt.Errorf("workflow database mutation denied for session %q: effective db_access is %q", sessionID, access)
+		if access := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); access != "read-write" {
+			return "", fmt.Errorf("workflow database mutation denied for session %q: explicit db_access=read-write is required (effective value %q)", sessionID, access)
 		}
 		dbPath, err := resolveWorkflowDBPathFromConfig(sessionID, cfg)
 		if err != nil {

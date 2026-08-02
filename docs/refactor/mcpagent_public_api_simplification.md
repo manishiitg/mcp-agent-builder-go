@@ -1,9 +1,121 @@
 # mcpagent public API simplification
 
-**Status:** In progress
+**Status:** Immutable cutover and planned public-surface reduction complete
 **Date:** 2026-08-01
+**Last updated:** 2026-08-02
 **Repositories:** `mcpagent`, `mcp-agent-builder-go`
 **Related:** `docs/bugs/custom_tool_category_as_agent_addressing.md`
+
+## Implementation status
+
+Completed core boundary:
+
+- `Agent` is opaque: it exposes exactly four methods and no exported fields.
+- `Session` exposes exactly five methods; both lifecycle types use
+  `Close() error`.
+- Builder, workflow, chat, delegation, gRPC, Family Server, and test callers no
+  longer read or write public `Agent` state.
+- Construction-time runtime values use typed `RuntimeConfig`; request-specific
+  streaming and tool policy use `Turn`.
+- Read-only access uses definition, diagnostics, runtime-info, and opaque
+  session-handle snapshots.
+- `DefinitionAssembly`, `LegacyOptions`, all 57 exported `With*` functions, and
+  the three legacy public constructors were removed from the supported API.
+- Unsafe testing/mutation helpers, example-only conveniences, and dead recovery
+  wrappers were removed. The package now has exactly 45 exported functions,
+  down from 148 at the start of this pass.
+- The unused example trees were deleted rather than allowing demonstrations to
+  keep compatibility APIs public. Command tests call `Agent.Run` directly.
+- The legacy Tool Search mode was removed completely. Provider-native Codex
+  `tool_search` disabling remains a separate transport capability.
+- Attached skills now have one transport-neutral access contract owned by
+  `mcpagent`: attaching the first skill installs the reserved `read_skill` tool,
+  exposes it through the coding-agent bridge, and keeps native CLI projection
+  as an optional optimization rather than the only way to read a skill.
+- Golden tests pin the exact 45-function inventory and the exact 14-function
+  `Agent` facade, as well as the four/five method contracts, zero exported
+  `Agent` fields, matching close contracts, and no exported `ForTesting` helper.
+
+Verified on the current working tree (2026-08-02):
+
+- `go test ./... -count=1` passes in `mcpagent`, including the exact API
+  ratchets.
+- `go test -race ./agent -count=1` and `go vet ./agent` pass in
+  `mcpagent`.
+- `go test ./... -count=1` passes in `mcp-agent-builder-go/agent_go`.
+- That suite compiles and verifies the real `agent_go/cmd/family-server` target.
+- `npm run build` passes in `frontend`, and the rebuilt static bundle contains
+  no legacy structured-output event renderer.
+- `npm test -- --run` passes all 54 frontend test files (335 tests).
+
+### Surface audit (2026-08-02): exact contract after reduction
+
+The final measured surface is:
+
+```text
+*Agent methods                                    4
+Agent exported fields                             0
+*Session methods                                  5
+package functions                                45
+  exported With* options                          0
+  public constructors returning *Agent            1
+  functions accepting or returning *Agent        14
+```
+
+The AST-based golden test pins the sorted names, not merely these counts. A
+deleted export cannot be silently replaced by a different export, and moving a
+method into a package function changes the reviewed 14-name facade list.
+
+### Consumer boundary and Family Server
+
+The supported local consumers are `mcpagent`'s gRPC/command packages and
+`mcp-agent-builder-go/agent_go`, which uses the local module replacement. The
+real Family Server is `agent_go/cmd/family-server`; it lives on
+`mcp-agent-builder-go` main and is compiled by the full builder suite. Its small
+refactor-branch delta uses the immutable session API.
+
+The separately named `/Users/mipl/ai-work/mcpagent-family-server` folder is an
+old worktree of the **same mcpagent module** on
+`fix/stale-claude-native-resume`. It is not the Family Server application and is
+not a downstream consumer to migrate. Its stale-resume commits should be merged
+through normal branch integration if still wanted; its legacy public API does
+not define the supported contract.
+
+No third-party consumer was found in the local workspace. A breaking published
+release still requires an explicit external-consumer policy.
+
+### Completed reduction work
+
+The five-step follow-up is complete on the supported code path:
+
+1. The exact exported inventory and Agent-facade inventory are golden-tested.
+2. The builder constructs `AgentDefinition` directly; `DefinitionAssembly` and
+   all duplicate `AddDefinition*` wrappers are gone.
+3. `RuntimeConfig` is grouped into generation, tools, context, coding, MCP,
+   workspace, and observability values. `LegacyOptions`, exported `With*`
+   options, and public legacy constructors are gone.
+4. Package-only ask, retry, summarization-threshold, recovery, and definition
+   lookup helpers are private. Dead constructors and one-shot structured/test
+   conveniences were deleted. Unused example trees were deleted with user
+   approval; command tests use `Agent.Run` and diagnostics.
+5. The actual Family Server target is part of the active builder suite and
+   passes. The similarly named old mcpagent worktree was correctly excluded as
+   a consumer.
+
+The legacy structured-output subsystem went further than originally planned.
+The structured ask/conversion helpers and dynamically forced completion tool
+were removed outright, together with their private implementation, bespoke
+events, tracing spans, UI renderers, and obsolete command tests. A grep across
+both supported consumers found no runtime caller. Builder-owned JSON results
+continue to use explicit prompt contracts plus prevalidation, or ordinary
+declared tools. Coding-agent `transport=structured` remains intact because it
+is the CLI transport protocol, not this deleted response-conversion feature.
+
+What remains public is context compaction/summarization, resume, steering,
+diagnostics, and retirement, because active production code calls them. They
+form the reviewed 14-name facade ratchet. Moving some of them into narrower
+runtime services may be a future cleanup, but is not a compatibility shim or
+blocker for this refactor.
 
 ## Decision
 
@@ -25,8 +137,9 @@ API.
 
 ## Why this refactor is needed
 
-`mcpagent.Agent` currently exposes 70 methods. The large surface allows callers
-to manage internal lifecycle order themselves:
+Before this cutover, `mcpagent.Agent` exposed 70 methods and 64 exported mutable
+fields. That large surface allowed callers to manage internal lifecycle order
+themselves:
 
 - overwrite, append, clear, inspect, and rebuild prompt state;
 - register a tool and then explicitly refresh a second registry;
@@ -40,10 +153,11 @@ execution registries, schema caches, and session handles. A caller can invoke
 individually valid methods in an invalid order.
 
 The first containment pass reduced the surface from 84 to 70 methods and
-removed the worst prompt and registry lifecycle combinations. It is not the
-final design. In particular, methods such as `SetInstructions`,
-`AddInstructions`, `ResetInstructions`, `SetToolAccess`, and
-`RegisterCustomTool` still allow an already-created agent to change identity.
+removed the worst prompt and registry lifecycle combinations. The completed
+core cutover reduced the concrete `Agent` surface again—from 70 methods and 64
+exported fields to four methods and zero exported fields. The old mutation
+operations are no longer methods on a live agent; the remaining compatibility
+work is confined to constructors and package-level bridge/runtime helpers.
 
 Production evidence makes the cost concrete:
 
@@ -300,12 +414,12 @@ The exact count is less important than the ownership boundary:
 | `HandleLargeOutputVirtualTool` | Internal routing. |
 | `BuildLargeOutputFilePath` | Internal storage service. |
 
-### Tool-search diagnostics
+### Removed legacy Tool Search diagnostics
 
 | Current method | Disposition |
 |---|---|
-| `GetDiscoveredToolCount` | Diagnostics/result metadata. |
-| `GetDeferredToolCount` | Diagnostics/result metadata. |
+| `GetDiscoveredToolCount` | Removed with the legacy Tool Search mode. |
+| `GetDeferredToolCount` | Removed with the legacy Tool Search mode. |
 
 ### Legacy prompt method
 
@@ -448,16 +562,34 @@ diagnostics must identify whether the legacy or replacement path handled a run.
 - `go test ./...` passes in `mcpagent` and `go test ./agent_go/...` passes in
   `mcp-agent-builder-go`.
 
-## Cutover progress (2026-08-01)
+## Cutover progress (updated 2026-08-02)
 
 The branch-level cutover now has a working end-to-end spine:
 
+- the concrete `Agent` now exposes exactly four methods and zero exported
+  fields; `Session` exposes exactly five methods, and both `Close` methods
+  return `error`;
+- package-level exported functions fell from 148 to 45. AST golden tests pin
+  every exported name plus the reviewed 14-function Agent facade and reject
+  `ForTesting` backdoors;
+- the builder no longer writes runtime state into public `Agent` fields. It
+  supplies provider keys, prompt labels, workspace paths, session handles, and
+  per-turn streaming callbacks through typed construction/turn inputs;
+- read-only state needed by callers is exposed through immutable definition,
+  diagnostics, runtime-info, and opaque session-handle snapshots rather than
+  mutable fields;
+- the full Go suites pass in both repositories, including
+  `agent_go/cmd/family-server`;
 - direct and MCP tools enter one canonical name-keyed registry;
 - request-time manifests and `get_api_spec` resolve from that registry;
 - conflicting implementation owners fail before replacing registry state;
 - `AgentDefinition` is validated and deeply cloned before runtime creation;
 - the reusable `agentsession` path and the main orchestrator assemble direct
   tools and MCP sources before constructing the agent;
+- attached skills are now readable through the intrinsic, reserved
+  `read_skill` tool on API and coding-agent transports; CLI filesystem
+  projection remains an optimization, so background/stage-agent isolation no
+  longer changes the skill-reading contract;
 - `BaseAgent` executes through `Run(Turn)` rather than choosing among ask and
   continuation methods itself;
 - the reusable `agentsession` adapter and the legacy `agentwrapper` execution
@@ -480,18 +612,18 @@ The branch-level cutover now has a working end-to-end spine:
   the freeze includes static prompt supplements, cloned skill definitions,
   direct tool executors/schemas, and observers, while replacement retirement
   preserves shared tracers and MCP/provider state;
-- chat and delegation prompt/skill/tool assembly now routes through a dedicated
-  `DefinitionAssembly`, which seals at finalization and rejects later identity
-  changes; runtime `Agent` access is retained only for diagnostics, observers,
-  steering, and continuation during the remaining caller migration;
+- chat and delegation prompt/skill/tool assembly now builds a private
+  `AgentDefinition` draft and constructs one immutable Agent at finalization;
+  runtime `Agent` access is retained only for diagnostics, steering,
+  continuation, and explicit replacement retirement;
 - the gRPC adapter now owns an explicit `Session` and returns response, history,
   usage, and costs from `Result` instead of calling legacy `Ask*`, token getters,
   or raw tool maps; and
 - the concrete `Agent` surface is now the final four methods: `Start`, `Run`,
   `Definition`, and `Close`; the golden test pins that exact list;
-- workflow, chat, delegation, and gRPC tool factories assemble one cached
-  `DefinitionAssembly`, which is sealed at the first-turn boundary and rejects
-  later instruction, skill, tool, or observer changes;
+- workflow, chat, delegation, and gRPC tool factories assemble direct
+  `AgentDefinition` values before the first-turn boundary and reject later
+  identity changes;
 - workflow and chat permissions are passed as `Turn.ToolPolicy`, while folder
   guards live in `RuntimeConfig` rather than mutable agent identity;
 - workflow steering now goes through the active `Session`, whose delivery path
@@ -499,19 +631,17 @@ The branch-level cutover now has a working end-to-end spine:
 - gRPC custom tools are constructed into the immutable definition. Their stable
   executors proxy to the currently bound stream callback, so a new conversation
   changes runtime routing without replacing tool schemas or mutating the Agent;
-- structured-output completion tools are now declared before the builder seals
-  its definition. The compatibility helper may still add one dynamically only
-  for legacy `NewAgent` instances with no `AgentDefinition`; it rejects that
-  fallback for immutable agents; and
 - cleanup ticker shutdown now detaches lifecycle state under a mutex and uses
   goroutine-local channels, removing the construction/close race exposed by the
   new definition tests.
 
-Focused runtime and diagnostic package functions remain for bridge internals,
-legacy command examples, and synthetic tests. They do not mutate agent identity
-and are deliberately outside the concrete `Agent` method set. The remaining
-cleanup is structural (moving those helpers into narrower internal services),
-not a blocker for the immutable construction/session cutover.
+The duplicate construction paths are gone: no `LegacyOptions`, exported
+`With*`, `DefinitionAssembly`, public legacy constructor, or legacy Tool Search
+mode remains. The remaining 14 Agent-related package functions are exact-listed
+because active production code uses them for context maintenance, diagnostics,
+resume, steering, transport startup, replacement, and the one manual
+virtual-tool test boundary. They are no longer an unbounded compatibility
+surface.
 
 ## Review (2026-08-01)
 
@@ -618,6 +748,114 @@ Anyone deciding whether to fund this work should see those three numbers.
   `Send` and their current semantics differ.
 - Acceptance criteria should include the golden test *count* as a committed
   number, not just "no more than 12". A count that can be edited is not a ratchet.
+
+## Canonical registry follow-up: complete
+
+**Status: implemented and verified (2026-08-02).** The audit found that the
+observation was real architectural debt, even though no production divergence
+had yet been captured. `Agent.customTools` contained no information absent from
+`registeredTool`: definition, executor, display group, and timeout all existed
+in both records.
+
+The two stores could silently disagree because registration wrote them in
+separate operations. The timeout path was especially weak: it updated
+`customTools` first and discarded any error while updating `toolRegistry`.
+Meanwhile discovery, bridge schema lookup, serial execution, parallel execution,
+skill-name collision checks, and timeout selection mostly read the projection.
+The structure therefore made the object documented as canonical the minority
+source in practice.
+
+The follow-up removed `CustomTool` and `Agent.customTools` completely. The
+canonical registry is now the sole Agent-side record for direct-tool identity,
+schema, executor, display metadata, and timeout. All of these consumers read it:
+
+- prompt and OpenAPI discovery;
+- bridge MCP schema construction;
+- serial and parallel direct-tool execution;
+- per-tool timeout selection;
+- direct-tool category/display-group enumeration;
+- attached-skill reserved-name checks; and
+- construction of the code-execution executor projection.
+
+Registration now writes one complete canonical record, including timeout, in one
+operation. Re-registering the same direct tool in a different display group is
+rejected inside the locked registry as well as at the caller boundary, so two
+concurrent registrations cannot bypass the invariant.
+
+`agent/codeexec.ToolRegistry` still contains executor maps. Those are deliberate
+session-scoped runtime projections used by the HTTP bridge: they contain only
+callable functions, are rebuilt from the canonical snapshot, and cannot answer
+identity, schema, category, or timeout questions. They are not a second
+Agent-side tool registry.
+
+Regression coverage now asserts that a timeout-bearing direct tool produces one
+complete canonical record and that the executor projection is derived from that
+record. `go test ./...`, `go test -race ./agent -count=1`, and `go vet ./agent`
+pass in `mcpagent`; `go test ./agent_go/... -count=1` passes in the builder. The
+exported API ratchets are unchanged: four `Agent` methods, zero exported `Agent`
+fields, and 45 package functions.
+
+Two related comments remain intentionally out of scope because their state is
+still live: the legacy per-provider session ID fields alongside
+`codingProviderSessionHandle`, and supported same-display-group re-registration
+used to refresh session-aware executors.
+
+### Session-scoped permissions after the projection change: verified
+
+Removing `Agent.customTools` changed where the code-execution executor map comes
+from, so the session permission model was re-traced end to end rather than
+assumed. It is intact. There are two enforcement surfaces and both receive the
+same policy from one place:
+
+```text
+Turn.ToolPolicy
+  → normalizeToolPolicy
+  → ctx turnPolicyContextKey  → isToolAllowedForContext   (in-process calls)
+  → codeexec.SetSessionToolAllowList(sessionID, allowed)  (HTTP bridge calls)
+```
+
+`Session.Run` (`turn_session.go:189`) writes both on every turn, so a
+code-executing agent cannot escape a per-turn policy by reaching a tool over the
+HTTP bridge instead of calling it directly.
+
+Three properties were confirmed in code, not inferred:
+
+1. **Executor refresh still works.** `canonicalToolRegistry.register` overwrites
+   an existing record when kind, source, and display group match. The builder
+   paths that re-register a tool to swap in a session-aware executor therefore
+   still take effect; the projection is rebuilt from the updated record.
+2. **Session registration happens on both paths** — at construction
+   (`agent.go:1866`) and on re-registration (`agent.go:3391`), each guarded by a
+   non-empty `sessionID`.
+3. **A session registry does not fall through to global.** Once
+   `sessionCustomTools[sessionID]` exists, a missing tool is an error rather than
+   a global lookup, so one workflow cannot borrow another's executor. Only a
+   session with no registry at all uses the legacy global path.
+
+**One real gap was found and closed.** The HTTP-bridge allow-list gate in
+`CallCustomToolWithSession` — the half of the model that enforces `ToolPolicy`
+over the bridge — had no test anywhere in either repository. The in-process half
+was covered (`agent/session_policy_test.go`, `skill_reader_test.go`) and
+cross-session executor isolation was covered
+(`TestCallCustomToolWithSessionDoesNotBorrowGlobalExecutor`), but nothing
+exercised the allow list itself. It could have stopped enforcing while every
+existing test stayed green.
+
+Four tests were added to `agent/codeexec/registry_test.go`:
+
+- a tool outside the allow list is rejected and its executor never runs;
+- a tool inside the allow list executes;
+- a nil allow list means unrestricted, not blocked — `Session.Run` passes nil
+  whenever `ToolPolicy.AllowedTools` is empty, so inverting this would break
+  every unrestricted turn rather than fail closed on one;
+- one session's allow list does not gate another's, since concurrent workflows
+  share one process-wide registry.
+
+They were mutation-checked: disabling the gate in `CallCustomToolWithSession`
+fails exactly the two enforcement tests and leaves the two permissive ones
+passing, which is the expected signature. `go test ./...`,
+`go test -race ./agent ./agent/codeexec`, and `go vet` pass in `mcpagent`, and
+`go test ./... -count=1` passes in `agent_go`.
 
 ## Non-goals
 

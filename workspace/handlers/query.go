@@ -233,6 +233,172 @@ func firstSQLKeyword(input string) string {
 	return strings.ToUpper(input[:end])
 }
 
+type sqlPolicyToken struct {
+	word       string
+	symbol     byte
+	identifier bool
+}
+
+// tokenizeSQLForPolicy is a deliberately small lexer for the mutation policy.
+// It does not try to validate SQLite syntax; SQLite still does that. Its job is
+// only to distinguish CTE structure from quoted text/comments so the policy can
+// identify the top-level statement that follows a WITH clause without guessing
+// from a substring.
+func tokenizeSQLForPolicy(input string) ([]sqlPolicyToken, error) {
+	var tokens []sqlPolicyToken
+	for i := 0; i < len(input); {
+		ch := input[i]
+		switch {
+		case ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f':
+			i++
+		case ch == '-' && i+1 < len(input) && input[i+1] == '-':
+			i += 2
+			for i < len(input) && input[i] != '\n' {
+				i++
+			}
+		case ch == '/' && i+1 < len(input) && input[i+1] == '*':
+			end := strings.Index(input[i+2:], "*/")
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated block comment")
+			}
+			i += end + 4
+		case ch == '\'' || ch == '"' || ch == '`':
+			quote := ch
+			quotedIdentifier := quote != '\''
+			i++
+			closed := false
+			for i < len(input) {
+				if input[i] != quote {
+					i++
+					continue
+				}
+				if i+1 < len(input) && input[i+1] == quote {
+					i += 2
+					continue
+				}
+				i++
+				closed = true
+				break
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated quoted value")
+			}
+			tokens = append(tokens, sqlPolicyToken{identifier: quotedIdentifier})
+		case ch == '[':
+			i++
+			closed := false
+			for i < len(input) {
+				if input[i] == ']' {
+					i++
+					closed = true
+					break
+				}
+				i++
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated quoted identifier")
+			}
+			tokens = append(tokens, sqlPolicyToken{identifier: true})
+		case ch == '(' || ch == ')' || ch == ',' || ch == ';':
+			tokens = append(tokens, sqlPolicyToken{symbol: ch})
+			i++
+		case ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z':
+			start := i
+			i++
+			for i < len(input) {
+				current := input[i]
+				if current == '_' || current == '$' || current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' || current >= '0' && current <= '9' {
+					i++
+					continue
+				}
+				break
+			}
+			tokens = append(tokens, sqlPolicyToken{word: strings.ToUpper(input[start:i]), identifier: true})
+		default:
+			tokens = append(tokens, sqlPolicyToken{symbol: ch})
+			i++
+		}
+	}
+	return tokens, nil
+}
+
+func skipSQLPolicyParentheses(tokens []sqlPolicyToken, start int) (int, error) {
+	if start >= len(tokens) || tokens[start].symbol != '(' {
+		return start, fmt.Errorf("expected parenthesized CTE query")
+	}
+	depth := 0
+	for i := start; i < len(tokens); i++ {
+		switch tokens[i].symbol {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1, nil
+			}
+			if depth < 0 {
+				return i, fmt.Errorf("unbalanced parentheses")
+			}
+		}
+	}
+	return len(tokens), fmt.Errorf("unterminated parenthesized CTE query")
+}
+
+// statementKeywordAfterWith parses only the SQLite WITH-clause envelope and
+// returns the top-level statement keyword after its CTE definitions. This keeps
+// the mutation endpoint fail-closed: WITH ... SELECT/CREATE/PRAGMA are not
+// authorized merely because a nested or quoted INSERT token exists.
+func statementKeywordAfterWith(input string) (string, error) {
+	tokens, err := tokenizeSQLForPolicy(input)
+	if err != nil {
+		return "", err
+	}
+	if len(tokens) == 0 || tokens[0].word != "WITH" {
+		return "", fmt.Errorf("expected WITH")
+	}
+	index := 1
+	if index < len(tokens) && tokens[index].word == "RECURSIVE" {
+		index++
+	}
+	for {
+		if index >= len(tokens) || !tokens[index].identifier {
+			return "", fmt.Errorf("expected CTE name")
+		}
+		index++
+		if index < len(tokens) && tokens[index].symbol == '(' {
+			index, err = skipSQLPolicyParentheses(tokens, index)
+			if err != nil {
+				return "", err
+			}
+		}
+		if index >= len(tokens) || tokens[index].word != "AS" {
+			return "", fmt.Errorf("expected AS after CTE name")
+		}
+		index++
+		if index < len(tokens) && tokens[index].word == "NOT" {
+			index++
+			if index >= len(tokens) || tokens[index].word != "MATERIALIZED" {
+				return "", fmt.Errorf("expected MATERIALIZED after NOT")
+			}
+			index++
+		} else if index < len(tokens) && tokens[index].word == "MATERIALIZED" {
+			index++
+		}
+		index, err = skipSQLPolicyParentheses(tokens, index)
+		if err != nil {
+			return "", err
+		}
+		if index < len(tokens) && tokens[index].symbol == ',' {
+			index++
+			continue
+		}
+		if index >= len(tokens) || tokens[index].word == "" {
+			return "", fmt.Errorf("expected statement after WITH clause")
+		}
+		return tokens[index].word, nil
+	}
+}
+
 func validateReadSQL(input string) error {
 	trimmed := stripSQLCommentsAndSpace(input)
 	if trimmed == "" {
@@ -271,11 +437,19 @@ func validateMutationSQL(input string) error {
 	if hasAdditionalSQLStatement(trimmed) {
 		return fmt.Errorf("exactly one SQL statement is allowed")
 	}
-	switch firstSQLKeyword(trimmed) {
+	keyword := firstSQLKeyword(trimmed)
+	if keyword == "WITH" {
+		var err error
+		keyword, err = statementKeywordAfterWith(trimmed)
+		if err != nil {
+			return fmt.Errorf("invalid WITH mutation: %w", err)
+		}
+	}
+	switch keyword {
 	case "INSERT", "UPDATE", "DELETE":
 		return nil
 	default:
-		return fmt.Errorf("only INSERT, UPDATE, and DELETE are allowed; schema changes use workflow migrations")
+		return fmt.Errorf("only INSERT, UPDATE, and DELETE, optionally prefixed by WITH, are allowed; schema changes use workflow migrations")
 	}
 }
 

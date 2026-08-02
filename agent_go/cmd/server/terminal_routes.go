@@ -19,6 +19,7 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/pkg/tmuxcapture"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/tmuxinput"
 
+	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 )
 
@@ -382,6 +383,92 @@ func (api *StreamingAPI) handleGetTerminal(w http.ResponseWriter, r *http.Reques
 		)
 	}
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+type terminalEventsResponse struct {
+	TerminalID     string              `json:"terminal_id"`
+	Events         []storeevents.Event `json:"events"`
+	HasOlder       bool                `json:"has_older"`
+	HasNewer       bool                `json:"has_newer"`
+	OldestSequence int64               `json:"oldest_sequence,omitempty"`
+	LatestSequence int64               `json:"latest_sequence,omitempty"`
+}
+
+// handleGetTerminalEvents returns one cursor page from one canonical terminal
+// transcript. It deliberately does not return session status; the existing
+// light session status/SSE channel remains authoritative for runtime state.
+// GET /api/terminals/{terminal_id}/events?limit=&before_sequence=&after_sequence=
+func (api *StreamingAPI) handleGetTerminalEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if api.terminalStore == nil || api.eventStore == nil {
+		http.Error(w, "Terminal not found", http.StatusNotFound)
+		return
+	}
+
+	terminalID := strings.TrimSpace(mux.Vars(r)["terminal_id"])
+	snapshot, ok := api.terminalStore.Get(terminalID)
+	if !ok || !api.canAccessTerminalSession(r, snapshot.SessionID) {
+		http.Error(w, "Terminal not found", http.StatusNotFound)
+		return
+	}
+
+	limit := storeevents.InitialEventsLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > storeevents.MaxPollingLimit {
+			http.Error(w, fmt.Sprintf("limit must be between 1 and %d", storeevents.MaxPollingLimit), http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+
+	parseCursor := func(name string) (int64, error) {
+		raw := strings.TrimSpace(r.URL.Query().Get(name))
+		if raw == "" {
+			return 0, nil
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return 0, fmt.Errorf("%s must be a positive integer", name)
+		}
+		return value, nil
+	}
+	before, err := parseCursor("before_sequence")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	after, err := parseCursor("after_sequence")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if before > 0 && after > 0 {
+		http.Error(w, "before_sequence and after_sequence are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+
+	result := api.eventStore.GetTerminalEvents(snapshot.SessionID, terminalID, storeevents.GetTerminalEventsOptions{
+		Limit:          limit,
+		BeforeSequence: before,
+		AfterSequence:  after,
+	})
+	if !result.Exists {
+		http.Error(w, "Terminal events not found", http.StatusNotFound)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(terminalEventsResponse{
+		TerminalID:     terminalID,
+		Events:         result.Events,
+		HasOlder:       result.HasOlder,
+		HasNewer:       result.HasNewer,
+		OldestSequence: result.OldestSequence,
+		LatestSequence: result.LatestSequence,
+	})
 }
 
 func shouldCaptureTerminalPaneForDetail(snapshot terminals.Snapshot, r *http.Request) bool {

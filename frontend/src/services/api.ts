@@ -9,6 +9,7 @@ import type {
   AgentQueryRequest,
   AgentQueryResponse,
   GetEventsResponse,
+  TerminalEventsResponse,
   MCPServerConfig,
   ChatHistoryConversation,
   ChatHistorySession,
@@ -610,7 +611,7 @@ export const agentApi = {
       offset?: number
     }
   ): Promise<GetEventsResponse> => {
-    const params: Record<string, string | number> = {}
+    const params: Record<string, string | number> = { working_set: 'session' }
 
     // Forward polling mode: use sinceIndex
     if (sinceIndex !== undefined && sinceIndex >= -1) {
@@ -638,6 +639,18 @@ export const agentApi = {
   // backend's bounded initial page and still returns last_processed_index.
   getRecentSessionEvents: async (sessionId: string): Promise<GetEventsResponse> => {
     return agentApi.getSessionEvents(sessionId, 0)
+  },
+
+  getTerminalEvents: async (
+    terminalId: string,
+    options: { limit?: number; beforeSequence?: number; afterSequence?: number } = {},
+  ): Promise<TerminalEventsResponse> => {
+    const params: Record<string, number> = {}
+    if (options.limit !== undefined) params.limit = options.limit
+    if (options.beforeSequence !== undefined) params.before_sequence = options.beforeSequence
+    if (options.afterSequence !== undefined) params.after_sequence = options.afterSequence
+    const response = await api.get(`/api/terminals/${encodeURIComponent(terminalId)}/events`, { params })
+    return response.data
   },
 
   listTerminals: async (

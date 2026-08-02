@@ -197,12 +197,14 @@ func TestExecutionOnlyPromptsTreatSkillAsAdvisory(t *testing.T) {
 	systemSnippets := []string{
 		"Treat learnings/skill content as advisory guidance from previous runs",
 		"the current step description, orchestrator instructions, and human input are the source of truth",
-		"Skill content is guidance from previous runs, not a replacement for the current task",
 	}
 	for _, snippet := range systemSnippets {
 		if !strings.Contains(systemPrompt, snippet) {
 			t.Fatalf("expected system prompt to contain %q\n\nPrompt:\n%s", snippet, systemPrompt)
 		}
+	}
+	if strings.Contains(systemPrompt, "Use the legacy selector.") {
+		t.Fatal("attached-skill mode must not recursively inline legacy learning history")
 	}
 
 	userPrompt := agent.executionOnlyUserMessageProcessor(map[string]string{

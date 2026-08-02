@@ -6,7 +6,7 @@ Workshop may maintain the live frontend report defined by `reports/report_plan.j
 
 A report is one or more **HTML documents**. The viewer renders each document in a sandboxed iframe and hands it live data via `window.report`; the HTML renders its own visuals with full styling control. The one native non-document kind is `interaction`: a user-configured question/control rendered by Runloop and backed by workflow SQLite. Never add an interaction automatically because an agent or Pulse happens to want input; use it only when the user explicitly asks to configure that control in the report.
 
-HTML is a superset of anything a plain document needs — prose, headings, tables, links — AND it can read the db live and draw charts. Start every report from the shipped HTML skeleton so even a simple narrative report is quick to author and looks consistent: load `get_reference_doc(kind="html-output")` for the layout baseline, dark-mode styles, and inline chart pattern.
+HTML is a superset of anything a plain document needs — prose, headings, tables, links — AND it can read the db live and draw charts. Start every report from the shipped HTML skeleton so even a simple narrative report is quick to author and looks consistent: load `read_skill(skill_name="builder-reference", path="references/html-output.md")` for the layout baseline, dark-mode styles, and inline chart pattern.
 
 ### The reporting toolchain
 

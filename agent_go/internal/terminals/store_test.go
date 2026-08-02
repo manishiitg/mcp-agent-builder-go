@@ -573,6 +573,31 @@ func TestStoreCollapsesMessageSequenceLifecycleIntoOneDetailedStep(t *testing.T)
 	}
 }
 
+func TestStoreFullRunCompletionDoesNotCreateConversationTerminal(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	store.HandleEvent("session-1", storeevents.Event{
+		Type:      "background_agent_completed",
+		Timestamp: now,
+		SessionID: "session-1",
+		Data: &agentevents.AgentEvent{
+			Type:      "background_agent_completed",
+			SessionID: "session-1",
+			Data: &orchestratorevents.BackgroundAgentCompletedEvent{
+				BaseEventData: agentevents.BaseEventData{Timestamp: now, SessionID: "session-1"},
+				AgentID:       "workflow-full-abc",
+				Name:          "Full Workflow Execution",
+				Status:        "failed",
+				Kind:          orchestratorevents.ExecutionKindFullRun,
+			},
+		},
+	})
+
+	if snapshots := store.List("session-1"); len(snapshots) != 0 {
+		t.Fatalf("full-run container completion must not create a conversation terminal: %+v", snapshots)
+	}
+}
+
 func TestStoreAsyncCompletionBatchSettlesVisibleStructuredTranscript(t *testing.T) {
 	store := NewStore()
 	now := time.Now()

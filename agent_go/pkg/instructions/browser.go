@@ -30,7 +30,7 @@ type BrowserConfig struct {
 // BuildBrowserRuntimeInstructions returns only run-specific browser state for
 // coding CLI agents. Static command syntax, safety rules, tab ownership, and
 // selector guidance are projected through the agent-browser and
-// workflow-reference skills; repeating those docs in CLAUDE.md/AGENTS.md can
+// builder-reference skills; repeating those docs in CLAUDE.md/AGENTS.md can
 // push the CLI over its system-prompt limit.
 func BuildBrowserRuntimeInstructions(cfg BrowserConfig) string {
 	if !cfg.HasAgentBrowser {
@@ -63,7 +63,7 @@ func BuildBrowserRuntimeInstructions(cfg BrowserConfig) string {
 	if cfg.IsIsolated {
 		sb.WriteString("- This agent has an isolated browser session; use the session name in the Browser Isolation section.\n")
 	}
-	sb.WriteString("- Before browser work, read the projected `agent-browser` skill when attached; otherwise read `workflow-reference/references/browser-usage.md`. Those references contain the managed HTTP bridge, current skill-loading, tab ownership, cleanup, and safety contracts.\n")
+	sb.WriteString("- Before browser work, read the projected `agent-browser` skill when attached; otherwise read `builder-reference/references/browser-usage.md`. Those references contain the managed HTTP bridge, current skill-loading, tab ownership, cleanup, and safety contracts.\n")
 	return sb.String()
 }
 
@@ -140,6 +140,7 @@ status = agent_browser(command="status", args=[], session="default")
 
 - If `+"`effective_mode`"+` is `+"`cdp`"+`, prefix every later call with one endpoint from `+"`authorized_endpoints`"+` and follow shared-tab rules.
 - If it is `+"`headless`"+`, call without `+"`--cdp`"+`.
+- `+"`status`"+` is the connectivity check and needs no tab and no `+"`--cdp`"+` argument. Never use `+"`snapshot`"+` as a reachability probe; it reads a specific page.
 - Never probe Chrome's `+"`/json/version`"+` endpoint through shell.
 - The backend rechecks auto-mode availability on every browser action.
 `, strings.Join(endpoints, "`, `"))
@@ -255,13 +256,15 @@ func GetCdpBrowserInstructions(cdpPort int, additionalPorts ...int) string {
 
 You have the `+"`agent_browser`"+` tool controlling the **user's real Chrome browser** via Chrome DevTools Protocol.
 
-Call agent_browser via HTTP API. Always include `+"`--cdp %[1]s`"+` in args.
+For a connectivity-only check, call `+"`agent_browser(command=\"status\", args=[])`"+`. It needs no tab and no `+"`--cdp`"+` argument. Never use `+"`snapshot`"+` to test CDP reachability because snapshot reads one specific page.
+
+After status, include `+"`--cdp %[1]s`"+` in every browser/documentation call.
 
 %[2]s
 
 In shared CDP mode, choose an explicit real `+"`tN`"+` tab before browsing, then keep using that tab. `+"`browser(\"tab\", [])`"+` refreshes real tab ids and query-free URLs for up to 15 seconds. Reuse the workflow's existing owned tab or an exact target-URL match. If neither exists, request one stable labeled tab; the backend atomically rechecks reuse and returns its real `+"`tN`"+` plus actual URL. If listing is unavailable, creation is refused instead of risking a duplicate. Important: `+"`open`"+` is URL-only; do not pass `+"`[\"tab\", \"t1\", url]`"+` to `+"`open`"+`. Use the `+"`tab`"+` command to choose/create the tab first, then call `+"`open`"+` with only the URL:
 
-`+"```python\nimport requests, os\nBROWSER = os.environ[\"MCP_API_URL\"] + \"/tools/mcp/workspace_browser/agent_browser\"\nHEADERS = {\"Authorization\": f\"Bearer {os.environ['MCP_API_TOKEN']}\", \"Content-Type\": \"application/json\"}\n\ndef browser(command, args=None, session=\"default\"):\n    resp = requests.post(BROWSER, json={\"command\": command, \"args\": [\"--cdp\", \"%[1]s\"] + (args or []), \"session\": session}, headers=HEADERS, timeout=120)\n    resp.raise_for_status()\n    return resp.json().get(\"result\", \"\")\n\n# Try the real tab list. If it times out, use the selected-tab fallback.\nselected = browser(\"tab\", [])\nprint(selected)\n# browser(\"tab\", [\"existing-tab-or-label\"])  # only if you already know it\n# browser(\"tab\", [\"new\", \"--label\", \"my-workflow-tab\", \"https://example.com\"])\nbrowser(\"open\", [\"https://example.com\"])\n\n# Use the chosen tab inline on page actions after open. The tab token is removed before the action runs.\nsnap = browser(\"snapshot\", [\"tab\", \"t1\", \"-i\"])\nbrowser(\"click\", [\"tab\", \"t1\", \"@e1\"])\nbrowser(\"fill\", [\"tab\", \"t1\", \"@e2\", \"text\"])\nbrowser(\"wait\", [\"tab\", \"t1\", \"6000\"])\nbrowser(\"wait\", [\"tab\", \"t1\", \"--load\", \"networkidle\"])\nsnap = browser(\"snapshot\", [\"tab\", \"my-workflow-tab\", \"-i\"])  # re-snapshot after each interaction\n```"+`
+`+"```python\nimport requests, os\nBROWSER = os.environ[\"MCP_API_URL\"] + \"/tools/mcp/workspace_browser/agent_browser\"\nHEADERS = {\"Authorization\": f\"Bearer {os.environ['MCP_API_TOKEN']}\", \"Content-Type\": \"application/json\"}\n\ndef browser(command, args=None, session=\"default\"):\n    tool_args = [] if command == \"status\" else [\"--cdp\", \"%[1]s\"] + (args or [])\n    resp = requests.post(BROWSER, json={\"command\": command, \"args\": tool_args, \"session\": session}, headers=HEADERS, timeout=120)\n    resp.raise_for_status()\n    return resp.json().get(\"result\", \"\")\n\n# Connectivity only: no tab and no --cdp.\nstatus = browser(\"status\")\nprint(status)\n\n# Try the real tab list. If it times out, use the selected-tab fallback.\nselected = browser(\"tab\", [])\nprint(selected)\n# browser(\"tab\", [\"existing-tab-or-label\"])  # only if you already know it\n# browser(\"tab\", [\"new\", \"--label\", \"my-workflow-tab\", \"https://example.com\"])\nbrowser(\"open\", [\"https://example.com\"])\n\n# Use the chosen tab inline on page actions after open. The tab token is removed before the action runs.\nsnap = browser(\"snapshot\", [\"tab\", \"t1\", \"-i\"])\nbrowser(\"click\", [\"tab\", \"t1\", \"@e1\"])\nbrowser(\"fill\", [\"tab\", \"t1\", \"@e2\", \"text\"])\nbrowser(\"wait\", [\"tab\", \"t1\", \"6000\"])\nbrowser(\"wait\", [\"tab\", \"t1\", \"--load\", \"networkidle\"])\nsnap = browser(\"snapshot\", [\"tab\", \"my-workflow-tab\", \"-i\"])  # re-snapshot after each interaction\n```"+`
 
 Key commands: skills (version-matched docs), open, snapshot, click, fill, type, press, screenshot, wait, get, scroll, select, hover, upload, download, eval, network, console, errors, record, trace, profiler, back, forward, reload, close, reset.
 

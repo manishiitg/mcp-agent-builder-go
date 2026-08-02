@@ -141,7 +141,7 @@ func (s *Store) Sessions() []string {
 // the adapter emits; GlobalSeq is the per-session insertion order
 // used for polling cursors.
 type StoredEvent struct {
-	GlobalSeq int                      `json:"global_seq"`
+	GlobalSeq int                     `json:"global_seq"`
 	Event     llmtypes.InspectorEvent `json:"event"`
 }
 

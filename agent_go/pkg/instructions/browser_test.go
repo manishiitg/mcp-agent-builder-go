@@ -45,6 +45,21 @@ func TestBuildBrowserInstructionsKeepsAutoModeDynamic(t *testing.T) {
 	}
 }
 
+func TestBrowserInstructionsDistinguishStatusProbeFromPageSnapshot(t *testing.T) {
+	for name, instructions := range map[string]string{
+		"auto": GetAutoBrowserInstructions(9222),
+		"cdp":  GetCdpBrowserInstructions(9222),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{"status", "needs no tab", "Never use `snapshot`"} {
+				if !strings.Contains(instructions, want) {
+					t.Fatalf("browser instructions missing %q:\n%s", want, instructions)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildBrowserRuntimeInstructionsIsCompactAndDynamic(t *testing.T) {
 	t.Setenv("CDP_HOST", "localhost")
 	got := BuildBrowserRuntimeInstructions(BrowserConfig{
@@ -53,7 +68,7 @@ func TestBuildBrowserRuntimeInstructionsIsCompactAndDynamic(t *testing.T) {
 		CdpPort:         9222,
 		CdpPorts:        []int{9222, 9333},
 	})
-	for _, want := range []string{"Configured mode: `auto`", "http://localhost:9222", "http://localhost:9333", "live `effective_mode`", "projected `agent-browser` skill", "workflow-reference/references/browser-usage.md"} {
+	for _, want := range []string{"Configured mode: `auto`", "http://localhost:9222", "http://localhost:9333", "live `effective_mode`", "projected `agent-browser` skill", "builder-reference/references/browser-usage.md"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("compact browser runtime instructions missing %q: %s", want, got)
 		}

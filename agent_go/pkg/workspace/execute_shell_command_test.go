@@ -251,9 +251,11 @@ func TestExecuteShellCommand_InjectsSessionEnv(t *testing.T) {
 	t.Setenv("WORKSPACE_API_TOKEN", "server-only-token")
 	sessionID := "test-session-env"
 	common.SetSessionShellEnv(sessionID, map[string]string{
-		"DB_PATH":         "/abs/workflow/db/db.sqlite",
-		"STEP_OUTPUT_DIR": "/abs/workspace-docs/Workflow/test-workflow/runs/iteration-0/default/execution/step-score",
+		"DB_PATH":            "/abs/workflow/db/db.sqlite",
+		"STEP_OUTPUT_DIR":    "/abs/workspace-docs/Workflow/test-workflow/runs/iteration-0/default/execution/step-score",
+		"WORKFLOW_DB_ACCESS": "read",
 	})
+	common.SetSessionWorkingDir(sessionID, "Workflow/test-workflow/runs/iteration-0/default/execution")
 	defer ClearSessionShellConfig(sessionID)
 
 	var got ExecuteShellCommandParams
@@ -288,6 +290,12 @@ func TestExecuteShellCommand_InjectsSessionEnv(t *testing.T) {
 	}
 	if got.ExtraEnv["STEP_OUTPUT_DIR"] != "/abs/workspace-docs/Workflow/test-workflow/runs/iteration-0/default/execution/step-score" {
 		t.Fatalf("session STEP_OUTPUT_DIR not injected: %q", got.ExtraEnv["STEP_OUTPUT_DIR"])
+	}
+	if !got.DBReadSnapshot {
+		t.Fatal("read-only scripted shell request did not ask the workspace service for a DB snapshot")
+	}
+	if got.WorkingDirectory != "Workflow/test-workflow/runs/iteration-0/default/execution" {
+		t.Fatalf("session working directory not injected: %q", got.WorkingDirectory)
 	}
 	if got.ExtraEnv["RUNLOOP_OWNER"] != "workflow" {
 		t.Fatalf("RUNLOOP_OWNER not inferred: %q", got.ExtraEnv["RUNLOOP_OWNER"])

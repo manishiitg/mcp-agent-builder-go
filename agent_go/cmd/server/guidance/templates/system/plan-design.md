@@ -41,9 +41,9 @@ Combine actions into one step when they share one objective and output contract,
 
 If selecting the next call genuinely requires live judgment, keep the decision agentic but isolate deterministic execution: the message sequence produces an explicit request/specification, a scripted regular step executes it, and a later message sequence interprets the result. Browser/UI navigation remains agentic unless it is genuinely stable and the user explicitly wants a scripted browser path. Human approval still precedes consequential side effects even when the approved API/CLI action itself is deterministic.
 
-**For recurring workflow shapes** (Phase Router, Scoped Investigation, coherent scripted pipeline, Fan-out & Consolidate, In-Context Verification Gate, Pre-flight Probe, Human Checkpoint, Critique Loop, Persistence Tail, SQL-driven foreach), call `get_reference_doc(kind="workflow-patterns")` — load when starting a new plan or restructuring an existing one.
+**For recurring workflow shapes** (Phase Router, Scoped Investigation, coherent scripted pipeline, Fan-out & Consolidate, In-Context Verification Gate, Pre-flight Probe, Human Checkpoint, Critique Loop, Persistence Tail, SQL-driven foreach), call `read_skill(skill_name="builder-reference", path="references/workflow-patterns.md")` — load when starting a new plan or restructuring an existing one.
 
-**Whenever you change an existing plan** — add / remove / reorder a step, or change a step's output contract, db writes, or behavior — run `get_reference_doc(kind="plan-change-impact")` before treating it as done and reconcile the blast radius (downstream steps, evals, report dashboard, db, learnings, KB). A step change ripples into everything that reads it; don't leave silent breakage behind.
+**Whenever you change an existing plan** — add / remove / reorder a step, or change a step's output contract, db writes, or behavior — run `read_skill(skill_name="builder-reference", path="references/plan-change-impact.md")` before treating it as done and reconcile the blast radius (downstream steps, evals, report dashboard, db, learnings, KB). A step change ripples into everything that reads it; don't leave silent breakage behind.
 
 ### Step 3: Design Context Flow
 
@@ -91,7 +91,7 @@ Use a `message_sequence` route when the parent orchestrator should be able to ca
 - Keep separate scripted steps only when deterministic work has its own durable artifact, independently rerunnable validation/failure domain, tool/security context, or downstream consumer. A desire to double-check the same final output is not a separate-step reason.
 - Add learning / knowledgebase / db update items as user messages at the exact point they should happen.
 - Add explicit reference-check, hallucination-check, critique, or self-validation items when reliability needs it.
-- Plain items inherit the step-level KB, DB, and learnings permissions, just like regular steps. Use a non-empty `write_access` object or `kind` only to narrow a particular turn; an item can never escalate beyond the step configuration. See `get_reference_doc(kind="message-sequence")`.
+- Plain items inherit the step-level KB, DB, and learnings permissions, just like regular steps. Use a non-empty `write_access` object or `kind` only to narrow a particular turn; an item can never escalate beyond the step configuration. See `read_skill(skill_name="builder-reference", path="references/message-sequence.md")`.
 - Deterministic execution is never a sequence item. Put API/CLI/SDK calls, data fetching, parsing, transforms, and mechanical writes in standalone scripted regular steps with explicit inputs, outputs, and validation.
 - As a todo_task predefined route, a message_sequence behaves like a reusable specialist sub-agent: reuse the same route for critique, test feedback, validation feedback, or follow-up work that should keep prior context; restart only when the prior conversation is stale, wrong, or contaminated.
 - For row/item iteration, use a `foreach` item inside message_sequence when one shared conversation should process every row. Use todo_task when each item needs independent sub-agent delegation.
@@ -102,7 +102,7 @@ Use `routing` when the next step must be **exactly one of N mutually exclusive p
 
 Routing has one mode: leave `description` and `context_output` empty, read an existing route file/source, then switch. The common case is that the builder/caller selects the fixed branch from the user's request with `route_selections`. If an agent/probe/judgment is needed, add a prior `message_sequence` step that writes `route_selection.json` and have the routing step consume it with `route_source_file` or `context_dependencies: ["route_selection.json"]`. Each `routes` entry needs a stable `route_id`, a `condition` explaining when that route should be selected, and a `next_step_id` that points to another step in the plan (routing routes do **not** define inline sub-agents — they branch to existing steps); set `default_route_id` only as a missing-file fallback.
 
-For full route structure, file contract, and anti-patterns, call `get_reference_doc(kind="routing")` — load before designing or repairing any routing step.
+For full route structure, file contract, and anti-patterns, call `read_skill(skill_name="builder-reference", path="references/routing.md")` — load before designing or repairing any routing step.
 
 ### Step 7: Design Validation
 

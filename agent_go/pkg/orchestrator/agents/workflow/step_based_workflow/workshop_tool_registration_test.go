@@ -9,7 +9,30 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
+
+type workshopDefinitionDraft struct {
+	tools  map[string]mcpagent.ToolDefinition
+	skills []*llmtypes.Skill
+}
+
+func newWorkshopDefinitionDraft() *workshopDefinitionDraft {
+	return &workshopDefinitionDraft{tools: make(map[string]mcpagent.ToolDefinition)}
+}
+
+func (d *workshopDefinitionDraft) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), displayGroup string) error {
+	return d.RegisterCustomToolWithTimeout(name, description, parameters, execute, 0, displayGroup)
+}
+
+func (d *workshopDefinitionDraft) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, displayGroup string) error {
+	d.tools[name] = mcpagent.ToolDefinition{Name: name, Description: description, InputSchema: parameters, Execute: execute, Timeout: timeout, DisplayGroup: displayGroup}
+	return nil
+}
+
+func (d *workshopDefinitionDraft) AttachedSkills() []*llmtypes.Skill {
+	return append([]*llmtypes.Skill(nil), d.skills...)
+}
 
 type workshopToolTestLogger struct{}
 
@@ -22,7 +45,7 @@ func (l workshopToolTestLogger) With(...loggerv2.Field) loggerv2.Logger { return
 func (workshopToolTestLogger) Close() error                             { return nil }
 
 func TestRegisterWorkshopChatToolsIncludesArtifactReviewMarker(t *testing.T) {
-	agent := &mcpagent.Agent{}
+	agent := newWorkshopDefinitionDraft()
 	workspacePath := t.TempDir()
 	base := &orchestrator.BaseOrchestrator{}
 	base.SetWorkspacePath(workspacePath)
@@ -34,20 +57,20 @@ func TestRegisterWorkshopChatToolsIncludesArtifactReviewMarker(t *testing.T) {
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
 
-	tool, ok := mcpagent.FindDefinitionTool(agent, "mark_changelog_artifact_reviewed")
+	tool, ok := agent.tools["mark_changelog_artifact_reviewed"]
 	if !ok {
 		t.Fatal("actual workshop agent registry is missing mark_changelog_artifact_reviewed")
 	}
 	if tool.DisplayGroup != "workflow" {
 		t.Fatalf("mark_changelog_artifact_reviewed category = %q, want workflow", tool.DisplayGroup)
 	}
-	if mcpagent.DefinitionToolExecutor(agent, "mark_changelog_artifact_reviewed") == nil {
+	if tool.Execute == nil {
 		t.Fatal("mark_changelog_artifact_reviewed has no registered executor")
 	}
 }
 
 func TestRunningStatusToolsShareRapidPollGuard(t *testing.T) {
-	agent := &mcpagent.Agent{}
+	agent := newWorkshopDefinitionDraft()
 	workspacePath := t.TempDir()
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0, "",
@@ -70,8 +93,8 @@ func TestRunningStatusToolsShareRapidPollGuard(t *testing.T) {
 	}
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
-	queryStep := mcpagent.DefinitionToolExecutor(agent, "query_step")
-	listExecutions := mcpagent.DefinitionToolExecutor(agent, "list_executions")
+	queryStep := agent.tools["query_step"].Execute
+	listExecutions := agent.tools["list_executions"].Execute
 	if queryStep == nil || listExecutions == nil {
 		t.Fatal("running-status tools were not registered")
 	}
@@ -102,7 +125,7 @@ func TestRunningStatusToolsShareRapidPollGuard(t *testing.T) {
 }
 
 func TestGenericAgentCanBeQueriedAndStoppedByExecutionID(t *testing.T) {
-	agent := &mcpagent.Agent{}
+	agent := newWorkshopDefinitionDraft()
 	workspacePath := t.TempDir()
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0, "",
@@ -127,8 +150,8 @@ func TestGenericAgentCanBeQueriedAndStoppedByExecutionID(t *testing.T) {
 	}
 
 	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
-	queryStep := mcpagent.DefinitionToolExecutor(agent, "query_step")
-	stopStep := mcpagent.DefinitionToolExecutor(agent, "stop_step")
+	queryStep := agent.tools["query_step"].Execute
+	stopStep := agent.tools["stop_step"].Execute
 	if queryStep == nil || stopStep == nil {
 		t.Fatal("generic execution control tools were not registered")
 	}

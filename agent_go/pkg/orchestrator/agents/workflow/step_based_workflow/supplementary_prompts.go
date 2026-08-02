@@ -26,13 +26,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 ) {
 	var identitySkills []*llmtypes.Skill
 	var supplements []string
-	// Coding CLI agents get static AgentWorks contracts as native projected
-	// skills. The execution role deliberately receives only the reference
-	// corpus, not workflow-commands: slash-command procedures belong to the
-	// builder chat and add irrelevant matching noise inside a workflow step.
-	if workflowReference := projectedWorkflowReferenceSkill(config); workflowReference != nil {
+	// Every transport gets the same static AgentWorks reference identity.
+	// Coding CLIs additionally project it to disk; API models read it through
+	// mcpagent's intrinsic read_skill tool. The execution role deliberately
+	// receives only the reference corpus, not workflow-commands.
+	if workflowReference := workflowReferenceSkill(); workflowReference != nil {
 		identitySkills = append(identitySkills, workflowReference)
-		hcpo.GetLogger().Info(fmt.Sprintf("📚 Attached projected workflow reference skill (%d supporting docs)", len(workflowReference.SupportingFiles)))
+		hcpo.GetLogger().Info(fmt.Sprintf("📚 Attached workflow reference skill (%d supporting docs)", len(workflowReference.SupportingFiles)))
 	}
 
 	// 1. Skills — Phase 3 rewire. Load the step's selected skills as
@@ -130,13 +130,14 @@ func usesProjectedReferenceSkills(config *agents.OrchestratorAgentConfig, templa
 	if raw, ok := templateVars["UseProjectedReferenceSkills"]; ok {
 		return raw == "true"
 	}
-	return isCodingCLIConfig(config)
+	// The variable name is retained for template compatibility. Reference
+	// skills are attached on every transport; only native disk projection is
+	// CLI-specific, while read_skill is universal.
+	_ = config
+	return true
 }
 
-func projectedWorkflowReferenceSkill(config *agents.OrchestratorAgentConfig) *llmtypes.Skill {
-	if !isCodingCLIConfig(config) {
-		return nil
-	}
+func workflowReferenceSkill() *llmtypes.Skill {
 	return guidance.MaterializeReferenceSkill("workshop")
 }
 

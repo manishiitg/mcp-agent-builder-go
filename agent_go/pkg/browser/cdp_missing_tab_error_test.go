@@ -15,6 +15,15 @@ func TestMissingCDPPageActionTabErrorKeepsPlaceholderWhenNoTabSupplied(t *testin
 	if !strings.Contains(msg, "<tab-id-or-label>") {
 		t.Errorf("expected the placeholder retry hint, got:\n%s", msg)
 	}
+	for _, want := range []string{
+		`agent_browser(command="status", args=[], session="<same-session>")`,
+		"status needs no tab and no --cdp argument",
+		`do not use "snapshot": it is a page action`,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected connectivity guidance %q, got:\n%s", want, msg)
+		}
+	}
 }
 
 // Recovery must stay narrow: only the unambiguous tN form, and never a value

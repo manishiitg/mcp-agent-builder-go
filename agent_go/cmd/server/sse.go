@@ -41,6 +41,7 @@ type sseStatusMessage struct {
 //   - session_id (path)  — required
 //   - since              — last event index the client has seen
 //   - event_mode         — "advanced" | "tiny" | "micro" (default "micro")
+//   - working_set=session — omit child transcript detail loaded by terminal API
 //
 // The handler subscribes to the EventStore first, then backfills catch-up
 // events so no events are lost between subscription and the initial fetch.
@@ -81,6 +82,7 @@ func (api *StreamingAPI) handleSSEStream(w http.ResponseWriter, r *http.Request)
 		}
 		sinceIndex = parsed
 	}
+	workingSetOnly := r.URL.Query().Get("working_set") == "session"
 
 	// 3. Disable write timeout for SSE connections — they are long-lived streams.
 	// The server's global WriteTimeout (30s) would kill the connection prematurely.
@@ -109,11 +111,22 @@ func (api *StreamingAPI) handleSSEStream(w http.ResponseWriter, r *http.Request)
 			SinceIndex:       sinceIndex,
 			IncludeStreaming: true,
 		})
-		if len(result.Events) > 0 {
+		backfillEvents := result.Events
+		if workingSetOnly {
+			backfillEvents = events.FilterSessionWorkingSet(sessionID, backfillEvents)
+		}
+		if workingSetOnly && len(result.Events) > 0 && len(backfillEvents) == 0 {
+			if err := writeSSEEvent(w, "cursor", result.LastProcessedIndex, struct{}{}); err != nil {
+				return
+			}
+			sinceIndex = result.LastProcessedIndex
+			flusher.Flush()
+		}
+		if len(backfillEvents) > 0 {
 			runtimeState, _ := api.authoritativeRuntimeSnapshot(sessionID)
 			runtimeStatus := sessionDisplayStatusFromRuntime(runtimeState)
 			msg := sseEventMessage{
-				Events:                     result.Events,
+				Events:                     backfillEvents,
 				SessionStatus:              sessionStatus,
 				DisplayStatus:              runtimeStatus.Status,
 				LastProcessedIndex:         result.LastProcessedIndex,
@@ -163,6 +176,16 @@ func (api *StreamingAPI) handleSSEStream(w http.ResponseWriter, r *http.Request)
 			}
 			if eventIndex > lastIndex {
 				lastIndex = eventIndex
+			}
+			if workingSetOnly && !events.RetainEventInSessionWorkingSet(sessionID, event) {
+				// Advance EventSource's Last-Event-ID without serializing the heavy
+				// child payload. The browser has no listener for this tiny cursor
+				// event, but will reconnect after the correct global index.
+				if err := writeSSEEvent(w, "cursor", lastIndex, struct{}{}); err != nil {
+					return
+				}
+				flusher.Flush()
+				continue
 			}
 
 			currentStatus, _ := api.getSessionStatusString(r, sessionID)

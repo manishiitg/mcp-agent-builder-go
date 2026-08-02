@@ -151,4 +151,3 @@ func testBotConnectorHandler(api *StreamingAPI) http.HandlerFunc {
 		})
 	}
 }
-

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
@@ -23,7 +22,7 @@ import (
 // It is the privileged, structured path for durable user-supplied runtime
 // context. The tool writes the context file; narrating the capture into
 // builder/improve.html is the agent's job.
-func RegisterCaptureContextTool(agent *mcpagent.Agent, workspacePath string, logger loggerv2.Logger) {
+func RegisterCaptureContextTool(agent definitionToolRegistrar, workspacePath string, logger loggerv2.Logger) {
 	desc := "Capture durable user-supplied runtime business context for this workflow. " +
 		"Use only after the user confirms the item should be remembered across runs, and only when the Workflow Profile allows business-context accumulation. " +
 		"Writes to knowledgebase/context/context.md. Record the capture in builder/improve.html yourself as a User rule (authoritative) entry. " +
@@ -65,7 +64,7 @@ func RegisterCaptureContextTool(agent *mcpagent.Agent, workspacePath string, log
 		return string(body), nil
 	}
 
-	if err := mcpagent.AddDefinitionTool(agent, "capture_context", desc, params, handler, "auto_improvement"); err != nil {
+	if err := agent.RegisterCustomTool("capture_context", desc, params, handler, "auto_improvement"); err != nil {
 		if logger != nil {
 			logger.Warn(fmt.Sprintf("Failed to register capture_context: %v", err))
 		}
@@ -75,6 +74,6 @@ func RegisterCaptureContextTool(agent *mcpagent.Agent, workspacePath string, log
 // RegisterAutoImprovementProposerTools registers optimizer-side framework tools.
 // Call this alongside the existing builder tools when the workshop session
 // enters optimizer mode.
-func RegisterAutoImprovementProposerTools(agent *mcpagent.Agent, workspacePath, triggerSource string, logger loggerv2.Logger) {
+func RegisterAutoImprovementProposerTools(agent definitionToolRegistrar, workspacePath, triggerSource string, logger loggerv2.Logger) {
 	RegisterCaptureContextTool(agent, workspacePath, logger)
 }

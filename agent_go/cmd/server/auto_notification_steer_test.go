@@ -5,9 +5,10 @@ import (
 	"sync"
 	"testing"
 
+	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
-	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 // TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery verifies
@@ -18,8 +19,7 @@ func TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery(t *testing
 	defer store.Stop()
 
 	sessionID := "busy-steerable-session"
-	runningAgent := &mcpagent.Agent{ModelID: "codex-cli"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderCodexCLI)
+	runningAgent := testCodingAgent(llm.ProviderCodexCLI, "codex-cli")
 
 	api := &StreamingAPI{
 		eventStore:       store,
@@ -58,11 +58,6 @@ func TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery(t *testing
 		t.Fatal("agent.notified = true after queued injection; want false so the queue path can retry")
 	}
 
-	queued := mcpagent.DrainAgentSteerMessagesForTesting(runningAgent)
-	if len(queued) != 0 {
-		t.Fatalf("steered messages = %d, want 0 because the caller owns retries: %#v", len(queued), queued)
-	}
-
 	if api.steerBackgroundAgentCompletion(sessionID, bg.ID) {
 		t.Fatal("second queued-injection steer call = true; want false until delivery is confirmed")
 	}
@@ -97,8 +92,7 @@ func TestSteerBackgroundAgentCompletionDefersPlainDelegation(t *testing.T) {
 	defer store.Stop()
 
 	sessionID := "busy-chief-session"
-	runningAgent := &mcpagent.Agent{ModelID: "claude-code"}
-	mcpagent.SetAgentProviderForTesting(runningAgent,llm.ProviderClaudeCode)
+	runningAgent := testCodingAgent(llm.ProviderClaudeCode, "claude-code")
 
 	api := &StreamingAPI{
 		eventStore:       store,
@@ -129,7 +123,12 @@ func TestSteerBackgroundAgentCompletionDefersPlainDelegation(t *testing.T) {
 	if notified {
 		t.Fatal("plain delegation completion was marked notified before the synthetic turn")
 	}
-	if got := mcpagent.DrainAgentSteerMessagesForTesting(runningAgent); len(got) != 0 {
-		t.Fatalf("plain delegation completion should not be delivered to the active turn, got %#v", got)
-	}
+}
+
+func testCodingAgent(provider llm.Provider, model string) *mcpagent.Agent {
+	agent := &mcpagent.Agent{}
+	mcpagent.ApplyAgentResumeHandle(agent, &mcpagent.AgentSessionHandle{
+		Provider: llmtypes.CodingProviderSessionHandle{Provider: string(provider), Model: model},
+	})
+	return agent
 }

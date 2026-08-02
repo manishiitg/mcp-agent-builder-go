@@ -733,6 +733,9 @@ export type PollingEvent = PollingEventSchema & {
   execution_id?: string
   parent_execution_id?: string
   execution_kind?: string
+  terminal_owner_id?: string
+  terminal_id?: string
+  sequence?: number
   component?: string
   event_index?: number
 }
@@ -797,6 +800,15 @@ export interface GetEventsResponse {
   is_synthetic_turn?: boolean // True when running auto-notification turn (input remains locked as normal)
   can_steer?: boolean // True when a live foreground agent can accept steer injection
   runtime_state?: RuntimeSnapshot
+}
+
+export interface TerminalEventsResponse {
+  terminal_id: string
+  events: PollingEvent[]
+  has_older: boolean
+  has_newer: boolean
+  oldest_sequence?: number
+  latest_sequence?: number
 }
 
 export interface TerminalSnapshot {

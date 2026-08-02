@@ -59,7 +59,7 @@ func TestInteractiveWorkshopPromptDoesNotBanAuthorizedSourceReview(t *testing.T)
 }
 
 // After the message-sequence migration, the full pattern catalog lives in
-// templates/system/message-sequence.md (loaded via get_reference_doc). The
+// templates/system/message-sequence.md (loaded via read_skill). The
 // inline workshop prompt now carries only a brief mention of the seven
 // pattern names plus the pointer; the detailed pattern descriptions are
 // asserted against the rendered .md content.
@@ -79,7 +79,7 @@ func TestInteractiveWorkshopPromptDocumentsMessageSequenceRouteReuse(t *testing.
 		"Maker+Reviewer",
 		"Clean-Room Retry",
 		"HITL Re-entry",
-		`get_reference_doc(kind="plan-design")`,
+		`read_skill(skill_name="builder-reference", path="references/plan-design.md")`,
 	}
 	for _, snippet := range inlineMustContain {
 		if !strings.Contains(prompt, snippet) {

@@ -28,7 +28,7 @@ Org Pulse does not turn task findings into workflow recommendations.
 
 ### 1. Back up org artifacts
 
-Follow `get_reference_doc(kind="backup-strategy")` using:
+Follow `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")` using:
 
 - `pulse/backup.json`
 - `pulse/backup/status.json`
@@ -102,7 +102,7 @@ Do not convert an alignment gap into a recommendation or question.
 
 ### 6. Update the durable scorecard
 
-Before writing, call `get_reference_doc(kind="org-html")`.
+Before writing, call `read_skill(skill_name="builder-reference", path="references/org-html.md")`.
 
 Update `pulse/goals.html` only when concrete evidence changes:
 
@@ -145,7 +145,7 @@ fixes.
 
 If `pulse/publish.json` is configured and `pulse/publish/status.json` confirms a verified existing
 destination, re-publish `pulse/goals.html` and `pulse/org-pulse.html` following
-`get_reference_doc(kind="publish-strategy")`. Never perform the first verifying publish unattended.
+`read_skill(skill_name="builder-reference", path="references/publish-strategy.md")`. Never perform the first verifying publish unattended.
 
 Send one factual daily digest after the log step:
 

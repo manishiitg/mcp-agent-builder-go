@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -367,6 +368,109 @@ func TestTerminalContentTailDropsPartialOSCTitle(t *testing.T) {
 	}
 	if !strings.Contains(got, "\x1b[31mactual output\x1b[0m") {
 		t.Fatalf("expected remaining ANSI output, got %q", got)
+	}
+}
+
+func TestGetTerminalEventsReturnsOnlySelectedTerminalCursorPage(t *testing.T) {
+	eventStore := storeevents.NewEventStore(20)
+	defer eventStore.Stop()
+	terminalStore := terminals.NewStore()
+	eventStore.SetEventAddedCallback(terminalStore.HandleEvent)
+	api := &StreamingAPI{terminalStore: terminalStore, eventStore: eventStore}
+
+	sessionID := "session-terminal-events-route"
+	ownerID := "background:reviewer"
+	terminalID := sessionID + ":" + ownerID
+	now := time.Now()
+	eventStore.AddEvent(sessionID, storeevents.Event{
+		ID:              "reviewer-terminal-start",
+		Type:            "streaming_chunk",
+		Timestamp:       now,
+		SessionID:       sessionID,
+		ExecutionID:     ownerID,
+		ExecutionKind:   "background_agent",
+		TerminalOwnerID: ownerID,
+		TerminalID:      terminalID,
+		Data: &agentevents.AgentEvent{
+			Type:      agentevents.StreamingChunk,
+			Timestamp: now,
+			Data: &agentevents.StreamingChunkEvent{
+				BaseEventData: agentevents.BaseEventData{Metadata: map[string]interface{}{"kind": "terminal"}},
+				Content:       "reviewer running",
+				ChunkIndex:    1,
+			},
+		},
+	})
+	for i := 1; i <= 3; i++ {
+		eventStore.AddEvent(sessionID, storeevents.Event{
+			ID:            fmt.Sprintf("reviewer-%d", i),
+			Type:          string(agentevents.ToolCallEnd),
+			Timestamp:     now.Add(time.Duration(i) * time.Millisecond),
+			SessionID:     sessionID,
+			ExecutionID:   ownerID,
+			ExecutionKind: "background_agent",
+			Data: &agentevents.AgentEvent{
+				Type:      agentevents.ToolCallEnd,
+				Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+				Data: &agentevents.ToolCallEndEvent{
+					ToolCallID: fmt.Sprintf("call-%d", i),
+					ToolName:   "review_tool",
+					Result:     "ok",
+				},
+			},
+		})
+	}
+	eventStore.AddEvent(sessionID, storeevents.Event{
+		ID:              "other-owner",
+		Type:            string(agentevents.ToolCallEnd),
+		Timestamp:       now.Add(4 * time.Millisecond),
+		SessionID:       sessionID,
+		TerminalOwnerID: "background:other",
+		TerminalID:      sessionID + ":background:other",
+		Data: &agentevents.AgentEvent{
+			Type:      agentevents.ToolCallEnd,
+			Timestamp: now.Add(4 * time.Millisecond),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminals/"+terminalID+"/events?limit=2", nil)
+	req = mux.SetURLVars(req, map[string]string{"terminal_id": terminalID})
+	rec := httptest.NewRecorder()
+	api.handleGetTerminalEvents(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get terminal events status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		TerminalID string `json:"terminal_id"`
+		Events     []struct {
+			ID              string `json:"id"`
+			TerminalID      string `json:"terminal_id"`
+			TerminalOwnerID string `json:"terminal_owner_id"`
+			Sequence        int64  `json:"sequence"`
+		} `json:"events"`
+		HasOlder bool `json:"has_older"`
+		HasNewer bool `json:"has_newer"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode terminal events response: %v", err)
+	}
+	if response.TerminalID != terminalID {
+		t.Fatalf("terminal id = %q, want %q", response.TerminalID, terminalID)
+	}
+	if len(response.Events) != 2 {
+		t.Fatalf("event count = %d, want 2: %+v", len(response.Events), response.Events)
+	}
+	if got := []string{response.Events[0].ID, response.Events[1].ID}; fmt.Sprint(got) != "[reviewer-2 reviewer-3]" {
+		t.Fatalf("event ids = %v, want selected terminal's latest page", got)
+	}
+	if !response.HasOlder || response.HasNewer {
+		t.Fatalf("page flags = older:%t newer:%t", response.HasOlder, response.HasNewer)
+	}
+	for _, event := range response.Events {
+		if event.TerminalID != terminalID || event.TerminalOwnerID != ownerID || event.Sequence <= 0 {
+			t.Fatalf("event missing canonical ownership/cursor: %+v", event)
+		}
 	}
 }
 

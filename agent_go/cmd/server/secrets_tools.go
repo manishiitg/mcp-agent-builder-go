@@ -11,8 +11,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 // registerSecretManagementTools registers list_secrets, set_user_secret, and
@@ -30,7 +28,7 @@ import (
 // afterDelete, if non-nil, is invoked after a successful delete_user_secret so
 // callers can clean up workspace state (e.g. detach from workflow.json + refresh
 // workshop shell env). Errors returned by afterDelete are surfaced to the agent.
-func (api *StreamingAPI) registerSecretManagementTools(agent *mcpagent.Agent, userID, workflowPath, toolCategory string, afterUpsert func(ctx context.Context, name, value string) error, afterDelete func(ctx context.Context, name string) error) error {
+func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegistrar, userID, workflowPath, toolCategory string, afterUpsert func(ctx context.Context, name, value string) error, afterDelete func(ctx context.Context, name string) error) error {
 	if agent == nil {
 		return fmt.Errorf("agent is nil")
 	}
@@ -39,7 +37,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent *mcpagent.Agent, us
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
-		return mcpagent.AddDefinitionTool(agent, name, description, params, exec, toolCategory)
+		return agent.RegisterCustomTool(name, description, params, exec, toolCategory)
 	}
 
 	encryptValue := func(plaintext string) (string, error) {

@@ -14,9 +14,9 @@ import (
 // endpoint returns. Keeping it small + flat so the frontend can render
 // a live timeline without extra translation.
 type inspectorSummary struct {
-	SessionID string                   `json:"session_id"`
-	LatestSeq int                      `json:"latest_seq"`
-	Count     int                      `json:"count"`
+	SessionID string                  `json:"session_id"`
+	LatestSeq int                     `json:"latest_seq"`
+	Count     int                     `json:"count"`
 	Events    []inspector.StoredEvent `json:"events"`
 }
 

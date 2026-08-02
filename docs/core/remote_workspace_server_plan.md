@@ -78,7 +78,7 @@ Local responsibilities:
 - run the desktop UI and local `agent_go` control plane;
 - launch Claude Code / Codex CLI / Cursor / other coding-agent CLIs;
 - run local `mcpbridge` as the stdio bridge for those CLIs;
-- register and execute local custom tools such as `get_reference_doc`, plan
+- register and execute local custom tools such as `read_skill`, plan
   editing tools, schedule tools, Pulse/auto-improve orchestration;
 - point all workspace IO to the remote gateway via `WORKSPACE_API_URL`;
 - store the imported server profile and device token securely;
@@ -134,13 +134,15 @@ It must not trust browser/client-supplied `X-User-ID` as authority.
 
 ## 3. How Existing Tools Map
 
-### `get_reference_doc`
+### `read_skill`
 
-Already fits the model. It is a local custom tool that renders embedded
-`agent_go` guidance templates; it does not need server files.
+Already fits the model. It is an intrinsic `mcpagent` identity tool that reads
+the in-memory bundles attached to the agent; it does not depend on workspace
+storage or on a Builder-specific transport path.
 
 ```text
-coding CLI -> mcpbridge -> local agent_go -> embedded guidance template
+API model -> mcpagent -> attached skill bundle
+coding CLI -> mcpbridge -> mcpagent -> attached skill bundle
 ```
 
 ### Plan Editing Tools
@@ -294,7 +296,7 @@ token is scoped to one user/device and can be revoked.
 ### Phase 3 — Tool Compatibility
 
 - Run the existing workshop tools against remote `WORKSPACE_API_URL`.
-- Verify `get_reference_doc` stays local and unaffected.
+- Verify `read_skill` stays local and unaffected.
 - Verify plan tools mutate remote `planning/plan.json` through
   `WorkspaceClient`.
 - Verify file, shell, db, report, cost, media, and browser helpers either work
@@ -369,7 +371,8 @@ real workflows.
   hits the server gateway, not local `127.0.0.1:8081`.
 - Run `execute_shell_command pwd` and confirm it executes inside the server
   workspace/container.
-- Run `get_reference_doc(kind=...)` and confirm it still works locally without
+- Run `read_skill(skill_name="builder-reference", path="references/file-layout.md")`
+  and confirm it still works locally without
   requiring server file access.
 - Disable or stop local `workspace-api` while using a remote profile; remote
   workflow browsing and tools should still work.

@@ -198,7 +198,7 @@ time, the runtime only runs it. There is no fix loop and no save-back.
 Script failures surface so you can regenerate `main.py` manually.
 
 For the full scripted-orchestrator authoring rules, call
-`get_reference_doc(kind="optimize-playbook")` and read the
+`read_skill(skill_name="builder-reference", path="references/optimize-playbook.md")` and read the
 "Orchestrator scripted mode" section.
 
 ## Tools

@@ -287,5 +287,4 @@ Choose `code_exec` when:
 ## Related Docs
 
 - [Step Config Specification](step_config_format_specification.md)
-- [Tool Search Mode](../core/tool_search_mode.md)
 - [Learning Architecture](learning_architecture.md)

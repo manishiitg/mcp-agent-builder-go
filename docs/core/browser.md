@@ -54,6 +54,15 @@ the managed `agent_browser` tool. The runtime injects and validates the CDP
 endpoint, applies session limits, serializes shared-tab actions, and keeps file
 access inside the workspace.
 
+To check whether CDP is reachable, use the backend status operation:
+
+```text
+agent_browser(command="status", args=[], session="default")
+```
+
+`status` needs no tab and no `--cdp` argument. `snapshot` is not a connectivity
+probe: it reads one specific page, so in shared CDP mode it must name the tab.
+
 Before the first browser action, load the installed CLI's matching command guide:
 
 ```text

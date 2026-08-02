@@ -230,8 +230,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		hcpo.restoreSubAgentToolExecutors(fastPathExecCtx)
 
 		stepExecutionRelPath := hcpo.getTodoTaskStepExecutionPath(stepID, todoTaskStepPath)
+		dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 		fastResult := hcpo.tryRunSavedScriptedScript(ctx, step, stepIndex, todoTaskStepPath, allSteps,
-			stepExecutionRelPath, executionWorkspacePath)
+			stepExecutionRelPath, executionWorkspacePath, dbAccess)
 
 		if fastResult.RanScript {
 			savedScriptPath := getScriptedScriptAbsPath(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), stepID, hcpo.isEvaluationMode)
@@ -1070,8 +1071,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskOrchestratorAgent(
 		return nil, nil, "", nil, nil, fmt.Errorf("failed to create todo task orchestrator agent: %w", err)
 	}
 
-	// Sync template vars with actual agent config — the factory may have overridden
-	// code execution mode (for CLI providers) or tool search mode after template vars were built.
+	// Sync template vars with actual agent config — the factory may have enabled
+	// code execution mode for CLI providers after template vars were built.
 	if agent.GetConfig() != nil {
 		if agentConfigUseCodeExecutionMode(agent.GetConfig()) {
 			templateVars["IsCodeExecutionMode"] = "true"

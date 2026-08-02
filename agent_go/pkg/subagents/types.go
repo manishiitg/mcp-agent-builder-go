@@ -102,8 +102,8 @@ func ParseCSV(s FlexString) []string {
 
 // ImportSubAgentRequest represents a request to import a subagent from GitHub
 type ImportSubAgentRequest struct {
-	GitHubURL   string `json:"github_url"`              // e.g., https://github.com/user/repo/tree/main/subagents/my-agent
-	GitHubToken string `json:"github_token,omitempty"`  // Optional PAT for private repos
+	GitHubURL   string `json:"github_url"`             // e.g., https://github.com/user/repo/tree/main/subagents/my-agent
+	GitHubToken string `json:"github_token,omitempty"` // Optional PAT for private repos
 }
 
 // ImportSubAgentResponse represents the response from importing a subagent
@@ -127,4 +127,3 @@ type ValidateSubAgentResponse struct {
 	Files       []string             `json:"files,omitempty"` // List of files in the subagent folder
 	Exists      bool                 `json:"exists"`          // True if a subagent with this name already exists
 }
-

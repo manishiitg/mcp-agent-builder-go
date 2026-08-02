@@ -204,32 +204,6 @@ func CreateEventEmitter(
 	}
 }
 
-// CreateStructuredOutputLLMWithEventBridge creates a structured output LLM with mandatory event bridge integration
-func CreateStructuredOutputLLMWithEventBridge(
-	config *agents.OrchestratorAgentConfig,
-	eventBridge mcpagent.AgentEventListener,
-	logger loggerv2.Logger,
-	tracer observability.Tracer,
-) (*StructuredOutputLLM, error) {
-	logger.Info(fmt.Sprintf("🔧 Creating structured output LLM with mandatory event bridge integration"))
-
-	// Create LLM instance using helper
-	llmInstance, err := CreateLLMInstance(config, logger, "structured-output")
-	if err != nil {
-		return nil, err
-	}
-
-	// Create structured output LLM with BaseLLM (which includes mandatory event bridge)
-	structuredOutputLLM := &StructuredOutputLLM{
-		BaseLLM: NewBaseLLM(llmInstance, logger, tracer, eventBridge, "structured-output"),
-	}
-
-	logger.Info(fmt.Sprintf("✅ Structured output LLM created successfully with event bridge - Provider: %s, Model: %s, Temperature: %.1f",
-		config.LLMConfig.Primary.Provider, config.LLMConfig.Primary.ModelID, config.Temperature))
-
-	return structuredOutputLLM, nil
-}
-
 // Close cleans up resources
 func (b *BaseLLM) Close() error {
 	return nil

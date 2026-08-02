@@ -304,6 +304,5 @@ This doc covers regular-step learn_code. Todo-task orchestrators also have a lea
 ## Related Docs
 
 - [Step Config Specification](step_config_format_specification.md)
-- [Tool Search Mode](../core/tool_search_mode.md)
 - [Learning Architecture](learning_architecture.md)
 - [Todo-Task Step Type](todo-task-step-type.md)

@@ -2,9 +2,10 @@
 
 ## Status
 
-Implemented locally on 2026-08-01; focused Go tests pass. Production MCP-bridge
-and full Pulse/workflow-run verification remain pending before rollout is called
-complete.
+Implemented locally through the production MCP-bridge boundary as of
+2026-08-02. Focused Go tests and the bridge-to-workspace SQLite E2E pass. A full
+LLM-driven Pulse pass and ordinary scheduled workflow run remain rollout
+verification, not missing implementation.
 Open-site audit completed 2026-08-01: two affected call sites, one of them
 (`loopclosure`) outside the agent path and previously unlisted — see "Every
 affected open site". The reproduction and the proposed `PRAGMA query_only`
@@ -51,13 +52,13 @@ Workflow/social-media
 Database:
 
 ```text
-/Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/Workflow/social-media/db/db.sqlite
+<workspace-docs>/Workflow/social-media/db/db.sqlite
 ```
 
 The Fixer first ran:
 
 ```bash
-sqlite3 -readonly /Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/Workflow/social-media/db/db.sqlite ".tables"
+sqlite3 -readonly <workspace-docs>/Workflow/social-media/db/db.sqlite ".tables"
 ```
 
 Observed:
@@ -70,7 +71,7 @@ Error: in prepare, unable to open database file (14)
 It then retried with:
 
 ```bash
-sqlite3 -readonly 'file:/Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/Workflow/social-media/db/db.sqlite?immutable=1' ".schema pulse_review_log"
+sqlite3 -readonly 'file:<workspace-docs>/Workflow/social-media/db/db.sqlite?immutable=1' ".schema pulse_review_log"
 ```
 
 That opened the database and printed the schema. However, the same shell command
@@ -455,11 +456,112 @@ that a generated write example is forbidden.
   and message-sequence write narrowing.
 - Updated regular/message-sequence/todo-task prompts to use the managed tools;
   saved scripted steps retain `$DB_PATH` compatibility.
-- Hard-blocked the `db/db.sqlite*` prefix for managed agentic/background sessions
-  while leaving `db/README.md` and `db/assets/` under their normal folder policy.
+- Hard-blocked the three concrete paths `db/db.sqlite`, `db/db.sqlite-wal`, and
+  `db/db.sqlite-shm` for managed agentic/background sessions while leaving
+  `db/README.md` and `db/assets/` under their normal folder policy.
 - Changed loop closure to the same WAL-capable query-only connection contract.
 - Added checkpointed-no-sidecar, active-WAL visibility, unsafe SQL, transaction
   rollback, missing-path, read-only capability, and raw-file-block regression tests.
+
+### Remaining gaps closed (2026-08-02)
+
+The follow-up audit found five concrete gaps in the first implementation. They
+are now closed in this order:
+
+1. **Read-only scripted snapshot.** Saved scripts and their repair shells no
+   longer receive the live WAL database when effective `db_access="read"`.
+   The trusted workspace service uses SQLite `VACUUM INTO` to create a
+   transactionally consistent, standalone per-process snapshot under the
+   step's authorized output folder, replaces `DB_PATH` for that process, and
+   removes the snapshot afterward. The regression keeps a non-empty WAL open
+   and proves the snapshot sees its committed row without needing snapshot
+   WAL/SHM sidecars. Read-write scripts continue to receive the live DB.
+2. **Exact sidecar blocking.** Managed sessions explicitly block
+   `db.sqlite`, `db.sqlite-wal`, and `db.sqlite-shm`; the policy no longer relies
+   on a comment or prefix interpretation to cover the sidecars.
+3. **All workflow background-agent query surfaces.** A shared read-only
+   background-reviewer bundle now gives `query_workflow_db` (and never
+   `mutate_workflow_db`) to plan, timing, cost/ops, and saved-code reviewers.
+   Goal Advisor/Pulse stages already share an allow-list whose invariant test
+   requires the query tool. Generic background tasks and background todo
+   agents already use the normal capability-derived workflow tool bundle.
+   KB consolidate/reorganize agents now also receive query-only DB access and
+   a read-only managed DB session. This removes the one-reviewer-at-a-time
+   patch pattern: every workflow-scoped background agent can inspect structured
+   state, while only explicitly authorized writers can mutate it.
+4. **Fail-closed mutation authorization.** `mutate_workflow_db` now requires
+   the trusted session value to equal `read-write` exactly. Missing/empty
+   authority is denied. The long-lived main Builder session is explicitly
+   configured as read-write, as are the already-bounded workflow/Pulse writer
+   sessions; no legitimate writer depends on the previous missing-value
+   fallback.
+5. **Production bridge E2E.** `TestWorkflowStepDatabaseToolsThroughMCPBridge`
+   runs the production stdio MCP bridge, production workflow DB executors,
+   workspace `/api/query` and `/api/mutate` handlers, and real WAL-mode SQLite.
+   It proves a workflow-step session reads a committed WAL row and writes an
+   authorized `WITH ... INSERT` mutation back to the live database without
+   calling an executor directly from the test.
+
+### Follow-up: CTE-prefixed mutations rejected (fixed 2026-08-02)
+
+The first mutation validator authorized SQL from only its first keyword. That
+correctly accepted direct `INSERT`, `UPDATE`, and `DELETE`, but rejected valid
+SQLite mutations such as `WITH incoming(...) AS (...) INSERT ...`. This was a
+harness defect, not an agent SQL mistake: SQLite accepted the statement, but the
+workspace authorization layer returned HTTP 400 before execution.
+
+The validator now parses the narrow SQLite `WITH` envelope, skipping quoted
+values, comments, and balanced CTE bodies, and authorizes only when the actual
+top-level statement after all CTE definitions is `INSERT`, `UPDATE`, or
+`DELETE`. It remains fail-closed for `WITH ... SELECT`, DDL, PRAGMA, malformed
+CTEs, and stacked statements. The public tool description now explicitly tells
+agents that CTE-prefixed mutations are supported.
+
+Verification covers:
+
+- a focused regression that failed with the original HTTP 400;
+- accepted single, multiple, recursive, and materialization-hinted CTEs;
+- rejected read-only, schema-changing, malformed, and stacked CTE forms;
+- the production stdio MCP-bridge E2E using `WITH ... INSERT`;
+- a deployed workspace-server smoke test on a disposable database, including a
+  forced second-statement failure proving the first CTE mutation rolled back.
+
+### Final workflow-agent coverage
+
+| Agent/runtime surface | Query | Mutate | Raw live SQLite |
+|---|---:|---:|---:|
+| Plan, timing/ops, cost, saved-code reviewers | yes | no | blocked |
+| Goal Advisor/Pulse read-only stages | yes | no | blocked |
+| Pulse Fixer stage | yes | yes, explicit delegated session | blocked |
+| Generic `run_in_background` Builder child | yes | yes when its trusted broad Builder write session grants it | blocked |
+| Background todo agent | yes | follows effective step `db_access` | only scripted compatibility |
+| KB consolidate/reorganize | yes | no | blocked |
+| Agentic workflow step | yes | only with effective `db_access=read-write` | blocked |
+| Scripted workflow step, effective read | via consistent `DB_PATH` snapshot | no live mutation | snapshot only |
+| Scripted workflow step, effective read-write | available as configured | yes | live compatibility path |
+
+Chief of Staff is intentionally not listed as a workflow DB agent. It is
+org-scoped and has no single current workflow from which `query_workflow_db`
+could safely resolve a database. Cross-workflow Chief of Staff inspection needs
+a separate typed, workflow-addressed read API or delegation into a specific
+workflow session; silently choosing one workflow would violate the pathless
+authorization design.
+
+### Verification completed on 2026-08-02
+
+The following suites pass after the final background-agent expansion:
+
+```text
+workspace: go test ./handlers ./models
+agent_go:  go test ./pkg/workspace ./cmd/server/virtual-tools ./pkg/orchestrator/agents/workflow/step_based_workflow
+agent_go:  go test ./cmd/server -run '^TestWorkflowStepDatabaseToolsThroughMCPBridge$' -count=1
+```
+
+The tests cover committed active-WAL visibility in the scripted snapshot,
+explicit main/WAL/SHM blocking, query-only background surfaces, denial when DB
+write authority is absent, transactional mutation receipts, and the production
+stdio MCP bridge path. A full LLM-driven Pulse pass and a scheduled ordinary
+workflow run remain rollout smoke tests rather than unit/transport gaps.
 
 ### Prefer typed Pulse lifecycle tools where available
 
@@ -484,9 +586,11 @@ The existing typed Pulse tools should be used wherever they already cover the
 Fixer's question. General SQL should remain an escape hatch for workflow-owned
 data, not the primary Pulse lifecycle interface.
 
-### Make schema observation a separate turn for raw-SQL compatibility
+### Keep schema observation separate from dependent queries
 
-Until a typed query tool exists, Fixer guidance should state:
+The typed query tool now exists, but any agent querying an unfamiliar table
+must still inspect it first and wait for that result before constructing a
+dependent query. Raw-SQL compatibility guidance should state:
 
 > When a table schema is not already known, inspect it in one tool call. Wait for
 > that result, then construct the data query in a later tool call. Never chain
@@ -499,8 +603,9 @@ absolute path. The harness, not the model, owns path resolution.
 ### Do not standardize `immutable=1` for live Pulse reads
 
 If a consistent read snapshot is required, create it through a trusted backend
-using SQLite's backup API and query that snapshot. Do not ask agents to copy the
-database, copy only `db.sqlite` without WAL state, or guess URI modes from shell.
+using SQLite's backup facilities (`VACUUM INTO` or the backup API) and query
+that snapshot. Do not ask agents to copy the database, copy only `db.sqlite`
+without WAL state, or guess URI modes from shell.
 
 ## Minimum Safe Interim Fix
 

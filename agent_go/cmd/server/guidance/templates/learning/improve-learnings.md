@@ -12,7 +12,8 @@ EXECUTION
 The parent Workshop/Pulse agent first loads `assumption-audit`, then passes its
 relevant lens and this rendered checklist to
 `call_generic_agent` in an instruction beginning with `READ-ONLY REVIEW` and
-waits for its synchronous result. The parent then validates and applies any
+ends its turn after receiving the execution ID. The parent resumes from the
+automatic completion notification, then validates and applies any
 bounded safe edit. Do not create a dedicated learning-maintenance agent or use
 `run_in_background` for this review.
 

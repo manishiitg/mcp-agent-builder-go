@@ -30,8 +30,8 @@ type SlackConfigRequest struct {
 // SlackConfigResponse represents the Slack configuration response
 type SlackConfigResponse struct {
 	Enabled        bool                    `json:"enabled"`
-	BotToken       string                  `json:"bot_token,omitempty"`  // Masked in GET
-	AppToken       string                  `json:"app_token,omitempty"`  // Masked in GET
+	BotToken       string                  `json:"bot_token,omitempty"` // Masked in GET
+	AppToken       string                  `json:"app_token,omitempty"` // Masked in GET
 	ChannelID      string                  `json:"channel_id,omitempty"`
 	BotMode        bool                    `json:"bot_mode"`
 	ChannelRouting map[string]ChannelRoute `json:"channel_routing,omitempty"` // Maps Slack channel IDs to ChannelRoute{workflow_id, workspace_path}

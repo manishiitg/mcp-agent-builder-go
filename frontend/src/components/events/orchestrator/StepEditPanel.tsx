@@ -534,10 +534,6 @@ export const StepEditPanel: React.FC<StepEditPanelProps> = ({
       finalConfigs.selected_tools = undefined;
     }
 
-    // Clean up any legacy tool search mode fields
-    delete finalConfigs.use_tool_search_mode;
-    delete finalConfigs.pre_discovered_tools;
-
     // Handle custom tools in unified format: "category:tool" or "category:*"
     if (enabledCustomTools.length === 0) {
       // Empty array means all tools enabled (default behavior)

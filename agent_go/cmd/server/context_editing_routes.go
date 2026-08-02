@@ -116,26 +116,25 @@ func (api *StreamingAPI) handleCompactContext(w http.ResponseWriter, r *http.Req
 
 	// No observer ID needed - events are stored by sessionID
 
-	// Create minimal agent with NO_SERVERS to avoid connecting to MCP servers
-	tempAgent, err := mcpagent.NewAgent(
-		ctx,
-		compactLLM,
-		api.mcpConfigPath,
-		mcpagent.WithServerName(mcpclient.NoServers), // No MCP servers needed for context editing
-		mcpagent.WithContextEditing(true),
-		mcpagent.WithContextEditingThreshold(tokenThreshold),
-		mcpagent.WithContextEditingTurnThreshold(turnThreshold),
-		mcpagent.WithLogger(api.logger),
-	)
+	runtime := mcpagent.RuntimeConfig{
+		Model: compactLLM, MCPConfigPath: api.mcpConfigPath,
+		Context: mcpagent.ContextRuntimeConfig{
+			EditingEnabled: true, EditingThreshold: tokenThreshold, EditingTurnThreshold: turnThreshold,
+		},
+		Observability: mcpagent.ObservabilityRuntimeConfig{Logger: api.logger},
+	}
+	if api.eventStore != nil {
+		runtime.Observability.Observers = []mcpagent.AgentEventListener{events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)}
+	}
+	tempAgent, err := mcpagent.NewAgentFromDefinition(ctx, mcpagent.AgentDefinition{
+		Tools: mcpagent.ToolSet{MCP: []mcpagent.MCPToolSource{{Name: mcpclient.NoServers}}},
+	}, runtime)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create agent for context editing: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Attach event observer to capture context editing events
 	if api.eventStore != nil {
-		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
-		mcpagent.ObserveAgent(tempAgent, eventObserver)
 		log.Printf("[CONTEXT_EDITING] Attached event observer to capture context editing events for session %s", sessionID)
 	} else {
 		log.Printf("[CONTEXT_EDITING] Warning: eventStore is nil, events will not be captured")

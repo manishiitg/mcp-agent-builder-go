@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/gin-contrib/gzip v1.2.6
 	github.com/gin-gonic/gin v1.12.0
+	github.com/creack/pty v1.1.24
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/viper v1.21.0
 	modernc.org/sqlite v1.49.1

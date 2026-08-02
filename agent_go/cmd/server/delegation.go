@@ -29,6 +29,7 @@ import (
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/mcpagent/llm"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 func safeDelegationRuntimeID(id string) string {
@@ -316,18 +317,26 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		}
 		log.Printf("[DELEGATION] Added event observers for sub-agent at depth %d", currentDepth)
 
-		// Phase 6 explicit-pass: sub-agents inherit NO skills from the
-		// parent. The parent must enumerate skills the sub-agent needs
-		// in its delegate() call (skills=[...]). delegation_tools.go
-		// threads those names through the SubAgentSpec.
+		// Chief of Staff delegation inherits the root agent's exact attached
+		// skill bundles. This includes the multi-agent reference surface and
+		// user-selected skills, with supporting files intact for projection
+		// into the child's isolated coding-agent runtime directory.
+		inheritedSkills := delegatedParentSkillsFromContext(ctx)
+		identitySkills := append([]*llmtypes.Skill(nil), inheritedSkills...)
+		// skills=[...] remains an additive override for skills that are not
+		// already attached to the Chief of Staff parent. Attach the combined
+		// set once so assembly-time identity also deduplicates correctly before
+		// the wrapper finalizes its immutable mcpagent definition.
 		if len(spec.Skills) > 0 {
 			if attached := skills.LoadAttachable(getWorkspaceAPIURL(), spec.Skills); len(attached) > 0 {
-				for _, s := range attached {
-					_ = subAgent.AttachSkill(s)
-				}
-				log.Printf("[DELEGATION] Attached %d skill(s) to sub-agent (explicit pass)", len(attached))
+				identitySkills = append(identitySkills, attached...)
 			}
 		}
+		attachedCount, attachErr := attachMissingDelegatedSkills(subAgent, identitySkills)
+		if attachErr != nil {
+			return "", fmt.Errorf("attach delegated agent skills: %w", attachErr)
+		}
+		log.Printf("[DELEGATION] Attached %d skill(s) to sub-agent (parent=%d, explicit_names=%d)", attachedCount, len(inheritedSkills), len(spec.Skills))
 
 		// Append prompt sections contributed by active conditional grants
 		// (resolved above in subResolvedGrants before this block).
@@ -401,7 +410,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		}
 		// Inject LLM config fallback for read_image HTTP calls (e.g., from claude CLI subprocess)
 		if underlying := subAgent.GetUnderlyingAgent(); underlying != nil {
-			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.AgentLLMConfig(underlying))
+			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig)
 		}
 
 		// Conditional grants already resolved above into subResolvedGrants.

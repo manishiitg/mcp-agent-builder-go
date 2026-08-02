@@ -1,11 +1,9 @@
 package testing
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -170,102 +168,23 @@ func isValidJSON(content string) bool {
 func testLargeOutputVirtualTools(testDir string) error {
 	logger := GetTestLogger()
 
-	logger.Info("Testing large output virtual tools functionality...")
-
-	// Create a test agent with large output virtual tools enabled
-	agent := &mcpagent.Agent{
-		EnableContextOffloading: true,
+	logger.Info("Testing large output handler configuration...")
+	handler := mcpagent.NewToolOutputHandlerWithConfig(16, testDir, "test-session", true, true)
+	content := strings.Repeat("large-output ", 100)
+	if !handler.IsLargeToolOutput(content) {
+		return fmt.Errorf("expected configured handler to offload large content")
 	}
-	mcpagent.ConfigureAgentToolOutput(agent, mcpagent.NewToolOutputHandler())
-
-	// Test 1: Check if large output virtual tools are enabled by default
-	logger.Info("Test 1: Default Configuration")
-	logger.Info(fmt.Sprintf("EnableContextOffloading: %v", agent.EnableContextOffloading))
-
-	// Test 2: Create virtual tools and check if large output tools are included
-	logger.Info("Test 2: Virtual Tools Creation")
-	virtualTools := mcpagent.CreateAgentVirtualTools(agent)
-	logger.Info(fmt.Sprintf("Total virtual tools: %d", len(virtualTools)))
-
-	largeOutputTools := mcpagent.CreateAgentLargeOutputTools(agent)
-	logger.Info(fmt.Sprintf("Large output virtual tools: %d", len(largeOutputTools)))
-
-	for _, tool := range virtualTools {
-		if tool.Function != nil {
-			logger.Info(fmt.Sprintf("- %s: %s", tool.Function.Name, tool.Function.Description))
-		}
+	path, err := handler.WriteToolOutputToFile(content, "test_tool")
+	if err != nil {
+		return fmt.Errorf("write tool output: %w", err)
 	}
-
-	// Test 3: Test with disabled large output virtual tools
-	logger.Info("Test 3: Disabled Configuration")
-	agent.EnableContextOffloading = false
-	disabledTools := mcpagent.CreateAgentLargeOutputTools(agent)
-	logger.Info(fmt.Sprintf("Large output virtual tools when disabled: %d", len(disabledTools)))
-
-	// Test 4: Test file path building
-	logger.Info("Test 4: File Path Building")
-
-	// Create a test tool output handler
-	toolOutputHandler := mcpagent.NewToolOutputHandler()
-	toolOutputHandler.SetSessionID("test-session")
-	mcpagent.ConfigureAgentToolOutput(agent, toolOutputHandler)
-
-	// Test valid filename
-	validPath := mcpagent.BuildAgentLargeOutputPath(agent, "tool_20250721_091511_tavily-search.json")
-	logger.Info(fmt.Sprintf("Valid filename path: %s", validPath))
-
-	// Test invalid filename
-	invalidPath := mcpagent.BuildAgentLargeOutputPath(agent, "invalid_filename.txt")
-	logger.Info(fmt.Sprintf("Invalid filename path: %s", invalidPath))
-
-	// Test 5: Test virtual tool handling
-	logger.Info("Test 5: Virtual Tool Handling")
-
-	ctx := context.Background()
-
-	// Test get_prompt tool (should work)
-	result, err := mcpagent.InvokeAgentVirtualTool(ctx, agent, "get_prompt", map[string]interface{}{
-		"server": "test-server",
-		"name":   "test-prompt",
-	})
-	logger.Info(fmt.Sprintf("get_prompt result: %s, error: %v", result, err))
-
-	// Test large output tool when enabled (should work)
-	agent.EnableContextOffloading = true
-
-	// Create a test file to read from
-	testFilePath := filepath.Join(testDir, "test-session", "tool_20250731_143800_test_tool.json")
-	if err := os.MkdirAll(filepath.Dir(testFilePath), 0755); err != nil {
-		return fmt.Errorf("failed to create test directory: %w", err)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("stat offloaded output: %w", err)
 	}
-
-	testContent := `{"name":"test","value":123,"items":["a","b","c"]}`
-	if err := os.WriteFile(testFilePath, []byte(testContent), 0644); err != nil {
-		return fmt.Errorf("failed to write test file: %w", err)
+	handler.SetEnabled(false)
+	if handler.IsLargeToolOutput(content) {
+		return fmt.Errorf("disabled handler still classified output for offloading")
 	}
-
-	// Set the tool output handler to use our test directory
-	handler := mcpagent.AgentToolOutput(agent)
-	handler.OutputFolder = testDir
-	handler.SessionID = "test-session"
-
-	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
-		"filename":  "tool_20250731_143800_test_tool.json",
-		"operation": "read",
-		"start":     float64(1),
-		"end":       float64(20),
-	})
-	logger.Info(fmt.Sprintf("search_large_output read when enabled: %s, error: %v", result, err))
-
-	// Test large output tool when disabled (should fail)
-	agent.EnableContextOffloading = false
-	result, err = mcpagent.InvokeAgentLargeOutputTool(ctx, agent, "search_large_output", map[string]interface{}{
-		"filename":  "test.json",
-		"operation": "read",
-		"start":     float64(1),
-		"end":       float64(100),
-	})
-	logger.Info(fmt.Sprintf("search_large_output read when disabled: %s, error: %v", result, err))
 
 	logger.Info("✅ Large output virtual tools tests passed!")
 	return nil

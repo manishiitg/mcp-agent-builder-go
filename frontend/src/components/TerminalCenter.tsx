@@ -25,6 +25,7 @@ import { preserveTerminalContinuity } from '../utils/terminalContinuity'
 import { isMainAgentTerminal } from '../utils/terminalIdentity'
 import { hasFreshTerminalDetailBody } from '../utils/terminalDetailFreshness'
 import {
+  canonicalTerminalRailSelection,
   hiddenSelectedTerminalRailGroup,
   organizeTerminalRail,
   terminalRailGroupSearchText,
@@ -40,6 +41,7 @@ import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { selectTerminalEvents } from '../utils/terminalEventTranscript'
 import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
+import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from '../utils/terminalEventPage'
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -88,6 +90,30 @@ const TERMINAL_ACTIVE_RAIL_PROBE_LIMIT = 4
 const ARCHIVED_TURN_PREFETCH_LIMIT = 1
 const TERMINAL_FAST_POLL_INTERVAL_MS = 750
 const TERMINAL_FAST_POLL_DURATION_MS = 5000
+const TERMINAL_EVENT_PAGE_LIMIT = 300
+const TERMINAL_EVENT_LIVE_POLL_INTERVAL_MS = 1000
+
+interface SelectedTerminalEventPage {
+  terminalId: string | null
+  events: PollingEvent[]
+  loaded: boolean
+  loading: boolean
+  loadingOlder: boolean
+  hasOlder: boolean
+  oldestSequence?: number
+  latestSequence?: number
+  error?: string
+}
+
+const EMPTY_SELECTED_TERMINAL_EVENT_PAGE: SelectedTerminalEventPage = {
+  terminalId: null,
+  events: [],
+  loaded: false,
+  loading: false,
+  loadingOlder: false,
+  hasOlder: false,
+}
+const EMPTY_TERMINAL_EVENTS: PollingEvent[] = []
 const LIVE_ATTACH_RESEED_DEBOUNCE_MS = 150
 const LIVE_ATTACH_RESEED_MIN_INTERVAL_MS = 2500
 // Must stay ABOVE the backend's own seed deadline (terminalTmuxActionTimeout,
@@ -2534,8 +2560,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const sessionEvents = useChatStore(state => (
     currentSessionId ? state.tabEvents[currentSessionId] : undefined
   ))
-  const addTabEvents = useChatStore(state => state.addTabEvents)
-  const eventHydrationAttemptedRef = useRef<Set<string>>(new Set())
+  const [selectedTerminalEventPage, setSelectedTerminalEventPage] = useState<SelectedTerminalEventPage>(
+    EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
+  )
+  const selectedTerminalEventPageRef = useRef(selectedTerminalEventPage)
+  const terminalEventRequestGenerationRef = useRef(0)
+  const terminalEventRefreshInFlightRef = useRef(false)
+  useEffect(() => {
+    selectedTerminalEventPageRef.current = selectedTerminalEventPage
+  }, [selectedTerminalEventPage])
   useEffect(() => {
     setDismissedErrorIDs(readDismissedTerminalErrorIDs(currentSessionId))
   }, [currentSessionId])
@@ -3057,6 +3090,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const latestActive = groupedTerminals.activeTerminals[0]
     const preferredTerminal = currentMainTerminal || latestActive || groupedTerminals.currentTerminals[0] || groupedTerminals.orderedTerminals[0]
 
+    const canonicalSelected = canonicalTerminalRailSelection(groupedTerminals.logicalGroups, selected)
+    if (selected && canonicalSelected && canonicalSelected.terminal_id !== selected.terminal_id) {
+      const canonicalKey = terminalPaneKey(canonicalSelected)
+      setSelectedID(canonicalKey)
+      if (userSelectedID === terminalPaneKey(selected)) setUserSelectedID(canonicalKey)
+      return
+    }
+
     if (userSelected) {
       const userSelectedKey = terminalPaneKey(userSelected)
       if (selectedID !== userSelectedKey) {
@@ -3215,9 +3256,178 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     selectedTerminalView.tmux_session,
   )
   const selectedTerminalID = selectedTerminalView?.terminal_id ?? null
+  const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
+  const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
+  const selectedTerminalUsesSessionEvents = Boolean(
+    selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
+  )
+
+  const loadSelectedTerminalEventPage = useCallback(async () => {
+    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+
+    terminalEventRefreshInFlightRef.current = false
+    const generation = ++terminalEventRequestGenerationRef.current
+    setSelectedTerminalEventPage({
+      ...EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
+      terminalId: selectedTerminalID,
+      loading: true,
+    })
+    try {
+      const response = await agentApi.getTerminalEvents(selectedTerminalID, {
+        limit: TERMINAL_EVENT_PAGE_LIMIT,
+      })
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      const events = mergeTerminalEventPages([], response.events || [])
+      const bounds = terminalEventSequenceBounds(events)
+      setSelectedTerminalEventPage({
+        terminalId: selectedTerminalID,
+        events,
+        loaded: true,
+        loading: false,
+        loadingOlder: false,
+        hasOlder: response.has_older,
+        oldestSequence: response.oldest_sequence ?? bounds.oldestSequence,
+        latestSequence: response.latest_sequence ?? bounds.latestSequence,
+      })
+    } catch (loadError) {
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      setSelectedTerminalEventPage({
+        ...EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
+        terminalId: selectedTerminalID,
+        loaded: true,
+        error: loadError instanceof Error ? loadError.message : 'Failed to load conversation events.',
+      })
+    }
+  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+
+  useEffect(() => {
+    terminalEventRequestGenerationRef.current++
+    terminalEventRefreshInFlightRef.current = false
+    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) {
+      setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
+      return
+    }
+    void loadSelectedTerminalEventPage()
+  }, [loadSelectedTerminalEventPage, selectedTerminalID, selectedTerminalUsesSessionEvents])
+
+  const refreshSelectedTerminalEvents = useCallback(async () => {
+    const page = selectedTerminalEventPageRef.current
+    if (
+      !selectedTerminalID ||
+      selectedTerminalUsesSessionEvents ||
+      page.terminalId !== selectedTerminalID ||
+      !page.loaded ||
+      page.loading ||
+      terminalEventRefreshInFlightRef.current
+    ) return
+
+    terminalEventRefreshInFlightRef.current = true
+    const generation = terminalEventRequestGenerationRef.current
+    try {
+      const response = await agentApi.getTerminalEvents(selectedTerminalID, {
+        limit: TERMINAL_EVENT_PAGE_LIMIT,
+        afterSequence: page.latestSequence,
+      })
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      setSelectedTerminalEventPage(current => {
+        if (current.terminalId !== selectedTerminalID) return current
+        const merged = mergeNewerTerminalEventPage(current, response)
+        return {
+          ...current,
+          ...merged,
+          error: undefined,
+        }
+      })
+    } catch (refreshError) {
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      setSelectedTerminalEventPage(current => current.terminalId === selectedTerminalID
+        ? {
+            ...current,
+            error: refreshError instanceof Error ? refreshError.message : 'Failed to refresh conversation events.',
+          }
+        : current)
+    } finally {
+      if (terminalEventRequestGenerationRef.current === generation) {
+        terminalEventRefreshInFlightRef.current = false
+      }
+    }
+  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+
+  // Detailed child events do not enter the session-wide store. Poll only the
+  // selected live transcript, and do one final refresh whenever its terminal
+  // snapshot changes or settles.
+  useEffect(() => {
+    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+    void refreshSelectedTerminalEvents()
+    if (!isSelectedTerminalStreaming) return
+    const interval = window.setInterval(
+      () => { void refreshSelectedTerminalEvents() },
+      TERMINAL_EVENT_LIVE_POLL_INTERVAL_MS,
+    )
+    return () => window.clearInterval(interval)
+  }, [
+    isSelectedTerminalStreaming,
+    refreshSelectedTerminalEvents,
+    selectedTerminalID,
+    selectedTerminalUsesSessionEvents,
+    selectedTerminalView?.chunk_index,
+    selectedTerminalView?.updated_at,
+  ])
+
+  const loadOlderSelectedTerminalEvents = useCallback(async () => {
+    const page = selectedTerminalEventPageRef.current
+    if (
+      !selectedTerminalID ||
+      selectedTerminalUsesSessionEvents ||
+      page.terminalId !== selectedTerminalID ||
+      page.loadingOlder ||
+      !page.hasOlder ||
+      !page.oldestSequence
+    ) return
+
+    const generation = terminalEventRequestGenerationRef.current
+    setSelectedTerminalEventPage(current => current.terminalId === selectedTerminalID
+      ? { ...current, loadingOlder: true, error: undefined }
+      : current)
+    try {
+      const response = await agentApi.getTerminalEvents(selectedTerminalID, {
+        limit: TERMINAL_EVENT_PAGE_LIMIT,
+        beforeSequence: page.oldestSequence,
+      })
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      setSelectedTerminalEventPage(current => {
+        if (current.terminalId !== selectedTerminalID) return current
+        const events = mergeTerminalEventPages(current.events, response.events || [])
+        const bounds = terminalEventSequenceBounds(events)
+        return {
+          ...current,
+          events,
+          loadingOlder: false,
+          hasOlder: response.has_older,
+          oldestSequence: bounds.oldestSequence ?? current.oldestSequence,
+          latestSequence: bounds.latestSequence ?? current.latestSequence,
+        }
+      })
+    } catch (loadError) {
+      if (terminalEventRequestGenerationRef.current !== generation) return
+      setSelectedTerminalEventPage(current => current.terminalId === selectedTerminalID
+        ? {
+            ...current,
+            loadingOlder: false,
+            error: loadError instanceof Error ? loadError.message : 'Failed to load older conversation events.',
+          }
+        : current)
+    }
+  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+
+  const selectedTerminalEventSource = selectedTerminalUsesSessionEvents
+    ? sessionEvents
+    : selectedTerminalEventPage.terminalId === selectedTerminalID
+      ? selectedTerminalEventPage.events
+      : EMPTY_TERMINAL_EVENTS
   const selectedTerminalEvents = useMemo(
-    () => selectTerminalEvents(sessionEvents, selectedTerminalView, terminals),
-    [sessionEvents, selectedTerminalView, terminals],
+    () => selectTerminalEvents(selectedTerminalEventSource, selectedTerminalView, terminals),
+    [selectedTerminalEventSource, selectedTerminalView, terminals],
   )
   const selectedTerminalHasEvents = useMemo(
     () => selectedTerminalEvents.length > 0,
@@ -3236,49 +3446,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
     [selectedTerminalEvents],
   )
-  // A restored tab can have terminal snapshots before its event history has
-  // been hydrated. Fetch once for the selected clean terminal rather than
-  // falling back to server-parsed rows: those rows are a lossy compatibility
-  // format and, when stale metadata crossed between parallel siblings, could
-  // display one step's lifecycle card under another step's selected header.
-  //
-  // Hydrated for tmux terminals too, not just synthetic ones: the formatted
-  // view is now reachable from a raw pane by toggle, and that toggle is only
-  // offered when the terminal has events. Gating hydration on "is already
-  // showing the transcript" made that unreachable -- the events would only be
-  // fetched for terminals that never needed the toggle. One fetch per
-  // session+terminal, guarded by eventHydrationAttemptedRef.
-  useEffect(() => {
-    const canRenderTranscript = selectedTerminalIsSynthetic || selectedTerminalIsTmux
-    if (!currentSessionId || !selectedTerminalID || !canRenderTranscript || selectedTerminalHasEvents) {
-      return
-    }
-    const hydrationKey = `${currentSessionId}:${selectedTerminalID}`
-    if (eventHydrationAttemptedRef.current.has(hydrationKey)) return
-    eventHydrationAttemptedRef.current.add(hydrationKey)
-
-    void agentApi.getRecentSessionEvents(currentSessionId)
-      .then(response => {
-        if (Array.isArray(response.events) && response.events.length > 0) {
-          addTabEvents(currentSessionId, response.events)
-          return
-        }
-        eventHydrationAttemptedRef.current.delete(hydrationKey)
-      })
-      .catch(error => {
-        eventHydrationAttemptedRef.current.delete(hydrationKey)
-        console.warn('Failed to hydrate clean terminal events', currentSessionId, error)
-      })
-  }, [
-    addTabEvents,
-    currentSessionId,
-    selectedTerminalHasEvents,
-    selectedTerminalID,
-    selectedTerminalIsSynthetic,
-    selectedTerminalIsTmux,
-  ])
-  const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
-  const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
   // Live-attach is the ONLY transport for the selected live tmux terminal: it
   // renders over the /api/terminals/{id}/stream WebSocket while the selected
   // terminal is active. Completed tmux panes render through StaticXtermPane from
@@ -4479,9 +4646,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                     // carry what the pane cannot show well -- tool arguments,
                     // results, and an unwrapped final answer.
                     <TerminalEventTranscript
-                      events={sessionEvents}
+                      events={selectedTerminalEventSource}
                       terminal={selectedTerminalView}
                       siblingTerminals={terminals}
+                      loading={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loading}
+                      loadingOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loadingOlder}
+                      hasOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.hasOlder}
+                      error={!selectedTerminalUsesSessionEvents ? selectedTerminalEventPage.error : undefined}
+                      onLoadOlder={!selectedTerminalUsesSessionEvents ? loadOlderSelectedTerminalEvents : undefined}
+                      onRetry={!selectedTerminalUsesSessionEvents ? loadSelectedTerminalEventPage : undefined}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane

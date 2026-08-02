@@ -505,7 +505,6 @@ behavior lives here.
 | `docs/llm_resilience.md` | Retry, timeout, classification |
 | `docs/oauth.md` | OAuth flow for provider auth |
 | `docs/mcp_cache_system.md` | MCP server connection caching |
-| `docs/tool_search_mode.md` | Tool-search agent mode |
 | `docs/tool_use_agent.md` | Agentic tool-use loop |
 
 ### coding-agent-loop (this repo)

@@ -14,10 +14,10 @@ const schedulerConfigFilePath = "config/scheduler.json"
 // SchedulerConfig stores workspace-level scheduler settings in config/scheduler.json.
 // Schedule definitions remain in each workflow manifest.
 type SchedulerConfig struct {
-	GloballyPaused   bool       `json:"globally_paused"`
-	PausedAt         *time.Time `json:"paused_at,omitempty"`
-	PausedBy         string     `json:"paused_by,omitempty"`
-	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+	GloballyPaused bool       `json:"globally_paused"`
+	PausedAt       *time.Time `json:"paused_at,omitempty"`
+	PausedBy       string     `json:"paused_by,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
 }
 
 func sanitizeSchedulerConfig(cfg *SchedulerConfig) *SchedulerConfig {
@@ -39,7 +39,6 @@ func sanitizeSchedulerConfig(cfg *SchedulerConfig) *SchedulerConfig {
 	}
 	return sanitized
 }
-
 
 func SaveSchedulerConfig(ctx context.Context, cfg *SchedulerConfig) error {
 	sanitized := sanitizeSchedulerConfig(cfg)

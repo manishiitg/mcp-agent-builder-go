@@ -65,7 +65,6 @@ type OrchestratorAgentStartEvent struct {
 	Iteration            int               `json:"iteration,omitempty"`               // which iteration of the loop
 	UseCodeExecutionMode bool              `json:"use_code_execution_mode,omitempty"` // code execution mode enabled
 	UseScriptedMode      bool              `json:"use_learn_code_mode,omitempty"`     // scripted mode enabled (persistent main.py replayed across runs). Wire-format tag kept as use_learn_code_mode for back-compat; rename deferred.
-	UseToolSearchMode    bool              `json:"use_tool_search_mode,omitempty"`    // tool search mode enabled
 	SystemPrompt         string            `json:"system_prompt,omitempty"`           // full system prompt sent to LLM
 	UserMessage          string            `json:"user_message,omitempty"`            // user message sent to LLM
 }
@@ -76,22 +75,21 @@ func (e *OrchestratorAgentStartEvent) GetEventType() events.EventType {
 
 type OrchestratorAgentEndEvent struct {
 	events.BaseEventData
-	AgentType          string                 `json:"agent_type"`                    // planning, execution, validation, organizer
-	AgentName          string                 `json:"agent_name"`                    // specific agent name
-	Objective          string                 `json:"objective"`                     // what the agent was trying to accomplish
-	InputData          map[string]string      `json:"input_data"`                    // template variables passed to agent
-	Result             string                 `json:"result"`                        // agent's output/result (text summary)
-	StructuredResponse map[string]interface{} `json:"structured_response,omitempty"` // structured response data (for ExecuteStructured calls)
-	Success            bool                   `json:"success"`                       // whether agent completed successfully
-	Error              string                 `json:"error,omitempty"`               // error message if failed
-	Duration           time.Duration          `json:"duration"`                      // how long the agent took
-	ModelID            string                 `json:"model_id"`                      // which LLM model was used
-	Provider           string                 `json:"provider"`                      // which LLM provider
-	ServersCount       int                    `json:"servers_count"`                 // number of MCP servers used
-	MaxTurns           int                    `json:"max_turns"`                     // maximum conversation turns
-	PlanID             string                 `json:"plan_id,omitempty"`             // associated plan ID
-	StepIndex          int                    `json:"step_index,omitempty"`          // which step in the plan
-	Iteration          int                    `json:"iteration,omitempty"`           // which iteration of the loop
+	AgentType    string            `json:"agent_type"`           // planning, execution, validation, organizer
+	AgentName    string            `json:"agent_name"`           // specific agent name
+	Objective    string            `json:"objective"`            // what the agent was trying to accomplish
+	InputData    map[string]string `json:"input_data"`           // template variables passed to agent
+	Result       string            `json:"result"`               // agent's output/result (text summary)
+	Success      bool              `json:"success"`              // whether agent completed successfully
+	Error        string            `json:"error,omitempty"`      // error message if failed
+	Duration     time.Duration     `json:"duration"`             // how long the agent took
+	ModelID      string            `json:"model_id"`             // which LLM model was used
+	Provider     string            `json:"provider"`             // which LLM provider
+	ServersCount int               `json:"servers_count"`        // number of MCP servers used
+	MaxTurns     int               `json:"max_turns"`            // maximum conversation turns
+	PlanID       string            `json:"plan_id,omitempty"`    // associated plan ID
+	StepIndex    int               `json:"step_index,omitempty"` // which step in the plan
+	Iteration    int               `json:"iteration,omitempty"`  // which iteration of the loop
 	// Token usage fields
 	PromptTokens          int `json:"prompt_tokens,omitempty"`
 	CompletionTokens      int `json:"completion_tokens,omitempty"`
@@ -161,13 +159,14 @@ func (e *BackgroundAgentStartedEvent) GetEventType() events.EventType {
 // Status == "completed", Error for Status == "failed".
 type BackgroundAgentCompletedEvent struct {
 	events.BaseEventData
-	AgentID           string `json:"agent_id"`
-	Name              string `json:"name"`
-	Status            string `json:"status"` // "completed" | "failed"
-	Result            string `json:"result,omitempty"`
-	Error             string `json:"error,omitempty"`
-	Duration          string `json:"duration,omitempty"`
-	ParentExecutionID string `json:"parent_execution_id,omitempty"`
+	AgentID           string        `json:"agent_id"`
+	Name              string        `json:"name"`
+	Status            string        `json:"status"` // "completed" | "failed"
+	Result            string        `json:"result,omitempty"`
+	Error             string        `json:"error,omitempty"`
+	Duration          string        `json:"duration,omitempty"`
+	ParentExecutionID string        `json:"parent_execution_id,omitempty"`
+	Kind              ExecutionKind `json:"execution_kind,omitempty"`
 }
 
 func (e *BackgroundAgentCompletedEvent) GetEventType() events.EventType {
@@ -207,10 +206,11 @@ func (e *SyntheticTurnReadyEvent) GetEventType() events.EventType {
 // queued for the next turn.
 type AutoNotificationSteeredEvent struct {
 	events.BaseEventData
-	AgentID  string `json:"agent_id"`
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Provider string `json:"provider"`
+	AgentID  string        `json:"agent_id"`
+	Name     string        `json:"name"`
+	Status   string        `json:"status"`
+	Provider string        `json:"provider"`
+	Kind     ExecutionKind `json:"execution_kind,omitempty"`
 }
 
 func (e *AutoNotificationSteeredEvent) GetEventType() events.EventType {

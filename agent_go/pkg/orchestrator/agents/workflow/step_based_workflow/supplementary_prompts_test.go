@@ -1,20 +1,14 @@
 package step_based_workflow
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
-)
-
-func TestProjectedWorkflowReferenceSkillIsCLIOnlyAndContainsExecutionDocs(t *testing.T) {
-	cliConfig := &agents.OrchestratorAgentConfig{}
-	cliConfig.LLMConfig.Primary.Provider = "codex-cli"
-	skill := projectedWorkflowReferenceSkill(cliConfig)
+func TestWorkflowReferenceSkillContainsExecutionDocsForEveryTransport(t *testing.T) {
+	skill := workflowReferenceSkill()
 	if skill == nil {
 		t.Fatal("coding CLI step must receive the workflow reference skill")
 	}
-	if skill.Name != "workflow-reference" {
-		t.Fatalf("projected skill name = %q, want workflow-reference", skill.Name)
+	if skill.Name != "builder-reference" {
+		t.Fatalf("projected skill name = %q, want builder-reference", skill.Name)
 	}
 
 	wantFiles := map[string]bool{
@@ -34,9 +28,4 @@ func TestProjectedWorkflowReferenceSkillIsCLIOnlyAndContainsExecutionDocs(t *tes
 		}
 	}
 
-	apiConfig := &agents.OrchestratorAgentConfig{}
-	apiConfig.LLMConfig.Primary.Provider = "anthropic"
-	if got := projectedWorkflowReferenceSkill(apiConfig); got != nil {
-		t.Fatalf("API provider should keep inline fallback, got projected skill %q", got.Name)
-	}
 }

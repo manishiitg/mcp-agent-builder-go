@@ -2,14 +2,12 @@ package testing
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 
@@ -119,56 +117,16 @@ Example:
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		// modelID is automatically extracted from llmModel
-		agent, err := mcpagent.NewAgent(
-			ctx,
-			llmModel,
-			"configs/mcp_servers_simple.json",     // config path
-			mcpagent.WithServerName("fileserver"), // server name
-			mcpagent.WithMaxTurns(10),
-		)
+		directTools, err := advancedWorkspaceToolDefinitions()
+		if err != nil {
+			return fmt.Errorf("build workspace tool definitions: %w", err)
+		}
+		agent, err := createTestingAgent(ctx, llmModel, "configs/mcp_servers_simple.json", "fileserver", 10, logger, directTools)
 		if err != nil {
 			return fmt.Errorf("failed to create agent: %w", err)
 		}
 		defer agent.Close()
-
-		logger.Info(fmt.Sprintf("✅ Agent created successfully"))
-
-		// Register workspace tools (including read_image)
-		workspaceTools := virtualtools.CreateWorkspaceAdvancedTools()
-		workspaceExecutors := virtualtools.CreateWorkspaceToolExecutors()
-
-		logger.Info(fmt.Sprintf("Registering %d workspace tools", len(workspaceTools)))
-
-		for _, tool := range workspaceTools {
-			toolName := tool.Function.Name
-			if executor, exists := workspaceExecutors[toolName]; exists {
-				// Convert Parameters to map[string]interface{}
-				var params map[string]interface{}
-				if tool.Function.Parameters != nil {
-					paramsBytes, err := json.Marshal(tool.Function.Parameters)
-					if err == nil {
-						json.Unmarshal(paramsBytes, &params)
-					}
-				}
-				if params == nil {
-					logger.Warn(fmt.Sprintf("Warning: Failed to convert parameters for tool %s", toolName))
-					continue
-				}
-
-				// Register the tool
-				mcpagent.AddDefinitionTool(agent,
-					toolName,
-					tool.Function.Description,
-					params,
-					executor,
-					"workspace",
-				)
-				logger.Info(fmt.Sprintf("✅ Registered workspace tool: %s", toolName))
-			}
-		}
-
-		logger.Info(fmt.Sprintf("✅ All workspace tools registered"))
+		logger.Info(fmt.Sprintf("✅ Agent created successfully with %d workspace tools", len(directTools)))
 
 		// Test read_image tool with the specific image
 		prompt := fmt.Sprintf("Please read the file '%s' and describe what you see in it.", imagePath)
@@ -177,7 +135,7 @@ Example:
 		logger.Info(fmt.Sprintf("🔍 This should trigger the read_image tool"))
 
 		// Invoke the agent
-		response, err := mcpagent.RunText(ctx, agent, prompt)
+		response, err := runAgentText(ctx, agent, prompt)
 		if err != nil {
 			logger.Error(fmt.Sprintf("❌ Read secure access image test failed: %v", err), nil)
 			return fmt.Errorf("read secure access image test failed: %w", err)
@@ -195,7 +153,7 @@ Example:
 		fmt.Print(strings.Repeat("=", 80) + "\n")
 
 		// Show agent capabilities
-		servers := mcpagent.AgentServerNames(agent)
+		servers := mcpagent.ReadAgentDiagnostics(agent).ServerNames
 		fmt.Printf("\n📊 Connected Servers: %v\n", servers)
 
 		logger.Info(fmt.Sprintf("✅ Read secure access image test completed successfully"))

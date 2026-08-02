@@ -13,7 +13,6 @@ import (
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -39,7 +38,7 @@ import (
 // doesn't crash the server during a routine auto-restore.
 func (api *StreamingAPI) installWorkflowPhaseTools(
 	ctx context.Context,
-	underlyingAgent *mcpagent.Agent,
+	definitionAgent definitionRegistrar,
 	setToolPolicy func([]string),
 	sessionID, userID, workflowPhaseID, phaseWorkspacePath, phaseRunFolder string,
 	phaseTemplateVars map[string]string,
@@ -70,7 +69,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		// never fire in a healthy build. The /api/query caller wraps this with log.Fatalf
 		// to preserve the original Fatal semantics; the restore caller logs and skips.
 		if err := todo_creation_human.RegisterPlanModificationTools(
-			underlyingAgent,
+			definitionAgent,
 			phaseWorkspacePath,
 			api.logger,
 			phaseReadFile,
@@ -240,7 +239,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 					return result
 				},
 			)
-			todo_creation_human.RegisterWorkshopChatTools(underlyingAgent, workshopSession, api.logger)
+			todo_creation_human.RegisterWorkshopChatTools(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered workshop execution tools for %s (execute_step, query_step, stop_step, list_steps, etc.)", workflowPhaseID)
 
 			builderSession := workshopSession
@@ -256,7 +255,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 				}
 				return builderSession.DetachSecretFromWorkflow(ctx, name)
 			}
-			if err := api.registerSecretManagementTools(underlyingAgent, userID, phaseWorkspacePath, "secret_tools", afterUpsert, afterDelete); err != nil {
+			if err := api.registerSecretManagementTools(definitionAgent, userID, phaseWorkspacePath, "secret_tools", afterUpsert, afterDelete); err != nil {
 				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register secret tools in %s: %v", workflowPhaseID, err)
 			} else {
 				log.Printf("[WORKFLOW_PHASE] Registered secret tools in %s (list_secrets, set_workflow_secret, delete_workflow_secret, set_user_secret, delete_user_secret) with workflow auto-detach", workflowPhaseID)
@@ -266,7 +265,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		// Register evaluation tools in builder-style phases: validation plus
 		// full execution against the current run.
 		if err := todo_creation_human.RegisterEvaluationValidationTools(
-			underlyingAgent,
+			definitionAgent,
 			phaseWorkspacePath,
 			api.logger,
 			phaseReadFile,
@@ -283,7 +282,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// preview against real db/db.sqlite tables / knowledgebase sources. The renderer
 			// silently drops bad widgets, so validation stays in the loop.
 			if err := todo_creation_human.RegisterReportPlanManagementTools(
-				underlyingAgent,
+				definitionAgent,
 				phaseWorkspacePath,
 				api.logger,
 				phaseReadFile,
@@ -295,7 +294,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			}
 
 			if err := todo_creation_human.RegisterReportPlanValidationTools(
-				underlyingAgent,
+				definitionAgent,
 				phaseWorkspacePath,
 				api.logger,
 				phaseReadFile,
@@ -306,7 +305,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			}
 
 			if err := todo_creation_human.RegisterReportRenderPreviewTool(
-				underlyingAgent,
+				definitionAgent,
 				phaseWorkspacePath,
 				api.logger,
 				phaseReadFile,
@@ -372,15 +371,15 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 					return result
 				},
 			)
-			todo_creation_human.RegisterRunFullEvaluationTool(underlyingAgent, evalSession, api.logger)
+			todo_creation_human.RegisterRunFullEvaluationTool(definitionAgent, evalSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered run_full_evaluation in %s", workflowPhaseID)
 		}
 		if workshopSession != nil {
-			todo_creation_human.RegisterRunFullWorkflowTool(underlyingAgent, workshopSession, api.logger)
+			todo_creation_human.RegisterRunFullWorkflowTool(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered run_full_workflow in %s", workflowPhaseID)
-			todo_creation_human.RegisterReorganizeKnowledgebaseTool(underlyingAgent, workshopSession, api.logger)
+			todo_creation_human.RegisterReorganizeKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered reorganize_knowledgebase in %s", workflowPhaseID)
-			todo_creation_human.RegisterConsolidateKnowledgebaseTool(underlyingAgent, workshopSession, api.logger)
+			todo_creation_human.RegisterConsolidateKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered consolidate_knowledgebase in %s", workflowPhaseID)
 			// Auto-improvement proposer tools stay in Workshop mode
 			// (was Optimizer before the merge). capture_context is also
@@ -390,10 +389,10 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// merge.
 			switch phaseTemplateVars["WorkshopMode"] {
 			case "workshop", "optimizer":
-				RegisterAutoImprovementProposerTools(underlyingAgent, phaseWorkspacePath, "pulse-fixer", api.logger)
+				RegisterAutoImprovementProposerTools(definitionAgent, phaseWorkspacePath, "pulse-fixer", api.logger)
 				log.Printf("[WORKFLOW_PHASE] Registered auto-improvement proposer tools in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 			case "run":
-				RegisterCaptureContextTool(underlyingAgent, phaseWorkspacePath, api.logger)
+				RegisterCaptureContextTool(definitionAgent, phaseWorkspacePath, api.logger)
 				log.Printf("[WORKFLOW_PHASE] Registered capture_context in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 			default:
 				log.Printf("[WORKFLOW_PHASE] Skipped auto-improvement proposer tools in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
@@ -401,40 +400,26 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// Guided-flow text for every workflow slash command, returned via
 			// get_workflow_command_guidance(kind=...). Available across modes;
 			// per-kind mode validation lives in the tool itself.
-			guidance.RegisterGuidanceTool(underlyingAgent, phaseTemplateVars["WorkshopMode"], api.logger)
+			guidance.RegisterGuidanceTool(definitionAgent, phaseTemplateVars["WorkshopMode"], api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered get_workflow_command_guidance in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 
-			// Reference docs for system-level content that used to live inline
-			// in the workshop prompt (main.py rules, store contracts, message
-			// sequence patterns, optimizer playbook, etc.) — returned via
-			// get_reference_doc(kind=...). Same registry pattern as guidance;
-			// per-kind mode validation lives in the tool itself.
 			workshopMode := phaseTemplateVars["WorkshopMode"]
-			guidance.RegisterReferenceDocTool(underlyingAgent, workshopMode, api.logger)
-			log.Printf("[WORKFLOW_PHASE] Registered get_reference_doc in %s (mode=%s)", workflowPhaseID, workshopMode)
 
-			// Attach the full reference surface: system-tools meta-skill
-			// (advertises get_reference_doc) plus one materialized SKILL.md
-			// per reference doc / guided flow.
-			//
-			// Both surfaces are registered unconditionally, but only one is
-			// load-bearing per transport. CLI adapters implement
-			// SkillProjector and write SKILL.md + references/*.md to disk,
-			// so the agent reads the content directly and get_reference_doc
-			// is redundant there (and costs an extra hop in code-execution
-			// mode, where it is not a bridge-native tool). API transports do
-			// not implement SkillProjector — they get only the name +
-			// description listing in the system prompt — so for them
-			// get_reference_doc is the ONLY way to reach the bodies.
-			guidance.AttachReferenceSurface(workshopMode, func(skill *llmtypes.Skill) {
-				_ = mcpagent.AddDefinitionSkill(underlyingAgent, skill)
-			})
+			// Attach the reference and command bundles once. mcpagent owns
+			// transport-specific access: read_skill is a normal API tool and
+			// an MCP-bridge tool for coding CLIs, while native projection is
+			// a convenience rather than a second contract.
+			if err := guidance.AttachReferenceSurface(workshopMode, func(skill *llmtypes.Skill) error {
+				return definitionAgent.AttachSkill(skill)
+			}); err != nil {
+				log.Printf("[WORKFLOW_PHASE] Failed to attach reference surface in %s (mode=%s): %v", workflowPhaseID, workshopMode, err)
+			}
 		}
 	default:
 		// planning: plan modification tools
 		// Returns an error on failure — see workflow-builder case above for rationale.
 		if err := todo_creation_human.RegisterPlanModificationTools(
-			underlyingAgent,
+			definitionAgent,
 			phaseWorkspacePath,
 			api.logger,
 			phaseReadFile,

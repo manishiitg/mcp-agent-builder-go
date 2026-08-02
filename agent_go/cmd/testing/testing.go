@@ -19,7 +19,7 @@ Features:
 - Connection pooling validation
 - Context cancellation testing
 
-Note: For comprehensive LLM provider testing (tool calls, structured output, 
+Note: For comprehensive LLM provider testing (tool calls, provider-specific response formats,
 streaming, embeddings, etc.), use the multi-llm-provider-go test suite:
   See: https://github.com/manishiitg/multi-llm-provider-go
 
@@ -85,7 +85,6 @@ func initTestingCommands() {
 	TestingCmd.AddCommand(shellSecurityTestCmd)
 	TestingCmd.AddCommand(shellOutputTestCmd)
 
-	TestingCmd.AddCommand(structuredOutputTestCmd)
 	TestingCmd.AddCommand(claudeExperimentalTestCmd)
 	TestingCmd.AddCommand(claudeResumeAfterCancelTestCmd)
 	TestingCmd.AddCommand(codexResumeAfterCancelTestCmd)

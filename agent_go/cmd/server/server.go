@@ -1766,6 +1766,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/sessions/{session_id}/activity-tree", api.handleGetSessionActivityTree).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/dismiss", api.handleDismissSession).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/terminals", api.handleListTerminals).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/events", api.handleGetTerminalEvents).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/terminals/{terminal_id}", api.handleGetTerminal).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/terminals/{terminal_id}", api.handleDismissTerminal).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/terminals/{terminal_id}/complete", api.handleCompleteTerminal).Methods("POST", "OPTIONS")
@@ -3234,7 +3235,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 		// NOTE: Workspace executor replacement with session + secrets happens after secrets are merged (see below).
 
-		// Load selected tools, code execution mode, tool search mode, skills, and preset LLM config from preset if available (for workflow agents)
+		// Load selected tools, code execution mode, skills, and preset LLM config from preset if available (for workflow agents)
 		var selectedTools []string
 		var useCodeExecutionMode bool
 		var selectedSkills []string
@@ -4363,7 +4364,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			logfWithContext(queryLogCtx, "[USER_ID_DEBUGGING] Main agent workspace executors: created with explicit userID=%q sessionID=%q", currentUserID, sessionID)
 			// Inject LLM config fallback for read_image HTTP calls (e.g., from claude CLI subprocess)
 			if underlying := llmAgent.GetUnderlyingAgent(); underlying != nil {
-				virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.AgentLLMConfig(underlying))
+				virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig)
 			}
 
 			// Merge @context file paths into additional folder-guard write access.
@@ -4565,6 +4566,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// Create the delegation execution function that will spawn sub-agents
 					// This function is injected into the context for the delegate tool to use
 					executeDelegatedTask := func(subCtx context.Context, instruction string) (string, error) {
+						subCtx = withDelegatedParentSkills(subCtx, llmAgent.GetUnderlyingAgent())
 						return api.executeDelegatedTask(subCtx, req, sessionID, instruction)
 					}
 
@@ -4584,6 +4586,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 					// Create background delegate function for async delegation (all modes)
 					bgDelegateFunc := func(bgCtx context.Context, name, instruction string) (string, error) {
+						bgCtx = withDelegatedParentSkills(bgCtx, llmAgent.GetUnderlyingAgent())
 						return api.executeBackgroundDelegatedTask(bgCtx, req, sessionID, name, instruction)
 					}
 					bgQuerier := &bgAgentQuerierImpl{registry: api.bgAgentRegistry}
@@ -4650,7 +4653,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 								return exec(ctx, args)
 							}
 
-							if err := mcpagent.AddDefinitionToolWithTimeout(delegationAgent,
+							if err := llmAgent.RegisterCustomToolWithTimeout(
 								toolName,
 								tool.Function.Description,
 								params,
@@ -4696,7 +4699,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 							ctx = context.WithValue(ctx, virtualtools.BGAgentSessionIDKey, sessionID)
 							return capturedExec(ctx, args)
 						}
-						if err := mcpagent.AddDefinitionToolWithTimeout(delegationAgent,
+						if err := llmAgent.RegisterCustomToolWithTimeout(
 							toolName,
 							tool.Function.Description,
 							params,
@@ -4735,7 +4738,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 							ctx = context.WithValue(ctx, virtualtools.BGAgentSessionIDKey, sessionID)
 							return capturedExec(ctx, args)
 						}
-						if err := mcpagent.AddDefinitionToolWithTimeout(delegationAgent,
+						if err := llmAgent.RegisterCustomToolWithTimeout(
 							toolName,
 							tool.Function.Description,
 							params,
@@ -4841,7 +4844,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			isMultiAgentChat := !isWorkflowPhase
 			if isMultiAgentChat {
-				if err := api.registerMultiAgentLLMTools(underlyingAgent); err != nil {
+				if err := api.registerMultiAgentLLMTools(llmAgent); err != nil {
 					logfWithContext(queryLogCtx, "[LLM TOOLS] Failed to register multi-agent LLM tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent LLM tools: %v", err), true)
 					return
@@ -4856,7 +4859,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				logfWithContext(queryLogCtx, "[SKILL TOOLS] Registered multi-agent skill tools")
 			}
 			if isWorkflowPhase {
-				if err := api.registerWorkflowLLMDiscoveryTools(underlyingAgent); err != nil {
+				if err := api.registerWorkflowLLMDiscoveryTools(llmAgent); err != nil {
 					logfWithContext(queryLogCtx, "[LLM TOOLS] Failed to register workflow LLM discovery tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register workflow LLM discovery tools: %v", err), true)
 					return
@@ -4873,28 +4876,28 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 				// create_workflow — privileged tool for writing new workflows under Workflow/
 				// Bypasses the session folder guard by writing via direct filesystem I/O.
-				if err := api.registerWorkflowCreatorTool(underlyingAgent); err != nil {
+				if err := api.registerWorkflowCreatorTool(llmAgent); err != nil {
 					logfWithContext(queryLogCtx, "[WORKFLOW CREATOR] Failed to register create_workflow tool: %v", err)
 					sendError(fmt.Sprintf("Failed to register create_workflow tool: %v", err), true)
 					return
 				}
 				logfWithContext(queryLogCtx, "[WORKFLOW CREATOR] Registered create_workflow tool")
 
-				if err := api.registerActivityStatusTool(underlyingAgent, currentUserID); err != nil {
+				if err := api.registerActivityStatusTool(llmAgent, currentUserID); err != nil {
 					logfWithContext(queryLogCtx, "[ACTIVITY STATUS] Failed to register get_activity_status tool: %v", err)
 					sendError(fmt.Sprintf("Failed to register get_activity_status tool: %v", err), true)
 					return
 				}
 				logfWithContext(queryLogCtx, "[ACTIVITY STATUS] Registered get_activity_status tool")
 
-				if err := api.registerSecretManagementTools(underlyingAgent, currentUserID, "", "secret_tools", nil, nil); err != nil {
+				if err := api.registerSecretManagementTools(llmAgent, currentUserID, "", "secret_tools", nil, nil); err != nil {
 					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
 					return
 				}
 				logfWithContext(queryLogCtx, "[SECRET TOOLS] Registered multi-agent secret tools (list_secrets, set_user_secret, delete_user_secret; global names read-only)")
 
-				if err := api.registerMultiAgentNotificationTool(underlyingAgent, currentUserID); err != nil {
+				if err := api.registerMultiAgentNotificationTool(llmAgent, currentUserID); err != nil {
 					logfWithContext(queryLogCtx, "[NOTIFICATION TOOLS] Failed to register Chief of Staff notification tool: %v", err)
 					sendError(fmt.Sprintf("Failed to register Chief of Staff notification tool: %v", err), true)
 					return
@@ -4932,22 +4935,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						_ = llmAgent.AddInstructions(tierSection)
 					}
 				}
-				// Register get_reference_doc for the multi-agent chat path. The
-				// delegation prompt embeds cheat sheets for rare-path topics
-				// (schedule-management, secret-management) plus pointers; the
-				// agent loads the deep guide on demand instead of carrying it
-				// in every turn's context.
-				guidance.RegisterReferenceDocTool(underlyingAgent, "multi-agent", api.logger)
-				logfWithContext(queryLogCtx, "[REFERENCE_DOC] Registered get_reference_doc for multi-agent chat")
-
-				// Attach the full reference surface for multi-agent chat:
-				// system-tools meta-skill (advertises get_reference_doc
-				// and gate semantics) plus one materialized SKILL.md per
-				// multi-agent-allowed reference doc. The skill files give
-				// each CLI a browseable view via its native skills UI; the
-				// tool path remains the authoritative way to satisfy
-				// precondition gates.
-				guidance.AttachReferenceSurface("multi-agent", func(skill *llmtypes.Skill) { _ = llmAgent.AttachSkill(skill) })
+				// Attach the full reference surface for multi-agent chat.
+				// mcpagent exposes attached bundles through read_skill on API
+				// and coding-CLI transports; native CLI projection is only an
+				// additional browseable view.
+				if err := guidance.AttachReferenceSurface("multi-agent", llmAgent.AttachSkill); err != nil {
+					logfWithContext(queryLogCtx, "[REFERENCE_DOC] Failed to attach multi-agent reference surface: %v", err)
+				}
 			}
 
 			// 2. WORKSPACE MAP — compact folder listing with absolute paths and access levels.
@@ -4993,7 +4987,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			// 4. MODE-SPECIFIC — browser.
 			//
-			// The full guide lives in the workflow-reference mega-skill
+			// The full guide lives in the builder-reference mega-skill
 			// (`browser-usage`) and is loaded on demand. We only
 			// inject a one-line pointer per capability so the agent KNOWS the
 			// surface exists, without paying for the ~10KB browser block on every
@@ -5001,7 +4995,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			chatBrowserCfg := buildChatBrowserConfig(req)
 			if chatBrowserCfg.HasAgentBrowser {
 				browserPrompt := "\n## Browser\n\nThis session has a browser tool configured (mode=" + chatBrowserCfg.Mode + "). " +
-					"CDP availability is live state and is not stored in this prompt. Before first use, call `agent_browser(command=\"status\", session=\"default\")` and follow its `effective_mode` and authorized endpoints. Read `get_reference_doc(kind=\"browser-usage\")` for tab, file, and safety rules. "
+					"CDP availability is live state and is not stored in this prompt. Before first use, call `agent_browser(command=\"status\", session=\"default\")` and follow its `effective_mode` and authorized endpoints. Read `read_skill(skill_name=\"builder-reference\", path=\"references/browser-usage.md\")` for tab, file, and safety rules. "
 				if chatBrowserCfg.Mode == "auto" || chatBrowserCfg.Mode == "cdp" {
 					_, endpointGuidance := cdpPromptEndpoints(chatBrowserCfg.CdpPorts, chatBrowserCfg.CdpPort)
 					browserPrompt += endpointGuidance + " These endpoints are configured candidates; live status is authoritative.\n"
@@ -5084,7 +5078,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// underlyingAgent is provably non-nil at this point
 					// (vet flags the prior nil check as tautological);
 					// nil-check removed to silence (govet/nilness).
-					underlyingAgent.CodingAgentWorkingDir = codingAgentWorkspaceWorkingDir(phaseWorkspacePath)
+					if err := llmAgent.SetCodingAgentWorkingDir(codingAgentWorkspaceWorkingDir(phaseWorkspacePath)); err != nil {
+						log.Printf("[WORKFLOW_PHASE] Failed to configure coding-agent working directory: %v", err)
+					}
 					// Restrict shell commands to the workflow folder via Isolator
 					// Include #workflow read-only paths so the builder can read referenced workflows
 					phaseReadPaths := []string{phaseWorkspacePath, "Chats", "skills", "subagents", "Downloads"}
@@ -5159,7 +5155,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					"Objective":                   phaseObjective,
 					"WorkspacePath":               phaseWorkspacePath,
 					"IsCodeExecutionMode":         fmt.Sprintf("%v", phaseIsCodeExec),
-					"UseProjectedReferenceSkills": fmt.Sprintf("%v", common.IsCLIProvider(finalProvider)),
+					"UseProjectedReferenceSkills": "true", // legacy template key; mcpagent read_skill is transport-neutral
 				}
 
 				// Pass workshop mode from frontend override (auto-detection happens after plan is loaded below).
@@ -5317,10 +5313,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 							if phaseBrowserCfg.HasAgentBrowser {
 								// Replace the ~5-10KB BuildBrowserInstructions block with a
 								// one-line pointer. The full guide (API + per-mode behaviors,
-								// upload rules, session limits) lives in the workflow-reference
+								// upload rules, session limits) lives in the builder-reference
 								// mega-skill as `browser-usage` and is fetched on demand.
 								browserPrompt := "\n## Browser\n\nThis phase has a browser tool configured (mode=" + configuredBrowserMode +
-									"). CDP availability is live state and is never stored in this prompt. Before the first browser action, call `agent_browser(command=\"status\", session=\"default\")`, then follow its `effective_mode` and authorized endpoints. Read `get_reference_doc(kind=\"browser-usage\")` for Builder-specific tab, file, and safety rules.\n"
+									"). CDP availability is live state and is never stored in this prompt. Before the first browser action, call `agent_browser(command=\"status\", session=\"default\")`, then follow its `effective_mode` and authorized endpoints. Read `read_skill(skill_name=\"builder-reference\", path=\"references/browser-usage.md\")` for Builder-specific tab, file, and safety rules.\n"
 								if configuredBrowserMode == "auto" || configuredBrowserMode == "cdp" {
 									_, endpointGuidance := cdpPromptEndpoints(phaseConfiguredCDPPorts, phaseBrowserCfg.CdpPort)
 									browserPrompt += endpointGuidance + " These are configured candidates only; `agent_browser status` is authoritative for current reachability.\n"
@@ -5394,7 +5390,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PresetQueryID:         req.PresetQueryID,
 				}
 				if err := api.installWorkflowPhaseTools(
-					setupCtx, underlyingAgent, llmAgent.SetToolPolicy, sessionID, currentUserID,
+					setupCtx, llmAgent, llmAgent.SetToolPolicy, sessionID, currentUserID,
 					workflowPhaseID, phaseWorkspacePath, phaseRunFolder,
 					phaseTemplateVars, selectedServers, mergedAPIKeys,
 					phaseReadFile, phaseWriteFile, phaseMoveFile,
@@ -5420,16 +5416,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Freeze the incrementally assembled chat identity before observers are
-		// attached or any turn can run. Finalization rebuilds one immutable
-		// definition containing every prompt section, skill, and direct tool.
-		if err := llmAgent.FinalizeDefinition(streamCtx); err != nil {
-			sendError(fmt.Sprintf("Failed to finalize agent definition: %v", err), true)
-			return
-		}
-
-		// Attach the in-memory event observer for real-time SSE/polling, plus
-		// the cost observer that persists immutable per-call usage events.
+		// Observers are runtime construction inputs, so attach them to the draft
+		// before finalization instead of mutating the live agent afterward.
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
 		costObs := newCostObserver(
 			api.costLedger,
@@ -5444,10 +5432,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				queryID,
 			),
 		)
+		if err := llmAgent.AddObserver(eventObserver); err != nil {
+			sendError(fmt.Sprintf("Failed to attach event observer: %v", err), true)
+			return
+		}
+		if err := llmAgent.AddObserver(costObs); err != nil {
+			sendError(fmt.Sprintf("Failed to attach cost observer: %v", err), true)
+			return
+		}
+
+		// Freeze the incrementally assembled chat identity and runtime before any
+		// turn can run. Finalization constructs the sole live Agent instance.
+		if err := llmAgent.FinalizeDefinition(streamCtx); err != nil {
+			sendError(fmt.Sprintf("Failed to finalize agent definition: %v", err), true)
+			return
+		}
+
+		// Register the finalized instance for steering and lifecycle management.
 		var registeredRunningAgent *mcpagent.Agent
 		if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
-			mcpagent.ObserveAgent(underlyingAgent, eventObserver)
-			mcpagent.ObserveAgent(underlyingAgent, costObs)
 			api.runningAgentsMux.Lock()
 			api.runningAgents[sessionID] = underlyingAgent
 			api.runningAgentsMux.Unlock()
@@ -5982,7 +5985,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					_ = json.Unmarshal([]byte(existingData), &tokenFile)
 				}
 				now := time.Now()
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, underlying.ModelID, modelUsage, now)
+				modelID := mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig.ModelID
+				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), tokenFilePath, string(tokenJSON)); err != nil {
@@ -6005,7 +6009,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if dailyTokenFile.TokenUsage == nil {
 					dailyTokenFile.TokenUsage = &orchestrator.PhaseTokenUsageFile{}
 				}
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, underlying.ModelID, modelUsage, now)
+				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, modelID, modelUsage, now)
 
 				if dailyTokenJSON, err := json.MarshalIndent(dailyTokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), dailyTokenFilePath, string(dailyTokenJSON)); err != nil {
@@ -6277,38 +6281,16 @@ func (api *StreamingAPI) captureChatHistoryAgentRuntime(sessionID, provider, mod
 			}
 		}
 		provider = runtime.Provider
-		switch provider {
-		case "claude-code":
-			if sid := strings.TrimSpace(underlyingAgent.ClaudeCodeSessionID); sid != "" {
-				runtime.ExternalSessionID = sid
-				runtime.ResumeSupported = true
+		if runtime.ExternalSessionID != "" {
+			switch provider {
+			case "claude-code", "cursor-cli":
 				runtime.ResumeFlag = "--resume"
-				log.Printf("[CLAUDE CODE] Saved session ID %s for session %s", sid, sessionID)
-			}
-		case "codex-cli":
-			if sid := strings.TrimSpace(underlyingAgent.CodexSessionID); sid != "" {
-				runtime.ExternalSessionID = sid
-				runtime.ResumeSupported = true
+			case "codex-cli":
 				runtime.ResumeFlag = "resume"
-				log.Printf("[CODEX CLI] Saved thread ID %s for session %s", sid, sessionID)
-			}
-			if dirID := strings.TrimSpace(underlyingAgent.CodexProjectDirID); dirID != "" {
-				runtime.ProjectDirID = dirID
-			}
-		case "cursor-cli":
-			if sid := strings.TrimSpace(underlyingAgent.CursorSessionID); sid != "" {
-				runtime.ExternalSessionID = sid
-				runtime.ResumeSupported = true
-				runtime.ResumeFlag = "--resume"
-				log.Printf("[CURSOR CLI] Saved session ID %s for session %s", sid, sessionID)
-			}
-		case "pi-cli":
-			if sid := strings.TrimSpace(underlyingAgent.PiSessionID); sid != "" {
-				runtime.ExternalSessionID = sid
-				runtime.ResumeSupported = true
+			case "pi-cli":
 				runtime.ResumeFlag = "--session-id"
-				log.Printf("[PI CLI] Saved session ID %s for session %s", sid, sessionID)
 			}
+			log.Printf("[%s] Saved native session ID %s for session %s", provider, runtime.ExternalSessionID, sessionID)
 		}
 		// Persist stable MCP server/tool selection only. Current prompts and
 		// browser availability are rebuilt for each request.
@@ -6528,18 +6510,12 @@ func codingAgentHasNativeResume(provider string, underlyingAgent *mcpagent.Agent
 	if underlyingAgent == nil {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude-code":
-		return strings.TrimSpace(underlyingAgent.ClaudeCodeSessionID) != ""
-	case "codex-cli":
-		return strings.TrimSpace(underlyingAgent.CodexSessionID) != "" || strings.TrimSpace(underlyingAgent.CodexProjectDirID) != ""
-	case "cursor-cli":
-		return strings.TrimSpace(underlyingAgent.CursorSessionID) != ""
-	case "pi-cli":
-		return strings.TrimSpace(underlyingAgent.PiSessionID) != ""
-	default:
+	handle := mcpagent.SnapshotAgentSession(underlyingAgent)
+	if handle == nil || handle.Provider.Empty() {
 		return false
 	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	return provider == "" || strings.EqualFold(handle.Provider.Provider, provider)
 }
 
 func codingAgentProviderSupportsNativeResume(provider, modelID string) bool {
@@ -6575,17 +6551,13 @@ func (api *StreamingAPI) seedCodingAgentRuntimeFromRestoredConversation(sessionI
 	}
 	externalSessionID := strings.TrimSpace(runtime.ExternalSessionID)
 	projectDirID := strings.TrimSpace(runtime.ProjectDirID)
+	currentOwnerSessionID := ""
+	if current := mcpagent.SnapshotAgentSession(underlyingAgent); current != nil {
+		currentOwnerSessionID = strings.TrimSpace(current.SessionID)
+	}
+	var resumeHandle mcpagent.AgentSessionHandle
 	if hasAgentSessionHandle {
-		currentOwnerSessionID := strings.TrimSpace(underlyingAgent.SessionID)
-		mcpagent.ApplyAgentResumeHandle(underlyingAgent, runtime.AgentSessionHandle)
-		// The persisted handle may come from an older chat session. Restoring it
-		// should recover provider-native state, not move the current request's
-		// live-input/terminal owner to an archived UI session.
-		if currentOwnerSessionID != "" {
-			underlyingAgent.SessionID = currentOwnerSessionID
-		} else if strings.TrimSpace(sessionID) != "" {
-			underlyingAgent.SessionID = strings.TrimSpace(sessionID)
-		}
+		resumeHandle = *runtime.AgentSessionHandle
 		if externalSessionID == "" {
 			externalSessionID = strings.TrimSpace(runtime.AgentSessionHandle.Provider.NativeSessionID)
 		}
@@ -6602,39 +6574,18 @@ func (api *StreamingAPI) seedCodingAgentRuntimeFromRestoredConversation(sessionI
 	// permissions. Re-applying persisted instructions here would overwrite live
 	// state with a stale snapshot.
 
-	switch provider {
-	case "claude-code":
-		if externalSessionID == "" {
-			return false
-		}
-		underlyingAgent.ClaudeCodeSessionID = externalSessionID
-		log.Printf("[CLAUDE CODE] Restored native session %s from chat history for session %s", externalSessionID, sessionID)
-		return true
-	case "codex-cli":
-		if externalSessionID != "" {
-			underlyingAgent.CodexSessionID = externalSessionID
-			log.Printf("[CODEX CLI] Restored native thread %s from chat history for session %s", externalSessionID, sessionID)
-		}
-		if projectDirID != "" {
-			underlyingAgent.CodexProjectDirID = projectDirID
-		}
-		return externalSessionID != "" || projectDirID != ""
-	case "cursor-cli":
-		if externalSessionID == "" {
-			return false
-		}
-		underlyingAgent.CursorSessionID = externalSessionID
-		log.Printf("[CURSOR CLI] Restored native session %s from chat history for session %s", externalSessionID, sessionID)
-		return true
-	case "pi-cli":
-		if externalSessionID == "" {
-			return false
-		}
-		underlyingAgent.PiSessionID = externalSessionID
-		log.Printf("[PI CLI] Restored native session %s from chat history for session %s", externalSessionID, sessionID)
-		return true
+	if provider != "codex-cli" && externalSessionID == "" {
+		return false
 	}
-	return false
+	resumeHandle.SessionID = firstNonEmptyTrimmed(currentOwnerSessionID, sessionID)
+	resumeHandle.OwnerID = resumeHandle.SessionID
+	resumeHandle.Provider.Provider = provider
+	resumeHandle.Provider.Model = firstNonEmptyTrimmed(resumeHandle.Provider.Model, runtime.ModelID)
+	resumeHandle.Provider.NativeSessionID = externalSessionID
+	resumeHandle.Provider.ProjectDirID = projectDirID
+	mcpagent.ApplyAgentResumeHandle(underlyingAgent, &resumeHandle)
+	log.Printf("[%s] Restored native runtime from chat history for session %s", provider, sessionID)
+	return true
 }
 
 // updateSessionActivity updates the LastActivity timestamp for a session when events are added
@@ -7249,7 +7200,8 @@ func agentSupportsLiveInputDelivery(agent *mcpagent.Agent) bool {
 	if agent == nil {
 		return false
 	}
-	contract, isCodingAgent := llm.GetCodingAgentProviderContract(mcpagent.AgentProvider(agent), agent.ModelID)
+	runtime := mcpagent.ReadAgentRuntimeInfo(agent)
+	contract, isCodingAgent := llm.GetCodingAgentProviderContract(mcpagent.ReadAgentRuntimeInfo(agent).Provider, runtime.LLMConfig.ModelID)
 	return isCodingAgent && contract.SupportsLiveInput
 }
 
@@ -7328,7 +7280,7 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 	messageID := newSteerMessageID()
 	provider := string(delivery.Provider)
 	if provider == "" {
-		provider = string(mcpagent.AgentProvider(runningAgent))
+		provider = string(mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider)
 	}
 	deliveryStatus := string(delivery.DeliveryStatus)
 	if deliveryStatus == "" {
@@ -7465,7 +7417,7 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 		Intent:    mcpagent.UserMessageDeliveryIntentLiveInput,
 	})
 	if err != nil {
-		log.Printf("[LIVE INPUT] Live input unavailable for provider %s session %s: %v", mcpagent.AgentProvider(runningAgent), sessionID, err)
+		log.Printf("[LIVE INPUT] Live input unavailable for provider %s session %s: %v", mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider, sessionID, err)
 		if !hasActiveForegroundTurn && api.startNextTurnFromLiveInput(w, r, sessionID, req.Message, runningAgent) {
 			return
 		}
@@ -7484,7 +7436,7 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 	messageID := newSteerMessageID()
 	provider := string(delivery.Provider)
 	if provider == "" {
-		provider = string(mcpagent.AgentProvider(runningAgent))
+		provider = string(mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider)
 	}
 	deliveryStatus := string(delivery.DeliveryStatus)
 	if deliveryStatus == "" {
@@ -7623,7 +7575,7 @@ func (api *StreamingAPI) startNextTurnFromLiveInput(w http.ResponseWriter, r *ht
 
 	provider := ""
 	if runningAgent != nil {
-		provider = string(mcpagent.AgentProvider(runningAgent))
+		provider = string(mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider)
 	}
 	if provider == "" {
 		provider = baseReq.Provider
@@ -7741,14 +7693,14 @@ func (api *StreamingAPI) handleControlKey(w http.ResponseWriter, r *http.Request
 		Key:       key,
 	})
 	if err != nil {
-		log.Printf("[CONTROL] Control key %q unavailable for provider %s session %s: %v", key, mcpagent.AgentProvider(runningAgent), sessionID, err)
+		log.Printf("[CONTROL] Control key %q unavailable for provider %s session %s: %v", key, mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider, sessionID, err)
 		http.Error(w, fmt.Sprintf("Control key unavailable: %v", err), http.StatusConflict)
 		return
 	}
 
 	provider := string(result.Provider)
 	if provider == "" {
-		provider = string(mcpagent.AgentProvider(runningAgent))
+		provider = string(mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider)
 	}
 	log.Printf("[CONTROL] Delivered control key %q to provider %s session %s", key, provider, sessionID)
 

@@ -26,7 +26,7 @@ the template; Publish mirrors each piece.
 | Auth | creds / secret | a provider token via the secrets system |
 | Agent prompt | `buildWorkflowBackupAgentPrompt` | `buildWorkflowPublishAgentPrompt` |
 
-The builder reads `workflow.json.publish` + `get_reference_doc(kind="publish-strategy")`,
+The builder reads `workflow.json.publish` + `read_skill(skill_name="builder-reference", path="references/publish-strategy.md")`,
 deploys the HTML, and writes `publish/status.json` with the public URL.
 
 ## Provider-agnostic by construction (agentic, no per-provider Go)
@@ -145,7 +145,7 @@ the public URL is behind.
 - `handleRunWorkflowPublish` — accepts `action: "publish" | "configure"` (+ later `unpublish`).
   Spawns a builder session with the publish prompt; writes `publish/status.json`.
 - `buildWorkflowPublishAgentPrompt` — the agentic contract: read `workflow.json.publish` +
-  `get_reference_doc(kind="publish-strategy")`; for each destination, prepare the static
+  `read_skill(skill_name="builder-reference", path="references/publish-strategy.md")`; for each destination, prepare the static
   artifacts (bake the dashboard per `dashboard_mode`), deploy via the destination's method,
   capture the URL, write status. Confirm scope before exposing data.
 - Route under `/workflow/publish`, `/workflow/publish/run`, `/workflow/publish/config`.
@@ -223,7 +223,7 @@ with their own artifact + config.
    actions, `buildWorkflowPublishAgentPrompt`); routes `/workflow/publish[/config|/run]`.
    Mirrors `workflow_backup.go`. Build + vet clean. **Manual publish path works end-to-end.**
 2. **`publish-strategy.md`** — ✅ Done (2026-06-24). The agentic playbook, registered as
-   `get_reference_doc(kind="publish-strategy")` (workshop/run/multi-agent). 3 universal deploy
+   `read_skill(skill_name="builder-reference", path="references/publish-strategy.md")` (workshop/run/multi-agent). 3 universal deploy
    paths + static-snapshot procedure + privacy/scope + setup→verify + status contract. Serves
    both workflow and org publish.
 3. **UI** — ✅ Done (2026-06-24). `publishStatus.ts` (state→visual + dot), `WorkflowPublishPopup.tsx`

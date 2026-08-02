@@ -9,9 +9,9 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `get_reference_doc(kind="post-run-monitor")`,
-   `get_reference_doc(kind="llm-selection")`, and
-   `get_reference_doc(kind="review-improve-log")`. These references belong to
+1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
+   `read_skill(skill_name="builder-reference", path="references/llm-selection.md")`, and
+   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. These references belong to
    the parent. Do not pass HTML style, skeleton, CSS, migration, or card-format
    work to the reviewer.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval
@@ -31,7 +31,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    create questions, publish, notify, run the workflow, call Pulse module-state
    tools, or launch another agent. It may read only matching
    LLM/Ops/open-finding regions of `builder/improve.html`; it must not format or
-   write the page.
+   write the page. `call_generic_agent` returns an `execution_id` immediately;
+   end the current turn and resume only from the automatic completion
+   notification.
 4. Require the reviewer to check all of the following agentically:
    event correlation; nested JSON/MCP/shell-envelope interpretation; argument
    identity; failure-status precedence; errors hidden in nominal success; HTTP
@@ -83,7 +85,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
 8. Read the persisted result with `get_pulse_review_result` using the exact
-   `review_run_id` and `module` returned by `call_generic_agent`. Validate and
+   `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that result against `builder/improve.html`. As the parent, make
    one bounded update that refreshes one compact LLM & operations review area
    with

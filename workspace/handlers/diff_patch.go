@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,6 +20,11 @@ import (
 	"github.com/gin-gonic/gin"
 	// "github.com/sergi/go-diff/diffmatchpatch" // Available for future use
 	"github.com/spf13/viper"
+)
+
+const (
+	diffPatchSubprocessTimeout = 5 * time.Second
+	noNewlineMarker            = `\ No newline at end of file`
 )
 
 // DiffPatchDocument handles PATCH /api/documents/*filepath/diff
@@ -53,8 +59,12 @@ func DiffPatchDocument(c *gin.Context) {
 		return
 	}
 
-	// Create parent directories and seed empty file if it doesn't exist yet
+	// A missing target is represented as empty input until the patch has been
+	// validated and applied. Do not pre-create the file: a /dev/null creation
+	// diff handed to patch(1) with an already-existing target makes BSD patch
+	// open /dev/tty and ask whether the patch should be reversed.
 	createdNewFile := false
+	var currentContent []byte
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		if mkErr := os.MkdirAll(filepath.Dir(filePath), 0755); mkErr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
@@ -64,30 +74,31 @@ func DiffPatchDocument(c *gin.Context) {
 			})
 			return
 		}
-		if writeErr := os.WriteFile(filePath, []byte(""), 0644); writeErr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
-				Success: false,
-				Message: "Failed to create document",
-				Error:   writeErr.Error(),
-			})
-			return
-		}
 		createdNewFile = true
-	}
-
-	// Read current file content
-	currentContent, err := os.ReadFile(filePath)
-	if err != nil {
+		currentContent = []byte{}
+	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
 			Success: false,
-			Message: "Failed to read document",
+			Message: "Failed to inspect document",
 			Error:   err.Error(),
 		})
 		return
+	} else {
+		currentContent, err = os.ReadFile(filePath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
+				Success: false,
+				Message: "Failed to read document",
+				Error:   err.Error(),
+			})
+			return
+		}
 	}
 
 	// Apply diff patch - try flexible approach first, fallback to strict patch command
-	newContent, err := applyDiffPatchFlexible(string(currentContent), req.Diff)
+	patchCtx, cancelPatch := context.WithTimeout(c.Request.Context(), diffPatchSubprocessTimeout)
+	defer cancelPatch()
+	newContent, err := applyDiffPatchFlexibleContext(patchCtx, string(currentContent), req.Diff)
 	if err != nil {
 		// Provide comprehensive error details with suggestions
 		errorDetails := map[string]interface{}{
@@ -157,6 +168,14 @@ func DiffPatchDocument(c *gin.Context) {
 		return
 	}
 
+	// The subprocess only edits a temporary file. Honor cancellation once more
+	// before committing so a timed-out/disconnected request cannot mutate the
+	// real workspace file after the caller has already been told it failed.
+	if err := patchCtx.Err(); err != nil {
+		log.Printf("[DIFF_PATCH] canceled before commit path=%s duration=%s error=%v", filePathParam, time.Since(started), err)
+		return
+	}
+
 	// Write updated content back to file
 	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
@@ -214,6 +233,12 @@ func validateDiffFormat(diffContent string) error {
 			inHunk = true
 			continue
 		}
+		if line == noNewlineMarker {
+			if !inHunk {
+				return fmt.Errorf("malformed diff line %d: no-newline marker is outside a hunk", i+1)
+			}
+			continue
+		}
 
 		// Check diff lines within hunks
 		if inHunk && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, "+")) {
@@ -245,7 +270,7 @@ func validateDiffFormat(diffContent string) error {
 }
 
 // applyDiffPatch applies a unified diff to the file content using the standard patch command
-func applyDiffPatch(currentContent, diffContent string) (string, error) {
+func applyDiffPatch(ctx context.Context, currentContent, diffContent string) (string, error) {
 	// Normalize line endings for consistent processing
 	currentContent = normalizeLineEndings(currentContent)
 	diffContent = normalizeLineEndings(diffContent)
@@ -290,9 +315,17 @@ func applyDiffPatch(currentContent, diffContent string) (string, error) {
 	// Apply only against complete context. The exact-match fallback below can
 	// recover stale line numbers without allowing patch(1) to discard context
 	// and place an otherwise ambiguous hunk under the wrong duplicate heading.
-	cmd := exec.Command("patch", "-u", "-F", "0", tempFile.Name(), patchFile.Name())
+	// -f is the portable non-interactive mode and, unlike -t/--batch, assumes
+	// the supplied diff is forward rather than reversed. Stdin alone is not a
+	// safety boundary: BSD patch opens /dev/tty directly when it wants an answer.
+	cmd := exec.CommandContext(ctx, "patch", "-f", "-u", "-F", "0", tempFile.Name(), patchFile.Name())
+	cmd.Stdin = strings.NewReader("")
+	cmd.WaitDelay = time.Second
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("patch command canceled: %w", ctxErr)
+		}
 		// Provide more specific error messages based on patch output
 		outputStr := string(output)
 		if strings.Contains(outputStr, "malformed patch") {
@@ -340,6 +373,9 @@ func safeMalformedContextLines(diffLines, currentLines []string) map[int]bool {
 				}
 				oldSide = append(oldSide, "")
 				candidates = append(candidates, end)
+				continue
+			}
+			if line == noNewlineMarker {
 				continue
 			}
 			switch line[0] {
@@ -456,7 +492,11 @@ func correctAgentGeneratedDiff(diffContent, currentContent string) string {
 		}
 
 		if currentHunk != nil {
-			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			if line == noNewlineMarker {
+				// This standard unified-diff metadata describes the preceding
+				// content line and does not contribute to either hunk count.
+				corrected = append(corrected, line)
+			} else if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
 				if strings.HasPrefix(line, " ") {
 					currentHunk.oldCount++
 					currentHunk.newCount++
@@ -504,40 +544,149 @@ func correctAgentGeneratedDiff(diffContent, currentContent string) string {
 	return result
 }
 
+func isExplicitCreationDiff(diffContent string) bool {
+	lines := strings.Split(normalizeLineEndings(diffContent), "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	fields := strings.Fields(lines[0])
+	return len(fields) >= 2 && fields[0] == "---" && fields[1] == "/dev/null"
+}
+
+var creationHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@$`)
+
+// applyExplicitCreationDiff handles the one case patch(1) cannot be allowed to
+// decide interactively. A creation patch has no old-side content, so its result
+// is deterministic and does not require an external process.
+func applyExplicitCreationDiff(currentContent, diffContent string) (string, error) {
+	diffContent = normalizeLineEndings(diffContent)
+	if !strings.HasSuffix(diffContent, "\n") {
+		diffContent += "\n"
+	}
+	if err := validateDiffFormat(diffContent); err != nil {
+		return "", fmt.Errorf("creation diff validation failed: %w", err)
+	}
+
+	lines := strings.Split(diffContent, "\n")
+	hunkCount := 0
+	declaredNewCount := -1
+	var additions []string
+	inHunk := false
+	noTrailingNewline := false
+	for index, line := range lines[2:] {
+		lineNumber := index + 3
+		if strings.HasPrefix(line, "@@") {
+			hunkCount++
+			if hunkCount > 1 {
+				return "", fmt.Errorf("creation diff must contain exactly one hunk")
+			}
+			match := creationHunkHeader.FindStringSubmatch(line)
+			if match == nil {
+				return "", fmt.Errorf("malformed creation hunk header on line %d", lineNumber)
+			}
+			oldCount := 1
+			if match[2] != "" {
+				if _, err := fmt.Sscanf(match[2], "%d", &oldCount); err != nil {
+					return "", fmt.Errorf("invalid old-line count on line %d: %w", lineNumber, err)
+				}
+			}
+			if match[1] != "0" || oldCount != 0 {
+				return "", fmt.Errorf("creation diff hunk must have an empty old side")
+			}
+			declaredNewCount = 1
+			if match[4] != "" {
+				if _, err := fmt.Sscanf(match[4], "%d", &declaredNewCount); err != nil {
+					return "", fmt.Errorf("invalid new-line count on line %d: %w", lineNumber, err)
+				}
+			}
+			inHunk = true
+			continue
+		}
+		if !inHunk {
+			if line == "" && index == len(lines[2:])-1 {
+				continue
+			}
+			return "", fmt.Errorf("unexpected creation diff content on line %d", lineNumber)
+		}
+		if line == noNewlineMarker {
+			if len(additions) == 0 || index != len(lines[2:])-2 {
+				return "", fmt.Errorf("creation diff no-newline marker must follow the final addition")
+			}
+			noTrailingNewline = true
+			continue
+		}
+		if line == "" && index == len(lines[2:])-1 {
+			continue
+		}
+		if !strings.HasPrefix(line, "+") {
+			return "", fmt.Errorf("creation diff line %d must be an addition", lineNumber)
+		}
+		additions = append(additions, line[1:])
+	}
+	if hunkCount != 1 {
+		return "", fmt.Errorf("creation diff must contain exactly one hunk")
+	}
+	if declaredNewCount != len(additions) {
+		return "", fmt.Errorf("creation diff declares %d new lines but contains %d", declaredNewCount, len(additions))
+	}
+
+	createdContent := strings.Join(additions, "\n")
+	if !noTrailingNewline {
+		createdContent += "\n"
+	}
+	if strings.TrimSpace(currentContent) == "" {
+		return createdContent, nil
+	}
+	if normalizeLineEndings(currentContent) == createdContent {
+		return currentContent, nil
+	}
+	return "", fmt.Errorf("creation diff targets a file that already exists with different content; read the current file and send an update diff")
+}
+
 // applyDiffPatchFlexible tries multiple approaches to apply diffs
-func applyDiffPatchFlexible(currentContent, diffContent string) (string, error) {
+func applyDiffPatchFlexibleContext(ctx context.Context, currentContent, diffContent string) (string, error) {
 	fmt.Printf("🔍 Attempting flexible diff patch approach\n")
 	currentContent = normalizeLineEndings(currentContent)
 	diffContent = normalizeLineEndings(diffContent)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	var result string
 	var err error
 
 	// First, try to correct common agent-generated patterns
 	correctedDiff := correctAgentGeneratedDiff(diffContent, currentContent)
+	if isExplicitCreationDiff(correctedDiff) {
+		result, creationErr := applyExplicitCreationDiff(currentContent, correctedDiff)
+		if creationErr != nil {
+			return "", creationErr
+		}
+		return result, nil
+	}
 	if correctedDiff != diffContent {
 		fmt.Printf("🔧 Applied automatic corrections to agent-generated diff\n")
 		fmt.Printf("🔍 Corrected diff:\n%s\n", diffPatchErrorPreview(correctedDiff))
 		// Try the corrected diff first
-		result, err = applyDiffPatch(currentContent, correctedDiff)
+		result, err = applyDiffPatch(ctx, currentContent, correctedDiff)
 		if err == nil {
 			fmt.Printf("✅ Corrected diff applied successfully\n")
-			return validateAndRepairJSON(result), nil
+			return result, nil
 		}
 		fmt.Printf("⚠️ Corrected diff failed strict patch, trying exact fallback: %v\n", err)
 		result, fallbackErr := applyAgentGeneratedDiffFallback(currentContent, correctedDiff)
 		if fallbackErr == nil {
 			fmt.Printf("✅ Corrected diff applied through exact fallback\n")
-			return validateAndRepairJSON(result), nil
+			return result, nil
 		}
 		fmt.Printf("⚠️ Corrected diff fallback failed, trying original: %v\n", fallbackErr)
 	}
 
 	// Try the original diff
-	result, err = applyDiffPatch(currentContent, diffContent)
+	result, err = applyDiffPatch(ctx, currentContent, diffContent)
 	if err == nil {
 		fmt.Printf("✅ Original diff applied successfully\n")
-		return validateAndRepairJSON(result), nil
+		return result, nil
 	}
 
 	fmt.Printf("⚠️ Original diff failed, trying fallback: %v\n", err)
@@ -549,61 +698,15 @@ func applyDiffPatchFlexible(currentContent, diffContent string) (string, error) 
 	}
 
 	fmt.Printf("✅ Fallback approach succeeded\n")
-	return validateAndRepairJSON(result), nil
+	return result, nil
 }
 
-// validateAndRepairJSON attempts to validate and repair JSON content
-func validateAndRepairJSON(content string) string {
-	// Clean markdown artifacts
-	cleaned := strings.TrimSpace(content)
-	if strings.HasPrefix(cleaned, "```") {
-		lines := strings.Split(cleaned, "\n")
-		if len(lines) > 2 {
-			// Remove first and last lines (the ``` markers)
-			cleaned = strings.Join(lines[1:len(lines)-1], "\n")
-			cleaned = strings.TrimSpace(cleaned)
-		}
-	}
-
-	if !couldBeJSON(cleaned) {
-		return content
-	}
-
-	var finalJs interface{}
-	if err := json.Unmarshal([]byte(cleaned), &finalJs); err == nil {
-		if indented, err := json.MarshalIndent(finalJs, "", "  "); err == nil {
-			fmt.Printf("✅ Result is valid JSON and has been re-formatted\n")
-			return string(indented) + "\n"
-		}
-	}
-
-	// Try to repair common JSON issues
-	reTrailingComma := regexp.MustCompile(`,\s*([}\]])`)
-	repaired := reTrailingComma.ReplaceAllString(cleaned, "$1")
-
-	// Try to add missing commas between lines that look like they should be separated by commas
-	// Broad version: match line ending in alphanumeric, quote, brace, or bracket
-	// and next line starting with alphanumeric, quote, brace, or bracket
-	reMissingComma := regexp.MustCompile(`([a-zA-Z\d"\}\]])\s*\n\s*([a-zA-Z\d"\{\[])`)
-	repaired = reMissingComma.ReplaceAllString(repaired, "$1,\n$2")
-
-	// Fix double commas that might have been introduced
-	reDoubleComma := regexp.MustCompile(`,\s*,`)
-	repaired = reDoubleComma.ReplaceAllString(repaired, ",")
-
-	var repairErr error
-	if err := json.Unmarshal([]byte(repaired), &finalJs); err == nil {
-		if indented, err := json.MarshalIndent(finalJs, "", "  "); err == nil {
-			fmt.Printf("✅ Repaired and re-formatted result as valid JSON\n")
-			return string(indented) + "\n"
-		}
-		repairErr = err
-	} else {
-		repairErr = err
-	}
-
-	fmt.Printf("⚠️ Failed to repair JSON: %v\n", repairErr)
-	return cleaned
+// applyDiffPatchFlexible retains the direct test/helper contract while the HTTP
+// handler uses its request-scoped context above.
+func applyDiffPatchFlexible(currentContent, diffContent string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), diffPatchSubprocessTimeout)
+	defer cancel()
+	return applyDiffPatchFlexibleContext(ctx, currentContent, diffContent)
 }
 
 // applyAgentGeneratedDiffFallback handles agent-generated diffs by parsing the intent
@@ -829,16 +932,6 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 
 	result := strings.Join(resultLines, "\n")
 	return result, nil
-}
-
-// couldBeJSON is a helper to check if content might be JSON
-
-func couldBeJSON(content string) bool {
-
-	trimmed := strings.TrimSpace(content)
-
-	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
-
 }
 
 // isJSON is a helper to check if content is valid JSON

@@ -309,7 +309,8 @@ func configureWorkflowDBSession(sessionID, workspacePath, dbAccess string, direc
 	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil {
 		blocked = append(blocked, cfg.BlockedPaths...)
 	}
-	blocked = append(blocked, filepath.Join(workspacePath, DBFolderName, "db.sqlite"))
+	dbPath := filepath.Join(workspacePath, DBFolderName, "db.sqlite")
+	blocked = append(blocked, dbPath, dbPath+"-wal", dbPath+"-shm")
 	common.SetSessionFolderGuardBlockedPaths(sessionID, common.DeduplicateStrings(blocked))
 }
 
@@ -421,7 +422,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// WorkflowWritableSubfolders, and isProtectedPlanningPath is the runtime backstop;
 	// plan.json/step_config.json are only ever mutated through the typed plan-mod tools.
 	planningPath := fmt.Sprintf("%s/%s", baseWorkspacePath, PlanningFolderName)
-	readPaths = []string{executionWorkspacePath, soulPath, builderPath, planningPath}
+	// runWorkspacePath, not just its execution/ child. A step is told its outputs
+	// live at runs/<run>/execution/<step>/, and confirming that path means walking
+	// down to it — but only the leaf was readable, so `ls runs/iteration-0/default`
+	// returned "Operation not permitted" while `ls .../execution/<step>` would have
+	// worked. A CDP test step on 2026-08-02 burned four calls on exactly that walk.
+	// The run folder also holds logs/ and run_metadata.json, which are ordinary
+	// evidence for a step reasoning about its own run. Read-only, and scoped to
+	// this run — it grants nothing outside what execution/ already exposes.
+	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write
@@ -873,10 +882,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 	return toolsToRegister, executorsToUse
 }
 
-// prepareWorkspaceToolsOnly prepares minimal workspace tools for learning agents.
-// Learning agents only need shell_command (for reading files) and diff_patch_workspace_file
-// (for writing learnings). They should NOT have human tools (like human_feedback) since
-// they are pure LLM analysis agents that should not block on human input.
+// prepareWorkspaceToolsOnly prepares minimal tools for KB maintenance agents.
+// They can inspect structured workflow state through query_workflow_db and can
+// update their authorized files, but they do not receive database mutation or
+// human tools.
 func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtypes.Tool, map[string]interface{}) {
 	tools, executors := orchestrator.FilterCustomToolsByCategory(
 		hcpo.WorkspaceTools,
@@ -884,9 +893,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtyp
 		[]string{
 			"workspace_advanced:execute_shell_command",
 			"workspace_advanced:diff_patch_workspace_file",
+			"workflow_db:query_workflow_db",
 		},
 	)
-	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Prepared %d learning agent tools (execute_shell_command + diff_patch, no human tools)", len(tools)))
+	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Prepared %d KB maintenance tools (shell + diff_patch + DB query, no mutation/human tools)", len(tools)))
 	return tools, executors
 }
 
@@ -935,24 +945,47 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupSubAgentSessionGuard(agentKind s
 	return sessionID
 }
 
+// workflowStepShellWorkingDir returns the server-side cwd every workflow-step
+// tool session must use. It is derived from the step's own execution context,
+// not inherited through the parent HTTP/group session chain: those sessions use
+// different identities and are created in different orders in workshop and
+// batch execution.
+func (hcpo *StepBasedWorkflowOrchestrator) workflowStepShellWorkingDir() string {
+	workspacePath := strings.TrimRight(strings.TrimSpace(hcpo.GetWorkspacePath()), "/")
+	runFolder := strings.Trim(strings.TrimSpace(hcpo.selectedRunFolder), "/")
+	if workspacePath == "" || runFolder == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/runs/%s/execution", workspacePath, runFolder)
+}
+
 func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(sessionID string, agentKind string, stepID string, readPaths []string, writePaths []string) {
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
 	hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
 
-	// Carry the parent group session's working directory onto the dedicated
-	// session so `ls learnings/_global/` style relative commands still resolve
-	// against the workspace. Without this, the shell falls back to the Go
-	// process's cwd (agent_go/), which would break every relative path the
-	// learning/KB agents use.
-	if parentSessionID := strings.TrimSpace(hcpo.GetMCPSessionID()); parentSessionID != "" {
-		if parentCfg := common.GetSessionShellConfig(parentSessionID); parentCfg != nil && parentCfg.WorkingDir != "" {
-			common.SetSessionWorkingDir(sessionID, parentCfg.WorkingDir)
+	// Set the child identity's cwd directly. The run cwd used to be recorded on
+	// httpSessionID, while shell calls carry this dedicated sessionID. Group
+	// creation copied only folder guards, so inheriting through the group missed
+	// the cwd and silently fell back to workspace root. Deriving it here also
+	// makes workshop and batch setup order irrelevant.
+	workingDir := hcpo.workflowStepShellWorkingDir()
+	if workingDir == "" {
+		// Preserve compatibility for non-run maintenance callers. A real workflow
+		// step also carries STEP_OUTPUT_DIR and is rejected by the shell bridge if
+		// neither this direct value nor a parent fallback is available.
+		if parentSessionID := strings.TrimSpace(hcpo.GetMCPSessionID()); parentSessionID != "" {
+			if parentCfg := common.GetSessionShellConfig(parentSessionID); parentCfg != nil {
+				workingDir = strings.TrimSpace(parentCfg.WorkingDir)
+			}
 		}
+	}
+	if workingDir != "" {
+		common.SetSessionWorkingDir(sessionID, workingDir)
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf(
-		"🔒 Sub-agent session %q (%s/%s) — folder guard set at session level Read=%v Write=%v",
-		sessionID, agentKind, stepID, readPaths, writePaths,
+		"🔒 Sub-agent session %q (%s/%s) — cwd=%q folder guard set at session level Read=%v Write=%v",
+		sessionID, agentKind, stepID, workingDir, readPaths, writePaths,
 	))
 }
 
@@ -1002,6 +1035,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-consolidate", stepID, readPaths, writePaths)
+	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB consolidate agent - Read: %v, Write: %v", readPaths, writePaths))
 
@@ -1060,6 +1094,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-reorganize", stepID, readPaths, writePaths)
+	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB reorganize agent - Read: %v, Write: %v", readPaths, writePaths))
 
@@ -1335,11 +1370,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	if baseAgent == nil {
 		return nil, fmt.Errorf("base agent is nil after creation for %s - this should never happen", agentName)
 	}
-	mcpAgent := baseAgent.Agent()
-	if mcpAgent == nil {
-		return nil, fmt.Errorf("mcp agent is nil after creation for %s - this should never happen", agentName)
-	}
-
 	// Inject supplementary prompts (skills, browser isolation, secrets, browser instructions)
 	isolatedSessionID, _ := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string)
 	attachGlobalLearnings := !hcpo.isEvaluationMode && learningsAccess != LearningsAccessNone
@@ -1767,6 +1797,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		if baseAgent.Agent() != nil {
 			attachGlobalLearnings := !hcpo.isEvaluationMode && resolveLearningsAccess(stepConfig) != LearningsAccessNone
 			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, "", attachGlobalLearnings)
+			if inherited := backgroundAgentSkillsFromContext(ctx); len(inherited) > 0 {
+				if err := applyInheritedBackgroundSkills(ctx, baseAgent, inherited); err != nil {
+					return nil, fmt.Errorf("apply inherited background orchestrator skills: %w", err)
+				}
+				hcpo.GetLogger().Info(fmt.Sprintf("🎯 Inherited %d workflow-builder skill(s) for background todo task", len(backgroundSkillNames(inherited))))
+			}
 		}
 	}
 

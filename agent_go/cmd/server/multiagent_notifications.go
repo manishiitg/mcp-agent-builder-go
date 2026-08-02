@@ -9,7 +9,6 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 const chiefOfStaffNotificationLabel = "Chief of Staff"
@@ -149,14 +148,14 @@ func (api *StreamingAPI) persistChiefNotificationConfig(ctx context.Context, use
 	return updatedChatCaps, secretValue, nil
 }
 
-func (api *StreamingAPI) registerMultiAgentNotificationTool(agent *mcpagent.Agent, userID string) error {
+func (api *StreamingAPI) registerMultiAgentNotificationTool(agent definitionToolRegistrar, userID string) error {
 	if agent == nil {
 		return fmt.Errorf("agent is nil")
 	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
-	return mcpagent.AddDefinitionTool(agent,
+	return agent.RegisterCustomTool(
 		"update_chief_of_staff_notifications",
 		"Configure or disable the Chief of Staff Slack Incoming Webhook destination. Pass the name of an existing encrypted user secret containing an official Slack Incoming Webhook URL; never pass or expose the URL itself. This updates both interactive Chief of Staff chat and scheduled Chief/Org Pulse runs. Pass an empty secret name to disable the dedicated webhook.",
 		map[string]interface{}{

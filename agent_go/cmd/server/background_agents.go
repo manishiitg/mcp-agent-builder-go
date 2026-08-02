@@ -564,6 +564,9 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 	bgSpec.Depth = 0
 	bgSpec.BackgroundAgentID = agentID
 	bgCtx = virtualtools.WithSubAgentSpec(bgCtx, bgSpec)
+	// The background context intentionally starts from context.Background(),
+	// so carry the Chief of Staff's exact attached skill snapshot explicitly.
+	bgCtx = copyDelegatedParentSkills(ctx, bgCtx)
 
 	// Propagate per-user Chats folder to background sub-agents so shell commands
 	// resolve to the right user's workspace folder.
@@ -781,8 +784,20 @@ func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, 
 		Error:             errMsg,
 		Duration:          duration,
 		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
+		Kind:              api.backgroundAgentExecutionKind(sessionID, agentID),
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentCompleted), "", evt)
+}
+
+func (api *StreamingAPI) backgroundAgentExecutionKind(sessionID, agentID string) orchEvents.ExecutionKind {
+	if api == nil || api.bgAgentRegistry == nil {
+		return orchEvents.ExecutionKindUnknown
+	}
+	agent := api.bgAgentRegistry.Get(sessionID, agentID)
+	if agent == nil {
+		return orchEvents.ExecutionKindUnknown
+	}
+	return orchEvents.ParseExecutionKind(agent.GetSnapshot().Kind)
 }
 
 // emitBackgroundAgentTerminated reports a background/delegated agent being
@@ -826,6 +841,7 @@ func (api *StreamingAPI) emitAutoNotificationSteered(sessionID, agentID, name, s
 		Name:          name,
 		Status:        status,
 		Provider:      provider,
+		Kind:          api.backgroundAgentExecutionKind(sessionID, agentID),
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.AutoNotificationSteered), "", evt)
 }
@@ -1774,7 +1790,7 @@ func workflowRunBackupDirective(snap BackgroundAgentSnapshot) string {
 	if snap.Kind != "workflow_run_tool" && snap.Metadata["type"] != "workflow_run" {
 		return ""
 	}
-	return "\n\nThe run is complete - now back up this workflow. Call get_reference_doc(kind=\"backup-strategy\"), read workflow.json.backup, and use it as the backup contract. Perform backup and all Git commands directly in this parent workflow turn. Never delegate them through run_in_background, call_generic_agent, a reviewer, or another sub-agent: delegated agents intentionally cannot write the workflow .git directory. If backup is enabled, perform the configured destinations (git/github, object store, HuggingFace, etc.). If backup is missing or disabled, do not silently skip: set it up with the zero-config local-git default (a local git repo needs no credentials) and back up. Skip the push only when backup/status.json shows the current source is already backed up (unchanged source hash) — i.e. a Pulse pass or an earlier turn already captured this state. Always write backup/status.json with state, last attempt/success timestamps, destination results, errors, and the current source hash; do not write operational backup status into workflow.json."
+	return "\n\nThe run is complete - now back up this workflow. Call read_skill(skill_name=\"builder-reference\", path=\"references/backup-strategy.md\"), read workflow.json.backup, and use it as the backup contract. Perform backup and all Git commands directly in this parent workflow turn. Never delegate them through run_in_background, call_generic_agent, a reviewer, or another sub-agent: delegated agents intentionally cannot write the workflow .git directory. If backup is enabled, perform the configured destinations (git/github, object store, HuggingFace, etc.). If backup is missing or disabled, do not silently skip: set it up with the zero-config local-git default (a local git repo needs no credentials) and back up. Skip the push only when backup/status.json shows the current source is already backed up (unchanged source hash) — i.e. a Pulse pass or an earlier turn already captured this state. Always write backup/status.json with state, last attempt/success timestamps, destination results, errors, and the current source hash; do not write operational backup status into workflow.json."
 }
 
 func workflowRunGoalAlignmentDirective(snap BackgroundAgentSnapshot) string {
@@ -1807,7 +1823,7 @@ func workflowRunGoalAlignmentDirective(snap BackgroundAgentSnapshot) string {
 		stepNote = fmt.Sprintf(" This was a single-step run for `%s`, so distinguish step evidence from full-workflow evidence.", stepID)
 	}
 
-	return fmt.Sprintf("\n\nAfter backup, do org goal alignment for this run. If `pulse/goals.html` exists, call get_reference_doc(kind=\"org-goals\"), read `pulse/goals.html`, and compare `%s` against any goals whose contributing workflows name this workflow. Use concrete evidence from %s, `builder/improve.html`, `reports/`, and `db/db.sqlite`. In your reply include a short `Org goal alignment` section: goal, status (`on-track`, `at-risk`, `off-track`, or `unknown`), evidence path, gap, and next action.%s If no goal names this workflow, classify it as supporting/maintenance or unaligned. Update `pulse/goals.html` only when this run provides concrete new evidence that changes the scorecard; load get_reference_doc(kind=\"org-html\") first and preserve goal history. Do not invent proxy metrics.", workflowRef, runEvidencePath, stepNote)
+	return fmt.Sprintf("\n\nAfter backup, do org goal alignment for this run. If `pulse/goals.html` exists, call read_skill(skill_name=\"builder-reference\", path=\"references/org-goals.md\"), read `pulse/goals.html`, and compare `%s` against any goals whose contributing workflows name this workflow. Use concrete evidence from %s, `builder/improve.html`, `reports/`, and `db/db.sqlite`. In your reply include a short `Org goal alignment` section: goal, status (`on-track`, `at-risk`, `off-track`, or `unknown`), evidence path, gap, and next action.%s If no goal names this workflow, classify it as supporting/maintenance or unaligned. Update `pulse/goals.html` only when this run provides concrete new evidence that changes the scorecard; load read_skill(skill_name=\"builder-reference\", path=\"references/org-html.md\") first and preserve goal history. Do not invent proxy metrics.", workflowRef, runEvidencePath, stepNote)
 }
 
 func workflowRunCompletionDirective(snap BackgroundAgentSnapshot) string {
@@ -2006,7 +2022,7 @@ func (api *StreamingAPI) steerBackgroundAgentCompletion(sessionID, agentID strin
 
 	provider := string(delivery.Provider)
 	if provider == "" {
-		provider = string(mcpagent.AgentProvider(runningAgent))
+		provider = string(mcpagent.ReadAgentRuntimeInfo(runningAgent).Provider)
 	}
 	deliveryStatus := string(delivery.DeliveryStatus)
 	if deliveryStatus == "" {

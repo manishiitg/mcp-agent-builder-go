@@ -99,6 +99,24 @@ func ExecuteShellCommand(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
+	// Read-only scripted steps cannot safely open the live db.sqlite through a
+	// sandbox that denies creation of its WAL/SHM sidecars. Materialize a
+	// transactionally consistent standalone copy while still in the trusted
+	// workspace service, then expose only that copy to the child process.
+	if req.DBReadSnapshot {
+		snapshotPath, snapshotCleanup, snapshotErr := createReadonlyDBSnapshot(ctx, docsDir, req.ExtraEnv, req.FolderGuard)
+		if snapshotErr != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{
+				Success: false,
+				Message: "Failed to prepare read-only workflow database snapshot",
+				Error:   snapshotErr.Error(),
+			})
+			return
+		}
+		defer snapshotCleanup()
+		req.ExtraEnv["DB_PATH"] = snapshotPath
+	}
+
 	// Build command with folder guard isolation
 	var cmd *exec.Cmd
 	var fullCommand string

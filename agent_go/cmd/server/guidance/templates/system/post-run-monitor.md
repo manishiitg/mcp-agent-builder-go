@@ -170,7 +170,7 @@ state. The Fixer is the only writer and records every due module's result.
    verdict, next-check condition, findings, evidence, bounded recommended fix,
    verification, and whether user judgment is required with a reason.
    For Bug Review, also include the suspect step ids/attempts and tell the
-   reviewer to load `get_reference_doc(kind="pulse-bug-review")` for the
+   reviewer to load `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the
    Exploratory QA and observable execution-trace contract whenever Gate evidence
    points to a specific step.
    Explicitly forbid file edits, config or plan changes, publishing,
@@ -187,7 +187,9 @@ state. The Fixer is the only writer and records every due module's result.
    transport there. Either way never wrap it in a temporary script, background
    process, or polling loop. Pass the exact
    scheduler-provided `pulse_run_id`, dated `review_run_id`, and module name on
-   every call. Do not add a reviewer-specific
+   every call. The call returns an `execution_id` immediately: record it, end
+   the current turn, and resume only from the automatic completion notification.
+   Do not add a reviewer-specific
    completion marker to the instructions:
    `call_generic_agent` appends and enforces its own authoritative final marker.
    The tool rejects a provider pane snapshot that does not contain that marker
@@ -201,13 +203,13 @@ state. The Fixer is the only writer and records every due module's result.
    Do not give a reviewer `html-output`, the Pulse skeleton, CSS migration, or
    card-formatting work. Reviewers may read only the matching semantic regions
    of `builder/improve.html`; the later Dashboard stage owns presentation.
-4. Reviewer agents only inspect and advise. The parent waits naturally for its
-   synchronous tool results; it must not use sleep, `list_executions`,
-   `query_step`, or a polling loop. The backend saves each complete
-   human-readable Markdown result directly in SQLite and returns a compact
-   review identity. Load it with `get_pulse_review_result` before the review
-   stage ends. The returned JSON carries both human Markdown and validated
-   structured verification outcomes.
+4. Reviewer agents only inspect and advise. The parent ends its turn after each
+   asynchronous start and resumes from the automatic completion notification;
+   it must not use sleep, `list_executions`, `query_step`, or a polling loop.
+   The backend saves each complete human-readable Markdown result directly in
+   SQLite and supplies a compact review identity in that notification. Load it
+   with `get_pulse_review_result` before the review stage ends. The returned JSON
+   carries both human Markdown and validated structured verification outcomes.
 5. For Goal Advisor, first obtain the read-only strategy review, then send that
    draft and its evidence to a separate read-only critic. The parent accepts,
    narrows, or rejects the proposal using both results. Reject a draft that does
@@ -238,11 +240,13 @@ state. The Fixer is the only writer and records every due module's result.
    an operational conflict that the evidence and precedence rules decide.
    Then start exactly one `call_generic_agent` with `role="fixer"`,
    `module="pulse_fixer"`, the shared run identities, and the due module list.
+   Record its `execution_id`, end the current turn, and resume only from the
+   automatic completion notification.
    Reviewer Markdown stays immutable evidence. Reviewers never mutate workflow
    state, and the Fixer creates no HTML recovery ledger.
 7. The Fixer applies bounded repair bundles sequentially with normal direct
    tools; never launch a second mutating maintenance agent. Load
-   `get_reference_doc(kind="fix-verification")`. Before mutation,
+   `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`. Before mutation,
    capture exact targets, time, hashes/versions, and latest baseline ids; a write
    or any pre-boundary artifact is not proof. Re-read `get_pulse_module_state`,
    map each actionable issue to its backlog record, and call
@@ -480,7 +484,7 @@ The read-only reviewer scopes the defect from run/eval evidence, execution logs,
 validation, prompts/config, stale artifacts, and evidence-chain breakage, then
 returns exact findings and verification steps; the Pulse Fixer applies and
 verifies the bounded repair directly. The reviewer and Pulse Fixer load
-`get_reference_doc(kind="pulse-bug-review")` for the full read-only contract:
+`read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the full read-only contract:
 the Exploratory QA behavioral-contract and risk-matrix method, the control-path
 reachability check (`wrong_store_write`, `shadow_store_drift`,
 `dead_configuration`), the observable execution-trace review, and the finding
@@ -710,7 +714,7 @@ Keep the next Auditor checkpoint no later than Advisor's and normally require a
 fresh Auditor result between Advisor runs. A user answer/experiment may override
 that order. After a bug fix, wait for verification plus new valid outcome data.
 
-Load `get_reference_doc(kind="strategy-auditor")`. The reviewer reconstructs
+Load `read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`. The reviewer reconstructs
 the goal-to-action-to-target/source-to-outcome causal chain and uses bounded
 read-only queries against existing workflow tables plus retained run/eval
 evidence. It compares comparable windows and plan versions, reports counts and

@@ -128,6 +128,11 @@ Skill content is guidance from previous runs, not a replacement for the current 
 {{printf "%s" .ValidationSchema}}
 {{end}}
 
+{{if .PriorValidationFailures}}
+## Previous Validation Failures — Fix These
+{{printf "%s" .PriorValidationFailures}}
+{{end}}
+
 {{if eq .IsEvaluationMode "true"}}
 ## Evaluation Mode
 You are running as an **evaluation agent** — your job is to **verify and assess** outputs from a previous execution run, NOT to create new artifacts.
@@ -332,10 +337,10 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 	}
 	useProjectedReferenceSkills := hctpeoa.useProjectedReferenceSkills(templateVars)
 	if useProjectedReferenceSkills {
-		// Coding CLI adapters project the workflow-reference and
-		// workflow-learnings skills to disk. Keep the system prompt focused on
-		// this run's dynamic contract instead of repeating static reference text
-		// (and a recursive legacy file inventory) in CLAUDE.md/AGENTS.md.
+		// Every transport receives builder-reference and workflow-learnings as
+		// attached identity. Keep the prompt focused on this run's dynamic
+		// contract instead of repeating static reference text or a recursive
+		// legacy file inventory.
 		learningHistory = ""
 	}
 
@@ -408,6 +413,7 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 		"PreviousStepsSummary":      previousStepsSummary,
 		"PlanPosition":              templateVars["PlanPosition"], // Where this step sits in the plan — steps cannot read planning/plan.json
 		"ValidationSchema":          validationSchema,             // Validation schema JSON string
+		"PriorValidationFailures":   templateVars["PriorValidationFailures"], // Unresolved prevalidation concerns from earlier runs of this step
 		"KnowledgebasePath":         knowledgebasePath,            // Knowledgebase folder path
 		"DBPath":                    dbPath,                       // DB folder path (always enabled)
 		"DBAccess":                  dbAccess,
@@ -436,12 +442,9 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 	return result.String()
 }
 
-// useProjectedReferenceSkills reports whether this execution is backed by a
-// coding CLI adapter. Those adapters receive the full static reference corpus
-// as native on-disk skills, so embedding the same docs in the system prompt is
-// both redundant and harmful (Claude Code rejects oversized CLAUDE.md files).
-// The explicit template value is a narrow test hook and also keeps prompt
-// rendering deterministic for archived/replayed executions.
+// useProjectedReferenceSkills retains the legacy template switch used by
+// archived/replayed prompts. Production attaches the reference corpus on every
+// transport; coding CLIs additionally project it to disk.
 func (hctpeoa *WorkflowExecutionOnlyAgent) useProjectedReferenceSkills(templateVars map[string]string) bool {
 	if hctpeoa == nil || hctpeoa.BaseOrchestratorAgent == nil {
 		return usesProjectedReferenceSkills(nil, templateVars)

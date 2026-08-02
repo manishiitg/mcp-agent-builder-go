@@ -35,8 +35,8 @@ When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**
 make exactly one `call_generic_agent` call for this module. Never combine
 reviewers in one shell command, run curl in the background, use `&`/`wait`, or
 wait for another module. In coding-agent mode, use the documented API bridge
-shell transport without imposing a short shell timeout on the reviewer. If the
-outer bridge call backgrounds, stop and await its automatic notification.
+shell transport. The call returns an `execution_id` immediately; record it,
+end the current turn, and resume only from its automatic notification of completion.
 Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
 its complete Markdown and structured verification results directly in SQLite;
 call `get_pulse_review_result` with that review run and module before the review
@@ -44,7 +44,9 @@ stage ends. Reviewer failure is retained as `Review incomplete` evidence for
 this module only and cannot block later reviewers. The consolidated Fixer
 records the terminal module result.
 
-Give each reviewer scope, Gate evidence, focused guidance, and this response contract:
+Give each reviewer scope, Gate evidence, focused guidance, and this response
+contract, loading each named doc with
+`read_skill(skill_name="builder-reference", path="references/<name>.md")`:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
 `llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
 DB/run evidence; or the Auditor diagnosis plus goal/experiment evidence for Goal
@@ -130,9 +132,10 @@ block affected modules, and do not mutate that target.
 After every selected reviewer stage finishes, start exactly one Pulse Fixer as
 one `call_generic_agent` with `role="fixer"`, this run's `pulse_run_id`, dated
 `review_run_id`, and `module="pulse_fixer"`. Never run a Fixer per module and
-never run two Fixers at once. Do not apply fixes inline in the parent turn. The
-stage runs on the maintenance tier and is lent write authority for this run
-alone.
+never run two Fixers at once. Do not apply fixes inline in the parent turn.
+Record its `execution_id`, end the current turn, and resume only from its
+automatic completion notification. The stage runs on the maintenance tier and
+is lent write authority for this run alone.
 
 The Fixer first builds one compact, priority-ordered Fix queue across all due
 modules. Each queue item is a coherent repair bundle. Group findings only when
@@ -145,7 +148,8 @@ actionable bundle, `start_pulse_fix_attempt` is the durable queue record: link
 every affected finding before mutation, process bundles sequentially, and
 checkpoint/disposition one bundle before beginning the next.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
-`fix-verification`; old artifacts or successful writes are not proof. If proof
+`read_skill(skill_name="builder-reference", path="references/fix-verification.md")`;
+old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint
 created from its `CONCERNS:` line, and call `start_pulse_fix_attempt` before

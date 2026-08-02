@@ -243,6 +243,14 @@ function isWorkflowTerminal(terminal: TerminalSnapshot): boolean {
   ].includes(kind)
 }
 
+function isFullRunContainerTerminal(terminal: TerminalSnapshot): boolean {
+  const kind = (terminal.execution_kind || terminal.scope || '').trim().toLowerCase()
+  if (kind === 'full_run') return true
+  const identity = `${terminal.execution_id || ''} ${terminal.owner_id || ''} ${terminal.terminal_id}`
+  return /(?:^|[:\s])workflow-full-[^:\s]+/i.test(identity) &&
+    /\bfull workflow execution\b/i.test(`${terminal.agent_name || ''} ${terminal.display_title || ''}`)
+}
+
 function updatedTime(terminal: TerminalSnapshot): number {
   return new Date(terminal.updated_at || terminal.created_at || '').getTime() || 0
 }
@@ -289,6 +297,34 @@ function runtimeAgentName(terminal: TerminalSnapshot): string {
     .toLowerCase()
 }
 
+function workflowStepParentExecution(terminal: TerminalSnapshot): string {
+  const sessionPrefix = `${terminal.session_id}:`
+  const owner = (terminal.owner_id || (
+    terminal.terminal_id.startsWith(sessionPrefix)
+      ? terminal.terminal_id.slice(sessionPrefix.length)
+      : ''
+  )).trim()
+  if (!owner.startsWith('workflow-step:')) return ''
+
+  const stepID = (terminal.step_id || '').trim()
+  const suffix = stepID ? `:${stepID}` : ''
+  if (!suffix || !owner.endsWith(suffix)) return ''
+  return owner.slice('workflow-step:'.length, -suffix.length).trim()
+}
+
+function isStandaloneLifecycleRoot(terminal: TerminalSnapshot): boolean {
+  if (terminal.step_id || terminal.terminal_id.includes(':workflow-step:')) return false
+  const kind = (terminal.execution_kind || terminal.scope || '').trim().toLowerCase()
+  return [
+    'background_agent',
+    'background',
+    'sub_agent',
+    'workflow_sub_agent',
+    'workshop_background',
+    'execution',
+  ].includes(kind)
+}
+
 // A predefined route produces two runtime records:
 //   1. todo-sub-<step-id>-...: lifecycle/notification wrapper
 //   2. workflow-step:...:<step-id>: the real agent transcript
@@ -330,6 +366,30 @@ function runtimeAliases(terminals: TerminalSnapshot[]): Map<string, string> {
     if (root) aliases.set(terminal.terminal_id, terminalRailLogicalKey(root))
   }
 
+  // A standalone background tool emits a lifecycle root and a richer
+  // workflow-step transcript beneath the same execution. They are one agent,
+  // even when their labels differ (for example "Review Workflow Plan" versus
+  // "Review plan"). Match by the declared execution ancestry rather than
+  // fuzzy title text. Only collapse roots with exactly one concrete child;
+  // a real orchestrator with several children remains independently visible.
+  const childrenByRoot = new Map<string, TerminalSnapshot[]>()
+  for (const child of terminals) {
+    if (!child.step_id || !child.terminal_id.includes(':workflow-step:')) continue
+    const parentExecution = workflowStepParentExecution(child)
+    if (!parentExecution) continue
+    const rootKey = `${child.session_id}:${parentExecution}`
+    const root = executionRoots.get(rootKey)
+    if (!root || !isStandaloneLifecycleRoot(root)) continue
+    const children = childrenByRoot.get(rootKey) || []
+    children.push(child)
+    childrenByRoot.set(rootKey, children)
+  }
+  for (const [rootKey, children] of childrenByRoot) {
+    if (children.length !== 1) continue
+    const root = executionRoots.get(rootKey)
+    if (root) aliases.set(root.terminal_id, terminalRailLogicalKey(children[0]))
+  }
+
   for (const terminal of terminals) {
     if (!isDelegationLifecycleWrapper(terminal)) continue
     const identity = delegationIdentity(terminal)
@@ -346,9 +406,7 @@ function runtimeAliases(terminals: TerminalSnapshot[]): Map<string, string> {
   // Evaluation execution emits both a real workflow-step transcript and a
   // step-less lifecycle record. Their agent names are identical, but only the
   // real transcript contains the events a user can inspect. Fold the wrapper
-  // into the real step when the match is exact and unambiguous. A standalone
-  // parent such as "Full Workflow Execution" remains visible because it has no
-  // matching workflow-step transcript.
+  // into the real step when the match is exact and unambiguous.
   for (const terminal of terminals) {
     if (
       terminal.step_id ||
@@ -401,6 +459,10 @@ export function organizeTerminalRail(
   const aliases = runtimeAliases(terminals)
   for (const terminal of terminals) {
     if (options.isMainAgent(terminal)) continue
+    // A full workflow is an orchestration container. It has no conversation
+    // of its own; the real, inspectable work is in its step terminals.
+    // Keep a legacy shape check because old completion events lost full_run.
+    if (isFullRunContainerTerminal(terminal)) continue
     const key = aliases.get(terminal.terminal_id) || terminalRailLogicalKey(terminal)
     const bucket = grouped.get(key) || []
     bucket.push(terminal)
@@ -467,4 +529,24 @@ export function hiddenSelectedTerminalRailGroup(
   )))
   if (!selectedGroup || visibleGroups.some(group => group.key === selectedGroup.key)) return null
   return selectedGroup
+}
+
+// Lifecycle wrappers remain group members for search/status reconciliation,
+// but they are not selectable transcripts. If one was selected before the
+// richer child arrived, move the pane to the group's real representative.
+export function canonicalTerminalRailSelection(
+  groups: TerminalRailLogicalGroup[],
+  selectedTerminal?: TerminalSnapshot | null,
+): TerminalSnapshot | null {
+  if (!selectedTerminal) return null
+  const selectedGroup = groups.find(group => group.members.some(terminal => (
+    terminal.terminal_id === selectedTerminal.terminal_id &&
+    (terminal.tmux_session || '') === (selectedTerminal.tmux_session || '')
+  )))
+  if (!selectedGroup) return selectedTerminal
+  const isSelectableTranscript = selectedGroup.terminals.some(terminal => (
+    terminal.terminal_id === selectedTerminal.terminal_id &&
+    (terminal.tmux_session || '') === (selectedTerminal.tmux_session || '')
+  ))
+  return isSelectableTranscript ? selectedTerminal : selectedGroup.representative
 }

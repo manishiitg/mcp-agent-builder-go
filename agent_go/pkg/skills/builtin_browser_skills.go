@@ -14,8 +14,18 @@ func builtinAttachableSkill(folderName string) *llmtypes.Skill {
 	switch folderName {
 	case "agent-browser":
 		return &llmtypes.Skill{
-			Name:        "agent-browser",
-			Description: "Use agent-browser through Builder's managed tool. Load version-matched core/specialized skills from the installed CLI, then follow Builder-specific CDP tab ownership, locking, file, and safety rules.",
+			Name: "agent-browser",
+			// Names where the Builder-specific rules actually are. The description
+			// used to say "follow Builder-specific CDP … rules" without saying
+			// where they live, and the surrounding skill list tells an agent to
+			// read learnings/_global/ for workflow content — so a CDP step on
+			// 2026-08-02 tried learnings/_global/references/browser-usage.md.
+			// It had the filename exactly right and only the parent wrong: the doc
+			// is projected to .agents/skills/builder-reference/references/, and is
+			// also served by read_skill. Naming the tool is the stable
+			// answer, since the projected directory differs per provider
+			// (.agents/ vs .claude/) while the tool call does not.
+			Description: "Use agent-browser through Builder's managed tool. Load version-matched core/specialized skills from the installed CLI, then call read_skill(skill_name=\"builder-reference\", path=\"references/browser-usage.md\") for Builder-specific CDP tab ownership, locking, file, and safety rules. Do not guess a path for it under learnings/.",
 			Content:     agentBrowserSkillContent,
 			Source:      llmtypes.SkillSource{Origin: "builtin"},
 		}
@@ -37,6 +47,10 @@ error—query Builder's backend-owned status operation:
 ` + "```python" + `
 status = agent_browser("status", [], session="main")
 ` + "```" + `
+
+` + "`status`" + ` is the connectivity probe. It needs no tab and no ` + "`--cdp`" + `
+argument. Do not use ` + "`snapshot`" + ` to test CDP reachability; snapshot reads a
+specific page and therefore requires an explicitly owned/selected tab.
 
 If ` + "`effective_mode`" + ` is ` + "`cdp`" + `, use one endpoint from
 ` + "`authorized_endpoints`" + ` on every later call. If it is ` + "`headless`" + `,

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	workspacepkg "github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 
 	"github.com/PaesslerAG/jsonpath"
@@ -4737,7 +4736,7 @@ func createCreatePlanExecutor(workspacePath string, logger loggerv2.Logger, read
 // This shared function is used by planning agent, code exec debugging agent, etc.
 // unlockLearningsFunc is optional - if provided, it will be called after plan modifications to unlock learnings
 func registerPlanModificationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -4759,7 +4758,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse create plan schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"create_plan",
 		"Initialize an empty planning/plan.json for a new workflow. Call this FIRST when the workflow has no plan.json yet, before using add_scripted_step / add_message_sequence_step / add_human_input_step / add_todo_task_step / add_routing_step to populate it. Refuses to overwrite an existing plan.json. Takes no arguments. Note: workflow objective lives in soul/soul.md — edit that file separately; plan.json no longer stores it.",
 		createPlanParams,
@@ -4773,7 +4772,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse migrate_message_sequence_code_items schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"migrate_message_sequence_code_items",
 		"Product-managed workflow-version migration for issue #170. Converts only unambiguous top-level message_sequence steps containing code + prevalidation items into visible standalone scripted regular steps. It copies scripts to learnings/<step-id>/main.py, preserves durable dependencies/outputs/validation, and updates plan/config with rollback on a config-write failure. Mixed conversational/code or nested sequences are rejected without changing plan/config. Call only during the v1.0.10 workflow preflight.",
 		migrateSequenceCodeParams,
@@ -4790,7 +4789,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update scripted step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_scripted_step",
 		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		regularUpdateParams,
@@ -4809,7 +4808,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update human input step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_human_input_step",
 		"Update a human input step in the plan. Provide existing_step_id (required) to identify which human input step to update, and only include the fields you want to change (question, response_type, options, variable_name, context_output, next_step_id, if_yes_next_step_id/if_no_next_step_id, option_routes). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		humanInputUpdateParams,
@@ -4824,7 +4823,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse delete schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"delete_plan_steps",
 		"Delete steps from the plan by providing their IDs. Use the step's id field from the plan. The mutation is atomic: before anything is saved, the complete plan graph is validated. If another route or next_step_id targets a deleted step, the tool returns PLAN_GRAPH_INVALID with every blocking reference; update those references to an existing step or end, then retry. Any matching planning/step_config.json entries are removed only after the plan deletion succeeds.",
 		deleteParams,
@@ -4842,7 +4841,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse cleanup_orphan_step_configs schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"cleanup_orphan_step_configs",
 		"Sweep planning/step_config.json and remove entries whose step_id no longer exists in plan.json (or plan.OrphanSteps). Use this once when you notice the agent describing orphan step_config entries it can't reach via update_step_config. Idempotent: returns the list of IDs removed (empty if nothing was orphaned).",
 		cleanupOrphanParams,
@@ -4858,7 +4857,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse scripted step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_scripted_step",
 		"Add a deterministic scripted execution step. Use only for fixed API/SDK calls, CLI commands, known pagination, stable parsing/normalization/transforms, or mechanical persistence that share one source/auth/retry/output contract. The internal plan type is regular, but the backend always configures this step as declared_execution_mode=scripted. Use next_step_id to chain multiple scripts within one selected route and point the final script at the shared convergence step; omit it for legacy sequential execution. This tool does not create an LLM step and does not convert prose into code: author and test learnings/<step-id>/main.py before production. Use add_message_sequence_step for every conversational or judgment-heavy task, including one-turn work. Give the script an authoritative DB or explicit file output, freshness/provenance, fail-closed errors, idempotency where relevant, and deterministic validation. The plan and step config are updated immediately.",
 		regularParams,
@@ -4873,7 +4872,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse message sequence step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_message_sequence_step",
 		"Add a message_sequence step to the plan. Use it when one agentic step should consume persisted evidence, own a coherent reasoning outcome, and then validate, critique, or repair that work in the same conversation. Put the whole reasoning outcome in the opening description; add follow-up items only for decision-useful assurance, a real intermediate gate, new external input, or foreach iteration—not one item per routine subtask or tool call. Fixed API/SDK/CLI calls, data fetching, known pagination, stable parsing/normalization, and mechanical writes belong in upstream standalone regular scripted steps; the sequence reads their validated DB rows or artifacts. The top-level validation_schema is automatically enforced after the final work turn with same-conversation repair retries. As a todo_task predefined route, use message_sequence when the orchestrator should reuse the same specialist conversation for critique, test feedback, validation feedback, or follow-up work; restart is controlled at execution time with message_sequence_restart. Plain turns inherit step-level DB/KB/learnings permissions; kind or non-empty write_access can narrow one turn.",
 		messageSequenceParams,
@@ -4891,7 +4890,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse human input step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_human_input_step",
 		"Add a human input step to the plan. Use this when you need to ask a question to a human and block execution until they respond. This step has no LLM, no execution, no validation, and no learning - it simply asks a question and waits for human input. The response is saved to a JSON file and passed to the next step. Provide: id, title, question (required), response_type (text/yesno/multiple_choice), options (for multiple_choice), variable_name (optional), context_output (optional, defaults to step-{index}.json), next_step_id (required), if_yes_next_step_id/if_no_next_step_id (for yesno), option_routes (for multiple_choice), insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		humanInputParams,
@@ -4906,7 +4905,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse todo task step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_todo_task_step",
 		"Add a todo task orchestration step to the plan. Use this when you need to manage a dynamic todo list with trackable tasks. The main orchestrator creates/assigns tasks, then delegates to predefined sub-agents (with learning and prevalidation) or a generic agent (workspace tools only, no learning). Predefined routes have MCP tool access and accumulate learnings. A conversational route sub_agent_step must be message_sequence; use regular only for an explicitly scripted deterministic route, or todo_task for one nested orchestration layer. The generic agent is for simple, ad-hoc tasks. Provide: id, title, todo_task_step (main orchestrator metadata), predefined_routes (optional, specialized sub-agents), enable_generic_agent (optional, default true), next_step_id, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		todoTaskParams,
@@ -4921,7 +4920,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse routing step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_routing_step",
 		"Add a deterministic routing step to the plan. Use this when the workflow must choose exactly one of multiple existing downstream steps. Routing has one mode only: read caller route_selections, the routing step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on routing steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the routing step's route_source_file or context_dependencies. Provide: id, title, routing_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		routingParams,
@@ -4936,7 +4935,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update routing step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_routing_step",
 		"Update a deterministic routing step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, routing_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; routing never executes an agent and never LLM-evaluates routing_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		routingUpdateParams,
@@ -4951,7 +4950,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update_message_sequence_step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_message_sequence_step",
 		"Update a message_sequence step in the plan. This also accepts a persisted legacy non-scripted regular step and atomically upgrades it to message_sequence, matching the compatibility runtime agents already see; declared scripted regular steps still require update_scripted_step. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		messageSequenceUpdateParams,
@@ -4969,7 +4968,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update_todo_task_step schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_todo_task_step",
 		"Update an Orchestrator step (todo_task type) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		todoTaskUpdateParams,
@@ -4985,7 +4984,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse add_todo_task_route schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"add_todo_task_route",
 		"Add a new predefined route (sub-agent) to an Orchestrator step (todo_task type). New conversational routes must use sub_agent_step.type=message_sequence, even for one turn. Use regular only for a deterministic scripted boundary; it is automatically configured as scripted. Provide parent_step_id and new_route with route_id, route_name, and condition, plus either sub_agent_step or orphan_step_ref. The plan.json file is updated immediately.",
 		addTodoTaskRouteParams,
@@ -5000,7 +4999,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update_todo_task_route schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_todo_task_route",
 		"Update an existing predefined route (sub-agent) within an Orchestrator step (todo_task type). Conversational route definitions use message_sequence; regular is reserved for deterministic scripted work. Provide parent_step_id, existing_route_id, and only the fields to change. Use orphan_step_ref for a reusable orphan step. The plan.json file is updated immediately.",
 		updateTodoTaskRouteParams,
@@ -5015,7 +5014,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse delete_todo_task_route schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"delete_todo_task_route",
 		"Delete a predefined route (sub-agent) from an Orchestrator step (todo_task type). Provide parent_step_id and deleted_route_id. Unlike routing steps, Orchestrator steps may have 0 predefined routes (generic-agent-only). The plan.json file is updated immediately when this tool is called.",
 		deleteTodoTaskRouteParams,
@@ -5031,7 +5030,7 @@ func registerPlanModificationTools(
 	if err != nil {
 		return fmt.Errorf("failed to parse update_validation_schema schema: %w", err)
 	}
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_validation_schema",
 		"Update the validation schema for an existing step in the plan. Provide existing_step_id (required) and validation_schema (required). The validation schema enables fast code-based pre-validation before LLM validation. The plan.json file is updated immediately when this tool is called.",
 		updateValidationSchemaParams,
@@ -5044,7 +5043,7 @@ func registerPlanModificationTools(
 	// The evaluation plan had no mutation tool, so every edit arrived by direct
 	// write and left nothing in planning/changelog for artifact drift review to
 	// read (AR-20260729-2).
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"update_evaluation_plan",
 		"Update one step in evaluation/evaluation_plan.json and record the change in planning/changelog. Provide step_id and reason (both required) plus at least one of title, description, context_output, context_dependencies, max_score, applies_to_routes, validation_schema, db_write. Use this instead of editing the file directly: a direct write leaves no changelog entry, so artifact drift review cannot see the change or judge it. Fields not named are preserved exactly, including any this tool does not model. applies_to_routes gates the step to specific routes selected by a routing step. Setting a field to its current value is reported as no change and writes no entry. Scripted-versus-agentic execution lives in evaluation/step_config.json via update_step_config, not here.",
 		parseSchemaForToolParametersMust(getUpdateEvaluationPlanSchema()),

@@ -848,7 +848,7 @@ func (s *WorkshopChatSession) UpdateEnabledGroupNames(ctx context.Context, enabl
 // RegisterWorkshopChatTools registers the complete workshop-only tool surface on
 // the given agent using the session's controller.
 func RegisterWorkshopChatTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -1067,11 +1067,11 @@ func (s *WorkshopChatSession) DetachSecretFromWorkflow(ctx context.Context, name
 //
 // See the post-step KB update agent for the extraction counterpart.
 func RegisterReorganizeKnowledgebaseTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"reorganize_knowledgebase",
 		"Apply a natural-language transformation to the knowledgebase notes only. Supported operations: merge two topic files, drop sections from a bad run, compact a topic file, rename a topic and rewrite cross-references, drop a topic entirely. Takes one argument 'instruction' describing what to do. The agent reads knowledgebase/notes/_index.json, scopes to the relevant topic files, applies the transformation, and resyncs the index. It must not read or write knowledgebase/context/. Serialized against post-step KB updates — safe to call while a workflow is running. Returns the agent's summary line describing what changed.",
 		map[string]interface{}{
@@ -1123,11 +1123,11 @@ func RegisterReorganizeKnowledgebaseTool(
 // Runs synchronously — blocks until the agent finishes — but serialized through
 // kbUpdateQueue so it can't race with live post-step updates or a reorganize call.
 func RegisterConsolidateKnowledgebaseTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"consolidate_knowledgebase",
 		"Run a holistic cross-step consolidation pass over knowledgebase/notes/. Use this AFTER multiple steps have contributed to catch drift that per-step KB updates can't see: two steps creating topic files under different slugs for the same entity, cross-step patterns that need a `pattern-*.md` note, contradictions between steps on the same subject. The agent reads every step's knowledgebase_contribution plus step output folders from the selected run. Takes one argument 'objective' describing the consolidation goal — be specific; the agent scopes work to it and won't opportunistically reorganize beyond. Returns the agent's summary line.",
 		map[string]interface{}{
@@ -1168,11 +1168,11 @@ func RegisterConsolidateKnowledgebaseTool(
 // RegisterRunFullEvaluationTool registers a run_full_evaluation tool that executes all
 // evaluation steps against a target execution run and publishes their outputs. Runs in background.
 func RegisterRunFullEvaluationTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"run_full_evaluation",
 		"Run the full evaluation pipeline: execute all evaluation steps against a target execution run, then publish their outputs into evaluation_report.json for review. Evaluation always targets iteration-0 (the default execution run). Runs in background — you will be notified when complete.",
 		map[string]interface{}{
@@ -1649,11 +1649,11 @@ func truncateResult(s string, maxLen int) string {
 // when execution completes. This is the workshop-builder equivalent of the orchestrator-mode
 // full execution, but triggered as a tool call.
 func RegisterRunFullWorkflowTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
-	if err := mcpagent.AddDefinitionTool(mcpAgent,
+	if err := mcpAgent.RegisterCustomTool(
 		"run_full_workflow",
 		"Execute the complete workflow: load the plan, resolve variables, and run all steps for a single variable group. Always uses iteration-0 and starts from the beginning. Runs in background - you will be notified when complete. Use send_step_message with the returned execution_id to steer whichever workflow child-agent turn is currently active. If the plan contains human_input steps on the selected path, you MUST provide human_inputs with a response for each one. If the plan contains deterministic routing steps and the user's request already selected a branch, pass route_selections keyed by routing step ID. Pass disable_eval=true to skip the automatic evaluation pass after the workflow completes.",
 		map[string]interface{}{
@@ -2022,7 +2022,7 @@ func RegisterRunFullWorkflowTool(
 // RegisterEvaluationValidationTools is the exported wrapper for registering evaluation
 // plan validation tools on an MCP agent. Used by server.go for workflow-builder chat sessions.
 func RegisterEvaluationValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2038,7 +2038,7 @@ func RegisterEvaluationValidationTools(
 // validate_report_plan tool on an MCP agent. Used by server.go for workflow-builder
 // chat sessions. Validates reports/report_plan.json.
 func RegisterReportPlanValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2050,7 +2050,7 @@ func RegisterReportPlanValidationTools(
 // JSON report plan read/write tools on an MCP agent. Used by server.go for
 // workflow-builder and optimizer chat sessions.
 func RegisterReportPlanManagementTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2064,7 +2064,7 @@ func RegisterReportPlanManagementTools(
 // and optimizer chat sessions so the agent can inspect the final report structure
 // and resolved data without relying on the frontend UI.
 func RegisterReportRenderPreviewTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2075,7 +2075,7 @@ func RegisterReportRenderPreviewTool(
 // RegisterPlanModificationTools is the exported wrapper for registering plan modification tools
 // on an MCP agent. Used by server.go for workflow phase chat sessions.
 func RegisterPlanModificationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),

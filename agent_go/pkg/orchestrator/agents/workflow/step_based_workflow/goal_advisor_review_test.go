@@ -139,10 +139,15 @@ func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing
 	proposal := goalAdvisorFinalizerProposalToolAgentAllowedToolNames()
 	approved := goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
 
-	for _, tool := range []string{"get_workflow_command_guidance", "get_reference_doc", "execute_shell_command"} {
+	for _, tool := range []string{"get_workflow_command_guidance", "execute_shell_command"} {
 		assertToolListContains(t, readOnly, tool)
 		assertToolListContains(t, proposal, tool)
 		assertToolListContains(t, approved, tool)
+	}
+	for name, tools := range map[string][]string{"read-only": readOnly, "proposal": proposal, "approved": approved} {
+		if toolSet(tools)["read_skill"] {
+			t.Fatalf("%s builder allowlist should not own mcpagent's intrinsic read_skill tool", name)
+		}
 	}
 	for _, tool := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
 		assertToolListContains(t, readOnly, tool)

@@ -22,8 +22,8 @@ import (
 // inline here so this file compiles standalone.
 type e2eMockLogger struct{}
 
-func (l *e2eMockLogger) Infof(format string, args ...any)         {}
-func (l *e2eMockLogger) Errorf(format string, args ...any)        {}
+func (l *e2eMockLogger) Infof(format string, args ...any)          {}
+func (l *e2eMockLogger) Errorf(format string, args ...any)         {}
 func (l *e2eMockLogger) Debugf(format string, args ...interface{}) {}
 
 // TestCostLedgerCapturesRealAnthropicTurn is the cross-stack e2e for

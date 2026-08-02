@@ -30,6 +30,32 @@ func TestAllGuidanceTemplatesRender(t *testing.T) {
 	}
 }
 
+// get_reference_doc was removed when reference bundles became attached skills.
+// A stale call in any rendered flow is dead on arrival for Pulse and workshop
+// agents, so guard the complete registered guidance surface against regression.
+func TestAllGuidanceUsesAttachedSkillReader(t *testing.T) {
+	registries := []struct {
+		name  string
+		kinds map[string]kindMeta
+	}{
+		{name: "commands", kinds: allKinds},
+		{name: "references", kinds: referenceKinds},
+	}
+
+	for _, registry := range registries {
+		for kind := range registry.kinds {
+			rendered, err := renderFromRegistry(kind, tmplData{}, registry.kinds)
+			if err != nil {
+				t.Errorf("%s/%s failed to render: %v", registry.name, kind, err)
+				continue
+			}
+			if strings.Contains(rendered, "get_reference_doc") {
+				t.Errorf("%s/%s still calls removed get_reference_doc; use read_skill(skill_name=\"builder-reference\", path=\"references/<kind>.md\")", registry.name, kind)
+			}
+		}
+	}
+}
+
 func TestChiefOfStaffGuidanceKeepsTechnicalDetailsOutOfVisibleOutput(t *testing.T) {
 	tests := map[string][]string{
 		"org-pulse": {
@@ -427,14 +453,14 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 			t.Fatalf("post-run-monitor should not re-inline extracted Bug Review contract %q", moved)
 		}
 	}
-	if !strings.Contains(postRun, `get_reference_doc(kind="pulse-bug-review")`) {
+	if !strings.Contains(postRun, `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")`) {
 		t.Fatal("post-run-monitor missing pointer to pulse-bug-review")
 	}
 
 	// The fix-verification contract is single-sourced: post-run-monitor and
 	// pulse-fixer reference it instead of restating the detail. Guard against
 	// the detail drifting back into the Gate-loaded post-run-monitor doc.
-	if !strings.Contains(postRun, `get_reference_doc(kind="fix-verification")`) {
+	if !strings.Contains(postRun, `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`) {
 		t.Fatal("post-run-monitor missing pointer to fix-verification")
 	}
 	for _, moved := range []string{"baseline only, never proof", "mtime alone"} {

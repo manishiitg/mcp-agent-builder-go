@@ -23,13 +23,13 @@ import (
 // cost e2e. It proves the complete chain that backs real workflow
 // runs:
 //
-//   real Anthropic call
-//     → adapter writes cost_model_id + cost_usd_estimated on
-//       GenerationInfo.Additional
-//     → caller builds a TokenUsageEvent (mirroring what mcpagent does)
-//     → ContextAwareEventBridge intercepts the event
-//     → bridge resolves effective model + injects current step context
-//     → calls TokenPersister.PersistTokenUsage with the right buckets
+//	real Anthropic call
+//	  → adapter writes cost_model_id + cost_usd_estimated on
+//	    GenerationInfo.Additional
+//	  → caller builds a TokenUsageEvent (mirroring what mcpagent does)
+//	  → ContextAwareEventBridge intercepts the event
+//	  → bridge resolves effective model + injects current step context
+//	  → calls TokenPersister.PersistTokenUsage with the right buckets
 //
 // What this nails down:
 //
@@ -244,16 +244,16 @@ var _ mcpagent.AgentEventListener = noopListener{}
 // multi-llm-provider-go adapter takes. Discard all output.
 type silentLogger struct{}
 
-func (silentLogger) Infof(format string, args ...any)         {}
-func (silentLogger) Errorf(format string, args ...any)        {}
+func (silentLogger) Infof(format string, args ...any)          {}
+func (silentLogger) Errorf(format string, args ...any)         {}
 func (silentLogger) Debugf(format string, args ...interface{}) {}
 
 // silentLoggerV2 implements the mcpagent loggerv2.Logger interface.
 type silentLoggerV2 struct{}
 
-func (silentLoggerV2) Debug(msg string, fields ...loggerv2.Field) {}
-func (silentLoggerV2) Info(msg string, fields ...loggerv2.Field)  {}
-func (silentLoggerV2) Warn(msg string, fields ...loggerv2.Field)  {}
+func (silentLoggerV2) Debug(msg string, fields ...loggerv2.Field)            {}
+func (silentLoggerV2) Info(msg string, fields ...loggerv2.Field)             {}
+func (silentLoggerV2) Warn(msg string, fields ...loggerv2.Field)             {}
 func (silentLoggerV2) Error(msg string, err error, fields ...loggerv2.Field) {}
 func (silentLoggerV2) Fatal(msg string, err error, fields ...loggerv2.Field) {}
 func (silentLoggerV2) With(fields ...loggerv2.Field) loggerv2.Logger {

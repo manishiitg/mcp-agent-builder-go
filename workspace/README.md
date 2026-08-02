@@ -707,7 +707,7 @@ docker-compose down -v
 
 ### **Pushing to Docker Hub**
 
-The workspace-api image is published as `manishiitg/workspace-api` on Docker Hub. Examples under `agent_go/examples/workspace_tools/` use this image.
+The workspace-api image is published as `manishiitg/workspace-api` on Docker Hub.
 
 **Build and push locally** (run from repo root or `workspace/`):
 ```bash

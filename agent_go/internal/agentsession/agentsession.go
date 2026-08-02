@@ -67,8 +67,8 @@ type Config struct {
 	ModelID  string       // "" -> llm.GetDefaultModel(provider)
 	// ReasoningEffort, when set ("low"|"medium"|"high"|"max"), sets the model's
 	// reasoning/thinking effort for providers that support it (Claude Code does).
-	// Empty leaves the provider/model default. Plumbed via mcpagent.WithLLMConfig
-	// as the primary model's Options["reasoning_effort"].
+	// Empty leaves the provider/model default. Plumbed through
+	// RuntimeConfig.Generation.LLM as the primary model's Options["reasoning_effort"].
 	ReasoningEffort string
 	WorkingDir      string // scope root (Family/parent). "" -> process cwd
 	SystemPrompt    string // agent persona / instructions
@@ -92,7 +92,7 @@ type Config struct {
 	SessionHandle *Handle
 	// BridgeRoutingInstructions, when non-nil, overrides mcpagent's default
 	// per-provider bridge-tool-routing system-prompt text (see
-	// mcpagent.WithBridgeRoutingInstructions and
+	// RuntimeConfig.Coding.BridgeRoutingInstructions and
 	// docs/core/mcp_bridge_layer.md) — nil keeps mcpagent's default
 	// (unconditionally applied for every provider); a pointer to "" suppresses
 	// the block entirely; a non-empty string replaces it with this app's own
@@ -102,7 +102,7 @@ type Config struct {
 	BridgeRoutingInstructions *string
 	// StreamCallback, when non-nil, is invoked with each content fragment as
 	// the model generates its reply (real token/chunk streaming, not just a
-	// cosmetic "working on it" status label) — via mcpagent.WithStreamingCallback,
+	// cosmetic "working on it" status label) — via Turn.StreamingCallback,
 	// which only ever delivers content fragments (never tool-call/terminal
 	// chunks). Requires the provider's own streaming env var to be set for
 	// interactive/tmux sessions (e.g. CODEX_CLI_STREAM_TRANSCRIPT=1) — set once
@@ -115,7 +115,7 @@ type Config struct {
 	// only queues) instead of the default llm.CodingAgentTransportTmux. Empty
 	// keeps the contract's default (tmux, for every coding-agent provider
 	// today). This exists to A/B the two transports from a live conversation;
-	// see mcpagent.WithCodingAgentTransport's own doc comment for the tradeoff.
+	// see RuntimeConfig.Coding.Transport for the tradeoff.
 	Transport llm.CodingAgentTransport
 }
 
@@ -225,26 +225,26 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	// different engine cannot give this one context.
 	handleRestored := cfg.SessionHandle != nil && !cfg.SessionHandle.Empty()
 	holdsPriorContext := resume && (handleRestored || hasWarmInteractiveOwner(sessionID, cfg.Provider))
-	opts := []mcpagent.AgentOption{
-		mcpagent.WithLogger(logger),
-		mcpagent.WithProvider(cfg.Provider),
-		mcpagent.WithCodeExecutionMode(true),
-		mcpagent.WithSessionID(sessionID),
+	runtime := mcpagent.RuntimeConfig{
+		Model: model, MCPConfigPath: b.mcpConfigPath, ResumeHandle: cfg.SessionHandle,
+		Generation:    mcpagent.GenerationRuntimeConfig{Provider: cfg.Provider, MaxTurns: cfg.MaxTurns},
+		Tools:         mcpagent.ToolRuntimeConfig{CodeExecution: true},
+		Coding:        mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
+		MCP:           mcpagent.MCPRuntimeConfig{SessionID: sessionID},
+		Workspace:     mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: cfg.WorkingDir},
+		Observability: mcpagent.ObservabilityRuntimeConfig{Logger: logger},
 	}
 	if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {
 		// Set the primary model's reasoning/thinking effort. GetLLMModelConfig
 		// returns LLMConfig.Primary when its Provider is set, so specify the full
 		// model here (provider + id) alongside the Options.
-		opts = append(opts, mcpagent.WithLLMConfig(mcpagent.AgentLLMConfiguration{
+		runtime.Generation.LLM = mcpagent.AgentLLMConfiguration{
 			Primary: mcpagent.LLMModel{
 				Provider: string(cfg.Provider),
 				ModelID:  modelID,
 				Options:  map[string]interface{}{"reasoning_effort": effort},
 			},
-		}))
-	}
-	if cfg.Transport != "" {
-		opts = append(opts, mcpagent.WithCodingAgentTransport(cfg.Transport))
+		}
 	}
 	if resume && cfg.Transport != llm.CodingAgentTransportStructured {
 		// Keep the coding agent's interactive (tmux) session alive so the next
@@ -254,26 +254,17 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		// — each turn is a one-shot CLI invocation resumed via SessionHandle).
 		switch cfg.Provider {
 		case llm.ProviderClaudeCode:
-			opts = append(opts, mcpagent.WithClaudeCodePersistentInteractiveSession(true))
+			runtime.Coding.PersistentClaudeCode = true
 		case llm.ProviderCodexCLI:
-			opts = append(opts, mcpagent.WithCodexPersistentInteractiveSession(true))
+			runtime.Coding.PersistentCodex = true
 		case llm.ProviderCursorCLI:
-			opts = append(opts, mcpagent.WithCursorPersistentInteractiveSession(true))
+			runtime.Coding.PersistentCursor = true
 		case llm.ProviderPiCLI:
-			opts = append(opts, mcpagent.WithPiPersistentInteractiveSession(true))
+			runtime.Coding.PersistentPi = true
 		}
 	}
-	if strings.TrimSpace(cfg.WorkingDir) != "" {
-		opts = append(opts, mcpagent.WithCodingAgentWorkingDir(cfg.WorkingDir))
-	}
-	if cfg.MaxTurns > 0 {
-		opts = append(opts, mcpagent.WithMaxTurns(cfg.MaxTurns))
-	}
-	if cfg.BridgeRoutingInstructions != nil {
-		opts = append(opts, mcpagent.WithBridgeRoutingInstructions(*cfg.BridgeRoutingInstructions))
-	}
 	if cfg.StreamCallback != nil {
-		opts = append(opts, mcpagent.WithStreamingCallback(func(chunk llmtypes.StreamChunk) {
+		runtime.Observability.StreamingCallback = func(chunk llmtypes.StreamChunk) {
 			// Only forward genuine reply-content chunks. For interactive/tmux
 			// providers the "content" stream is derived from tailing the raw
 			// pane, and other chunk types (tool_call/tool_call_start/tool_call_end/
@@ -285,7 +276,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 				return
 			}
 			cfg.StreamCallback(chunk.Content)
-		}))
+		}
 	}
 	if len(cfg.Tools) > 0 {
 		// Expose every app-registered custom tool as a NATIVE bridge tool for
@@ -296,7 +287,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		for _, t := range cfg.Tools {
 			names = append(names, t.Name)
 		}
-		opts = append(opts, mcpagent.WithAdditionalBridgeTools(names...))
+		runtime.Tools.AdditionalBridge = names
 	}
 
 	if resume {
@@ -323,12 +314,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	if cfg.SessionHandle != nil && !cfg.SessionHandle.Empty() && strings.TrimSpace(cfg.WorkingDir) != "" {
 		cfg.SessionHandle.Provider.WorkingDir = cfg.WorkingDir
 	}
-	agent, err := mcpagent.NewAgentFromDefinition(ctx, definitionFromConfig(cfg), mcpagent.RuntimeConfig{
-		Model:         model,
-		MCPConfigPath: b.mcpConfigPath,
-		ResumeHandle:  cfg.SessionHandle,
-		LegacyOptions: opts,
-	})
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, definitionFromConfig(cfg), runtime)
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
@@ -350,7 +336,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		runtime:           runtimeSession,
 		logger:            logger,
 		holdsPriorContext: holdsPriorContext,
-		shutdown:          agent.Close, // per-turn agent only; shared bridge + tmux persist
+		shutdown:          func() { _ = agent.Close() }, // per-turn agent only; shared bridge + tmux persist
 	}
 	return s, nil
 }

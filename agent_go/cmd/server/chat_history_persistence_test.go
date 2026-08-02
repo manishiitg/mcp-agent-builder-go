@@ -1118,12 +1118,58 @@ func TestParseLocalChatHistorySessionIgnoresTrailingLowSignalTitle(t *testing.T)
 	}
 }
 
+func testAgentWithHandle(sessionID string, provider llmtypes.CodingProviderSessionHandle) *mcpagent.Agent {
+	agent := &mcpagent.Agent{}
+	mcpagent.ApplyAgentResumeHandle(agent, &mcpagent.AgentSessionHandle{
+		SessionID: sessionID,
+		OwnerID:   sessionID,
+		Provider:  provider,
+	})
+	return agent
+}
+
+type persistenceTestModel struct{}
+
+func (persistenceTestModel) GenerateContent(context.Context, []llmtypes.MessageContent, ...llmtypes.CallOption) (*llmtypes.ContentResponse, error) {
+	return &llmtypes.ContentResponse{}, nil
+}
+func (persistenceTestModel) GetModelID() string { return "persistence-test" }
+func (persistenceTestModel) GetModelMetadata(string) (*llmtypes.ModelMetadata, error) {
+	return &llmtypes.ModelMetadata{}, nil
+}
+
+func testAgentWithInstructions(t *testing.T, instructions string) *mcpagent.Agent {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := mcpagent.NewAgentFromDefinition(context.Background(), mcpagent.AgentDefinition{Instructions: instructions}, mcpagent.RuntimeConfig{
+		Model: persistenceTestModel{}, MCPConfigPath: configPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.Close() })
+	return agent
+}
+
+func requireAgentHandle(t *testing.T, agent *mcpagent.Agent) *mcpagent.AgentSessionHandle {
+	t.Helper()
+	handle := mcpagent.SnapshotAgentSession(agent)
+	if handle == nil {
+		t.Fatal("expected agent session handle")
+	}
+	return handle
+}
+
 func TestCaptureChatHistoryAgentRuntimeStoresCLIResumeID(t *testing.T) {
 	api := &StreamingAPI{}
 
-	runtime := api.captureChatHistoryAgentRuntime("session-1", "claude-code", "claude-code", "Workflow/example", &mcpagent.Agent{
-		ClaudeCodeSessionID: "claude-session-1",
-	})
+	runtime := api.captureChatHistoryAgentRuntime("session-1", "claude-code", "claude-code", "Workflow/example",
+		testAgentWithHandle("session-1", llmtypes.CodingProviderSessionHandle{
+			Provider: "claude-code", Model: "claude-code", NativeSessionID: "claude-session-1",
+		}))
 
 	if runtime == nil {
 		t.Fatal("expected runtime metadata")
@@ -1139,10 +1185,10 @@ func TestCaptureChatHistoryAgentRuntimeStoresCLIResumeID(t *testing.T) {
 func TestCaptureChatHistoryAgentRuntimeStoresCodexThreadID(t *testing.T) {
 	api := &StreamingAPI{}
 
-	runtime := api.captureChatHistoryAgentRuntime("codex-session", "codex-cli", "gpt-5.4", "Workflow/example", &mcpagent.Agent{
-		CodexSessionID:    "codex-thread-1",
-		CodexProjectDirID: "Workflow/example",
-	})
+	runtime := api.captureChatHistoryAgentRuntime("codex-session", "codex-cli", "gpt-5.4", "Workflow/example",
+		testAgentWithHandle("codex-session", llmtypes.CodingProviderSessionHandle{
+			Provider: "codex-cli", Model: "gpt-5.4", NativeSessionID: "codex-thread-1", ProjectDirID: "Workflow/example",
+		}))
 
 	if runtime == nil {
 		t.Fatal("expected runtime metadata")
@@ -1161,9 +1207,10 @@ func TestCaptureChatHistoryAgentRuntimeStoresCodexThreadID(t *testing.T) {
 func TestCaptureChatHistoryAgentRuntimeStoresPiSessionID(t *testing.T) {
 	api := &StreamingAPI{}
 
-	runtime := api.captureChatHistoryAgentRuntime("pi-session", "pi-cli", "google/gemini-3.5-flash", "Workflow/example", &mcpagent.Agent{
-		PiSessionID: "mlp-pi-session-1",
-	})
+	runtime := api.captureChatHistoryAgentRuntime("pi-session", "pi-cli", "google/gemini-3.5-flash", "Workflow/example",
+		testAgentWithHandle("pi-session", llmtypes.CodingProviderSessionHandle{
+			Provider: "pi-cli", Model: "google/gemini-3.5-flash", NativeSessionID: "mlp-pi-session-1",
+		}))
 
 	if runtime == nil {
 		t.Fatal("expected runtime metadata")
@@ -1179,19 +1226,16 @@ func TestCaptureChatHistoryAgentRuntimeStoresPiSessionID(t *testing.T) {
 func TestCaptureChatHistoryAgentRuntimePersistsAgentSessionHandle(t *testing.T) {
 	api := &StreamingAPI{}
 
-	agent := &mcpagent.Agent{
-		SessionID: "chat-session-1",
-		CodingProviderSessionHandle: llmtypes.CodingProviderSessionHandle{
-			Provider:        "codex-cli",
-			Transport:       llmtypes.CodingProviderTransportTmux,
-			NativeSessionID: "codex-thread-typed",
-			TmuxSession:     "tmux-codex-1",
-			WorkingDir:      "/workspace",
-			ProjectDirID:    "Workflow/example",
-			Model:           "gpt-5.4",
-			Status:          llmtypes.CodingProviderSessionStatusIdle,
-		},
-	}
+	agent := testAgentWithHandle("chat-session-1", llmtypes.CodingProviderSessionHandle{
+		Provider:        "codex-cli",
+		Transport:       llmtypes.CodingProviderTransportTmux,
+		NativeSessionID: "codex-thread-typed",
+		TmuxSession:     "tmux-codex-1",
+		WorkingDir:      "/workspace",
+		ProjectDirID:    "Workflow/example",
+		Model:           "gpt-5.4",
+		Status:          llmtypes.CodingProviderSessionStatusIdle,
+	})
 
 	runtime := api.captureChatHistoryAgentRuntime("chat-session-1", "codex-cli", "gpt-5.4", "Workflow/example", agent)
 
@@ -1212,16 +1256,13 @@ func TestCaptureChatHistoryAgentRuntimePersistsAgentSessionHandle(t *testing.T) 
 func TestCaptureChatHistoryAgentRuntimeInfersProviderFromSessionHandle(t *testing.T) {
 	api := &StreamingAPI{}
 
-	agent := &mcpagent.Agent{
-		SessionID: "chat-session-1",
-		CodingProviderSessionHandle: llmtypes.CodingProviderSessionHandle{
-			Provider:        "codex-cli",
-			Transport:       llmtypes.CodingProviderTransportTmux,
-			NativeSessionID: "codex-thread-typed",
-			ProjectDirID:    "Workflow/example",
-			Model:           "gpt-5.4",
-		},
-	}
+	agent := testAgentWithHandle("chat-session-1", llmtypes.CodingProviderSessionHandle{
+		Provider:        "codex-cli",
+		Transport:       llmtypes.CodingProviderTransportTmux,
+		NativeSessionID: "codex-thread-typed",
+		ProjectDirID:    "Workflow/example",
+		Model:           "gpt-5.4",
+	})
 
 	runtime := api.captureChatHistoryAgentRuntime("chat-session-1", "", "", "Workflow/example", agent)
 
@@ -1342,7 +1383,7 @@ func TestFindChatHistoryConversationPathForSessionReadsWorkflowScopedPath(t *tes
 
 func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresClaude(t *testing.T) {
 	api := &StreamingAPI{}
-	agent := &mcpagent.Agent{SessionID: "new-ui-session"}
+	agent := testAgentWithHandle("new-ui-session", llmtypes.CodingProviderSessionHandle{})
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:              "coding_agent",
 		Provider:          "claude-code",
@@ -1354,8 +1395,8 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresClaude(t *testing
 		t.Fatal("expected native resume state to be seeded")
 	}
 
-	if agent.ClaudeCodeSessionID != "claude-native-restored" {
-		t.Fatalf("agent ClaudeCodeSessionID = %q", agent.ClaudeCodeSessionID)
+	if got := requireAgentHandle(t, agent).Provider.NativeSessionID; got != "claude-native-restored" {
+		t.Fatalf("native session ID = %q", got)
 	}
 }
 
@@ -1392,8 +1433,8 @@ func TestSeedCodingAgentRuntimeFromCurrentConversationRestoresClaude(t *testing.
 	if recoveredRuntime == nil {
 		t.Fatal("expected the recovered runtime to be returned for the auto-resume re-launch path")
 	}
-	if agent.ClaudeCodeSessionID != "claude-native-existing" {
-		t.Fatalf("agent ClaudeCodeSessionID = %q", agent.ClaudeCodeSessionID)
+	if got := requireAgentHandle(t, agent).Provider.NativeSessionID; got != "claude-native-existing" {
+		t.Fatalf("native session ID = %q", got)
 	}
 }
 
@@ -1412,11 +1453,12 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresCodex(t *testing.
 		t.Fatal("expected Codex resume state to be seeded")
 	}
 
-	if agent.CodexSessionID != "codex-thread-restored" {
-		t.Fatalf("agent CodexSessionID = %q", agent.CodexSessionID)
+	handle := requireAgentHandle(t, agent)
+	if handle.Provider.NativeSessionID != "codex-thread-restored" {
+		t.Fatalf("native session ID = %q", handle.Provider.NativeSessionID)
 	}
-	if agent.CodexProjectDirID != "Workflow/example" {
-		t.Fatalf("agent CodexProjectDirID = %q", agent.CodexProjectDirID)
+	if handle.Provider.ProjectDirID != "Workflow/example" {
+		t.Fatalf("project dir ID = %q", handle.Provider.ProjectDirID)
 	}
 }
 
@@ -1434,16 +1476,15 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresPi(t *testing.T) 
 		t.Fatal("expected Pi resume state to be seeded")
 	}
 
-	if agent.PiSessionID != "mlp-pi-restored" {
-		t.Fatalf("agent PiSessionID = %q", agent.PiSessionID)
+	if got := requireAgentHandle(t, agent).Provider.NativeSessionID; got != "mlp-pi-restored" {
+		t.Fatalf("native session ID = %q", got)
 	}
 }
 
 func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPrompt(t *testing.T) {
 	api := &StreamingAPI{}
-	agent := &mcpagent.Agent{}
 	currentPrompt := "<current>mode=auto; query agent_browser status</current>"
-	mcpagent.SetAgentInstructionsForTesting(agent, currentPrompt)
+	agent := testAgentWithInstructions(t, currentPrompt)
 
 	// Old conversation files may still contain persisted prompts and a resolved
 	// browser_mode. JSON decoding must ignore those legacy fields, and native
@@ -1473,18 +1514,15 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationDoesNotRestoreLegacyPromp
 
 func TestCaptureChatHistoryAgentRuntimeOmitsPromptAndBrowserAvailability(t *testing.T) {
 	api := &StreamingAPI{}
-	agent := &mcpagent.Agent{
-		CodingProviderSessionHandle: llmtypes.CodingProviderSessionHandle{
-			Provider:        "pi-cli",
-			NativeSessionID: "mlp-pi-roundtrip",
-			ProjectDirID:    "Workflow/example",
-			Model:           "pi-cli",
-		},
-	}
-	mcpagent.SetAgentInstructionsForTesting(agent, "<current>mode=cdp</current>")
-	if err := mcpagent.AddDefinitionInstructions(agent, "<dynamic-browser-state>"); err != nil {
-		t.Fatalf("AddDefinitionInstructions: %v", err)
-	}
+	agent := testAgentWithHandle("pi-ui-session", llmtypes.CodingProviderSessionHandle{
+		Provider:        "pi-cli",
+		NativeSessionID: "mlp-pi-roundtrip",
+		ProjectDirID:    "Workflow/example",
+		Model:           "pi-cli",
+	})
+	agentWithPrompt := testAgentWithInstructions(t, "<current>mode=cdp</current>\n\n<dynamic-browser-state>")
+	mcpagent.ApplyAgentResumeHandle(agentWithPrompt, mcpagent.SnapshotAgentSession(agent))
+	agent = agentWithPrompt
 	common.SetSessionBrowserMode("pi-ui-session", "cdp")
 
 	runtime := api.captureChatHistoryAgentRuntime("pi-ui-session", "pi-cli", "pi-cli", "Workflow/example", agent)
@@ -1505,9 +1543,8 @@ func TestCaptureChatHistoryAgentRuntimeOmitsPromptAndBrowserAvailability(t *test
 // (which may have been set by a parallel /api/query path).
 func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t *testing.T) {
 	api := &StreamingAPI{}
-	agent := &mcpagent.Agent{}
 	preExisting := "default agent prompt set elsewhere"
-	mcpagent.SetAgentInstructionsForTesting(agent, preExisting)
+	agent := testAgentWithInstructions(t, preExisting)
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:              "coding_agent",
 		Provider:          "pi-cli",
@@ -1548,14 +1585,15 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationAppliesAgentSessionHandle
 	if !api.seedCodingAgentRuntimeFromRestoredConversation("new-ui-session", "codex-cli", "", runtime, agent) {
 		t.Fatal("expected typed handle to seed native resume state")
 	}
-	if agent.SessionID != "new-ui-session" {
-		t.Fatalf("agent SessionID = %q, want current UI session owner", agent.SessionID)
+	handle := requireAgentHandle(t, agent)
+	if handle.SessionID != "new-ui-session" {
+		t.Fatalf("agent SessionID = %q, want current UI session owner", handle.SessionID)
 	}
-	if agent.CodexSessionID != "codex-thread-from-handle" {
-		t.Fatalf("agent CodexSessionID = %q", agent.CodexSessionID)
+	if handle.Provider.NativeSessionID != "codex-thread-from-handle" {
+		t.Fatalf("native session ID = %q", handle.Provider.NativeSessionID)
 	}
-	if agent.CodingAgentWorkingDir != "/workspace" {
-		t.Fatalf("agent CodingAgentWorkingDir = %q", agent.CodingAgentWorkingDir)
+	if handle.Provider.WorkingDir != "/workspace" {
+		t.Fatalf("working dir = %q", handle.Provider.WorkingDir)
 	}
 }
 
@@ -1572,8 +1610,8 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRejectsProviderMismatch(t
 	if api.seedCodingAgentRuntimeFromRestoredConversation("new-ui-session", "codex-cli", "", runtime, agent) {
 		t.Fatal("expected provider mismatch to skip native resume")
 	}
-	if agent.ClaudeCodeSessionID != "" {
-		t.Fatalf("agent ClaudeCodeSessionID = %q", agent.ClaudeCodeSessionID)
+	if handle := mcpagent.SnapshotAgentSession(agent); handle != nil && handle.Provider.NativeSessionID != "" {
+		t.Fatalf("unexpected native session ID = %q", handle.Provider.NativeSessionID)
 	}
 }
 
@@ -1593,7 +1631,7 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRejectsWorkshopModeMismat
 	if api.seedCodingAgentRuntimeFromRestoredConversation("new-ui-session", "claude-code", "run", runtime, agent) {
 		t.Fatal("expected workshop mode mismatch to skip native resume")
 	}
-	if agent.ClaudeCodeSessionID != "" {
-		t.Fatalf("agent ClaudeCodeSessionID = %q", agent.ClaudeCodeSessionID)
+	if handle := mcpagent.SnapshotAgentSession(agent); handle != nil && handle.Provider.NativeSessionID != "" {
+		t.Fatalf("unexpected native session ID = %q", handle.Provider.NativeSessionID)
 	}
 }
