@@ -77,7 +77,8 @@ import {
 import { FAMILY_API } from './apiBase'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
-import { MicButton } from './voice/MicButton'
+import { MicButton, type MicButtonHandle } from './voice/MicButton'
+import type { MicState } from './voice/useMicDictation'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
@@ -875,11 +876,15 @@ const CHILD_WAIT_HINTS = [
 const CHILD_QUICK_ACTIONS: { label: string; message: string }[] = [
   { label: 'Update answers for print', message: "Please update all my answered questions on this page so it's ready to print." },
   { label: 'No more hints', message: "Don't give me any more hints — just tell me if I'm right or wrong." },
+  { label: 'Be stricter', message: "Grade my answers more strictly from now on — don't count a partial or close answer as correct, and tell me exactly what's wrong." },
   { label: 'Harder question', message: 'Can you give me a harder question?' },
   { label: 'Easier question', message: 'Can you give me an easier question?' },
   { label: 'Give me a hint', message: 'Can you give me a hint?' },
   { label: 'Keep quizzing me, harder each time', message: 'Keep asking me progressively harder questions on this until I fully understand it.' },
   { label: 'One section at a time', message: "Let's go one section at a time — keep quizzing me on this section until I really understand it before moving to the next." },
+  { label: 'Explain it a different way', message: "Can you explain this in a completely different way — not just the same explanation again?" },
+  { label: 'Give me a real example', message: 'Can you give me a real-world example of this, not just the definition?' },
+  { label: 'Check my full working', message: "Please check my full working step by step, not just whether my final answer is right." },
 ]
 
 // formatBytes renders a byte count the way a person reads it. Sizes here are
@@ -2803,6 +2808,23 @@ export default function LearningApp() {
   useEffect(() => {
     if (childTextareaRef.current) autoGrowTextarea(childTextareaRef.current)
   }, [childInput])
+  // Lets each composer's Enter handler tell, synchronously, whether the mic
+  // is currently recording — if so Enter should stop+submit the dictation
+  // instead of sending whatever (unrelated, likely stale) text already sits
+  // in the box. Refs rather than state: read at keydown time, no re-render
+  // wiring needed for something this transient.
+  const parentMicRef = useRef<MicButtonHandle>(null)
+  const parentMicStateRef = useRef<MicState>('idle')
+  const childMicRef = useRef<MicButtonHandle>(null)
+  const childMicStateRef = useRef<MicState>('idle')
+  // The mic's onText callback can be a render or two stale by the time it
+  // actually fires (see MicButton's comment on why) — a ref mirror gives the
+  // auto-submit path the true latest value without stashing a side effect
+  // inside a setState updater (StrictMode double-invokes those).
+  const focusInputRef = useRef(focusInput)
+  useEffect(() => { focusInputRef.current = focusInput })
+  const childInputRef = useRef(childInput)
+  useEffect(() => { childInputRef.current = childInput })
 
   const onPickFiles = () => fileInputRef.current?.click()
 
@@ -3307,7 +3329,8 @@ export default function LearningApp() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault()
-                    sendParentText(focusInput)
+                    if (parentMicStateRef.current === 'recording') parentMicRef.current?.stopAndSubmit()
+                    else sendParentText(focusInput)
                   }
                 }}
               />
@@ -3334,7 +3357,14 @@ export default function LearningApp() {
                 <Zap size={19} />
               </button>
               <MicButton
-                onText={(text) => {
+                ref={parentMicRef}
+                onStateChange={(s) => { parentMicStateRef.current = s }}
+                onText={(text, autoSubmit) => {
+                  if (autoSubmit) {
+                    const cur = focusInputRef.current
+                    sendParentText(cur ? `${cur} ${text}` : text)
+                    return
+                  }
                   setFocusInput((cur) => (cur ? `${cur} ${text}` : text))
                   // So Enter immediately sends — without this the composer
                   // stays unfocused after dictation and Enter does nothing.
@@ -4386,7 +4416,8 @@ export default function LearningApp() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
-                      sendChildText(childInput)
+                      if (childMicStateRef.current === 'recording') childMicRef.current?.stopAndSubmit()
+                      else sendChildText(childInput)
                     }
                   }}
                 />
@@ -4413,7 +4444,14 @@ export default function LearningApp() {
                   <Zap size={19} />
                 </button>
                 <MicButton
-                  onText={(text) => {
+                  ref={childMicRef}
+                  onStateChange={(s) => { childMicStateRef.current = s }}
+                  onText={(text, autoSubmit) => {
+                    if (autoSubmit) {
+                      const cur = childInputRef.current
+                      sendChildText(cur ? `${cur} ${text}` : text)
+                      return
+                    }
                     setChildInput((cur) => (cur ? `${cur} ${text}` : text))
                     // So Enter immediately sends — without this the composer
                     // stays unfocused after dictation and Enter does nothing.
