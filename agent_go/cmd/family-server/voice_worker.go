@@ -48,9 +48,45 @@ type voiceWorker struct {
 	// 15 minutes ago) — this is what lets the UI say "Warming up..." instead
 	// of falsely claiming instant readiness.
 	warm map[string]bool
+
+	// How to start the process. Everything else here — the readiness
+	// handshake, call timeout, idle unload, crash reaping — is transport
+	// agnostic, so the native Swift helper (voice_native.go) reuses all of it
+	// by supplying a different launcher rather than duplicating the
+	// supervision logic. name only labels log lines.
+	name   string
+	launch func() (*exec.Cmd, error)
+	// Per-worker override for voiceWorkerCallTimeout. The native helper needs
+	// a much longer one: its very first `load` downloads CoreML weights
+	// (~96s measured), which would otherwise trip the 30s default and get the
+	// process killed mid-download, forever.
+	callTimeout time.Duration
 }
 
-var sharedVoiceWorker = &voiceWorker{}
+func (w *voiceWorker) timeout() time.Duration {
+	if w.callTimeout > 0 {
+		return w.callTimeout
+	}
+	return voiceWorkerCallTimeout
+}
+
+var sharedVoiceWorker = &voiceWorker{name: "voice", launch: pythonVoiceWorkerCmd}
+
+// pythonVoiceWorkerCmd starts the MLX/Python worker.
+func pythonVoiceWorkerCmd() (*exec.Cmd, error) {
+	scriptBytes, err := voiceWorkerScript.ReadFile("voice_worker.py")
+	if err != nil {
+		return nil, err
+	}
+	// Written into the SAME directory the shared MLX environment already
+	// lives in, rather than embedded-and-run-from-memory, so it's a normal
+	// file `python` can execute and a developer can open to debug.
+	scriptPath := filepath.Join(mlxVoiceDir(), "voice_worker.py")
+	if err := os.WriteFile(scriptPath, scriptBytes, 0o600); err != nil {
+		return nil, err
+	}
+	return exec.Command(mlxVoicePython(), scriptPath), nil
+}
 
 // voiceWorkerCallTimeout bounds how long ANY single request may block waiting
 // on the worker's response. Without this, a genuinely stuck worker (observed
@@ -76,7 +112,7 @@ func (w *voiceWorker) call(ctx context.Context, req map[string]any) (map[string]
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	callCtx, cancel := context.WithTimeout(ctx, voiceWorkerCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, w.timeout())
 	defer cancel()
 	resp, err := w.callLocked(callCtx, req)
 	if err != nil {
@@ -85,7 +121,7 @@ func (w *voiceWorker) call(ctx context.Context, req map[string]any) (map[string]
 		// timed out between calls, without making every transient hiccup
 		// visible.
 		w.stopLocked()
-		retryCtx, retryCancel := context.WithTimeout(ctx, voiceWorkerCallTimeout)
+		retryCtx, retryCancel := context.WithTimeout(ctx, w.timeout())
 		defer retryCancel()
 		resp, err = w.callLocked(retryCtx, req)
 	}
@@ -165,19 +201,10 @@ func (w *voiceWorker) ensureStartedLocked() error {
 	if w.cmd != nil {
 		return nil
 	}
-	scriptBytes, err := voiceWorkerScript.ReadFile("voice_worker.py")
+	cmd, err := w.launch()
 	if err != nil {
 		return err
 	}
-	// Written into the SAME directory the shared MLX environment already
-	// lives in, rather than embedded-and-run-from-memory, so it's a normal
-	// file `python` can execute and a developer can open to debug.
-	scriptPath := filepath.Join(mlxVoiceDir(), "voice_worker.py")
-	if err := os.WriteFile(scriptPath, scriptBytes, 0o600); err != nil {
-		return err
-	}
-
-	cmd := exec.Command(mlxVoicePython(), scriptPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -226,7 +253,7 @@ func (w *voiceWorker) ensureStartedLocked() error {
 	w.idle = time.AfterFunc(voiceWorkerIdleTimeout, func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		log.Printf("[voice] worker idle for %s, unloading", voiceWorkerIdleTimeout)
+		log.Printf("[%s] worker idle for %s, unloading", w.name, voiceWorkerIdleTimeout)
 		w.stopLocked()
 	})
 
@@ -248,7 +275,7 @@ func (w *voiceWorker) ensureStartedLocked() error {
 		}
 	}()
 
-	log.Printf("[voice] worker started (models load lazily on first use of each)")
+	log.Printf("[%s] worker started (models load lazily on first use of each)", w.name)
 	return nil
 }
 

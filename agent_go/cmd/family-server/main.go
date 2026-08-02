@@ -131,6 +131,12 @@ func main() {
 	mux.HandleFunc("/api/voice/status", handleVoiceStatus)
 	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
 	mux.HandleFunc("/api/voice/warm", handleVoiceWarm)
+	// Incremental dictation via the native helper. Falls back to the
+	// /transcribe path above when the helper isn't present — see
+	// docs/refactor/native_streaming_stt.md.
+	mux.HandleFunc("/api/voice/stream/start", handleVoiceStreamStart)
+	mux.HandleFunc("/api/voice/stream/chunk", handleVoiceStreamChunk)
+	mux.HandleFunc("/api/voice/stream/finish", handleVoiceStreamFinish)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)

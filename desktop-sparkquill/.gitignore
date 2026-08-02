@@ -3,3 +3,4 @@ dist/
 resources/family-server
 resources/web/
 *.log
+resources/voice-helper

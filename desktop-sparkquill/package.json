@@ -31,6 +31,7 @@
     },
     "extraResources": [
       { "from": "resources/family-server", "to": "family-server" },
+      { "from": "resources/voice-helper", "to": "voice-helper" },
       { "from": "resources/web", "to": "web" },
       { "from": "resources/icons", "to": "icons" }
     ],

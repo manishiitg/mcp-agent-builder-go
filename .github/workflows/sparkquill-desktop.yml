@@ -85,6 +85,17 @@ jobs:
           go mod edit -replace=github.com/manishiitg/multi-llm-provider-go=../deps/multi-llm-provider-go
           go mod download
 
+      # --show-bin-path rather than a hardcoded .build/release: that path is a
+      # symlink to the HOST arch's output, so on this Intel runner copying it
+      # would silently ship an x86_64 binary inside an arm64 app.
+      - name: Build the native voice helper
+        working-directory: desktop-sparkquill/voice-helper
+        run: |
+          swift build -c release --arch arm64
+          BIN="$(swift build -c release --arch arm64 --show-bin-path)"
+          cp "$BIN/voice-helper" ../resources/voice-helper
+          file ../resources/voice-helper
+
       - name: Build family-server
         working-directory: agent_go
         run: |
