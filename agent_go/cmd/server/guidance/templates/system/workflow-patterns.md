@@ -187,7 +187,7 @@ The builder's primitives referenced below: `regular`, `todo_task`, `routing`, `h
 **Pitfalls**:
 - Tail step couples to the main work — if the tail fails, the user thinks the workflow failed. Keep tail steps idempotent and clearly named.
 - Splitting per store automatically even when the writes form one atomic contract; conversely, do not merge stores whose permissions or failure semantics must remain isolated.
-- Forgetting `db/README.md` schema declaration before writing to `db/` — see `read_skill(skill_name="builder-reference", path="references/stores.md")`.
+- Forgetting `db/README.md` schema declaration before writing to `db/` — see `read_skill(skills=[{"name":"builder-reference","path":"references/stores.md"}])`.
 
 ---
 

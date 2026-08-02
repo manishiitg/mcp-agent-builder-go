@@ -345,7 +345,7 @@ func TestWorkshopModeIsMergedSuperset(t *testing.T) {
 	mustContain := []string{
 		"create_human_input_request",
 		"run_goal_advisor_review",
-		`read_skill(skill_name="builder-reference", path="references/optimize-playbook.md")`,
+		`read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(prompt, s) {
@@ -389,7 +389,7 @@ func TestWorkshopPromptReferencesNewToolForLazyDocs(t *testing.T) {
 	prompt := executeRealisticWorkshopPromptForMode(t, "workshop")
 	if !strings.Contains(prompt, "read_skill") {
 		t.Errorf("workshop prompt does not reference read_skill — agent will not know to load templates/system/*.md docs. " +
-			"Add a pointer to at least one migrated section (e.g. 'For full main.py rules call read_skill(skill_name=\"builder-reference\", path=\"references/code-authoring.md\")').")
+			"Add a pointer to at least one migrated section (e.g. 'For full main.py rules call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/code-authoring.md\"}])').")
 	}
 }
 

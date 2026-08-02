@@ -1,6 +1,6 @@
 Define what success means for this workflow before optimization.
 
-Write to `builder/improve.html` - the single durable log. For the log/HTML format, one-time migration from legacy review files, and close-out rules, follow `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")` and `read_skill(skill_name="builder-reference", path="references/html-output.md")`.
+Write to `builder/improve.html` - the single durable log. For the log/HTML format, one-time migration from legacy review files, and close-out rules, follow `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` and `read_skill(skills=[{"name":"builder-reference","path":"references/html-output.md"}])`.
 
 Either bootstrap a confirmed Goal contract or audit the existing Goal, eval coverage, and Pulse setup.{{if .Focus}}
 
@@ -55,7 +55,7 @@ Then map the confirmed type/traits onto the internal axes:
 Show your inference, reasoning, and alternatives considered. Ask the user to confirm.
 
 STEP 2 - SEED builder/improve.html
-If `builder/improve.html` does not exist yet, create it from the Starter HTML skeleton in `read_skill(skill_name="builder-reference", path="references/review-improve-log-skeleton.md")` using `diff_patch_workspace_file`. If it exists, preserve its timeline.
+If `builder/improve.html` does not exist yet, create it from the Starter HTML skeleton in `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}])` using `diff_patch_workspace_file`. If it exists, preserve its timeline.
 
 Fill the skeleton:
 - Header: workflow name, type/oversight chips, and verdict pills. With no runs yet, set Bug = "Not measured" and Goal = "Not measured" (warn).

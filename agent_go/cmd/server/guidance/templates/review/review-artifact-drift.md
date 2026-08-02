@@ -20,7 +20,7 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   recent decision/outcome regions in `builder/improve.html`. Do not load HTML
   style/skeleton guidance, inspect CSS, migrate markup, or format cards.
 
-Load `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`. While tracing changed surfaces, identify dependent artifacts that preserved an old architecture, tactic, schema, metric, or execution assumption after the plan evolved. Keep consequential unresolved restrictions under Pulse's Assumptions challenged.
+Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`. While tracing changed surfaces, identify dependent artifacts that preserved an old architecture, tactic, schema, metric, or execution assumption after the plan evolved. Keep consequential unresolved restrictions under Pulse's Assumptions challenged.
 
 ## Audit checklist
 

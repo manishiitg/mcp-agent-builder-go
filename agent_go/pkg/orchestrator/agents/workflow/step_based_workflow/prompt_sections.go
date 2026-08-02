@@ -145,7 +145,7 @@ func contextOutputMatchesDependency(output string, dep string) bool {
 //
 // The workshop chat agent prompt does NOT call this anymore — it gets a short
 // cheat sheet and loads the full rules on demand via
-// read_skill(skill_name="builder-reference", path="references/code-authoring.md") when it actually needs to patch.
+// read_skill(skills=[{"name":"builder-reference","path":"references/code-authoring.md"}]) when it actually needs to patch.
 //
 // Source of truth lives in cmd/server/guidance/templates/system/code-authoring.md.
 // This wrapper is the inline fallback for API agents and non-execution review

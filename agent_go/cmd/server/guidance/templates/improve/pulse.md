@@ -14,8 +14,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
 ## Canonical contract
 
-	1. Call `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")` and
-	   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. Follow the same evidence
+	1. Call `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])` and
+	   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. Follow the same evidence
 	   review and independent read-only reviewer contracts. If bounded repairs are
 	   warranted, use the same one consolidated Pulse Fixer as scheduled Pulse.
 2. Select the latest meaningful retained run when no run folder was supplied.

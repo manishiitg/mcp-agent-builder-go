@@ -83,4 +83,4 @@ Set via `update_step_config(step_id, ...)`:
 
 - Provider-manifest models are directly selectable. A saved configuration is needed only when the same exact provider/model/options combination should be named and reused.
 - To add credentials for a provider, use `set_provider_auth(provider, api_key?, region?, endpoint?, ...)` — never paste API keys into shell or config files.
-- Provider-backed **media** capabilities (image/video/audio/text generation, transcription, web search) are a separate surface with their own provider/model contracts and discovery — see `read_skill(skill_name="builder-reference", path="references/workspace-media-tools.md")`. This doc covers the LLM that *executes agent steps*, not media generation.
+- Provider-backed **media** capabilities (image/video/audio/text generation, transcription, web search) are a separate surface with their own provider/model contracts and discovery — see `read_skill(skills=[{"name":"builder-reference","path":"references/workspace-media-tools.md"}])`. This doc covers the LLM that *executes agent steps*, not media generation.

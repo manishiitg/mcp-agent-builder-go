@@ -43,8 +43,8 @@ tables do not use the column names an agent would guess.
 
 ## Select work
 
-1. Load `read_skill(skill_name="builder-reference", path="references/pulse-review-fixer.md")` and
-   `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`.
 2. Call `get_pulse_module_state`, then `get_pulse_finding_backlog` with no module
    filter so it returns the complete active backlog. Treat active concerns, finding lifecycles, attempts,
    verification history, decisions, and saved review identities as the source of
@@ -61,7 +61,7 @@ tables do not use the column names an agent would guess.
    to an unresolved automatic Pulse run, stop rather than taking it over.
 
 Before each mutation, establish a **post-change evidence boundary** per
-`read_skill(skill_name="builder-reference", path="references/fix-verification.md")`: record the mutation start time,
+`read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`: record the mutation start time,
 canonical target identity, pre-change hash or version, and the latest relevant
 pre-change run/artifact ids. Old artifacts are baseline only, never proof.
 

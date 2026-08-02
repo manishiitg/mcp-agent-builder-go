@@ -50,7 +50,7 @@ func TestAllGuidanceUsesAttachedSkillReader(t *testing.T) {
 				continue
 			}
 			if strings.Contains(rendered, "get_reference_doc") {
-				t.Errorf("%s/%s still calls removed get_reference_doc; use read_skill(skill_name=\"builder-reference\", path=\"references/<kind>.md\")", registry.name, kind)
+				t.Errorf("%s/%s still calls removed get_reference_doc; use read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/<kind>.md\"}])", registry.name, kind)
 			}
 		}
 	}
@@ -453,14 +453,14 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 			t.Fatalf("post-run-monitor should not re-inline extracted Bug Review contract %q", moved)
 		}
 	}
-	if !strings.Contains(postRun, `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")`) {
+	if !strings.Contains(postRun, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])`) {
 		t.Fatal("post-run-monitor missing pointer to pulse-bug-review")
 	}
 
 	// The fix-verification contract is single-sourced: post-run-monitor and
 	// pulse-fixer reference it instead of restating the detail. Guard against
 	// the detail drifting back into the Gate-loaded post-run-monitor doc.
-	if !strings.Contains(postRun, `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`) {
+	if !strings.Contains(postRun, `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`) {
 		t.Fatal("post-run-monitor missing pointer to fix-verification")
 	}
 	for _, moved := range []string{"baseline only, never proof", "mtime alone"} {

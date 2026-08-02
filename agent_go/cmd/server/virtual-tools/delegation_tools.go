@@ -656,7 +656,7 @@ Schedules are server-managed in ` + "`_users/" + userID + "/multiagent-schedules
 
 **When scheduling:** confirm what/when/timezone, call ` + "`list_multiagent_schedules`" + `, then ` + "`create_multiagent_schedule`" + ` / ` + "`update_multiagent_schedule`" + ` / ` + "`delete_multiagent_schedule`" + ` / ` + "`trigger_multiagent_schedule`" + `. Do not edit the JSON directly.
 
-**Before schedule changes:** ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/schedule-management.md\")`" + `.
+**Schedule changes:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedule-management.md\"}])`" + `.
 
 ## Secret Management (brief)
 
@@ -664,7 +664,7 @@ Buckets: **workflow** (scoped to workflow), **user** (reusable), **global** (rea
 
 **Hard rules:** never echo / print / log a plaintext secret value; acknowledge by name only. ` + "`set_workflow_secret`" + ` / ` + "`set_user_secret`" + ` inject ` + "`$SECRET_<NAME>`" + ` into the shell — usable immediately without config update.
 
-**Before secret changes:** ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/secret-management.md\")`" + `.
+**Secret changes:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/secret-management.md\"}])`" + `.
 `
 
 	return scheduleInstructions + `
@@ -682,7 +682,7 @@ Translate internal states into plain English. Do not expose run/session ids, too
 
 ### Org Goals
 
-Org goals live in the local workspace file ` + "`pulse/goals.html`" + ` (docs root + ` + "`/pulse/goals.html`" + `). Org Pulse lives in local ` + "`pulse/org-pulse.html`" + `. Manage workflows against them using Pulse verdicts, reports, db, and run artifacts. Load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-goals.md\")`" + ` before goal/alignment/performance work, and ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-html.md\")`" + ` before editing. Never WebFetch raw GitHub URLs for these files or reference docs.
+Org goals live in the local workspace file ` + "`pulse/goals.html`" + ` (docs root + ` + "`/pulse/goals.html`" + `). Org Pulse lives in local ` + "`pulse/org-pulse.html`" + `. Manage workflows against them using Pulse verdicts, reports, db, and run artifacts. Load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` before goal/alignment/performance work, and ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-html.md\"}])`" + ` before editing. Never WebFetch raw GitHub URLs for these files or reference docs.
 
 Mechanically you are an **orchestrator**: you decompose work and dispatch sub-agents, and you use tools directly for simple tasks.
 
@@ -714,11 +714,11 @@ Chief of Staff does **not** run workflows directly right now. The user runs work
 2. Find available groups — ` + "`execute_shell_command(command: \"cat Workflow/<name>/variables/variables.json\")`" + ` and look at the ` + "`groups`" + ` array
 3. Tell the user which workflow/group to run manually and what context or route choice to use.
 4. After the user has run it, inspect the latest output in ` + "`Workflow/<name>/runs/iteration-0/<group>/`" + `.
-5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-goals.md\")`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, ` + "`builder/improve.html`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
+5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, ` + "`builder/improve.html`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
 
 ### Reading workflow state
 
-When asked what a workflow produced, knows, or should improve, load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/file-layout.md\")`" + ` and ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/stores.md\")`" + ` for the full filesystem contract, then inspect the right source:
+When asked what a workflow produced, knows, or should improve, load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/file-layout.md\"}])`" + ` and ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/stores.md\"}])`" + ` for the full filesystem contract, then inspect the right source:
 
 - **Plan/config:** ` + "`workflow.json`" + `, ` + "`soul/soul.md`" + `, ` + "`planning/plan.json`" + `, ` + "`planning/step_config.json`" + `, ` + "`variables/variables.json`" + `.
 - **Reports:** ` + "`reports/report_plan.json`" + ` and HTML under ` + "`db/reports/`" + `; reports read ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `.

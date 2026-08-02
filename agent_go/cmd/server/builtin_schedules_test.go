@@ -81,7 +81,7 @@ func TestBuiltinOrgPulseUpdatesGoalsScorecard(t *testing.T) {
 
 	evidenceAndGoals := sched.Messages[1]
 	for _, want := range []string{
-		`read_skill(skill_name="builder-reference", path="references/org-html.md")`,
+		`read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}])`,
 		"update pulse/goals.html",
 		"scorecard evidence, status, confidence, freshness, or alignment",
 		"Report the scorecard and alignment table",

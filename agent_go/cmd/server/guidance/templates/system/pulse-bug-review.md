@@ -3,7 +3,7 @@
 Load this when the `bug_review` module is due. It is the deep read-only review
 contract used by the Bug Review reviewer and the Pulse Fixer. Gate does not load
 it — Gate only decides whether `bug_review` is due from the triggers in
-`read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`. The reviewer inspects and advises;
+`read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.
 

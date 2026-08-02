@@ -371,7 +371,7 @@ real workflows.
   hits the server gateway, not local `127.0.0.1:8081`.
 - Run `execute_shell_command pwd` and confirm it executes inside the server
   workspace/container.
-- Run `read_skill(skill_name="builder-reference", path="references/file-layout.md")`
+- Run `read_skill(skills=[{"name":"builder-reference","path":"references/file-layout.md"}])`
   and confirm it still works locally without
   requiring server file access.
 - Disable or stop local `workspace-api` while using a remote profile; remote

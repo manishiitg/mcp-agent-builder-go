@@ -18,7 +18,7 @@ import { formatNotificationStateLabel, getNotificationDotClass } from '../workfl
 
 const ORG_BACKUP_COMMAND_MESSAGE = `Help me set up or run org-level backup.
 
-Call read_skill(skill_name="builder-reference", path="references/backup-strategy.md") and follow its org-level workflow-style contract. Read pulse/backup.json and pulse/backup/status.json if they exist.
+Call read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) and follow its org-level workflow-style contract. Read pulse/backup.json and pulse/backup/status.json if they exist.
 
 Scope:
 - pulse/goals.html
@@ -35,7 +35,7 @@ Always write pulse/backup/status.json. Never write org backup state into any wor
 
 const ORG_PUBLISH_COMMAND_MESSAGE = `Help me set up or run org-level publish.
 
-Call read_skill(skill_name="builder-reference", path="references/publish-strategy.md") and follow its org-level workflow-style contract. Read pulse/publish.json and pulse/publish/status.json if they exist.
+Call read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and follow its org-level workflow-style contract. Read pulse/publish.json and pulse/publish/status.json if they exist.
 
 Publish scope:
 - pulse/goals.html as goals.html
