@@ -29,7 +29,6 @@ import (
 	"strings"
 	"text/template"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -91,12 +90,13 @@ var allKinds = map[string]kindMeta{
 
 // referenceKinds is the registry of system reference docs — content that
 // used to live inline in the workshop system prompt and is now loaded on
-// demand by the agent via get_reference_doc(kind). These are not procedural
+// demand by the agent via mcpagent's intrinsic read_skill tool. These are not procedural
 // flows (those live in allKinds); they are reference material the agent reads
 // before performing certain actions (e.g. read "code-authoring" before
 // patching main.py). Which docs to read is the agent's judgment call: every
 // kind is also materialized into the projected reference skill, so the agent
-// can reach the same content by reading references/<kind>.md directly.
+// can reach the same content by reading references/<kind>.md from the attached
+// builder-reference bundle.
 //
 // Adding a new reference doc:
 //
@@ -117,12 +117,12 @@ var referenceKinds = map[string]kindMeta{
 	"code-authoring":              {Group: "system", Description: "Detailed main.py authoring rules and patterns (env access, sys.argv contract, data authenticity, patching discipline)", Modes: []string{"workshop"}},
 	"stores":                      {Group: "system", Description: "Persistent store design contract: skill vs knowledgebase vs db, when to write to which", Modes: []string{"multi-agent", "workshop", "run"}},
 	"assumption-audit":            {Group: "system", Description: "Bounded cross-artifact check that separates explicit user constraints and verified external facts from revisable design choices and agent-inferred assumptions; prevents plan/eval/report/KB/learnings/DB/code from freezing an outdated approach", Modes: []string{"workshop", "run"}},
-	"review-improve-log":          {Group: "system", Description: "The single workflow Pulse log spec: Needs your decision first in Runloop; active Assumptions challenged, Today's outcome, goal progress, recent activity, collapsed technical detail, and a non-duplicative bottom Agent log in builder/improve.html; newest-on-top audit timeline, Bug/Goal verdicts, cadence, archive, and migration rules. Load before writing the log from any /review-* or /improve-* skill or Pulse.", Modes: []string{"workshop", "run"}},
+	"review-improve-log":          {Group: "system", Description: "The compact workflow Pulse report spec: Needs your decision first in Runloop; active Assumptions challenged, Today's outcome, SQLite-derived Current work and verification queues, goal progress, material recent activity, collapsed technical detail, Bug/Goal verdicts, archive, and migration rules. The Pulse popup owns the full issue tracker. Load before writing builder/improve.html from any /review-* or /improve-* skill or Pulse.", Modes: []string{"workshop", "run"}},
 	"review-improve-log-skeleton": {Group: "system", Description: "Copy-paste starter HTML skeleton for builder/improve.html, including the human-first Pulse hierarchy, optional Assumptions challenged block, Today's outcome widgets, collapsed technical details, compact bottom Agent log, mobile-first CSS, filter controls, card examples, and the stable newest-first insertion anchor. Load only when creating a new Pulse log or doing the format upgrade required by review-improve-log.", Modes: []string{"workshop", "run"}},
 	"post-run-monitor":            {Group: "system", Description: "The dynamic Pulse playbook: Gate reads run evidence, changelog, eval/report/DB/KB/learnings, and human inputs; writes a plain-language Pulse Worklist to builder/improve.html under the current format contract; records selected modules in db/db.sqlite via record_pulse_worklist; then only due modules run before a dedicated dashboard render and an ordered backup/publish/notify finalizer with real command statuses. Goal Advisor is selected by Pulse Gate, not a separate recurring schedule. Load when running the post-run monitor pass.", Modes: []string{"workshop", "run"}},
 	"pulse-archive":               {Group: "system", Description: "Focused scheduler Pulse archive preflight: preserve all active/open state, move only safe resolved history into complete monthly HTML archives, validate before replacing files, then stop.", Modes: []string{"workshop", "run"}},
 	"pulse-gate":                  {Group: "system", Description: "Focused scheduler Pulse Gate contract: progressive evidence scan, concerns and cadence classification, complete nine-module worklist, compact durable handoff, and no review/fix/finalizer work.", Modes: []string{"workshop", "run"}},
-	"pulse-review-fixer":          {Group: "system", Description: "Focused scheduler backlog-drain and independent module review/fix contract: reconcile existing findings before discovery, optionally run one read-only reviewer, apply sequential verified fixes, and record a terminal module result without blocking later modules.", Modes: []string{"workshop", "run"}},
+	"pulse-review-fixer":          {Group: "system", Description: "Focused scheduler contract for independent read-only module reviews followed by one consolidated Fixer: reconcile existing findings before discovery, verify prior changes, bundle compatible repairs, apply them sequentially, and record every due module result.", Modes: []string{"workshop", "run"}},
 	"pulse-finalizer":             {Group: "system", Description: "Focused scheduler Pulse finalizer contract: after the dedicated dashboard stage, require terminal due-module results, then run backup, publish, and notify in one ordered truthfully recorded turn without rewriting Pulse HTML.", Modes: []string{"workshop", "run"}},
 	"pulse-bug-review":            {Group: "system", Description: "The deep read-only Bug Review contract loaded only when the bug_review module is due: the Exploratory QA behavioral-contract and risk-matrix method, the control-path reachability check (wrong_store_write / shadow_store_drift / dead_configuration), the observable execution-trace review, and the finding classifications (correctness_bug, efficiency_or_coaching, no_issue, insufficient_evidence). Gate does not load this — it only decides whether bug_review is due (see post-run-monitor). Load when performing or fixing Bug Review.", Modes: []string{"workshop", "run"}},
 	"strategy-auditor":            {Group: "system", Description: "The read-only Strategy Auditor contract loaded only when strategy_auditor is due: reconstruct the plan-to-goal causal chain, analyze retained cross-run outcome and strategy telemetry, detect proxy optimization, repetition, concentration, saturation, and exploration gaps, and classify strategy_flaw, execution_bug, measurement_gap, insufficient_evidence, or no_material_problem. It diagnoses only; Goal Advisor owns proposals and experiments.", Modes: []string{"workshop", "run"}},
@@ -134,7 +134,7 @@ var referenceKinds = map[string]kindMeta{
 	"regular":                     {Group: "system", Description: "regular step design: use only as the scripted boundary for deterministic API/CLI/data work; covers anatomy, required validation_schema, store access, and anti-patterns. Conversational work always uses message_sequence. Load before adding a scripted regular step or when unsure which step type fits.", Modes: []string{"workshop"}},
 	"workflow-patterns":           {Group: "system", Description: "Recurring workflow composition patterns: routing, shared-context investigation, coherent scripted pipelines, independent fan-out, in-context verification, pre-flight probes, human checkpoints, critique, durable persistence, and SQL-driven foreach. Each pattern follows one large message_sequence per shared-context span. Load when starting a new plan or restructuring an existing one.", Modes: []string{"workshop"}},
 	"optimize-playbook":           {Group: "system", Description: "Optimizer deep-dive: harden vs replan decision tree, eval, and the Pulse/Goal Advisor framework", Modes: []string{"workshop"}},
-	"step-config":                 {Group: "system", Description: "Per-step config reference (planning/step_config.json via update_step_config): the three store-access modes (learnings_access, knowledgebase_access, db_access + the $DB_PATH contract), the three locks (lock_learnings/lock_code/lock_knowledgebase), execution mode (agentic vs scripted + promotion gates), model selection (execution_tier/execution_llm), validation_schema, skills/tools, and clearing fields. Load before tuning a step's access, locks, mode, or model.", Modes: []string{"workshop"}},
+	"step-config":                 {Group: "system", Description: "Per-step config reference (planning/step_config.json via update_step_config): store-access modes (including db_access mapped to managed query/mutation tools, with $DB_PATH only for saved scripted compatibility), locks, execution mode, model selection, validation_schema, skills/tools, and clearing fields. Load before tuning a step's access, locks, mode, or model.", Modes: []string{"workshop"}},
 	"file-layout":                 {Group: "system", Description: "Workspace file layout reference and path discipline", Modes: []string{"multi-agent", "workshop", "run"}},
 	"plan-design":                 {Group: "system", Description: "Plan-design playbook: step boundaries, step-type selection, context flow, validation/failure design, anti-patterns, step-types reference. Load when designing a new plan or restructuring an existing one in DESIGN phase.", Modes: []string{"workshop"}},
 	"plan-change-impact":          {Group: "system", Description: "Plan-change impact analysis: when a step changes (add/remove/reorder, output contract, db writes, or behavior) trace and reconcile the blast radius across downstream steps, evals, the report dashboard, db, learnings, and KB — by searching the workspace for references to the change's surface, then fixing the clear ones and flagging the judgment calls. The planning/changelog is the work-list; record an impact summary and let review-artifact-drift be the audit backstop. Load before treating any plan change (builder edit, replan, or harden) as done.", Modes: []string{"workshop"}},
@@ -147,7 +147,7 @@ var referenceKinds = map[string]kindMeta{
 	"org-html":                    {Group: "system", Description: "Org HTML design contract for Chief of Staff right-panel artifacts: self-contained, theme-aware, right-panel-first, colorful widget-first structure and starter skeletons for pulse/goals.html and pulse/org-pulse.html. Load before writing or materially changing org goals or org pulse HTML.", Modes: []string{"multi-agent"}},
 	"org-pulse":                   {Group: "system", Description: "The Org Pulse playbook: a read-only daily check of whether explicit org goals are being met and whether every workflow is aligned, supporting, unaligned, or missing measurement. It backs up org artifacts, updates pulse/goals.html and pulse/org-pulse.html from targeted evidence, re-publishes only when already verified/configured, and sends one factual digest. It never writes workflow files, recommends, asks questions, promotes tasks, runs workflows, or fixes anything.", Modes: []string{"multi-agent"}},
 	"chief-task-report":           {Group: "system", Description: "Chief of Staff scheduled task report contract: after a normal non-system multi-agent schedule completes, update the single shared pulse/task.html Tasks page with colorful task-dashboard widgets, run summary, decisions/recommendations, evidence, next action, and key findings to reuse next time. Separate from Org Pulse; never create per-task report files.", Modes: []string{"multi-agent"}},
-	"delegation":                  {Group: "system", Description: "Multi-agent chat delegation contract: the four tools (delegate/query_agent/terminate_agent/list_agents), delegate parameters (name, instruction, reasoning_level, agent_template, servers, skills, share_browser), async background execution model, the max-depth-3 hierarchy (root→child→grandchild), explicit-pass skill semantics (sub-agents inherit NO skills), and what subagents/ templates actually apply at runtime (default_reasoning_level + body only — frontmatter skills/servers are NOT applied). Load before delegating work to sub-agents in chat.", Modes: []string{"multi-agent"}},
+	"delegation":                  {Group: "system", Description: "Multi-agent chat delegation contract: the four tools (delegate/query_agent/terminate_agent/list_agents), delegate parameters (name, instruction, reasoning_level, agent_template, servers, skills, share_browser), async background execution model, the max-depth-3 hierarchy (root→child→grandchild), Chief of Staff parent-skill inheritance with additive per-call skills, and what subagents/ templates actually apply at runtime (default_reasoning_level + body only — frontmatter skills/servers are NOT applied). Load before delegating work to sub-agents in chat.", Modes: []string{"multi-agent"}},
 
 	// Multi-agent chat reference docs (rare-path topics — schedule/secret
 	// management — that don't warrant always-loaded prompt space).
@@ -304,7 +304,11 @@ func kindEnumWithDescriptionsFrom(registry map[string]kindMeta) string {
 // validated against the kind's allow-list — calling a kind from the wrong
 // mode returns an error message instructing the agent to suggest a mode
 // switch.
-func RegisterGuidanceTool(agent *mcpagent.Agent, currentMode string, logger loggerv2.Logger) {
+type DefinitionToolRegistrar interface {
+	RegisterCustomTool(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error), string) error
+}
+
+func RegisterGuidanceTool(agent DefinitionToolRegistrar, currentMode string, logger loggerv2.Logger) {
 	desc := "Get the canonical guided-flow text for any workflow command. " +
 		"Call this tool — and follow the returned instructions verbatim — when (1) the user invokes a slash command " +
 		"like /design-plan or /improve-evaluation (the slash command will name the kind to pass; pass the surrounding " +
@@ -391,18 +395,16 @@ func ReferenceKindNames() []string {
 
 // BuildSystemToolsSkill returns a single small "meta" skill whose body
 // teaches the agent the system-tool surface available in this session:
-// the MCP bridge, get_api_spec for tool discovery, get_reference_doc
-// for deeper system docs, and get_workflow_command_guidance for
+// the MCP bridge, get_api_spec for tool discovery, read_skill for deeper
+// system docs, and get_workflow_command_guidance for
 // procedural flows. The skill enumerates the reference-doc kinds that
-// are allowed in the given mode so the agent knows which kinds it can
-// actually ask for via get_reference_doc.
+// are allowed in the given mode so the agent knows which bundled files it can
+// read.
 //
 // Why a meta-skill rather than one skill per reference doc: copying
 // every reference-doc body into a skill folder per session duplicates
 // content and risks drift. Instead this small skill points at the
-// existing tools so the agent loads detail on demand, with progressive
-// disclosure handled by the provider when it surfaces the meta-skill
-// itself.
+// attached bundle so the agent loads detail on demand through mcpagent.
 //
 // An empty mode returns nil (no skill to attach).
 func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
@@ -411,7 +413,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 	}
 
 	// The per-kind catalog (name + description) is deliberately NOT inlined
-	// here: the workflow-reference / multiagent-reference mega-skill's TOC
+	// here: the builder-reference mega-skill's TOC
 	// already lists every mode-allowed kind, and duplicating the registry in
 	// two attached skills costs prompt tokens in every session. This skill
 	// just points at that catalog.
@@ -425,7 +427,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 	kindList := "(no reference docs are available in this mode)\n"
 	if hasKinds {
 		refSkillName := referenceSkillSpecForMode(mode).Name
-		kindList = "The full catalog of kinds, each with a description of when to load it, is the `references/` list in the `" + refSkillName + "` skill. Each `references/<kind>.md` file there corresponds to a kind you can pass to `get_reference_doc`.\n"
+		kindList = "The full catalog is the `references/` list in the `" + refSkillName + "` skill. Read a topic with `read_skill(skill_name=\"" + refSkillName + "\", path=\"references/<kind>.md\")`.\n"
 	}
 
 	configAccess := buildConfigurationAccessGuidance(mode)
@@ -435,7 +437,7 @@ func BuildSystemToolsSkill(mode string) *llmtypes.Skill {
 ## Tool / API discovery
 
 - ` + "`get_api_spec(server_name, tool_name)`" + ` — when you do not know an MCP tool's parameters or response shape, call this first.
-- ` + "`get_reference_doc(kind, focus?)`" + ` — system reference docs. Load the matching doc before any deep action (e.g. read ` + "`post-run-monitor`" + ` before Pulse review/fix work; read ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `; read ` + "`llm-selection`" + ` before ` + "`set_workflow_llm_config`" + `). The same content is also on disk as ` + "`references/<kind>.md`" + ` in the projected reference skill — reading it there is equivalent.
+- ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/<kind>.md\")`" + ` — load system reference docs before deep actions (for example ` + "`post-run-monitor`" + ` before Pulse work, ` + "`code-authoring`" + ` before authoring ` + "`main.py`" + `, or ` + "`llm-selection`" + ` before changing workflow models). This intrinsic mcpagent tool works on API and coding-CLI transports; native CLI skill files are the same bundle.
 - ` + "`get_workflow_command_guidance(kind, focus?)`" + ` — canonical procedural flows (design-plan, improve-evaluation, goal-advisor, define-success, etc.). The returned text is your instructions for that turn; follow it verbatim.
 - ` + "`run_goal_advisor_review(pulse_run_id?, focus?)`" + ` — when available, spawn Goal Advisor as a dedicated background agent instead of doing expensive strategic review inline in the parent Pulse/workshop turn.
 
@@ -476,7 +478,7 @@ Call the right discovery tool above before guessing. Hallucinated tool names or 
 
 	return &llmtypes.Skill{
 		Name:        "system-tools",
-		Description: "How to use the MCP bridge, tool discovery (get_api_spec), reference docs (get_reference_doc), and workflow command guidance in this session.",
+		Description: "How to use the MCP bridge, tool discovery (get_api_spec), attached references (read_skill), and workflow command guidance in this session.",
 		Content:     body,
 		Source:      llmtypes.SkillSource{Origin: "builtin"},
 	}
@@ -484,13 +486,13 @@ Call the right discovery tool above before guessing. Hallucinated tool names or 
 
 func buildConfigurationAccessGuidance(mode string) string {
 	var parts []string
-	parts = append(parts, "LLM/provider configuration is tool-managed. For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate. Do not read or edit `config/` files with shell or file tools; load `get_reference_doc(kind=\"llm-provider-config\")` before publishing or changing provider auth.")
+	parts = append(parts, "LLM/provider configuration is tool-managed. For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate. Do not read or edit `config/` files with shell or file tools; load `read_skill(skill_name=\"builder-reference\", path=\"references/llm-provider-config.md\")` before publishing or changing provider auth.")
 
 	if modeAllowedIn("llm-selection", mode, referenceKinds) {
-		parts = append(parts, "For workflow execution tiers and per-step model choices, use `get_llm_config` and `set_workflow_llm_config`; load `get_reference_doc(kind=\"llm-selection\")` before changing workflow execution models.")
+		parts = append(parts, "For workflow execution tiers and per-step model choices, use `get_llm_config` and `set_workflow_llm_config`; load `read_skill(skill_name=\"builder-reference\", path=\"references/llm-selection.md\")` before changing workflow execution models.")
 	}
 	if modeAllowedIn("workspace-media-tools", mode, referenceKinds) {
-		parts = append(parts, "For media/search provider tools, load `get_reference_doc(kind=\"workspace-media-tools\")`.")
+		parts = append(parts, "For media/search provider tools, load `read_skill(skill_name=\"builder-reference\", path=\"references/workspace-media-tools.md\")`.")
 	}
 
 	return strings.Join(parts, " ")
@@ -498,11 +500,9 @@ func buildConfigurationAccessGuidance(mode string) string {
 
 // RenderSystemDoc renders the named reference doc with no caller context,
 // stripping the path-discipline preamble. Intended for production code that
-// needs system-doc content inline (e.g. sub-agent prompts that can't call
-// get_reference_doc themselves because they're not in a chat). The returned
-// string is identical to what get_reference_doc(kind=...) would produce in
-// the `reference` field, minus the path-discipline header (which only makes
-// sense as a chat-turn preamble).
+// needs system-doc content inline (for example deterministic server-side
+// assembly that is not itself an agent turn). Agent-facing access uses the
+// attached builder-reference skill through mcpagent's read_skill tool.
 //
 // Panics on error because the embedded FS is compile-time — if a kind is
 // declared in referenceKinds but its .md file is missing or malformed, that
@@ -540,80 +540,4 @@ func RenderReferenceKindForTest(kind, mode string) (string, error) {
 // test ergonomics ("ForTest" suffix signals "use from tests only").
 func ListReferenceKindsForTest() []string {
 	return ReferenceKindNames()
-}
-
-// RegisterReferenceDocTool exposes get_reference_doc to the agent. The tool
-// returns the rendered text for any kind in referenceKinds — reference
-// documentation that used to live inline in the workshop system prompt and
-// is now loaded on demand. Same internals as RegisterGuidanceTool but
-// scoped to system-doc semantics:
-//
-//   - allKinds → procedural guided flows ("here is the procedure to follow")
-//   - referenceKinds → static reference material ("here are the rules / patterns")
-//
-// Mode is validated against the kind's allow-list; calling a kind from the
-// wrong mode returns a teaching error explaining which modes the doc lives in.
-func RegisterReferenceDocTool(agent *mcpagent.Agent, currentMode string, logger loggerv2.Logger) {
-	desc := "Get the full reference documentation for a workshop concept. " +
-		"Use this when you need detailed rules, patterns, or contracts that aren't fully covered by the system prompt's " +
-		"inline cheat sheets — for example before authoring a step's main.py, designing a message_sequence route, " +
-		"writing to db/kb/skill stores, applying Pulse fixes, or applying material plan changes. " +
-		"The returned text is reference material; read it, then proceed with the action that required it. " +
-		"Available reference docs:\n" + kindEnumWithDescriptionsFrom(referenceKinds) +
-		"Mode validation: each doc is gated to specific workshop modes. If a doc is not available in the current mode, " +
-		"the tool returns an error naming the modes where it is available."
-
-	params := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"kind": map[string]interface{}{
-				"type":        "string",
-				"enum":        kindEnumFrom(referenceKinds),
-				"description": "The reference doc to load. See the tool description for the full list and per-mode availability.",
-			},
-			"focus": map[string]interface{}{
-				"type":        "string",
-				"description": "Optional. A short note about why you are loading this doc — gets included in the rendered output so the agent has caller context for any conditional sections.",
-			},
-		},
-		"required": []string{"kind"},
-	}
-
-	handler := func(ctx context.Context, args map[string]interface{}) (string, error) {
-		kind, _ := args["kind"].(string)
-		focus, _ := args["focus"].(string)
-
-		if _, ok := referenceKinds[kind]; !ok {
-			return fmt.Sprintf("error: unknown reference doc %q. Valid kinds: %s", kind, strings.Join(kindEnumFrom(referenceKinds), ", ")), nil
-		}
-		if currentMode != "" && !modeAllowedIn(kind, currentMode, referenceKinds) {
-			meta := referenceKinds[kind]
-			return fmt.Sprintf(
-				"error: reference doc %q is not available in mode %q. It is available in: %s.",
-				kind, currentMode, strings.Join(meta.Modes, ", "),
-			), nil
-		}
-
-		text, err := renderReferenceKind(kind, tmplData{
-			Focus:        strings.TrimSpace(focus),
-			WorkshopMode: strings.TrimSpace(currentMode),
-		})
-		if err != nil {
-			return fmt.Sprintf("error rendering reference doc %q: %v", kind, err), nil
-		}
-
-		// Same envelope shape as get_workflow_command_guidance so the agent
-		// sees a consistent return contract across both tools.
-		envelope, _ := json.MarshalIndent(map[string]interface{}{
-			"kind":      kind,
-			"reference": text,
-		}, "", "  ")
-		return string(envelope), nil
-	}
-
-	if err := agent.RegisterCustomTool("get_reference_doc", desc, params, handler, "auto_improvement"); err != nil {
-		if logger != nil {
-			logger.Warn(fmt.Sprintf("Failed to register get_reference_doc: %v", err))
-		}
-	}
 }

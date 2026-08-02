@@ -2,8 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"reflect"
@@ -23,33 +21,6 @@ import (
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
-
-// NonStructuredResponseError represents a case where the agent returned a text response
-// instead of structured output. This should be handled by displaying the text to the user
-// and asking for further feedback.
-type NonStructuredResponseError struct {
-	TextResponse   string
-	UpdatedHistory []llmtypes.MessageContent
-	OriginalError  error
-}
-
-func (e *NonStructuredResponseError) Error() string {
-	if e.OriginalError != nil {
-		return e.OriginalError.Error()
-	}
-	return fmt.Sprintf("non-structured response received: %s", e.TextResponse)
-}
-
-// Unwrap returns the original error for error unwrapping
-func (e *NonStructuredResponseError) Unwrap() error {
-	return e.OriginalError
-}
-
-// IsNonStructuredResponseError checks if an error is a NonStructuredResponseError
-func IsNonStructuredResponseError(err error) bool {
-	var nonStructuredErr *NonStructuredResponseError
-	return errors.As(err, &nonStructuredErr)
-}
 
 // OrchestratorContext holds context information for event emission
 // Removed: OrchestratorContext and related context-specific fields are now handled by the context-aware bridge.
@@ -117,6 +88,7 @@ func (boa *BaseOrchestratorAgent) Initialize(ctx context.Context) error {
 		llmInstance,
 		boa.systemPrompt,
 		boa.config.ServerNames,
+		boa.config.DirectTools,
 		boa.config.SelectedTools,
 		boa.config.UseCodeExecutionMode,
 		boa.config.Mode,
@@ -158,243 +130,7 @@ func (boa *BaseOrchestratorAgent) Initialize(ctx context.Context) error {
 
 	boa.baseAgent = baseAgent
 
-	// Set prompt log label for agent prompt logging
-	// Prefer the unique agent name (e.g. "step-5-execution-review-trades") over the generic type
-	if boa.config.AgentName != "" {
-		boa.baseAgent.agent.PromptLogLabel = boa.config.AgentName
-	} else {
-		boa.baseAgent.agent.PromptLogLabel = string(boa.agentType)
-	}
-
-	// Append the agent-specific prompt to the existing system prompt
-	boa.baseAgent.agent.AppendSystemPrompt(boa.systemPrompt)
 	return nil
-}
-
-// ExecuteStructuredWithInputProcessor executes the agent with structured output and proper event emission
-func ExecuteStructuredWithInputProcessor[T any](boa *BaseOrchestratorAgent, ctx context.Context, templateVars map[string]string, inputProcessor func(map[string]string) string, conversationHistory []llmtypes.MessageContent, schema string, systemPrompt string, overwriteSystemPrompt bool) (T, []llmtypes.MessageContent, error) {
-	startTime := time.Now()
-
-	// Use userMessageProcessor if set, otherwise use provided inputProcessor
-	var userMessage string
-	if boa.userMessageProcessor != nil {
-		userMessage = boa.userMessageProcessor(templateVars)
-	} else {
-		userMessage = inputProcessor(templateVars)
-	}
-
-	// Auto-emit agent start event (after computing user message so it can be included)
-	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
-
-	// Always mark as sub-agent so ContextAwareEventBridge tags tool events
-	// with this agent's correlation ID (BaseOrchestratorAgent is only used
-	// for orchestrator step agents, never the main chat agent).
-	agentCtx := context.WithValue(ctx, events.AgentSessionIDKey, boa.agentSessionID)
-	agentCtx = context.WithValue(agentCtx, events.IsSubAgentContextKey, true)
-	if sid := boa.config.MCPSessionID; sid != "" {
-		// Workspace tools resolve session-level folder guards from ChatSessionIDKey.
-		// Propagate the per-agent MCP session so tool calls honor the agent's narrow
-		// session guard instead of falling back to the parent workflow context guard.
-		agentCtx = context.WithValue(agentCtx, common.ChatSessionIDKey, sid)
-	}
-
-	// Get the base agent for structured output
-	baseAgent := boa.baseAgent
-
-	// Check if baseAgent is initialized
-	if baseAgent == nil {
-		var zero T
-		return zero, nil, fmt.Errorf("base agent is not initialized - Initialize() must be called before executing agent %s", boa.agentType)
-	}
-
-	// Use the agent's built-in structured output capability
-	// First, prepare messages with conversation history and user message
-	messages := make([]llmtypes.MessageContent, len(conversationHistory))
-	copy(messages, conversationHistory)
-
-	// Add user message
-	userMessageContent := llmtypes.MessageContent{
-		Role:  llmtypes.ChatMessageTypeHuman,
-		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
-	}
-	messages = append(messages, userMessageContent)
-
-	// Set system prompt if provided
-	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			baseAgent.agent.SetSystemPrompt(systemPrompt)
-		} else {
-			baseAgent.agent.AppendSystemPrompt(systemPrompt)
-		}
-	}
-
-	// Use AskWithHistoryStructured from mcpagent
-	// Note: schema parameter needs to be a zero value of type T for the schema type, and schemaString is the JSON schema string
-	var schemaType T
-	result, updatedHistory, err := mcpagent.AskWithHistoryStructured[T](baseAgent.agent, agentCtx, messages, schemaType, schema)
-
-	duration := time.Since(startTime)
-
-	// Auto-emit agent end event with structured response
-	// Convert structured response to map for event emission
-	var resultStr string
-	var structuredResponse map[string]interface{}
-	if err != nil {
-		resultStr = "Error: " + err.Error()
-	} else {
-		// Marshal structured response to JSON for both Result field and StructuredResponse map
-		resultBytes, marshalErr := json.Marshal(result)
-		if marshalErr == nil {
-			// Set Result field to the JSON string of the structured response
-			resultStr = string(resultBytes)
-
-			// Also unmarshal to map for StructuredResponse field
-			var responseMap map[string]interface{}
-			if unmarshalErr := json.Unmarshal(resultBytes, &responseMap); unmarshalErr == nil {
-				structuredResponse = responseMap
-			} else {
-				boa.logger.Warn(fmt.Sprintf("⚠️ Failed to unmarshal structured response for event: %v", unmarshalErr), loggerv2.Field{Key: "error", Value: unmarshalErr})
-			}
-		} else {
-			// Fallback to generic message if marshaling fails
-			resultStr = fmt.Sprintf("Generated %s structured output (marshaling failed: %v)", boa.agentType, marshalErr)
-			boa.logger.Warn(fmt.Sprintf("⚠️ Failed to marshal structured response for event: %v", marshalErr), loggerv2.Field{Key: "error", Value: marshalErr})
-		}
-	}
-	boa.emitAgentEndEventWithStructuredResponse(ctx, templateVars, resultStr, structuredResponse, err, duration)
-
-	if err != nil {
-		var zero T
-		return zero, nil, fmt.Errorf("structured execution failed: %w", err)
-	}
-
-	return result, updatedHistory, nil
-}
-
-// ExecuteStructuredWithInputProcessorViaTool executes the agent with structured output via tool calls
-func ExecuteStructuredWithInputProcessorViaTool[T any](boa *BaseOrchestratorAgent, ctx context.Context, templateVars map[string]string, inputProcessor func(map[string]string) string, conversationHistory []llmtypes.MessageContent, schema string, systemPrompt string, overwriteSystemPrompt bool, toolName string, toolDescription string) (T, []llmtypes.MessageContent, error) {
-	startTime := time.Now()
-
-	// Use userMessageProcessor if set, otherwise use provided inputProcessor
-	var userMessage string
-	if boa.userMessageProcessor != nil {
-		userMessage = boa.userMessageProcessor(templateVars)
-	} else {
-		userMessage = inputProcessor(templateVars)
-	}
-
-	// Auto-emit agent start event (after computing user message so it can be included)
-	boa.emitAgentStartEvent(ctx, templateVars, systemPrompt, userMessage)
-
-	// Always mark as sub-agent so ContextAwareEventBridge tags tool events
-	// with this agent's correlation ID (BaseOrchestratorAgent is only used
-	// for orchestrator step agents, never the main chat agent).
-	agentCtx := context.WithValue(ctx, events.AgentSessionIDKey, boa.agentSessionID)
-	agentCtx = context.WithValue(agentCtx, events.IsSubAgentContextKey, true)
-	if sid := boa.config.MCPSessionID; sid != "" {
-		agentCtx = context.WithValue(agentCtx, common.ChatSessionIDKey, sid)
-	}
-
-	// Get the base agent for structured output
-	baseAgent := boa.baseAgent
-
-	// Check if baseAgent is initialized
-	if baseAgent == nil {
-		var zero T
-		return zero, nil, fmt.Errorf("base agent is not initialized - Initialize() must be called before executing agent %s", boa.agentType)
-	}
-
-	// Prepare messages with conversation history and user message
-	messages := make([]llmtypes.MessageContent, len(conversationHistory))
-	copy(messages, conversationHistory)
-
-	// Add user message
-	userMessageContent := llmtypes.MessageContent{
-		Role:  llmtypes.ChatMessageTypeHuman,
-		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
-	}
-	messages = append(messages, userMessageContent)
-
-	// Set system prompt if provided
-	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			baseAgent.agent.SetSystemPrompt(systemPrompt)
-		} else {
-			baseAgent.agent.AppendSystemPrompt(systemPrompt)
-		}
-	}
-
-	// Use AskWithHistoryStructuredViaTool from mcpagent
-	result, err := mcpagent.AskWithHistoryStructuredViaTool[T](baseAgent.agent, agentCtx, messages, toolName, toolDescription, schema)
-	updatedHistory := result.Messages
-
-	duration := time.Since(startTime)
-
-	// Auto-emit agent end event with structured response
-	var resultStr string
-	var structuredResponse map[string]interface{} // Will be nil for conversational responses
-	var finalErr error
-
-	if err != nil {
-		resultStr = "Error: " + err.Error()
-		finalErr = err
-		// structuredResponse remains nil for errors
-	} else if !result.HasStructuredOutput {
-		// Conversational response - no structured output
-		// structuredResponse remains nil (explicitly)
-		conversationalInput := result.TextResponse
-		if conversationalInput == "" {
-			conversationalInput = "LLM returned empty response (no tool call detected)"
-		}
-		resultStr = conversationalInput // Use conversational input directly, not wrapped
-
-		// Log for debugging
-
-		// Emit agent end event with conversational response before returning error
-		// This ensures the frontend shows the conversational output, not the previous tool
-		// Explicitly pass nil for structuredResponse to ensure it's not set
-		boa.emitAgentEndEventWithStructuredResponse(ctx, templateVars, resultStr, nil, nil, duration)
-
-		// Return a special error type that includes the text response and updated history
-		// This allows callers to handle non-structured responses gracefully by displaying
-		// the text to the user and asking for further feedback
-		var zero T
-		return zero, updatedHistory, &NonStructuredResponseError{
-			TextResponse:   conversationalInput,
-			UpdatedHistory: updatedHistory,
-			OriginalError:  fmt.Errorf("conversational input detected - LLM response: %s", conversationalInput),
-		}
-	} else {
-		// Structured output: marshal to JSON for result field and map for structuredResponse field
-		// This applies generically to all structured responses (conditional, validation, etc.)
-		resultBytes, marshalErr := json.Marshal(result.StructuredResult)
-		if marshalErr == nil {
-			// Set Result field to the JSON string of the structured response
-			resultStr = string(resultBytes)
-
-			// Also unmarshal to map for StructuredResponse field
-			var responseMap map[string]interface{}
-			if unmarshalErr := json.Unmarshal(resultBytes, &responseMap); unmarshalErr == nil {
-				structuredResponse = responseMap
-			} else {
-				boa.logger.Warn(fmt.Sprintf("⚠️ Failed to unmarshal structured response for event: %v", unmarshalErr), loggerv2.Field{Key: "error", Value: unmarshalErr})
-			}
-		} else {
-			// Fallback to generic message if marshaling fails
-			resultStr = fmt.Sprintf("Generated %s structured output (marshaling failed: %v)", boa.agentType, marshalErr)
-			boa.logger.Warn(fmt.Sprintf("⚠️ Failed to marshal structured response for event: %v", marshalErr), loggerv2.Field{Key: "error", Value: marshalErr})
-		}
-	}
-
-	boa.emitAgentEndEventWithStructuredResponse(ctx, templateVars, resultStr, structuredResponse, finalErr, duration)
-
-	if err != nil {
-		var zero T
-		return zero, nil, fmt.Errorf("structured execution failed: %w", err)
-	}
-
-	// NonStructuredResponseError is already handled above (line 273), so we can proceed to return the result
-	return result.StructuredResult, updatedHistory, nil
 }
 
 // ExecuteWithInputProcessor executes the agent with a custom input processor
@@ -414,6 +150,9 @@ func (boa *BaseOrchestratorAgent) ExecuteWithTemplateValidation(ctx context.Cont
 		userMessage = boa.userMessageProcessor(templateVars)
 	} else {
 		userMessage = inputProcessor(templateVars)
+	}
+	if err := boa.applyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+		return "", nil, err
 	}
 
 	// Auto-emit agent start event (after computing user message so it can be included)
@@ -437,7 +176,7 @@ func (boa *BaseOrchestratorAgent) ExecuteWithTemplateValidation(ctx context.Cont
 	}
 
 	// Delegate to template's Execute method which enforces event patterns
-	result, updatedConversationHistory, err := boa.baseAgent.Execute(agentCtx, userMessage, conversationHistory, systemPrompt, overwriteSystemPrompt)
+	result, updatedConversationHistory, err := boa.baseAgent.Execute(agentCtx, userMessage, conversationHistory, "", false)
 
 	duration := time.Since(startTime)
 
@@ -550,28 +289,10 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 		agentName = boa.baseAgent.name
 	}
 
-	// Build full system prompt for the event
-	// If a systemPrompt override is provided, combine it with appended supplementary prompts.
-	// Otherwise, read the current full prompt from the agent (which already includes appended prompts).
-	// Note: {{TOOL_STRUCTURE}} placeholder is resolved later by SetSystemPrompt, so replace it
-	// with a short marker for the event to keep the prompt readable.
 	var fullSystemPrompt string
 	if boa.baseAgent != nil {
 		if mcpAg := boa.baseAgent.Agent(); mcpAg != nil {
-			if systemPrompt != "" {
-				fullSystemPrompt = systemPrompt
-				for _, p := range mcpAg.GetAppendedSystemPrompts() {
-					fullSystemPrompt += "\n\n" + p
-				}
-			} else {
-				fullSystemPrompt = mcpAg.GetSystemPrompt()
-			}
-		}
-	}
-	// Resolve {{TOOL_STRUCTURE}} placeholder with actual tool index
-	if boa.baseAgent != nil {
-		if mcpAg := boa.baseAgent.Agent(); mcpAg != nil {
-			fullSystemPrompt = mcpAg.ResolveToolStructure(fullSystemPrompt)
+			fullSystemPrompt = mcpAg.Definition().Instructions
 		}
 	}
 
@@ -604,13 +325,15 @@ func (boa *BaseOrchestratorAgent) emitAgentStartEvent(ctx context.Context, templ
 	boa.emitEvent(ctx, events.OrchestratorAgentStart, eventData)
 }
 
-// emitAgentEndEvent emits an agent end event automatically
-func (boa *BaseOrchestratorAgent) emitAgentEndEvent(ctx context.Context, templateVars map[string]string, result string, err error, duration time.Duration) {
-	boa.emitAgentEndEventWithStructuredResponse(ctx, templateVars, result, nil, err, duration)
+func (boa *BaseOrchestratorAgent) applyInstructions(ctx context.Context, systemPrompt string, overwrite bool) error {
+	if systemPrompt == "" || boa.baseAgent == nil || boa.baseAgent.agent == nil {
+		return nil
+	}
+	return boa.baseAgent.ApplyInstructions(ctx, systemPrompt, overwrite)
 }
 
-// emitAgentEndEventWithStructuredResponse emits an agent end event with optional structured response
-func (boa *BaseOrchestratorAgent) emitAgentEndEventWithStructuredResponse(ctx context.Context, templateVars map[string]string, result string, structuredResponse map[string]interface{}, err error, duration time.Duration) {
+// emitAgentEndEvent emits an agent end event automatically.
+func (boa *BaseOrchestratorAgent) emitAgentEndEvent(ctx context.Context, templateVars map[string]string, result string, err error, duration time.Duration) {
 	agentName := string(boa.agentType)
 	if boa.baseAgent != nil {
 		agentName = boa.baseAgent.name
@@ -619,7 +342,14 @@ func (boa *BaseOrchestratorAgent) emitAgentEndEventWithStructuredResponse(ctx co
 	// Get token usage from agent if available
 	var promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCallCount, cacheEnabledCallCount int
 	if boa.baseAgent != nil && boa.baseAgent.agent != nil {
-		promptTokens, completionTokens, totalTokens, cacheTokens, reasoningTokens, llmCallCount, cacheEnabledCallCount = boa.baseAgent.agent.GetTokenUsage()
+		usage := mcpagent.ReadAgentDiagnostics(boa.baseAgent.agent).Usage
+		promptTokens = usage.PromptTokens
+		completionTokens = usage.CompletionTokens
+		totalTokens = usage.TotalTokens
+		cacheTokens = usage.CacheTokens
+		reasoningTokens = usage.ReasoningTokens
+		llmCallCount = usage.LLMCalls
+		cacheEnabledCallCount = usage.CacheEnabledLLMCalls
 	}
 
 	eventData := &events.OrchestratorAgentEndEvent{
@@ -627,12 +357,11 @@ func (boa *BaseOrchestratorAgent) emitAgentEndEventWithStructuredResponse(ctx co
 			Timestamp:     time.Now(),
 			CorrelationID: boa.agentSessionID, // Use shared session ID for correlation
 		},
-		AgentType:          string(boa.agentType),
-		AgentName:          agentName,
-		InputData:          templateVars,
-		Result:             result,
-		StructuredResponse: structuredResponse, // This will be nil for conversational responses
-		Success:            err == nil,
+		AgentType: string(boa.agentType),
+		AgentName: agentName,
+		InputData: templateVars,
+		Result:    result,
+		Success:   err == nil,
 		Error: func() string {
 			if err != nil {
 				return err.Error()

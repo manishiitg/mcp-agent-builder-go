@@ -5,7 +5,7 @@ coherent output and deterministic final gate and runs through the saved `main.py
 Do not create an agentic regular step: every new conversational or judgment-heavy step uses
 **`message_sequence`**, even when it needs only one work turn. Persisted non-scripted regular
 steps are normalized to a one-turn message sequence at runtime; they never use the removed
-direct regular-agent path. See `get_reference_doc(kind="message-sequence")`.
+direct regular-agent path. See `read_skill(skill_name="builder-reference", path="references/message-sequence.md")`.
 Use the others for branching (`routing`), sub-agent coordination (`todo_task`), or operator
 input (`human_input`).
 
@@ -13,7 +13,7 @@ input (`human_input`).
 
 - Deterministic, self-contained work: fixed API/SDK calls, CLI commands, data fetching, known pagination, parse, normalize, transform, write, and mechanically verify. Declare these steps `scripted` from initial design and batch related calls that share one source/auth/retry/output contract.
 - One clear deterministic objective expressible as a `description` plus a `validation_schema`.
-- A coherent scripted boundary inside the **Linear Pipeline** pattern (see `get_reference_doc(kind="workflow-patterns")`), not one step per pipeline action.
+- A coherent scripted boundary inside the **Linear Pipeline** pattern (see `read_skill(skill_name="builder-reference", path="references/workflow-patterns.md")`), not one step per pipeline action.
 
 If the work fans out over items, branches on a decision, needs several turns that
 share one conversation, or needs a specialist that remembers across calls, it is
@@ -31,13 +31,13 @@ share one conversation, or needs a specialist that remembers across calls, it is
   duplicated summary file drifts from the db — e.g. a `status` that ends up null).
 - Stores: reads soul / db / knowledgebase / learnings per access; writes its own step
   folder + `db/`, plus knowledgebase notes / learnings when access is read-write
-  (learnings writes happen in a dedicated post-step turn — see `get_reference_doc(kind="stores")`).
+  (learnings writes happen in a dedicated post-step turn — see `read_skill(skill_name="builder-reference", path="references/stores.md")`).
 
 ## Execution mode
 
 - **Scripted / code-execution mode** is the only mode for new regular steps. Create one with `add_scripted_step`; the internal plan type remains `regular`. The builder authors a `main.py` saved under
   `learnings/{step-id}/` and re-runs it on later runs (scripted fast path). Use for
-  deterministic, repeatable execution. No run-history threshold is required to declare an obviously deterministic step scripted; 10+ representative successful runs are required only before `lock_code=true` freezes it. See `get_reference_doc(kind="code-authoring")`.
+  deterministic, repeatable execution. No run-history threshold is required to declare an obviously deterministic step scripted; 10+ representative successful runs are required only before `lock_code=true` freezes it. See `read_skill(skill_name="builder-reference", path="references/code-authoring.md")`.
 - Judgment, adaptive discovery, ambiguous live evidence, and browser/UI work use `message_sequence`.
 
 Preferred data shape: `regular scripted fetcher(s) → message_sequence processor`. Fetchers own credentials, calls, retries/rate limits, provenance, freshness, idempotency, response parsing, and authoritative DB/file output. The message sequence reads that output and owns semantic analysis, synthesis, critique, and repair.

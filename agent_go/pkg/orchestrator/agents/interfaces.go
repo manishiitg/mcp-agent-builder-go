@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/mcpagent/mcpclient"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -189,6 +190,12 @@ type OrchestratorAgentConfig struct {
 	// share the same orchestrator instance.
 	FolderGuardReadPaths  []string `json:"-"`
 	FolderGuardWritePaths []string `json:"-"`
+
+	// DirectTools is the fully prepared direct-tool identity for this agent.
+	// The owning orchestrator resolves categories, folder guards, and executor
+	// wrappers before Initialize so mcpagent can register the complete immutable
+	// definition during construction.
+	DirectTools []mcpagent.ToolDefinition `json:"-"`
 }
 
 // CrossProviderFallback represents cross-provider fallback configuration

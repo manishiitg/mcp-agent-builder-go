@@ -1,6 +1,6 @@
 # Bot Connector System
 
-A platform-agnostic bot framework that allows users to interact with the agent system from messaging platforms (Slack, Discord, Telegram, WhatsApp) and the built-in web simulator. Users @mention the bot (or type in the simulator), the system starts a multi-agent session with the user's pre-configured MCP servers, skills, and tool search mode, and streams progress back to the thread.
+A platform-agnostic bot framework that allows users to interact with the agent system from messaging platforms (Slack, Discord, Telegram, WhatsApp) and the built-in web simulator. Users @mention the bot (or type in the simulator), the system starts a multi-agent session with the user's pre-configured MCP servers, skills, and code-execution policy, and streams progress back to the thread.
 
 ## Architecture Overview
 
@@ -65,7 +65,7 @@ When a user sends a message, the system starts a multi-agent session directly us
 
 - **MCP Servers**: from `default_servers` in the `_global` config
 - **Skills**: from `default_skills`, falling back to all discovered skills
-- **Tool search mode**: enabled automatically when >2 servers are configured
+- **Tool access**: uses the saved workspace code-execution capability and selected servers
 - **Delegation mode**: always `"plan"` (multi-agent chat)
 - **Workspace access**: always enabled
 - **Provider/model**: high tier from `delegation_tier_config` (DB → env → defaults)
@@ -279,7 +279,7 @@ Bot capabilities (MCP servers and skills) are configured globally via a standalo
 2. User selects servers/skills using the standard dropdowns
 3. On save: `POST /api/bot/simulate/config` with `{ default_servers, default_skills }`
 4. When any bot session starts, `buildQueryRequest()` uses `default_servers`/`default_skills` from the `_global` config
-5. Tool search mode is auto-enabled when >2 servers are configured
+5. Tool access follows the saved workspace code-execution capability
 
 ---
 
@@ -330,7 +330,7 @@ The agent session uses the high tier as the main provider.
 | `provider` / `model_id` | High tier from delegation config (DB → env → defaults) |
 | `servers` | `default_servers` from `_global` config |
 | `selected_skills` | `default_skills` from `_global` config (falls back to all discovered) |
-| `use_tool_search_mode` | `true` when >2 servers configured |
+| `use_code_execution_mode` | Saved workspace capability |
 | `delegation_tier_config` | From DB `_global` config or env vars |
 | `llm_config.primary` | Same as `provider`/`model_id` (ensures follow-ups recover correct model) |
 | `llm_config.api_keys` | From DB `provider_api_keys` |

@@ -16,7 +16,7 @@ In multi-agent chat you are an orchestrator: decompose work and hand pieces to s
 - **`reasoning_level`** (required) — `high` | `medium` | `low` (plus any custom tiers configured for the workspace). Maps to a provider/model. Use `high` for ambiguous/judgment work, `low` for mechanical work.
 - **`agent_template`** (optional) — a template folder name from `subagents/` (see below).
 - **`servers`** (optional) — MCP server names to scope the sub-agent's tools.
-- **`skills`** (optional) — explicit skill folder names. **Sub-agents start with NO skills.** See pass-through below.
+- **`skills`** (optional) — additional skill folder names beyond those inherited from Chief of Staff. See inheritance below.
 - **`share_browser`** (optional, default `true`) — share the browser session or isolate it.
 
 ### Execution model: async background
@@ -34,9 +34,9 @@ Delegation depth is capped at **3** (`MaxDelegationDepth = 3`). The hierarchy is
 
 So plan for at most root → child → grandchild. Don't design flows that need deeper nesting; flatten them, or have the root fan out directly.
 
-### Skills do NOT inherit — explicit pass only
+### Skills inherit from Chief of Staff
 
-A sub-agent starts with **zero** skills. It does **not** inherit the skills selected for your session. If the sub-agent needs a skill, name it in `delegate(skills=["folder-a", "folder-b"])`. This is deliberate ("explicit-pass" semantics) — it keeps each sub-agent's prompt scoped to exactly what its task needs. The same is true for MCP `servers`: pass the ones the sub-agent needs.
+A sub-agent receives every skill attached to the Chief of Staff session at the moment `delegate` runs, including the multi-agent reference surface and user-selected skills. Full skill bundles are projected into the sub-agent's isolated coding-agent directory, so their `references/`, `scripts/`, and assets remain available. Use `delegate(skills=["folder-a"])` only to add a skill that is not already attached to Chief of Staff; duplicates are ignored. MCP `servers` keep their existing behavior: omitting `servers` inherits the parent's servers, while passing it narrows the child to that list.
 
 ### Sub-agent templates (`subagents/`)
 
@@ -47,7 +47,7 @@ Reusable agent profiles live at `subagents/custom/<name>/SUBAGENT.md` (authored 
 - **`name`, `description`** — discovery/display metadata only.
 - **`default_reasoning_level`** — applied **only if** you omit `reasoning_level` on the `delegate` call.
 - **The Markdown body** — appended to the sub-agent's system prompt as its role.
-- **`skills` / `servers` in frontmatter are NOT applied.** Even if a template lists them, the sub-agent will not get them. You must pass `skills=[...]` / `servers=[...]` explicitly on every `delegate` call that needs them.
+- **`skills` / `servers` in frontmatter are NOT applied.** A template cannot add either capability. Chief of Staff's already-attached skills still inherit normally; pass `skills=[...]` for any extra template-recommended skill and `servers=[...]` when the child needs a narrowed server set.
 
 So a template gives the sub-agent a *role and (optionally) a default reasoning tier* — not its tools or skills. Wire those per call.
 

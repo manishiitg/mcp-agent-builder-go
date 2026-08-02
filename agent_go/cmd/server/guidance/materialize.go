@@ -10,10 +10,9 @@ import (
 )
 
 // MaterializeReferenceSkill bundles every mode-allowed entry in
-// referenceKinds into ONE Anthropic-pattern skill. Workshop/run modes keep the
-// historical "workflow-reference" name; multi-agent chat gets an explicitly
-// chat-scoped name so CLI skill matching does not treat it as workflow-only
-// guidance.
+// referenceKinds into ONE Anthropic-pattern skill. Every mode uses the stable
+// "builder-reference" identity so prompts and agents never need to know which
+// transport or execution surface materialized the bundle.
 // the SKILL.md body is a table of contents; the deep content lives in
 // references/<kind>.md supporting files. The agent's CLI matches the skill
 // by description, then reads the specific reference file it needs.
@@ -41,7 +40,7 @@ type referenceSkillSpec struct {
 func referenceSkillSpecForMode(mode string) referenceSkillSpec {
 	if mode == "multi-agent" {
 		return referenceSkillSpec{
-			Name: "multiagent-reference",
+			Name: "builder-reference",
 			Description: "Multi-agent chat reference docs — detailed contracts and rules to consult before specific actions: " +
 				"LLM/provider configuration via tools, delegation, skill management, memory, browser/media tools, " +
 				"schedule and secret management, backup, debugging, and MCP bridge usage. Match this skill when you need deep " +
@@ -51,7 +50,7 @@ func referenceSkillSpecForMode(mode string) referenceSkillSpec {
 	}
 
 	return referenceSkillSpec{
-		Name: "workflow-reference",
+		Name: "builder-reference",
 		Description: "Workflow workshop reference docs — detailed contracts and rules to consult before specific actions: " +
 			"LLM/provider configuration via tools, main.py authoring, persistent stores (skill/kb/db), routing and " +
 			"message-sequence patterns, workflow composition patterns, plan-design, report-plan, evaluation-plan, " +
@@ -90,8 +89,8 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // agent — at most three skills:
 //
 //   - system-tools (existing meta-skill: explains the tool surface and
-//     get_reference_doc)
-//   - workflow-reference / multiagent-reference (mega-skill bundling every
+//     read_skill)
+//   - builder-reference (mode-filtered mega-skill bundling every
 //     reference doc allowed in the current mode; SKILL.md TOC +
 //     references/<kind>.md per topic)
 //   - workflow-commands (mega-skill bundling every procedural flow)
@@ -103,20 +102,29 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // skill with references/ subfiles is exactly the progressive-disclosure
 // shape Anthropic's skill spec is designed for.
 //
-// Both surfaces coexist with the get_reference_doc tool path and are
-// equivalent: the tool renders the same template these files are built from,
-// so reading references/<kind>.md off disk is a complete substitute for
-// calling the tool. Nothing tracks or requires one over the other.
-func AttachReferenceSurface(mode string, attach func(*llmtypes.Skill)) {
+// mcpagent exposes every attached bundle through its intrinsic read_skill tool
+// on API and coding-CLI transports. Native CLI projection is an optimization,
+// not a separate access contract.
+func AttachReferenceSurface(mode string, attach func(*llmtypes.Skill) error) error {
+	if attach == nil {
+		return fmt.Errorf("attach reference surface: nil attach function")
+	}
 	if meta := BuildSystemToolsSkill(mode); meta != nil {
-		attach(meta)
+		if err := attach(meta); err != nil {
+			return fmt.Errorf("attach %s: %w", meta.Name, err)
+		}
 	}
 	if refs := MaterializeReferenceSkill(mode); refs != nil {
-		attach(refs)
+		if err := attach(refs); err != nil {
+			return fmt.Errorf("attach %s: %w", refs.Name, err)
+		}
 	}
 	if cmds := MaterializeGuidanceSkill(mode); cmds != nil {
-		attach(cmds)
+		if err := attach(cmds); err != nil {
+			return fmt.Errorf("attach %s: %w", cmds.Name, err)
+		}
 	}
+	return nil
 }
 
 // buildMegaSkillSpec captures the inputs for buildMegaSkill so the two
@@ -158,8 +166,8 @@ func buildMegaSkill(spec buildMegaSkillSpec) *llmtypes.Skill {
 			// A render failure is a programming error in an embedded
 			// template, but crashing the session over one bad kind is
 			// worse than attaching the skill without it — the kind is
-			// still reachable via get_reference_doc, whose render path
-			// reports its own error.
+			// will be absent from read_skill's file list, making the
+			// programming error visible without crashing the session.
 			log.Printf("[GUIDANCE] materialize %s/%s: %v (skipping this reference)", spec.Name, k, err)
 			continue
 		}

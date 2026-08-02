@@ -16,10 +16,10 @@ If you renamed a field, removed an output, changed a file path, changed what's w
 ## 2. Trace each dimension — search, don't guess
 For each dimension, **search the workspace** for references to the surface and reconcile every hit. Don't reason about ripple effects in the abstract — grep for the *actual* references (step id, output file/field, db table/column, topic).
 
-- **Downstream steps** — search `planning/plan.json` and step descriptions for the step id / output file / changed field. A later step that consumes a field you changed must have its expectation **and** its `validation_schema` updated. (`get_reference_doc(kind="step-config")`)
-- **Evals** — search `evaluation/` for the step id / output path. An eval that reads the changed output must be updated so it still resolves and scores the right thing. (`get_reference_doc(kind="evaluation-plan")`)
-- **Report dashboard** — search `reports/report_plan.json` and the dashboard HTML's `window.report.query` SQL for the db tables/columns and output fields. A query that reads changed data must be fixed, and `report_plan.json` updated. (`get_reference_doc(kind="report-plan")`)
-- **db** — read `db/README.md` (it already lists each table's writers + shape). If this step writes db and the shape changed, update the schema, the README contract, and any readers. (`get_reference_doc(kind="stores")`)
+- **Downstream steps** — search `planning/plan.json` and step descriptions for the step id / output file / changed field. A later step that consumes a field you changed must have its expectation **and** its `validation_schema` updated. (`read_skill(skill_name="builder-reference", path="references/step-config.md")`)
+- **Evals** — search `evaluation/` for the step id / output path. An eval that reads the changed output must be updated so it still resolves and scores the right thing. (`read_skill(skill_name="builder-reference", path="references/evaluation-plan.md")`)
+- **Report dashboard** — search `reports/report_plan.json` and the dashboard HTML's `window.report.query` SQL for the db tables/columns and output fields. A query that reads changed data must be fixed, and `report_plan.json` updated. (`read_skill(skill_name="builder-reference", path="references/report-plan.md")`)
+- **db** — read `db/README.md` (it already lists each table's writers + shape). If this step writes db and the shape changed, update the schema, the README contract, and any readers. (`read_skill(skill_name="builder-reference", path="references/stores.md")`)
 - **Learnings** — the step's `learnings/{step-id}/` and `learnings/_global/SKILL.md` were generated against the old behavior. If behavior changed, clear `lock_learnings`/`lock_code` so they regenerate, and prune any now-wrong notes.
 - **KB** — search `knowledgebase/notes/` for the step's topic. Notes describing the old behavior must be updated or flagged.
 

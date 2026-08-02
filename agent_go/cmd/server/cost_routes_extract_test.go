@@ -9,10 +9,10 @@ import "testing"
 // adapters, this test breaks loudly.
 func TestExtractCostAndEffectiveModelPullsBothFields(t *testing.T) {
 	cases := []struct {
-		name         string
-		in           map[string]interface{}
-		wantModel    string
-		wantCostUSD  float64
+		name        string
+		in          map[string]interface{}
+		wantModel   string
+		wantCostUSD float64
 	}{
 		{
 			name: "unified keys present",

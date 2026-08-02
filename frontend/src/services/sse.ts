@@ -48,6 +48,9 @@ export class SSEConnection {
 
     const baseUrl = getApiBaseUrl()
     const params = new URLSearchParams()
+    // Detailed child transcripts are fetched only for the selected terminal.
+    // Keep the session stream to main-agent detail plus lifecycle/control data.
+    params.set('working_set', 'session')
     if (this.sinceIndex >= 0) {
       params.set('since', String(this.sinceIndex))
     }

@@ -9,6 +9,7 @@ import type {
   AgentQueryRequest,
   AgentQueryResponse,
   GetEventsResponse,
+  TerminalEventsResponse,
   MCPServerConfig,
   ChatHistoryConversation,
   ChatHistorySession,
@@ -610,7 +611,7 @@ export const agentApi = {
       offset?: number
     }
   ): Promise<GetEventsResponse> => {
-    const params: Record<string, string | number> = {}
+    const params: Record<string, string | number> = { working_set: 'session' }
 
     // Forward polling mode: use sinceIndex
     if (sinceIndex !== undefined && sinceIndex >= -1) {
@@ -638,6 +639,18 @@ export const agentApi = {
   // backend's bounded initial page and still returns last_processed_index.
   getRecentSessionEvents: async (sessionId: string): Promise<GetEventsResponse> => {
     return agentApi.getSessionEvents(sessionId, 0)
+  },
+
+  getTerminalEvents: async (
+    terminalId: string,
+    options: { limit?: number; beforeSequence?: number; afterSequence?: number } = {},
+  ): Promise<TerminalEventsResponse> => {
+    const params: Record<string, number> = {}
+    if (options.limit !== undefined) params.limit = options.limit
+    if (options.beforeSequence !== undefined) params.before_sequence = options.beforeSequence
+    if (options.afterSequence !== undefined) params.after_sequence = options.afterSequence
+    const response = await api.get(`/api/terminals/${encodeURIComponent(terminalId)}/events`, { params })
+    return response.data
   },
 
   listTerminals: async (
@@ -1420,7 +1433,8 @@ export const agentApi = {
   },
 
   // Run a read-only SQL query against a workflow's db/db.sqlite. The workspace
-  // service opens the connection mode=ro + query_only, so only reads succeed.
+  // service opens the existing WAL database mode=rw + query_only, so SQLite can
+  // maintain sidecars while SQL mutations remain rejected.
   // Returns { success, data: { columns, rows } } — rows are objects keyed by column.
   queryWorkflowDB: async (dbPath: string, sql: string) => {
     const response = await workspaceApi.post('/api/query', { db_path: dbPath, sql })

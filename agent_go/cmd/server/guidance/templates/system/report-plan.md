@@ -6,7 +6,7 @@ Workshop may maintain the live frontend report defined by `reports/report_plan.j
 
 A report is one or more **HTML documents**. The viewer renders each document in a sandboxed iframe and hands it live data via `window.report`; the HTML renders its own visuals with full styling control. The one native non-document kind is `interaction`: a user-configured question/control rendered by Runloop and backed by workflow SQLite. Never add an interaction automatically because an agent or Pulse happens to want input; use it only when the user explicitly asks to configure that control in the report.
 
-HTML is a superset of anything a plain document needs — prose, headings, tables, links — AND it can read the db live and draw charts. Start every report from the shipped HTML skeleton so even a simple narrative report is quick to author and looks consistent: load `get_reference_doc(kind="html-output")` for the layout baseline, dark-mode styles, and inline chart pattern.
+HTML is a superset of anything a plain document needs — prose, headings, tables, links — AND it can read the db live and draw charts. Start every report from the shipped HTML skeleton so even a simple narrative report is quick to author and looks consistent: load `read_skill(skill_name="builder-reference", path="references/html-output.md")` for the layout baseline, dark-mode styles, and inline chart pattern.
 
 ### The reporting toolchain
 
@@ -45,7 +45,7 @@ HTML is a superset of anything a plain document needs — prose, headings, table
 
 Interaction answers are framework-owned rows in the workflow's `db/db.sqlite` table `report_widget_responses`; the report page is only the UI. They are asynchronous: creating or displaying a widget never pauses a run, and the user may answer days later. The framework creates the table when the interaction is configured, so a consumer may safely treat an absent `answered` row as "no answer yet."
 
-If the user wants an answer to affect future execution, configure the intended consumer step (and give it DB read access) to query `$DB_PATH`, for example:
+If the user wants an answer to affect future execution, configure the intended consumer step with DB read access and have an agentic step call `query_workflow_db` (saved scripted code may query `$DB_PATH`), for example:
 
 ```sql
 SELECT instance_key, selected_option_id, note,

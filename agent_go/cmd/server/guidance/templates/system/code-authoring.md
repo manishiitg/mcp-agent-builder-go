@@ -39,4 +39,4 @@ Apply these when writing or patching a step's `main.py`. Scripts must run identi
 - **HTML** — only when you genuinely need rich/branded layout markdown can't express. For an actual dashboard, use the report system (`reports/report_plan.json` + `window.report`), which is the purpose-built HTML surface — don't hand-author a standalone `.html` report as the default.
 - Do NOT make HTML copies of Markdown stores (`soul.md`, learnings, KB) — those stay Markdown and are read as Markdown.
 
-Before writing a `.html` output file, call `get_reference_doc(kind="html-output")` — it has the full layout baseline, dark-mode styles, inline chart pattern, and quality checklist.
+Before writing a `.html` output file, call `read_skill(skill_name="builder-reference", path="references/html-output.md")` — it has the full layout baseline, dark-mode styles, inline chart pattern, and quality checklist.

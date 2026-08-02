@@ -281,7 +281,7 @@ func CreateDelegationTools(tierConfig *DelegationTierConfig, requireReasoningLev
 						"items": map[string]interface{}{
 							"type": "string",
 						},
-						"description": "Optional list of skill folder names to attach to this sub-agent. Sub-agents start with NO skills by default — if the sub-agent needs a skill, the parent must pass it explicitly here. Use this when the sub-agent's task benefits from a specific skill's instructions (e.g. skills=[\"pdf-extract\"] for a sub-agent that processes PDFs). Do not pass skills the sub-agent does not need; each adds tokens to the sub-agent's system prompt.",
+						"description": "Optional additional skill folder names to attach to this sub-agent. Chief of Staff sub-agents already inherit every skill attached to the parent session; use this only for an extra skill not attached there (for example skills=[\"pdf-extract\"]). Duplicates are ignored.",
 					},
 				},
 				"required": func() []string {
@@ -414,9 +414,9 @@ func handleDelegate(ctx context.Context, args map[string]interface{}) (string, e
 		shareBrowser = sb
 	}
 
-	// Extract optional skills array — explicit-pass semantics for
-	// sub-agents. Parent must list every skill the sub-agent needs;
-	// no inheritance from the parent's own attached skills.
+	// Extract optional additional skills. Chief of Staff parent-skill
+	// inheritance is injected by the server at launch time; the typed spec only
+	// carries per-call additions.
 	var delegationSkills []string
 	if skillsRaw, ok := args["skills"].([]interface{}); ok {
 		for _, s := range skillsRaw {
@@ -646,7 +646,7 @@ func GetMultiAgentDelegationInstructionsWithUser(chatsFolder string, userID stri
 	// Schedule + Secret management used to be ~80 lines of inline detail.
 	// Both are rare-path topics: most chat turns do not touch schedules or
 	// secrets at all. They moved to templates/system/{schedule-management,
-	// secret-management}.md, loaded via get_reference_doc when the user
+	// secret-management}.md, loaded via read_skill when the user
 	// actually asks. Keep brief cheat sheets here so the agent knows the
 	// capabilities exist and which doc to load.
 	scheduleInstructions := `
@@ -656,8 +656,7 @@ Schedules are server-managed in ` + "`_users/" + userID + "/multiagent-schedules
 
 **When scheduling:** confirm what/when/timezone, call ` + "`list_multiagent_schedules`" + `, then ` + "`create_multiagent_schedule`" + ` / ` + "`update_multiagent_schedule`" + ` / ` + "`delete_multiagent_schedule`" + ` / ` + "`trigger_multiagent_schedule`" + `. Do not edit the JSON directly.
 
-**For formats, cron examples, update/remove flows, call:**
-` + "`get_reference_doc(kind=\"schedule-management\")`" + ` before changing schedules.
+**Before schedule changes:** ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/schedule-management.md\")`" + `.
 
 ## Secret Management (brief)
 
@@ -665,8 +664,7 @@ Buckets: **workflow** (scoped to workflow), **user** (reusable), **global** (rea
 
 **Hard rules:** never echo / print / log a plaintext secret value; acknowledge by name only. ` + "`set_workflow_secret`" + ` / ` + "`set_user_secret`" + ` inject ` + "`$SECRET_<NAME>`" + ` into the shell — usable immediately without config update.
 
-**For full bucket semantics, naming rules, safety rules, call:**
-` + "`get_reference_doc(kind=\"secret-management\")`" + ` before any set / delete / attach.
+**Before secret changes:** ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/secret-management.md\")`" + `.
 `
 
 	return scheduleInstructions + `
@@ -684,7 +682,7 @@ Translate internal states into plain English. Do not expose run/session ids, too
 
 ### Org Goals
 
-Org goals live in the local workspace file ` + "`pulse/goals.html`" + ` (docs root + ` + "`/pulse/goals.html`" + `). Org Pulse lives in local ` + "`pulse/org-pulse.html`" + `. Manage workflows against them using Pulse verdicts, reports, db, and run artifacts. Load ` + "`get_reference_doc(kind=\"org-goals\")`" + ` before goal/alignment/performance work, and ` + "`get_reference_doc(kind=\"org-html\")`" + ` before editing. Never WebFetch raw GitHub URLs for these files or reference docs.
+Org goals live in the local workspace file ` + "`pulse/goals.html`" + ` (docs root + ` + "`/pulse/goals.html`" + `). Org Pulse lives in local ` + "`pulse/org-pulse.html`" + `. Manage workflows against them using Pulse verdicts, reports, db, and run artifacts. Load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-goals.md\")`" + ` before goal/alignment/performance work, and ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-html.md\")`" + ` before editing. Never WebFetch raw GitHub URLs for these files or reference docs.
 
 Mechanically you are an **orchestrator**: you decompose work and dispatch sub-agents, and you use tools directly for simple tasks.
 
@@ -703,6 +701,7 @@ Spawns an async sub-agent. Call multiple in one turn for parallel execution.
 | reasoning_level | yes | ` + "`high`" + ` (architecture/complex), ` + "`medium`" + ` (standard), ` + "`low`" + ` (simple reads/lookups) |
 | agent_template | no | Folder from ` + "`subagents/`" + ` — loads a specialized profile |
 | servers | no | MCP server names to scope the worker's tools |
+| skills | no | Extra skill folders beyond the full skill set inherited from this Chief of Staff session |
 
 Other tools: ` + "`query_agent(agent_id)`" + `, ` + "`terminate_agent(agent_id)`" + `, ` + "`list_agents()`" + `
 
@@ -715,11 +714,11 @@ Chief of Staff does **not** run workflows directly right now. The user runs work
 2. Find available groups — ` + "`execute_shell_command(command: \"cat Workflow/<name>/variables/variables.json\")`" + ` and look at the ` + "`groups`" + ` array
 3. Tell the user which workflow/group to run manually and what context or route choice to use.
 4. After the user has run it, inspect the latest output in ` + "`Workflow/<name>/runs/iteration-0/<group>/`" + `.
-5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`get_reference_doc(kind=\"org-goals\")`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, ` + "`builder/improve.html`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
+5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/org-goals.md\")`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, ` + "`builder/improve.html`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
 
 ### Reading workflow state
 
-When asked what a workflow produced, knows, or should improve, load ` + "`get_reference_doc(kind=\"file-layout\")`" + ` and ` + "`get_reference_doc(kind=\"stores\")`" + ` for the full filesystem contract, then inspect the right source:
+When asked what a workflow produced, knows, or should improve, load ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/file-layout.md\")`" + ` and ` + "`read_skill(skill_name=\"builder-reference\", path=\"references/stores.md\")`" + ` for the full filesystem contract, then inspect the right source:
 
 - **Plan/config:** ` + "`workflow.json`" + `, ` + "`soul/soul.md`" + `, ` + "`planning/plan.json`" + `, ` + "`planning/step_config.json`" + `, ` + "`variables/variables.json`" + `.
 - **Reports:** ` + "`reports/report_plan.json`" + ` and HTML under ` + "`db/reports/`" + `; reports read ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `.

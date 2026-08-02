@@ -26,11 +26,6 @@ const NON_TRANSCRIPT_TYPES = new Set(['token_usage', 'status_line'])
 // a "Full Run [Group / Iteration 0]" row restating the panel header above it
 // before the first thing that actually happened.
 const CONTAINER_EXECUTION_KINDS = new Set(['full_run'])
-
-function isContainerLifecycleEvent(event: PollingEvent): boolean {
-  if (!CONTAINER_EXECUTION_KINDS.has(event.execution_kind || '')) return false
-  return LIFECYCLE_EVENT_FAMILIES[event.type || ''] !== undefined
-}
 const TOOL_CALL_TYPES = new Set([
   'tool_call_start',
   'tool_call_end',
@@ -73,6 +68,50 @@ const LIFECYCLE_EVENT_FAMILIES: Record<string, { start?: boolean; terminal?: boo
   background_agent_terminated: { terminal: true, family: 'background-agent' },
 }
 
+function isFullRunContainerEvent(event: PollingEvent): boolean {
+  const fields = eventFields(event)
+  const kind = textField(event.execution_kind) || textField(fields.execution_kind)
+  if (CONTAINER_EXECUTION_KINDS.has(kind)) return true
+
+  // Compatibility for events recorded before completion events preserved the
+  // creator-declared full_run kind. Their stable workflow-full-* execution id
+  // still identifies the orchestration container unambiguously.
+  const identity = textField(event.execution_id) ||
+    textField(fields.execution_id) ||
+    textField(fields.agent_id)
+  return identity.startsWith('workflow-full-')
+}
+
+function isContainerTranscriptNoise(event: PollingEvent): boolean {
+  if (!isFullRunContainerEvent(event)) return false
+  return LIFECYCLE_EVENT_FAMILIES[event.type || ''] !== undefined ||
+    event.type === 'auto_notification_steered'
+}
+
+// Message-sequence items are announced twice: the generic background runner
+// emits a blue/green lifecycle banner, then the delegated step emits the real
+// task/result card. The generic rows add no content ("Running" / "completed")
+// and remain visually loud after the useful card has appeared. Keep failures
+// and cancellations visible, but remove the redundant happy-path wrapper.
+const MESSAGE_SEQUENCE_WRAPPER_TYPES = new Set([
+  'background_agent_started',
+  'background_agent_completed',
+])
+
+function isMessageSequenceWrapperEvent(event: PollingEvent): boolean {
+  if (!MESSAGE_SEQUENCE_WRAPPER_TYPES.has(event.type || '')) return false
+  const fields = eventFields(event)
+  const metadata = fields.metadata && typeof fields.metadata === 'object'
+    ? fields.metadata as Record<string, unknown>
+    : undefined
+  const name = textField(fields.name).toLowerCase()
+  const agentID = textField(fields.agent_id) || textField(metadata?.agent_id)
+  return name.startsWith('message sequence item') ||
+    agentID.toLowerCase().startsWith('msgseq-') ||
+    metadata?.message_sequence_item === true ||
+    metadata?.message_sequence_item === 'true'
+}
+
 function eventFields(event: PollingEvent): Record<string, unknown> {
   const outer = event.data
   if (!outer || typeof outer !== 'object') return {}
@@ -99,7 +138,20 @@ function lifecycleFamily(event: PollingEvent): string {
 
 function lifecycleExecutionID(event: PollingEvent): string {
   const fields = eventFields(event)
-  return textField(event.execution_id) || textField(fields.execution_id) || textField(fields.agent_id)
+  const metadata = fields.metadata && typeof fields.metadata === 'object'
+    ? fields.metadata as Record<string, unknown>
+    : undefined
+
+  // Lifecycle events for one message-sequence item do not always agree on
+  // the outer execution_id. The generic background event carries the item's
+  // agent_id directly, while the richer orchestrator event can retain the
+  // parent workflow-step execution_id and put that same agent_id in metadata.
+  // The agent id is the identity of the lifecycle being announced; the outer
+  // execution id is only its container and remains the legacy fallback.
+  return textField(fields.agent_id) ||
+    textField(metadata?.agent_id) ||
+    textField(event.execution_id) ||
+    textField(fields.execution_id)
 }
 
 // The server and the delegated agent both announce the SAME execution, and they
@@ -291,7 +343,8 @@ function dropDuplicateExecutionPromptMessages(events: PollingEvent[]): PollingEv
 
 function isTranscriptEvent(event: PollingEvent): boolean {
   if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
-  if (isContainerLifecycleEvent(event)) return false
+  if (isContainerTranscriptNoise(event)) return false
+  if (isMessageSequenceWrapperEvent(event)) return false
   return true
 }
 
@@ -496,8 +549,12 @@ function dropAnswersRepeatedByCompletionCard(events: PollingEvent[]): PollingEve
 }
 
 export function buildTranscriptItems(events: PollingEvent[]): TranscriptItem[] {
+  // Filter wrapper noise before lifecycle deduplication. Otherwise a generic
+  // completion can supersede the richer delegated completion and then be
+  // removed itself, accidentally hiding both records.
+  const transcriptEvents = events.filter(isTranscriptEvent)
   const visibleEvents = dropAnswersRepeatedByCompletionCard(
-    dropDuplicateExecutionPromptMessages(collapseCompletedLifecycleStarts(events)),
+    dropDuplicateExecutionPromptMessages(collapseCompletedLifecycleStarts(transcriptEvents)),
   )
   const items: TranscriptItem[] = []
   let cursor = 0

@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 type activityStatusResponse struct {
@@ -54,7 +52,7 @@ type activityRunningSchedule struct {
 
 // registerActivityStatusTool gives multi-agent chat a read-only live status view.
 // It mirrors the UI header's running workflow source and the scheduler runtime state.
-func (api *StreamingAPI) registerActivityStatusTool(underlyingAgent *mcpagent.Agent, currentUserID string) error {
+func (api *StreamingAPI) registerActivityStatusTool(underlyingAgent definitionToolRegistrar, currentUserID string) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}

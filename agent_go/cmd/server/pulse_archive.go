@@ -166,7 +166,7 @@ func (assessment pulseImproveArchiveAssessment) triggerSummary() string {
 func postRunMonitorArchiveStep(assessment pulseImproveArchiveAssessment) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "archive-improve-log",
-		query: fmt.Sprintf("PULSE ARCHIVE PREFLIGHT. builder/improve.html crossed its retention window (%s; recent run rows=%d). Load get_reference_doc(kind=\"pulse-archive\") and follow it exactly. Archive only safe resolved history, validate staged complete HTML before replacement, preserve all active/open state, then stop.",
+		query: fmt.Sprintf("PULSE ARCHIVE PREFLIGHT. builder/improve.html crossed its retention window (%s; recent run rows=%d). Load read_skill(skill_name=\"builder-reference\", path=\"references/pulse-archive.md\") and follow it exactly. Archive only safe resolved history, validate staged complete HTML before replacement, preserve all active/open state, then stop.",
 			assessment.triggerSummary(), assessment.RecentRunRows),
 	}
 }

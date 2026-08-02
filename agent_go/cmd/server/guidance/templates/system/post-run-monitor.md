@@ -18,7 +18,7 @@ the sole source for a machine action. Preserve its legacy recovery/Advisor state
 until replaced, but add no new state semantics. Project user-relevant outcomes
 without contradicting runtime state.
 
-When updating `builder/improve.html`, keep the first screen short and user-prioritized. Runloop renders pending **Needs your decision** requests above the HTML. The HTML then shows active **Assumptions challenged** only when consequential assumptions exist, followed by **Today's outcome**, goal progress, and recent activity. Signal tiles, cost/time, Maintenance Radar, and cadence may stay inside closed-by-default operator details, but raw evidence never appears in visible HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative. Do not duplicate the full latest-run Bug/Goal narrative at the top if the same details already appear in Recent runs or the timeline.
+When updating `builder/improve.html`, keep the first screen short and user-prioritized. Runloop renders pending **Needs your decision** requests above the HTML. The HTML then shows active **Assumptions challenged** only when consequential assumptions exist, followed by **Today's outcome**, a compact SQLite-derived **Current work** summary, goal progress, and recent material activity. Current work contains counts plus at most three important items and three fixes needing verification; the Pulse popup owns the full issue tracker. Signal tiles, cost/time, Maintenance Radar, and cadence may stay inside closed-by-default operator details, but raw evidence, standing finding cards, and reviewer field dumps never appear in visible HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative. Do not duplicate the full latest-run Bug/Goal narrative at the top if the same details already appear in Recent runs or the timeline.
 
 ## Timeout Recovery
 
@@ -132,19 +132,18 @@ Gate does not launch reviewers or call mutation tools, plan modification tools, 
 
 Gate must record exactly one decision for each module. A partial worklist is invalid because omitted modules would otherwise disappear silently.
 
-## Independent Review/Fix Stages And One Sequential Writer
+## Independent Review Stages And One Consolidated Writer
 
-The scheduler sends one independently terminal stage per due module, in module
-order, with a shared dated `review_run_id`. Each stage drains retained work,
-optionally performs one fresh read-only review, and acts as that module's sole
-sequential Fixer. A failed reviewer can fail only its module; later modules
-still run.
+The scheduler sends one read-only stage per due module, in module order, with a
+shared dated `review_run_id`. After every selected review stage, it sends one
+consolidated Fixer stage for the pass. Review stages never mutate or mark module
+state. The Fixer is the only writer and records every due module's result.
 
 1. Read `get_pulse_module_state`, `get_pulse_finding_backlog`, the durable
    Gate/worklist, current-run module results, and saved SQLite reviewer records. If every due module already has a
    terminal current-run result, stop. This avoids repeating completed review
    work. On recovery, inspect the current target files, runtime state, and
-   verification evidence before deciding whether to finish, roll back, or
+   verification evidence before deciding whether the Fixer should finish, roll back, or
    retry. Never trust HTML as recovery truth and never blindly reapply a
    partial fix. A `changed_unverified` result is resumed only when its named
    next valid evidence boundary has arrived; until
@@ -160,8 +159,8 @@ still run.
    against saved reviewer records and lifecycle events. Classify each candidate
    as existing unchanged, existing with new evidence, reopened, or genuinely
    new. Update the existing fingerprint for the first two; never file duplicate
-   prose as another bug. Drain actionable retained fixes and verification before
-   spending on new discovery. Launch exactly one reviewer only when changed
+   prose as another bug. Verify eligible prior changes before new discovery;
+   verification does not consume the discovery cap. Launch exactly one reviewer only when changed
    artifacts/current-run evidence or an evidence gap requires it. Never combine
    reviewers in one shell command or use `run_in_background`, background curl,
    `&`, or `wait`.
@@ -171,7 +170,7 @@ still run.
    verdict, next-check condition, findings, evidence, bounded recommended fix,
    verification, and whether user judgment is required with a reason.
    For Bug Review, also include the suspect step ids/attempts and tell the
-   reviewer to load `get_reference_doc(kind="pulse-bug-review")` for the
+   reviewer to load `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the
    Exploratory QA and observable execution-trace contract whenever Gate evidence
    points to a specific step.
    Explicitly forbid file edits, config or plan changes, publishing,
@@ -188,7 +187,9 @@ still run.
    transport there. Either way never wrap it in a temporary script, background
    process, or polling loop. Pass the exact
    scheduler-provided `pulse_run_id`, dated `review_run_id`, and module name on
-   every call. Do not add a reviewer-specific
+   every call. The call returns an `execution_id` immediately: record it, end
+   the current turn, and resume only from the automatic completion notification.
+   Do not add a reviewer-specific
    completion marker to the instructions:
    `call_generic_agent` appends and enforces its own authoritative final marker.
    The tool rejects a provider pane snapshot that does not contain that marker
@@ -202,11 +203,13 @@ still run.
    Do not give a reviewer `html-output`, the Pulse skeleton, CSS migration, or
    card-formatting work. Reviewers may read only the matching semantic regions
    of `builder/improve.html`; the later Dashboard stage owns presentation.
-4. Reviewer agents only inspect and advise. The parent waits naturally for its
-   synchronous tool results; it must not use sleep, `list_executions`,
-   `query_step`, or a polling loop. The backend saves each complete
-   human-readable Markdown result directly in SQLite and returns a compact
-   review identity. Load it with `get_pulse_review_result` before fixing.
+4. Reviewer agents only inspect and advise. The parent ends its turn after each
+   asynchronous start and resumes from the automatic completion notification;
+   it must not use sleep, `list_executions`, `query_step`, or a polling loop.
+   The backend saves each complete human-readable Markdown result directly in
+   SQLite and supplies a compact review identity in that notification. Load it
+   with `get_pulse_review_result` before the review stage ends. The returned JSON
+   carries both human Markdown and validated structured verification outcomes.
 5. For Goal Advisor, first obtain the read-only strategy review, then send that
    draft and its evidence to a separate read-only critic. The parent accepts,
    narrows, or rejects the proposal using both results. Reject a draft that does
@@ -214,13 +217,19 @@ still run.
    different thesis, its relationship to the active strategy experiment, and
    why incremental repair is insufficient. Maintenance or instrumentation alone
    is never a valid Goal Advisor result.
-6. After the module reviewer returns, build a structured in-turn review ledger
+6. After all selected reviewers return, the consolidated Fixer builds one
+   structured Fix queue
    retaining every finding id, target key, severity, evidence pointer,
    recommended action, verification, and user-judgment flag. Do not repeat
    narrative reviewer prose in later reasoning.
-   Reconcile it with the durable backlog before mutation. Build a conflict map
-   grouped by target key and merge compatible
-   recommendations. Resolve incompatible recommendations in this order:
+   Reconcile it with the durable backlog before mutation. A queue item is one
+   coherent repair bundle and becomes durable through `start_pulse_fix_attempt`.
+   Group findings only when they share a root cause, compatible target changes,
+   and one verification condition. Cross-reviewer grouping is allowed, but no
+   finding may disappear and there is no arbitrary queue cap. Waiting-on-run,
+   waiting-on-user, proposal-only, and externally owned items remain visible
+   outside the actionable queue. Build a conflict map grouped by target and
+   resolve incompatible recommendations in this order:
    explicit user-approved decisions and constraints; correctness and data
    integrity; preserved goal meaning; strategy improvement; then cost and
    convenience. A lower-priority recommendation must never silently override a
@@ -229,18 +238,23 @@ still run.
    alternatives, impact, evidence, and safe default; mark only the affected
    modules blocked and do not mutate that target. Do not ask the user to resolve
    an operational conflict that the evidence and precedence rules decide.
-   Then the parent becomes this module's only **Pulse Fixer** and SQLite lifecycle writer;
-   reviewer Markdown stays immutable evidence. Reviewers never mutate workflow
+   Then start exactly one `call_generic_agent` with `role="fixer"`,
+   `module="pulse_fixer"`, the shared run identities, and the due module list.
+   Record its `execution_id`, end the current turn, and resume only from the
+   automatic completion notification.
+   Reviewer Markdown stays immutable evidence. Reviewers never mutate workflow
    state, and the Fixer creates no HTML recovery ledger.
-7. Apply bounded fixes sequentially with normal direct tools; never launch a
-   second mutating maintenance agent. Load
-   `get_reference_doc(kind="fix-verification")`. Before mutation,
+7. The Fixer applies bounded repair bundles sequentially with normal direct
+   tools; never launch a second mutating maintenance agent. Load
+   `read_skill(skill_name="builder-reference", path="references/fix-verification.md")`. Before mutation,
    capture exact targets, time, hashes/versions, and latest baseline ids; a write
    or any pre-boundary artifact is not proof. Re-read `get_pulse_module_state`,
-   map each actionable finding ID to its `CONCERNS:` fingerprint, and call
-   `start_pulse_fix_attempt` before mutation with intended files and before refs.
-   Block an actionable finding that lacks a fingerprint. One attempt may link
-   several findings; retain its `attempt_id`.
+   map each actionable issue to its backlog record, and call
+   `start_pulse_fix_attempt` before mutation with `issue.id` as `finding_id`, the
+   fingerprint from the same item, intended files, and before refs. IDs address
+   records but do not determine semantic sameness. Block an actionable finding
+   that lacks either value. One attempt may link several findings; retain its
+   `attempt_id`.
 
    After verification, give every finding exactly one evidence-backed
    disposition: `fixed_verified`, `verified_no_change`, `changed_unverified`,
@@ -258,8 +272,9 @@ still run.
    `verification`; before/after refs are only real hashes, versions, or cursors.
    It commits module audit and finding lifecycle atomically. Preserve exact
    blocked/failed errors in `reason`; create no duplicate audit file or visible
-   HTML proof. Recovery starts at the first unresolved module and revalidates
-   current state instead of repeating a mutation.
+   HTML proof. Checkpoint each queue item before starting the next. Recovery
+   starts at the first unresolved queue item and revalidates current state
+   instead of repeating a mutation.
 8. Strategy changes and LLM/Ops changes remain proposal-only unless an exact
    matching request was already approved and still passes approval revalidation.
    Before applying it, compare its recorded approval basis with current state:
@@ -285,11 +300,11 @@ still run.
    its terminal result. Do not claim the module completed while any finding id
    is missing, duplicated without a canonical link, or lacks a durable
    disposition.
-10. Call `mark_pulse_module_result` exactly once for every due module immediately
+10. Within the single Fixer, call `mark_pulse_module_result` exactly once for every due module immediately
     after that module reaches an honest terminal state, including clean,
     changed, changed-unverified, blocked, or failed outcomes.
-    A reviewer failure affects only
-    that module unless missing evidence makes a safe fix impossible. Do not
+    A reviewer failure is retained for only
+    that module and does not close it before the Fixer runs. Do not
     replace a failed reviewer by improvising its deep audit in the parent; mark
     the module failed or blocked with the exact reviewer error and continue the
     independent safe modules.
@@ -303,7 +318,7 @@ still run.
     results exist.
 
 Read-only behavior is enforced by reviewer prompts, a read-only tool allowlist,
-and empty reviewer write paths. The single-fixer rule prevents concurrent
+and empty reviewer write paths. The one-Fixer-per-pass rule prevents concurrent
 workflow-state writes; the dedicated Dashboard prevents competing
 `improve.html` writers. The backend independently enforces the two-reviewer
 concurrency cap and persists one complete SQLite reviewer result per module.
@@ -469,7 +484,7 @@ The read-only reviewer scopes the defect from run/eval evidence, execution logs,
 validation, prompts/config, stale artifacts, and evidence-chain breakage, then
 returns exact findings and verification steps; the Pulse Fixer applies and
 verifies the bounded repair directly. The reviewer and Pulse Fixer load
-`get_reference_doc(kind="pulse-bug-review")` for the full read-only contract:
+`read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")` for the full read-only contract:
 the Exploratory QA behavioral-contract and risk-matrix method, the control-path
 reachability check (`wrong_store_write`, `shadow_store_drift`,
 `dead_configuration`), the observable execution-trace review, and the finding
@@ -699,7 +714,7 @@ Keep the next Auditor checkpoint no later than Advisor's and normally require a
 fresh Auditor result between Advisor runs. A user answer/experiment may override
 that order. After a bug fix, wait for verification plus new valid outcome data.
 
-Load `get_reference_doc(kind="strategy-auditor")`. The reviewer reconstructs
+Load `read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`. The reviewer reconstructs
 the goal-to-action-to-target/source-to-outcome causal chain and uses bounded
 read-only queries against existing workflow tables plus retained run/eval
 evidence. It compares comparable windows and plan versions, reports counts and
@@ -852,8 +867,8 @@ Enabled account-level notification channels (for example Gmail) are inherited au
 Before finalizing, read `get_pulse_module_state` and confirm every module marked
 due for this `pulse_run_id` has a terminal module result. If any due result is
 missing, do not publish or notify a complete Pulse. Run each unresolved
-module's independent backlog/review/fixer stage,
-record their results, and then continue finalization. Never silently treat a
+module's independent read-only review when needed, then run the one consolidated
+Fixer to record all unresolved results before continuing finalization. Never silently treat a
 missing result as skipped or successful.
 
 Dashboard/questions run in a focused turn that loads `review-improve-log`,

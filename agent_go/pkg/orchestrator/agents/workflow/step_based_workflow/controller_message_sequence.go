@@ -1015,14 +1015,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) setMessageSequenceShellEnv(sessionID,
 		return
 	}
 	stepOutputAbs := hcpo.messageSequenceAbsPath(hcpo.messageSequenceExecutionRelPath(stepPath, stepID))
-	dbAbs := filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 	registerStepSessionShellEnv(
 		sessionID,
 		stepOutputAbs,
 		filepath.Dir(stepOutputAbs),
-		dbAbs,
+		"",
 		hcpo.snapshotWorkspaceEnv(),
 	)
+	dbAccess := DBAccessRead
+	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil && dbWritePathGranted(cfg.WritePaths, hcpo.GetWorkspacePath()) {
+		dbAccess = DBAccessReadWrite
+	}
+	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), dbAccess, false)
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceRuntimeSessionID(stepPath string, stepID string) string {
@@ -1224,6 +1228,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 	if writeAccess.Knowledgebase {
 		kbAccess = KBAccessReadWrite
 	}
+	dbAccess := DBAccessRead
+	if writeAccess.DB {
+		dbAccess = DBAccessReadWrite
+	}
 	// Honor the step's declared context_output so the sequence writes the file
 	// downstream steps expect (in execution/<stepID>/, the normal step folder).
 	// Fall back to the generic name only when the step declares no output.
@@ -1260,6 +1268,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 		"DocsRoot":                  docsRoot,
 		"StepExecutionPath":         hcpo.messageSequenceAbsPath(stepExecRel),
 		"DBPath":                    hcpo.messageSequenceAbsPath(DBFolderName),
+		"DBAccess":                  dbAccess,
+		"DBDirectAccess":            "false",
 		"KnowledgebasePath":         hcpo.messageSequenceAbsPath(KnowledgebaseFolderName),
 		"FolderGuardReadPaths":      strings.Join(toAbsPaths(docsRoot, readPaths), ", "),
 		"FolderGuardWritePaths":     strings.Join(toAbsPaths(docsRoot, writePaths), ", "),

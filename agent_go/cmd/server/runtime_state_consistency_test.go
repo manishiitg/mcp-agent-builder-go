@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,5 +294,54 @@ func TestRuntimeEndpointsUseSameDisplayStatus(t *testing.T) {
 	}
 	if sseBody.RuntimeState.Revision != wantRevision {
 		t.Fatalf("SSE runtime revision=%d, want %d", sseBody.RuntimeState.Revision, wantRevision)
+	}
+}
+
+// TestReconcilerDoesNotCallAnInFlightRunSuccessful covers the bug that made
+// every other run symptom unreadable.
+//
+// A scheduled run is many sequential turns sharing one session, and between
+// them the session reads "completed". Finalizing on that stamped the whole run
+// success while it was on turn 1 of 10: rtslatency's 2026-07-31 02:30 run was
+// recorded success/84,599 ms while its log shows turns running for another hour.
+// Because the record never corrected itself, runs later killed by a restart also
+// read as successful, and the workflow looked healthy while its digest had not
+// shipped for days.
+func TestReconcilerDoesNotCallAnInFlightRunSuccessful(t *testing.T) {
+	now := time.Now()
+	svc := &SchedulerService{api: &StreamingAPI{
+		activeSessions: map[string]*ActiveSessionInfo{
+			"run-session": {SessionID: "run-session", Status: "completed", LastActivity: now},
+		},
+	}}
+
+	// 84 seconds in — exactly where rtslatency was stamped success.
+	status, _, terminal := svc.reconciledScheduleRunStatus(&ScheduleRunEntry{
+		SessionID: "run-session",
+		StartedAt: now.Add(-84 * time.Second),
+	}, now)
+	if terminal {
+		t.Fatalf("a run between turns was finalized as %q; the scheduler had not recorded a result yet", status)
+	}
+
+	// A long real run must also survive: healthy rtslatency runs reach 2.5 hours.
+	if _, _, terminal := svc.reconciledScheduleRunStatus(&ScheduleRunEntry{
+		SessionID: "run-session",
+		StartedAt: now.Add(-150 * time.Minute),
+	}, now); terminal {
+		t.Fatal("a 2.5-hour run still between turns was finalized")
+	}
+
+	// Past the abandoned window it is reported interrupted — never success,
+	// because success is the scheduler's verdict and it never recorded one.
+	status, msg, terminal := svc.reconciledScheduleRunStatus(&ScheduleRunEntry{
+		SessionID: "run-session",
+		StartedAt: now.Add(-scheduleRunAbandonedAfter - time.Minute),
+	}, now)
+	if !terminal || status == "success" {
+		t.Fatalf("an abandoned run reconciled to status %q terminal=%t; must never be success", status, terminal)
+	}
+	if !strings.Contains(msg, "never recorded a terminal result") {
+		t.Fatalf("abandoned-run message does not say what happened: %q", msg)
 	}
 }

@@ -99,10 +99,15 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 		"get_pulse_module_state",
 		"get_pulse_finding_backlog",
 		"existing_unchanged",
+		"expected outcome",
+		"observed failure",
+		"never from an ID, fingerprint",
 		"reuse the exact existing CONCERNS payload",
-		"matched fingerprint",
+		"do not emit a separate technical manifest",
 		"STRUCTURED HARNESS ISSUES",
 		"PULSE_FINDING_JSON:",
+		"PULSE_VERIFICATION_JSON:",
+		`"attempt_id"`,
 		"never executed by the UI",
 	} {
 		if !strings.Contains(instruction, want) {
@@ -111,15 +116,38 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 	}
 }
 
+func TestBuildPulseFixerInstructionDoesNotInheritReadOnlyReviewerContract(t *testing.T) {
+	marker := pulseReviewerCompletionMarker("all-modules-fixer")
+	instruction := buildPulseFixerInstruction("Workflow/example", "Drain bug_review and eval_health.", marker)
+	for _, want := range []string{"PULSE FIXER WRITE SCOPE", "single writer", "CONSOLIDATED FIX QUEUE", "start_pulse_fix_attempt", "repair bundles"} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("Fixer instruction missing %q:\n%s", want, instruction)
+		}
+	}
+	for _, forbidden := range []string{"READ-ONLY REVIEW SCOPE", "do not write a file", "ARTIFACT-FIRST RESULT CONTRACT"} {
+		if strings.Contains(instruction, forbidden) {
+			t.Fatalf("Fixer instruction inherited reviewer restriction %q:\n%s", forbidden, instruction)
+		}
+	}
+	if !strings.HasSuffix(instruction, marker) {
+		t.Fatalf("Fixer marker must be final: %s", instruction)
+	}
+}
+
 func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing.T) {
 	readOnly := goalAdvisorReadOnlyToolAgentAllowedToolNames()
 	proposal := goalAdvisorFinalizerProposalToolAgentAllowedToolNames()
 	approved := goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
 
-	for _, tool := range []string{"get_workflow_command_guidance", "get_reference_doc", "execute_shell_command"} {
+	for _, tool := range []string{"get_workflow_command_guidance", "execute_shell_command"} {
 		assertToolListContains(t, readOnly, tool)
 		assertToolListContains(t, proposal, tool)
 		assertToolListContains(t, approved, tool)
+	}
+	for name, tools := range map[string][]string{"read-only": readOnly, "proposal": proposal, "approved": approved} {
+		if toolSet(tools)["read_skill"] {
+			t.Fatalf("%s builder allowlist should not own mcpagent's intrinsic read_skill tool", name)
+		}
 	}
 	for _, tool := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
 		assertToolListContains(t, readOnly, tool)

@@ -7,10 +7,10 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `get_reference_doc(kind="post-run-monitor")`,
-   `get_reference_doc(kind="pulse-bug-review")`,
-   `get_reference_doc(kind="assumption-audit")`, and
-   `get_reference_doc(kind="review-improve-log")`. Use the `bug_review` triggers
+1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
+   `read_skill(skill_name="builder-reference", path="references/pulse-bug-review.md")`,
+   `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`, and
+   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. Use the `bug_review` triggers
    from `post-run-monitor` plus the Exploratory QA, observable execution-trace,
    and control-path reachability contract in `pulse-bug-review` as the audit
    contract. These references belong to the parent. Do
@@ -30,7 +30,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    files, send external messages, publish, trade, post, mutate production data,
    ask the user, or launch another agent. It may read only matching Bug
    Review/open-finding regions of `builder/improve.html`; it must not format or
-   write the page.
+   write the page. `call_generic_agent` returns an `execution_id` immediately;
+   end the current turn and resume only from the automatic completion
+   notification.
 4. Require: behavioral contract, QA coverage, expected versus observed,
    findings classified as `correctness_bug`, `efficiency_or_coaching`,
    `no_issue`, or `insufficient_evidence`, exact evidence, bounded recommended
@@ -48,7 +50,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    limitation. Harness correctness fixes are platform-owned and do not require
    a user decision unless a genuine product-policy choice remains.
 5. Read the persisted result with `get_pulse_review_result` using the exact
-   `review_run_id` and `module` returned by `call_generic_agent`. Validate and
+   `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that complete result against `builder/improve.html`. As the
    parent, make one bounded update that appends one compact newest-first Bug
    Review entry with

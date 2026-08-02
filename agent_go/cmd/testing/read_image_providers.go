@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"

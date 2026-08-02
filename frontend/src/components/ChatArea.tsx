@@ -274,9 +274,10 @@ function handleLiveStreamingEvent(
 
   if (event.type === 'streaming_start') {
     if (ownedTerminalKeys.length > 0) {
-      for (const ownedTerminalKey of ownedTerminalKeys) {
-        chatStore.clearOwnedStreamingTerminal(ownedTerminalKey)
-      }
+      // Child terminal snapshots are already retained by the backend terminal
+      // store. Keeping another full-screen copy per unopened owner in Zustand
+      // made Electron memory grow with every agent and had no UI consumer.
+      return
     } else if (scope.kind === 'delegation' && scope.id) {
       chatStore.clearDelegationStreamingText(scope.id)
     } else if (scope.kind === 'session') {
@@ -295,9 +296,7 @@ function handleLiveStreamingEvent(
     const rawIndex = innerData?.chunk_index ?? agentEvent?.chunk_index
     const chunkIndex = typeof rawIndex === 'number' ? rawIndex : -1
     if (ownedTerminalKeys.length > 0) {
-      for (const ownedTerminalKey of ownedTerminalKeys) {
-        chatStore.setOwnedStreamingTerminalSnapshot(ownedTerminalKey, chunkIndex, content)
-      }
+      return
     } else if (scope.kind === 'delegation' && scope.id) {
       if (chunkIndex === 0 || chunkIndex === 1) chatStore.clearDelegationStreamingText(scope.id)
       chatStore.appendDelegationStreamingChunk(scope.id, chunkIndex, content)
@@ -312,9 +311,7 @@ function handleLiveStreamingEvent(
   }
 
   if (event.type === 'streaming_end' && ownedTerminalKeys.length > 0) {
-    for (const ownedTerminalKey of ownedTerminalKeys) {
-      chatStore.setOwnedStreamingTerminalActive(ownedTerminalKey, false)
-    }
+    return
   } else if (event.type === 'streaming_end' && scope.kind === 'session') {
     chatStore.clearStreamingStatus(actualSessionId)
     const sidForClear = actualSessionId

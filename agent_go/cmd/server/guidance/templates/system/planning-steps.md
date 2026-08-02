@@ -64,7 +64,7 @@ several known actions in one shared context are not enough. Do not add a
 For the design playbook (8-step design walkthrough, step-type
 trade-offs, validation design, context flow, anti-patterns,
 step-types reference, inner steps, reusable orphan-route pattern),
-call **`get_reference_doc(kind="plan-design")`** — this is the entry
+call **`read_skill(skill_name="builder-reference", path="references/plan-design.md")`** — this is the entry
 point for any plan-composition decision. From there:
 
 - **Per-step-type deep dives**: `todo-task` (anatomy + routes +

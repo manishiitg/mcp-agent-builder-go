@@ -12,9 +12,9 @@ A step's access to each store is independent and defaults differently. Grant the
 | `knowledgebase_access` | `read` · `write` · `read-write` · `none` | `none` | KB is opt-in. `read` to consume business context/notes (covers `knowledgebase/context/`); `write`/`read-write` to contribute — also needs a non-empty `knowledgebase_contribution`, and `knowledgebase_write_method` (`direct` = step writes notes/ itself, default; `agent` = separate post-step writer, only if the user asks). |
 | `db_access` | `read` · `read-write` | `read-write` | db/ is the shared structured-state surface, so read+write is the default. Set `read` for least-privilege steps that must never mutate the db — pure readers, report-shaping/aggregation, validation/preflight: db/ stays readable but is removed from the step's write paths, so an accidental write is sandbox-denied. |
 
-- **Path contract:** steps reach the db via the absolute **`$DB_PATH`** env var (`os.environ['DB_PATH']`), NOT a relative `db/db.sqlite` — a step's working directory is its execution folder, not the workflow root.
+- **DB contract:** agentic steps use `query_workflow_db` and, when `db_access=read-write`, `mutate_workflow_db`; they do not receive raw SQLite access. Saved scripted/application code retains the absolute `$DB_PATH` compatibility variable and must never use a relative `db/db.sqlite` path.
 - **Rule of thumb:** routing, validation, mechanical transforms, aggregation/report-shaping, human approval, pure db/KB readers, and mature scripted steps should stay read-only on learnings (and often `db_access: read`).
-- Deep dive on what belongs in each store and the write contracts: `get_reference_doc(kind="stores")`.
+- Deep dive on what belongs in each store and the write contracts: `read_skill(skill_name="builder-reference", path="references/stores.md")`.
 
 ### The three locks
 
@@ -35,7 +35,7 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
   - **Workshop mode selection** → move or create obviously deterministic API/CLI/data work as scripted immediately. The 10+ representative-run threshold applies only before freezing it with `lock_code`, not before choosing scripted mode.
   - Set `declared_execution_mode_reason` either way.
 - **`use_code_execution_mode`**: per-step override of the preset's code-execution toggle (nil = inherit).
-- **Model selection**: `execution_tier` (`high`/`medium`/`low`) maps to the workflow's tiered allocation; `execution_llm` / `validation_llm` pin a specific published model for that role. Prefer tiers over hard pins. Full framework: `get_reference_doc(kind="llm-selection")`.
+- **Model selection**: `execution_tier` (`high`/`medium`/`low`) maps to the workflow's tiered allocation; `execution_llm` / `validation_llm` pin a specific published model for that role. Prefer tiers over hard pins. Full framework: `read_skill(skill_name="builder-reference", path="references/llm-selection.md")`.
 
 ### Other common fields
 
@@ -49,4 +49,4 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
 
 1. `update_step_config(step_id, <field>=<value>, ...)` to set; `update_step_config(step_id, clear=["<field>", ...])` to revert to default.
 2. Pair access grants with their prerequisite (`learnings_access: read-write` ⇒ `learning_objective`; KB write ⇒ `knowledgebase_contribution`).
-3. For the reliability/strategy decision-making that drives most config changes: `get_reference_doc(kind="optimize-playbook")`.
+3. For the reliability/strategy decision-making that drives most config changes: `read_skill(skill_name="builder-reference", path="references/optimize-playbook.md")`.

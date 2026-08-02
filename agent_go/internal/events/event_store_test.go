@@ -215,6 +215,96 @@ func TestEventStoreRetentionPreservesStructuralWorkflowMilestones(t *testing.T) 
 	}
 }
 
+func TestGetTerminalEventsUsesExclusiveSequenceCursors(t *testing.T) {
+	store := NewEventStore(20)
+	defer store.Stop()
+
+	sessionID := "session-terminal-cursors"
+	terminalID := sessionID + ":background:reviewer"
+	otherTerminalID := sessionID + ":background:other"
+	now := time.Now()
+	for i := 1; i <= 5; i++ {
+		store.AddEvent(sessionID, Event{
+			ID:              fmt.Sprintf("event-%d", i),
+			Type:            string(pkgevents.ToolCallEnd),
+			Timestamp:       now.Add(time.Duration(i) * time.Millisecond),
+			SessionID:       sessionID,
+			TerminalOwnerID: "background:reviewer",
+			TerminalID:      terminalID,
+			Data: &pkgevents.AgentEvent{
+				Type:      pkgevents.ToolCallEnd,
+				Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			},
+		})
+	}
+	store.AddEvent(sessionID, Event{
+		ID:              "other-event",
+		Type:            string(pkgevents.ToolCallEnd),
+		Timestamp:       now.Add(6 * time.Millisecond),
+		SessionID:       sessionID,
+		TerminalOwnerID: "background:other",
+		TerminalID:      otherTerminalID,
+		Data: &pkgevents.AgentEvent{
+			Type:      pkgevents.ToolCallEnd,
+			Timestamp: now.Add(6 * time.Millisecond),
+		},
+	})
+
+	latest := store.GetTerminalEvents(sessionID, terminalID, GetTerminalEventsOptions{Limit: 2})
+	if got := eventIDs(latest.Events); fmt.Sprint(got) != "[event-4 event-5]" {
+		t.Fatalf("latest ids = %v, want [event-4 event-5]", got)
+	}
+	if !latest.HasOlder || latest.HasNewer {
+		t.Fatalf("latest page flags = older:%t newer:%t", latest.HasOlder, latest.HasNewer)
+	}
+
+	older := store.GetTerminalEvents(sessionID, terminalID, GetTerminalEventsOptions{
+		Limit:          2,
+		BeforeSequence: latest.OldestSequence,
+	})
+	if got := eventIDs(older.Events); fmt.Sprint(got) != "[event-2 event-3]" {
+		t.Fatalf("older ids = %v, want [event-2 event-3]", got)
+	}
+	if !older.HasOlder || !older.HasNewer {
+		t.Fatalf("older page flags = older:%t newer:%t", older.HasOlder, older.HasNewer)
+	}
+
+	newer := store.GetTerminalEvents(sessionID, terminalID, GetTerminalEventsOptions{
+		Limit:         10,
+		AfterSequence: older.LatestSequence,
+	})
+	if got := eventIDs(newer.Events); fmt.Sprint(got) != "[event-4 event-5]" {
+		t.Fatalf("newer ids = %v, want [event-4 event-5]", got)
+	}
+	if contains(eventIDs(newer.Events), "other-event") {
+		t.Fatal("terminal cursor page leaked an event owned by another terminal")
+	}
+}
+
+func TestTerminalEventIndexFollowsBoundedSessionRetention(t *testing.T) {
+	store := NewEventStore(3)
+	defer store.Stop()
+
+	sessionID := "session-terminal-index-retention"
+	terminalID := sessionID + ":background:reviewer"
+	for i := 1; i <= 5; i++ {
+		store.AddEvent(sessionID, Event{
+			ID:              fmt.Sprintf("event-%d", i),
+			Type:            string(pkgevents.ToolCallEnd),
+			Timestamp:       time.Now().Add(time.Duration(i) * time.Millisecond),
+			SessionID:       sessionID,
+			TerminalOwnerID: "background:reviewer",
+			TerminalID:      terminalID,
+			Data:            &pkgevents.AgentEvent{Type: pkgevents.ToolCallEnd},
+		})
+	}
+
+	page := store.GetTerminalEvents(sessionID, terminalID, GetTerminalEventsOptions{Limit: 10})
+	if got := eventIDs(page.Events); fmt.Sprint(got) != "[event-3 event-4 event-5]" {
+		t.Fatalf("terminal index retained events outside global bound: %v", got)
+	}
+}
+
 func eventTypes(events []Event) []string {
 	types := make([]string, 0, len(events))
 	for _, event := range events {

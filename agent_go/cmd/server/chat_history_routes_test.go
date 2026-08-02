@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
-	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 )
 
 func TestRestoredRuntimeUsesLaunchableTransportFromHandle(t *testing.T) {

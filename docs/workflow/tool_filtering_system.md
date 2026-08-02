@@ -154,7 +154,7 @@ Tool availability is decided by **two independent gates**. Section 1 above is on
 | Layer | Scope | Where | Keyed on |
 |-------|-------|-------|----------|
 | **1. Static config filter** | Which tools are *registered* on the agent | `enabled_custom_tools` / `selected_tools` → `FilterCustomToolsByCategory` / `ToolFilter` | step/workflow config |
-| **2. Dynamic workshop-mode allow-list** | Which *registered* tools the agent may use *this turn* | `GetToolsForWorkshopMode(mode)` → `Agent.SetToolAllowList` | current workshop mode (`workshop` / `run`) |
+| **2. Dynamic workshop-mode allow-list** | Which *registered* tools the agent may use *this turn* | `GetToolsForWorkshopMode(mode)` → `Agent.SetToolAccess` | current workshop mode (`workshop` / `run`) |
 
 A tool can be **registered** (layer 1) yet still **blocked** (layer 2). This has happened in production twice:
 
@@ -168,12 +168,12 @@ A tool can be **registered** (layer 1) yet still **blocked** (layer 2). This has
 
 CLI providers (`claude-code`, `codex-cli`, `cursor-cli`, `pi-cli`; legacy `agy-cli`) do **not** receive tools as native tool-calling functions. They run in code-execution mode and reach every tool through the **api-bridge** (`mcp__api-bridge__*`), discovered at use-time via `get_api_spec`. So "do you have tool X?" asked of a CLI agent is unreliable — bridged tools aren't in its native list; it only sees them through `get_api_spec`.
 
-Crucially, the **layer-2 allow-list is the single gate for the bridge too**, enforced in two spots in `mcpagent` — both reading the same `sessionToolAllowLists[sessionID]` map (populated by `SetToolAllowList` → `codeexec.SetSessionToolAllowList`):
+Crucially, the **layer-2 allow-list is the single gate for the bridge too**, enforced in two spots in `mcpagent` — both reading the same `sessionToolAllowLists[sessionID]` map (populated by `SetToolAccess` → `codeexec.SetSessionToolAllowList`):
 
 1. **Discovery** — `agent/code_execution_tools.go` (`Respect toolAllowList … only include allowed custom tools in the index`): a blocked tool never appears in `get_api_spec`.
 2. **Execution** — `agent/codeexec/registry.go` `CallCustomToolWithSession`: a blocked tool's HTTP call returns `tool "<name>" is not available in the current workshop mode`.
 
-**Consequence:** adding a tool to `GetToolsForWorkshopMode` is sufficient for CLI agents — it makes the tool both *visible* in `get_api_spec` and *callable* via the bridge. No separate bridge registration is needed (registration already happened in layer 1 via `UpdateCodeExecutionRegistry`).
+**Consequence:** adding a tool to `GetToolsForWorkshopMode` is sufficient for CLI agents — it makes the tool both *visible* in `get_api_spec` and *callable* via the bridge. Registration updates routing immediately; there is no separate public registry-refresh lifecycle.
 
 ### Debugging checklist — "the agent says it doesn't have tool X"
 

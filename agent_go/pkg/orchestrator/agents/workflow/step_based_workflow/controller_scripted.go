@@ -809,6 +809,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 	stepOutputAbsPath string,
 	workDirAbsPath string,
 	stepExecutionRelPath string,
+	dbAccess string,
 ) (output string, exitCode int, execErr error) {
 	docsRoot := GetPromptDocsRoot() // /app/workspace-docs
 
@@ -892,6 +893,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 		UseShell:         &useShell,
 		FolderGuard:      guard,
 		ExtraEnv:         extraEnv,
+		DBReadSnapshot:   dbAccess == DBAccessRead,
 	}
 
 	// Dispatch through the same client the agent's own execute_shell_command uses.
@@ -949,6 +951,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 	allSteps []PlanStepInterface,
 	stepExecutionRelPath string, // workspace-relative, e.g. "Workflow/X/runs/iter-1/execution/step-2"
 	executionWorkspacePath string, // workspace-relative execution root
+	dbAccess string,
 ) *ScriptedFastPathResult {
 	docsRoot := GetPromptDocsRoot()
 	stepID := step.GetID()
@@ -1038,7 +1041,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 
 	// Run from execution/code/ — same location the LLM writes to
 	scriptStartTime := time.Now()
-	output, exitCode, execErr := hcpo.execScriptedScript(ctx, step, stepIndex, stepPath, mainPyAbsPath, inputArgs, stepExecutionAbsPath, codeDirAbsPath, stepExecutionRelPath)
+	output, exitCode, execErr := hcpo.execScriptedScript(ctx, step, stepIndex, stepPath, mainPyAbsPath, inputArgs, stepExecutionAbsPath, codeDirAbsPath, stepExecutionRelPath, dbAccess)
 	scriptDurationMs := time.Since(scriptStartTime).Milliseconds()
 
 	// Helper to build a RunRecord with common fields pre-filled

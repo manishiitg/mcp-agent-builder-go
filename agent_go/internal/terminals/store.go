@@ -2559,6 +2559,9 @@ func metadataForEvent(event storeevents.Event) map[string]interface{} {
 		if data.Duration != "" {
 			metadata["duration"] = data.Duration
 		}
+		if data.Kind != "" {
+			metadata["execution_kind"] = string(data.Kind)
+		}
 		if data.ParentExecutionID != "" {
 			metadata["parent_execution_id"] = data.ParentExecutionID
 		}
@@ -2588,6 +2591,9 @@ func metadataForEvent(event storeevents.Event) map[string]interface{} {
 		metadata["name"] = data.Name
 		metadata["status"] = data.Status
 		metadata["provider"] = data.Provider
+		if data.Kind != "" {
+			metadata["execution_kind"] = string(data.Kind)
+		}
 	default:
 		if withBase, ok := event.Data.Data.(interface {
 			GetBaseEventData() *agentevents.BaseEventData
@@ -2666,42 +2672,10 @@ func isStructuredExecutionMetadata(sessionID string, event storeevents.Event, me
 }
 
 func terminalOwnerID(sessionID string, event storeevents.Event, metadata map[string]interface{}) string {
-	if ownerID := workflowStepOwnerCandidate(event, metadata); validTerminalOwner(ownerID, sessionID) {
+	if ownerID := strings.TrimSpace(event.TerminalOwnerID); ownerID != "" {
 		return ownerID
 	}
-	// An explicit execution owner is goroutine-local and therefore more
-	// authoritative than a provider event's inherited main_agent label.
-	if ownerID := firstValidTerminalOwner(sessionID,
-		stringValue(metadata, "execution_owner_id"),
-		stringValue(metadata, "owner_execution_id"),
-	); ownerID != "" {
-		return ownerID
-	}
-	// Child identity is more specific than a provider-level execution kind.
-	// Provider events can inherit main_agent from their parent while carrying
-	// the real child owner in enriched metadata.
-	if ownerID := firstValidTerminalOwner(sessionID,
-		stringValue(metadata, "background_agent_id"),
-		stringValue(metadata, "delegation_id"),
-		stringValue(metadata, "agent_id"),
-	); ownerID != "" {
-		return ownerID
-	}
-	if terminalEventIsMainAgent(event, metadata) {
-		return "main:" + sessionID
-	}
-	if ownerID := firstValidTerminalOwner(sessionID,
-		stringValue(metadata, "execution_id"),
-		event.ExecutionID,
-	); ownerID != "" {
-		return ownerID
-	}
-	return firstValidTerminalOwner(sessionID,
-		stringValue(metadata, "current_step_id"),
-		stringValue(metadata, "workflow_step_id"),
-		stringValue(metadata, "step_id"),
-		stringValue(metadata, "correlation_id"),
-	)
+	return storeevents.ResolveTerminalOwnerID(sessionID, event, metadata)
 }
 
 func terminalOwnerIsCanonicalMain(sessionID, ownerID string) bool {
@@ -2784,150 +2758,8 @@ func terminalKindIsMain(kind string) bool {
 	}
 }
 
-func terminalEventIsMainAgent(event storeevents.Event, metadata map[string]interface{}) bool {
-	kind := strings.ToLower(strings.TrimSpace(firstNonEmpty(
-		stringValue(metadata, "execution_kind"),
-		stringValue(metadata, "scope"),
-		event.ExecutionKind,
-	)))
-	return kind == "main_agent" || kind == "main" || kind == "chat"
-}
-
-func firstValidTerminalOwner(sessionID string, candidates ...string) string {
-	for _, candidate := range candidates {
-		if validTerminalOwner(candidate, sessionID) {
-			return strings.TrimSpace(candidate)
-		}
-	}
-	return ""
-}
-
-func validTerminalOwner(candidate, sessionID string) bool {
-	candidate = strings.TrimSpace(candidate)
-	return candidate != "" && candidate != sessionID
-}
-
-func workflowStepOwnerCandidate(event storeevents.Event, metadata map[string]interface{}) string {
-	for _, candidate := range []string{
-		event.ExecutionID,
-		stringValue(metadata, "execution_id"),
-		stringValue(metadata, "agent_execution_id"),
-	} {
-		candidate = strings.TrimSpace(candidate)
-		if strings.HasPrefix(candidate, "workflow-step:") {
-			return canonicalWorkflowStepOwner(candidate)
-		}
-	}
-
-	agentID := firstNonEmpty(
-		stringValue(metadata, "agent_id"),
-		stringValue(metadata, "background_agent_id"),
-		event.ExecutionID,
-	)
-	parentExecutionID := firstNonEmpty(
-		stringValue(metadata, "parent_execution_id"),
-		stringValue(metadata, "owner_execution_id"),
-	)
-	// execute_step IDs are created per invocation and are goroutine-local.
-	// current_step_id/step_id come from shared workflow context and can briefly
-	// describe a sibling when parallel steps start together. Prefer the step
-	// encoded in the execution identity so parallel calc/word executions
-	// cannot swap transcripts.
-	stepID := firstNonEmpty(
-		workflowStepIDFromExecutionAgent(agentID),
-		workflowStepIDFromExecutionAgent(parentExecutionID),
-		stringValue(metadata, "current_step_id"),
-		stringValue(metadata, "workflow_step_id"),
-		stringValue(metadata, "step_id"),
-	)
-	// A message-sequence item is an internal turn of its parent workflow step,
-	// not a separately selectable terminal. Collapse every item and automatic
-	// validation pass into the parent step's clean transcript. Message-sequence
-	// items are always structured transport (never tmux), so unlike the
-	// exec- collapse below, this does not need the isTerminalMetadata guard —
-	// there is no real tmux pane to protect from being merged.
-	//
-	// The parent can be either an "exec-<step>-<timestamp>" id (a regular
-	// workshop step execution) or a "workflow-full-<token>" id (an item
-	// running inside a scheduled/Pulse full-run execution, which registers
-	// itself as the ParentExecutionID for everything it contains — see
-	// planning_exports.go's execID construction). Missing the second form
-	// left full-run items stranded in their own near-empty terminal instead
-	// of the step terminal their own tool-call events already collapse into.
-	// Preferred path: the creator DECLARED that this execution is an internal
-	// turn of its parent (message_sequence_item, scripted_step, router), so it
-	// resolves to its parent's terminal regardless of what its id looks like.
-	// This is what makes the collapse independent of id format — the reason
-	// the prefix-matching fallback below kept missing cases as new id shapes
-	// ("exec-", then "workflow-full-") were introduced.
-	declaredKind := orchestratorevents.ParseExecutionKind(stringValue(metadata, "execution_kind"))
-	if declaredKind.FoldsIntoParent() && parentExecutionID != "" && stepID != "" {
-		return "workflow-step:" + parentExecutionID + ":" + stepID
-	}
-	// Legacy fallback for executions that predate the declared kind.
-	if strings.HasPrefix(agentID, "msgseq-") && stepID != "" &&
-		(strings.HasPrefix(parentExecutionID, "exec-") || strings.HasPrefix(parentExecutionID, "workflow-full-")) {
-		return "workflow-step:" + parentExecutionID + ":" + stepID
-	}
-	// execute_step uses exec-<step>-<timestamp> for the outer background task.
-	// Give it the same owner used by its streaming/tool events.
-	if !isTerminalMetadata(metadata) && strings.HasPrefix(agentID, "exec-") && stepID != "" {
-		return "workflow-step:" + agentID + ":" + stepID
-	}
-
-	workflowID := firstNonEmpty(
-		stringValue(metadata, "workflow_execution_id"),
-		stringValue(metadata, "workflow_run_id"),
-		stringValue(metadata, "execution_owner_id"),
-		stringValue(metadata, "execution_id"),
-		event.ExecutionID,
-	)
-	if strings.HasPrefix(workflowID, "workflow-full-") && stepID != "" {
-		return "workflow-step:" + workflowID + ":" + stepID
-	}
-	return ""
-}
-
-func workflowStepIDFromExecutionAgent(agentID string) string {
-	agentID = strings.TrimSpace(agentID)
-	if !strings.HasPrefix(agentID, "exec-") {
-		return ""
-	}
-	withoutPrefix := strings.TrimPrefix(agentID, "exec-")
-	lastDash := strings.LastIndex(withoutPrefix, "-")
-	if lastDash <= 0 {
-		return ""
-	}
-	suffix := withoutPrefix[lastDash+1:]
-	if len(suffix) < 12 {
-		return ""
-	}
-	for _, r := range suffix {
-		if r < '0' || r > '9' {
-			return ""
-		}
-	}
-	return strings.TrimSpace(withoutPrefix[:lastDash])
-}
-
-func canonicalWorkflowStepOwner(ownerID string) string {
-	ownerID = strings.TrimSpace(ownerID)
-	if !strings.HasPrefix(ownerID, "workflow-step:") {
-		return ownerID
-	}
-	executionID := workflowExecutionIDFromOwner(ownerID)
-	encodedStepID := workflowStepIDFromExecutionAgent(executionID)
-	if executionID == "" || encodedStepID == "" {
-		return ownerID
-	}
-	return "workflow-step:" + executionID + ":" + encodedStepID
-}
-
 func terminalIDFor(sessionID, ownerID string) string {
-	if ownerID == "" {
-		return sessionID
-	}
-	return fmt.Sprintf("%s:%s", sessionID, ownerID)
+	return storeevents.TerminalIDForOwner(sessionID, ownerID)
 }
 
 func workflowStepIDFromOwner(ownerID string) string {

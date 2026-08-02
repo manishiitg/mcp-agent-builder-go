@@ -192,8 +192,9 @@ func TestMacOSSandboxProfile(t *testing.T) {
 	if strings.Contains(profile, fmt.Sprintf("(allow file-read* (subpath \"%s\"))", canonicalWorkDir)) {
 		t.Error("sandbox profile grants broad read access to the working directory")
 	}
-	if !strings.Contains(profile, fmt.Sprintf("(allow file-read-metadata (literal \"%s\"))", canonicalWorkDir)) {
-		t.Error("sandbox profile must grant only working-directory metadata access")
+	workDirLiteralGrant := fmt.Sprintf("(allow file-read* (literal \"%s\"))", canonicalWorkDir)
+	if count := strings.Count(profile, workDirLiteralGrant); count != 1 {
+		t.Errorf("sandbox profile must grant the working-directory literal exactly once for getcwd; count=%d", count)
 	}
 
 	t.Logf("✓ Sandbox profile generated correctly:\n%s", profile)

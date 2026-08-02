@@ -82,7 +82,7 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
   const getAgentColor = () => {
     const t = (event as unknown as { agent_type?: string })?.agent_type
     if (isMessageSequenceItem) return 'slate'
-    if (isWorkflowStepExecution) return 'cyan'
+    if (isWorkflowStepExecution) return 'slate'
     if (isEvaluationAgent) return 'blue'
     if (t === 'plan_breakdown') return 'emerald'
     if (t === 'planning') return 'blue'
@@ -93,7 +93,9 @@ export const OrchestratorAgentEndEventDisplay: React.FC<OrchestratorAgentEndEven
     // through to the yellow default, so a normal end-of-run read as a warning
     // -- the loudest card on the screen for the least alarming event.
     if (t === 'todo_task_orchestrator') return 'slate'
-    return 'yellow'
+    // A normal completion is neutral. Failure components carry their own red
+    // treatment, so yellow here looked like a warning even when work succeeded.
+    return 'slate'
   }
 
   const agentColor = getAgentColor();

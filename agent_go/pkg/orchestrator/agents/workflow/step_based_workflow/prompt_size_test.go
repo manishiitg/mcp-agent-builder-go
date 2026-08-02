@@ -65,7 +65,7 @@ func executeRealisticWorkshopPromptForMode(t *testing.T, mode string) string {
 // These tests lock in the system-prompt size target for the workshop
 // (builder / optimizer / merged-workshop) modes. The intent is to migrate
 // reference content out of the inline system prompt and into
-// templates/system/*.md, loaded on demand via get_reference_doc.
+// templates/system/*.md, loaded on demand via read_skill.
 //
 // BEFORE migration (snapshot taken from a real chat agent prompt log):
 //   - rendered prompt ~ 154,000 chars / ~38,500 tokens
@@ -208,7 +208,7 @@ func TestWorkshopPromptSize(t *testing.T) {
 
 			if size > MaxWorkshopPromptBytes {
 				t.Errorf("workshop prompt (mode=%s) %d bytes exceeds ceiling %d (~%d tokens). "+
-					"Move sections to templates/system/*.md and reference them via get_reference_doc.",
+					"Move sections to templates/system/*.md and reference them via read_skill.",
 					mode, size, MaxWorkshopPromptBytes, estTokens)
 			}
 			if size < MinWorkshopPromptBytes {
@@ -238,10 +238,11 @@ func TestWorkshopCLIPromptUsesProjectedWorkspaceToolReference(t *testing.T) {
 		}
 	}
 	for _, routingContract := range []string{
-		"exposes only `execute_shell_command`",
+		"The native `api-bridge` exposes `execute_shell_command`",
+		"intrinsic `read_skill`",
 		"logical HTTP-backed tools",
 		"Never call `api-bridge.list_executions`",
-		`get_api_spec(server_name="workflow", tool_name="<name>")`,
+		`get_api_spec(tool_name="<name>")`,
 		"$MCP_MCP",
 		"foreground curl",
 		"Never use `nohup`",
@@ -262,7 +263,7 @@ func TestWorkflowToolsReferenceDistinguishesLogicalFromNativeBridgeTools(t *test
 		"logical workflow tool names",
 		"Never try",
 		"`api-bridge.list_executions`",
-		`get_api_spec(server_name="workflow", tool_name="<name>")`,
+		`get_api_spec(tool_name="<name>")`,
 		"$MCP_MCP`/`$MCP_CUSTOM",
 		"foreground curl",
 		"Never use `nohup`",
@@ -344,7 +345,7 @@ func TestWorkshopModeIsMergedSuperset(t *testing.T) {
 	mustContain := []string{
 		"create_human_input_request",
 		"run_goal_advisor_review",
-		`get_reference_doc(kind="optimize-playbook")`,
+		`read_skill(skill_name="builder-reference", path="references/optimize-playbook.md")`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(prompt, s) {
@@ -382,13 +383,13 @@ func TestWorkshopPromptKeepsCriticalRules(t *testing.T) {
 }
 
 // TestWorkshopPromptReferencesNewToolForLazyDocs verifies the inline prompt
-// mentions get_reference_doc so the agent knows how to load the migrated
+// mentions read_skill so the agent knows how to load the migrated
 // content.
 func TestWorkshopPromptReferencesNewToolForLazyDocs(t *testing.T) {
 	prompt := executeRealisticWorkshopPromptForMode(t, "workshop")
-	if !strings.Contains(prompt, "get_reference_doc") {
-		t.Errorf("workshop prompt does not reference get_reference_doc — agent will not know to load templates/system/*.md docs. " +
-			"Add a pointer to at least one migrated section (e.g. 'For full main.py rules call get_reference_doc(kind=\"code-authoring\")').")
+	if !strings.Contains(prompt, "read_skill") {
+		t.Errorf("workshop prompt does not reference read_skill — agent will not know to load templates/system/*.md docs. " +
+			"Add a pointer to at least one migrated section (e.g. 'For full main.py rules call read_skill(skill_name=\"builder-reference\", path=\"references/code-authoring.md\")').")
 	}
 }
 
@@ -397,7 +398,7 @@ func TestWorkshopPromptReferencesNewToolForLazyDocs(t *testing.T) {
 // it asserts:
 //  1. A unique marker from the old inlined block is GONE from the prompt
 //  2. The kind name IS mentioned somewhere in the prompt (so the agent
-//     knows to call get_reference_doc with that kind)
+//     knows to call read_skill with that kind)
 //
 // This will fail until each section is actually moved. That's the point —
 // it makes "did we migrate yet?" a green/red signal in CI.
@@ -424,7 +425,7 @@ func TestWorkshopPromptMovedSectionsAreReferencedNotInlined(t *testing.T) {
 
 	for _, m := range migrations {
 		if strings.Contains(prompt, m.oldBodyMarker) {
-			t.Errorf("section %q still inlined (found %q); should be in templates/system/%s.md and referenced via get_reference_doc",
+			t.Errorf("section %q still inlined (found %q); should be in templates/system/%s.md and referenced via read_skill",
 				m.kind, m.oldBodyMarker, m.kind)
 		}
 		if !strings.Contains(prompt, m.kind) {

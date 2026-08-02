@@ -100,8 +100,6 @@ import {
   ContextCancelledEventDisplay,
   CacheEventDisplay,
   ComprehensiveCacheEventDisplay,
-  StructuredOutputStartEventDisplay,
-  StructuredOutputEndEventDisplay,
   ContextSummarizationStartedEventDisplay,
   ContextSummarizationCompletedEventDisplay,
   ContextSummarizationErrorEventDisplay,
@@ -861,14 +859,6 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   // Unified Completion Events
   if (isEventType(event, 'unified_completion')) {
     return <CompactWrapper compact={compact}><UnifiedCompletionEventDisplay event={getEventData(event)} /></CompactWrapper>
-  }
-
-  // Structured Output Events
-  if (isEventType(event, 'structured_output_start')) {
-    return <CompactWrapper compact={compact}><StructuredOutputStartEventDisplay event={getEventData(event)} /></CompactWrapper>
-  }
-  if (isEventType(event, 'structured_output_end')) {
-    return <CompactWrapper compact={compact}><StructuredOutputEndEventDisplay event={getEventData(event)} /></CompactWrapper>
   }
 
   // Context Summarization Events

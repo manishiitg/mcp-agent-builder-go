@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	agent "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentwrapper"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 type shutdownTestWorkshopSession struct {

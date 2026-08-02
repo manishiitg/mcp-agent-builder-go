@@ -273,9 +273,6 @@
         },
         "use_code_execution_mode": {
           "type": "boolean"
-        },
-        "use_tool_search_mode": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -327,6 +324,9 @@
           "type": "string"
         },
         "provider": {
+          "type": "string"
+        },
+        "execution_kind": {
           "type": "string"
         }
       },
@@ -388,6 +388,9 @@
           "type": "string"
         },
         "parent_execution_id": {
+          "type": "string"
+        },
+        "execution_kind": {
           "type": "string"
         }
       },
@@ -2288,15 +2291,6 @@
         "human_verification_response": {
           "$ref": "#/$defs/HumanVerificationResponseEvent"
         },
-        "structured_output_start": {
-          "$ref": "#/$defs/StructuredOutputStartEvent"
-        },
-        "structured_output_end": {
-          "$ref": "#/$defs/StructuredOutputEndEvent"
-        },
-        "structured_output_error": {
-          "$ref": "#/$defs/StructuredOutputErrorEvent"
-        },
         "streaming_start": {
           "$ref": "#/$defs/StreamingStartEvent"
         },
@@ -2468,9 +2462,6 @@
         "streaming_error",
         "streaming_progress",
         "streaming_start",
-        "structured_output_end",
-        "structured_output_error",
-        "structured_output_start",
         "synthetic_turn_ready",
         "system_prompt",
         "throttling_detected",
@@ -3988,9 +3979,6 @@
         "result": {
           "type": "string"
         },
-        "structured_response": {
-          "type": "object"
-        },
         "success": {
           "type": "boolean"
         },
@@ -4198,9 +4186,6 @@
           "type": "boolean"
         },
         "use_learn_code_mode": {
-          "type": "boolean"
-        },
-        "use_tool_search_mode": {
           "type": "boolean"
         },
         "system_prompt": {
@@ -5303,156 +5288,6 @@
       "additionalProperties": false,
       "type": "object"
     },
-    "StructuredOutputEndEvent": {
-      "properties": {
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "event_id": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": "string"
-        },
-        "is_end_event": {
-          "type": "boolean"
-        },
-        "correlation_id": {
-          "type": "string"
-        },
-        "hierarchy_level": {
-          "type": "integer"
-        },
-        "session_id": {
-          "type": "string"
-        },
-        "component": {
-          "type": "string"
-        },
-        "metadata": {
-          "type": "object"
-        },
-        "success": {
-          "type": "boolean"
-        },
-        "schema_name": {
-          "type": "string"
-        },
-        "target_type": {
-          "type": "string"
-        },
-        "parsed_output": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "StructuredOutputErrorEvent": {
-      "properties": {
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "event_id": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": "string"
-        },
-        "is_end_event": {
-          "type": "boolean"
-        },
-        "correlation_id": {
-          "type": "string"
-        },
-        "hierarchy_level": {
-          "type": "integer"
-        },
-        "session_id": {
-          "type": "string"
-        },
-        "component": {
-          "type": "string"
-        },
-        "metadata": {
-          "type": "object"
-        },
-        "error": {
-          "type": "string"
-        },
-        "schema_name": {
-          "type": "string"
-        },
-        "target_type": {
-          "type": "string"
-        },
-        "raw_output": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "StructuredOutputStartEvent": {
-      "properties": {
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "event_id": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": "string"
-        },
-        "is_end_event": {
-          "type": "boolean"
-        },
-        "correlation_id": {
-          "type": "string"
-        },
-        "hierarchy_level": {
-          "type": "integer"
-        },
-        "session_id": {
-          "type": "string"
-        },
-        "component": {
-          "type": "string"
-        },
-        "metadata": {
-          "type": "object"
-        },
-        "schema_name": {
-          "type": "string"
-        },
-        "target_type": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
     "SyntheticTurnReadyEvent": {
       "properties": {
         "timestamp": {
@@ -5808,9 +5643,6 @@
           "type": "string"
         },
         "use_code_execution_mode": {
-          "type": "boolean"
-        },
-        "use_tool_search_mode": {
           "type": "boolean"
         },
         "cache_discount": {
@@ -6641,6 +6473,30 @@
     "session_id": {
       "type": "string",
       "description": "Session identifier"
+    },
+    "execution_id": {
+      "type": "string",
+      "description": "Canonical execution identifier"
+    },
+    "parent_execution_id": {
+      "type": "string",
+      "description": "Parent execution identifier"
+    },
+    "execution_kind": {
+      "type": "string",
+      "description": "Execution kind"
+    },
+    "terminal_owner_id": {
+      "type": "string",
+      "description": "Canonical owner identifier for one terminal transcript"
+    },
+    "terminal_id": {
+      "type": "string",
+      "description": "Canonical terminal transcript identifier"
+    },
+    "sequence": {
+      "type": "integer",
+      "description": "Stable session event sequence cursor"
     },
     "error": {
       "type": "string",

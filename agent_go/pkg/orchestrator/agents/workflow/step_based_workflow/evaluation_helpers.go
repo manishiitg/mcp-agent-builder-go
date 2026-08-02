@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
@@ -101,7 +100,7 @@ func validateCrossPlanStepIDUniqueness(
 // registerEvaluationValidationTools registers the validate_evaluation_plan tool on an MCP agent.
 // Used by planning_exports.go for workflow-builder chat sessions.
 func registerEvaluationValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),

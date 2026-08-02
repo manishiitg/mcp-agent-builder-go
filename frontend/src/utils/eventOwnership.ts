@@ -37,6 +37,15 @@ export function getOwnedTerminalOwnerKeys(event: PollingEvent, payload?: Record<
   const sessionId = event.session_id?.trim()
   if (!sessionId) return []
 
+  // Modern events carry the backend-resolved terminal identity. Prefer it
+  // absolutely: this is the write-time contract shared with terminal snapshot
+  // creation and the lazy transcript API. The derivation below remains only
+  // for persisted events created before terminal_id existed.
+  const explicitTerminalId = event.terminal_id?.trim()
+  if (explicitTerminalId && explicitTerminalId.startsWith(`${sessionId}:`)) {
+    return [explicitTerminalId]
+  }
+
   const normalizeOwnerId = (value: unknown): string | null => {
     if (typeof value !== 'string') return null
     const trimmed = value.trim()

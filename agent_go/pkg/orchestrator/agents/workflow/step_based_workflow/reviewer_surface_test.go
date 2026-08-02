@@ -27,13 +27,15 @@ func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 		"get_pulse_module_state",
 		"get_pulse_finding_backlog",
 		"get_pulse_review_result",
-		"get_reference_doc",
 		"get_workflow_command_guidance",
 		"execute_shell_command",
 	} {
 		if !surface[required] {
 			t.Fatalf("reviewer contract calls %q but the surface does not include it", required)
 		}
+	}
+	if surface["read_skill"] {
+		t.Fatal("reviewer allowlist should not own mcpagent's intrinsic read_skill identity tool")
 	}
 }
 

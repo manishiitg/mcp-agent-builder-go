@@ -52,9 +52,6 @@ export interface UnifiedEventsComplete {
   request_human_feedback?: RequestHumanFeedbackEvent;
   step_progress_updated?: StepProgressUpdatedEvent;
   step_token_usage?: StepTokenUsageEvent;
-  structured_output_end?: StructuredOutputEndEvent;
-  structured_output_error?: StructuredOutputErrorEvent;
-  structured_output_start?: StructuredOutputStartEvent;
   synthetic_turn_ready?: SyntheticTurnReadyEvent;
   system_prompt?: SystemPromptEvent;
   throttling_detected?: ThrottlingDetectedEvent;
@@ -115,13 +112,13 @@ export interface AgentStartEvent {
   timestamp?: string;
   trace_id?: string;
   use_code_execution_mode?: boolean;
-  use_tool_search_mode?: boolean;
 }
 export interface AutoNotificationSteeredEvent {
   agent_id?: string;
   component?: string;
   correlation_id?: string;
   event_id?: string;
+  execution_kind?: string;
   hierarchy_level?: number;
   is_end_event?: boolean;
   metadata?: {
@@ -143,6 +140,7 @@ export interface BackgroundAgentCompletedEvent {
   duration?: string;
   error?: string;
   event_id?: string;
+  execution_kind?: string;
   hierarchy_level?: number;
   is_end_event?: boolean;
   metadata?: {
@@ -923,9 +921,6 @@ export interface OrchestratorAgentEndEvent {
   session_id?: string;
   span_id?: string;
   step_index?: number;
-  structured_response?: {
-    [k: string]: unknown;
-  };
   success?: boolean;
   timestamp?: string;
   total_tokens?: number;
@@ -988,7 +983,6 @@ export interface OrchestratorAgentStartEvent {
   trace_id?: string;
   use_code_execution_mode?: boolean;
   use_learn_code_mode?: boolean;
-  use_tool_search_mode?: boolean;
   user_message?: string;
 }
 export interface OrchestratorEndEvent {
@@ -1182,61 +1176,6 @@ export interface StepTokenUsageEvent {
   total_tokens?: number;
   trace_id?: string;
 }
-export interface StructuredOutputEndEvent {
-  component?: string;
-  correlation_id?: string;
-  event_id?: string;
-  hierarchy_level?: number;
-  is_end_event?: boolean;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  parent_id?: string;
-  parsed_output?: string;
-  schema_name?: string;
-  session_id?: string;
-  span_id?: string;
-  success?: boolean;
-  target_type?: string;
-  timestamp?: string;
-  trace_id?: string;
-}
-export interface StructuredOutputErrorEvent {
-  component?: string;
-  correlation_id?: string;
-  error?: string;
-  event_id?: string;
-  hierarchy_level?: number;
-  is_end_event?: boolean;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  parent_id?: string;
-  raw_output?: string;
-  schema_name?: string;
-  session_id?: string;
-  span_id?: string;
-  target_type?: string;
-  timestamp?: string;
-  trace_id?: string;
-}
-export interface StructuredOutputStartEvent {
-  component?: string;
-  correlation_id?: string;
-  event_id?: string;
-  hierarchy_level?: number;
-  is_end_event?: boolean;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  parent_id?: string;
-  schema_name?: string;
-  session_id?: string;
-  span_id?: string;
-  target_type?: string;
-  timestamp?: string;
-  trace_id?: string;
-}
 export interface SyntheticTurnReadyEvent {
   agent_id?: string;
   component?: string;
@@ -1390,7 +1329,6 @@ export interface TokenUsageEvent {
   trace_id?: string;
   turn?: number;
   use_code_execution_mode?: boolean;
-  use_tool_search_mode?: boolean;
 }
 export interface ToolCallEndEvent {
   component?: string;

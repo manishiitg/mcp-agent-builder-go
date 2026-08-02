@@ -93,7 +93,7 @@ func TestPostRunMonitorArchiveStepPreservesCurrentTruthAndStagesWrites(t *testin
 	if step.label != "archive-improve-log" {
 		t.Fatalf("archive step label = %q", step.label)
 	}
-	if !strings.Contains(step.query, `get_reference_doc(kind="pulse-archive")`) {
+	if !strings.Contains(step.query, `read_skill(skill_name="builder-reference", path="references/pulse-archive.md")`) {
 		t.Fatalf("archive step must load the focused archive contract:\n%s", step.query)
 	}
 	raw, err := os.ReadFile("guidance/templates/system/pulse-archive.md")

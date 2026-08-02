@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
@@ -89,15 +88,14 @@ func registerCodingToolGroup(
 // browser-tool exposure can't drift between them; only the guard closure and the
 // caller's gating (fresh: enableBrowserAccess; resume: browser_mode headless/cdp)
 // differ.
-func registerCodingBrowserTools(ag *mcpagent.Agent, sessionID, configuredMode string, cdpPorts []int, guard codingToolGuard) error {
-	if ag == nil {
-		return nil
-	}
+func registerCodingBrowserTools(registrar interface {
+	RegisterCustomTool(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error), string) error
+}, sessionID, configuredMode string, cdpPorts []int, guard codingToolGuard) error {
 	runtime := browser.NewBrowserRuntimeConfig(configuredMode, cdpPorts)
 	execs := virtualtools.CreateWorkspaceBrowserToolExecutorsWithRuntime(sessionID, runtime)
 	if guard != nil {
 		execs = guard(execs)
 	}
 	category := virtualtools.GetWorkspaceBrowserToolCategory()
-	return registerCodingToolGroup(ag.RegisterCustomTool, virtualtools.CreateWorkspaceBrowserTools(), execs, func(string) string { return category }, nil)
+	return registerCodingToolGroup(registrar.RegisterCustomTool, virtualtools.CreateWorkspaceBrowserTools(), execs, func(string) string { return category }, nil)
 }

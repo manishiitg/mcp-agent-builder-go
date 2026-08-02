@@ -307,8 +307,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectKBReview(state *W
 	}
 	hcpo.startRecoveredDirectContinuation(state, runtime, workflowContinuationPhaseKBReview, "Recovered KB Review", func(execCtx context.Context, agent agents.OrchestratorAgent) (string, error) {
 		if handle != nil && !handle.Empty() {
-			if base := agent.GetBaseAgent(); base != nil && base.Agent() != nil {
-				base.Agent().ApplyAgentSessionHandle(handle)
+			if base := agent.GetBaseAgent(); base != nil {
+				if err := base.Resume(execCtx, handle); err != nil {
+					return "", fmt.Errorf("resume KB review agent: %w", err)
+				}
 			}
 		}
 		base := agent.GetBaseAgent()
@@ -346,8 +348,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectLearning(state *W
 	}
 	hcpo.startRecoveredDirectContinuation(state, runtime, workflowContinuationPhaseDirectLearning, "Recovered Direct Learning", func(execCtx context.Context, agent agents.OrchestratorAgent) (string, error) {
 		if handle != nil && !handle.Empty() {
-			if base := agent.GetBaseAgent(); base != nil && base.Agent() != nil {
-				base.Agent().ApplyAgentSessionHandle(handle)
+			if base := agent.GetBaseAgent(); base != nil {
+				if err := base.Resume(execCtx, handle); err != nil {
+					return "", fmt.Errorf("resume learning agent: %w", err)
+				}
 			}
 		}
 		if cfg := agent.GetConfig(); cfg != nil {

@@ -9,7 +9,6 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 const chiefOfStaffNotificationLabel = "Chief of Staff"
@@ -149,7 +148,7 @@ func (api *StreamingAPI) persistChiefNotificationConfig(ctx context.Context, use
 	return updatedChatCaps, secretValue, nil
 }
 
-func (api *StreamingAPI) registerMultiAgentNotificationTool(agent *mcpagent.Agent, userID string) error {
+func (api *StreamingAPI) registerMultiAgentNotificationTool(agent definitionToolRegistrar, userID string) error {
 	if agent == nil {
 		return fmt.Errorf("agent is nil")
 	}

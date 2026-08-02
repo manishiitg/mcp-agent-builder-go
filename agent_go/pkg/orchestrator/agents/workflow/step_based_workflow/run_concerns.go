@@ -215,6 +215,8 @@ func recordRunConcernLinesAt(
 		// not hold, and that is strictly more important than the original report.
 		// A concern recurring while awaiting verification is the failed
 		// verification signal itself, so it also returns to open.
+		// A concern still recurring after the run it was waiting for means that
+		// run happened and did not resolve it, so awaiting_run reopens too.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
@@ -227,9 +229,9 @@ func recordRunConcernLinesAt(
 				last_seen_run = excluded.last_seen_run,
 				last_seen_at = excluded.last_seen_at,
 				seen_count = run_concerns.seen_count + 1,
-				status = CASE WHEN run_concerns.status IN (?, ?) THEN ? ELSE run_concerns.status END`,
+				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
 			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
-			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusOpen)
+			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err
 		}
@@ -237,7 +239,7 @@ func recordRunConcernLinesAt(
 		switch previousStatus {
 		case "":
 			eventType = "filed"
-		case ConcernStatusResolved, ConcernStatusAwaitingVerification:
+		case ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun:
 			eventType = "reopened"
 		}
 		metadata, _ := json.Marshal(map[string]string{
@@ -293,15 +295,15 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 		JOIN (
 			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
 			FROM run_concerns
-			WHERE status IN (?, ?, ?, ?)
+			WHERE status IN (?, ?, ?, ?, ?)
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE c.status IN (?, ?, ?, ?)
+		WHERE c.status IN (?, ?, ?, ?, ?)
 		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
 			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
 	args := []interface{}{
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
 	}
 	if limit > 0 {
 		query += ` LIMIT ?`
@@ -426,4 +428,100 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Contex
 			hcpo.GetLogger().Info(fmt.Sprintf("📌 Recorded %d %s concern(s) for step %s", n, phase, stepID))
 		}
 	}
+}
+
+// LoadPriorPreValidationFailures returns this step's still-open prevalidation
+// concerns, newest first, so the next run can be told what its last output got
+// wrong.
+//
+// Why this exists. A scripted step that fails gets its own error handed back:
+// controller_execution.go renders ScriptedPriorScript and ScriptedPriorError
+// into the prompt, and the LLM repairs the script. An agentic step had no
+// equivalent. It receives ValidationSchema — so it knows the shape it must
+// produce — but prevalidation runs *after* it, and nothing carried the verdict
+// forward. The step therefore read an identical prompt every run and wrote the
+// same wrong shape every run.
+//
+// tectonicusadaytrading's deliver-briefing is the worked example: five concerns
+// filed 2026-07-29, still open at seen_count 3 on 2026-07-30, all of the form
+// "$.delivery_status must exist but was not found: unknown key". A stable
+// contract mismatch that recurred purely because the only party able to fix it
+// was never told.
+//
+// Reads run_concerns rather than the prevalidation log because these rows are
+// already durable, already deduplicated by fingerprint, and already carry
+// seen_count — recurrence is the strongest signal that the step is not learning,
+// and it is free here.
+func LoadPriorPreValidationFailures(ctx context.Context, workspacePath, stepID string, limit int) ([]RunConcern, error) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return nil, nil
+	}
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
+			resolved_at, resolved_by, resolution_note
+		FROM run_concerns
+		WHERE step_id=? AND phase=? AND status NOT IN (?, ?, ?)
+		ORDER BY seen_count DESC, last_seen_at DESC
+		LIMIT ?`,
+		stepID, ConcernPhasePreValidation,
+		ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired,
+		limit)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunConcern
+	for rows.Next() {
+		var concern RunConcern
+		if err := rows.Scan(
+			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
+			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
+			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,
+			&concern.ResolutionNote,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, concern)
+	}
+	return out, rows.Err()
+}
+
+// FormatPriorPreValidationFailures renders concerns for a step prompt. Returns
+// "" when there is nothing to say, so the caller can leave the template variable
+// empty and the block disappears entirely rather than rendering an empty header.
+func FormatPriorPreValidationFailures(concerns []RunConcern) string {
+	if len(concerns) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("A previous run of this step produced output that failed its own validation schema. ")
+	b.WriteString("These are unresolved. Produce output that satisfies them this time; if the schema itself is wrong, say so explicitly in your summary as a CONCERNS: line rather than writing output you know will fail.\n")
+	for _, concern := range concerns {
+		text := strings.TrimSpace(concern.Text)
+		if text == "" {
+			continue
+		}
+		// seen_count is the part that matters most: "failed once" is noise, and
+		// "failed on three consecutive runs" means the step has been reading its
+		// schema and getting it wrong repeatedly.
+		if concern.SeenCount > 1 {
+			fmt.Fprintf(&b, "- %s (seen on %d runs)\n", text, concern.SeenCount)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s\n", text)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

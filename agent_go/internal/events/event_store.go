@@ -210,6 +210,9 @@ type Event struct {
 	ExecutionID       string             `json:"execution_id,omitempty"`
 	ParentExecutionID string             `json:"parent_execution_id,omitempty"`
 	ExecutionKind     string             `json:"execution_kind,omitempty"`
+	TerminalOwnerID   string             `json:"terminal_owner_id,omitempty"`
+	TerminalID        string             `json:"terminal_id,omitempty"`
+	Sequence          int64              `json:"sequence,omitempty"`
 }
 
 // MarshalJSON customizes JSON serialization to flatten the event structure for frontend
@@ -234,6 +237,15 @@ func (e Event) MarshalJSON() ([]byte, error) {
 	}
 	if e.ExecutionKind != "" {
 		result["execution_kind"] = e.ExecutionKind
+	}
+	if e.TerminalOwnerID != "" {
+		result["terminal_owner_id"] = e.TerminalOwnerID
+	}
+	if e.TerminalID != "" {
+		result["terminal_id"] = e.TerminalID
+	}
+	if e.Sequence > 0 {
+		result["sequence"] = e.Sequence
 	}
 
 	// Add the original data field - this is the only data structure we use now
@@ -326,10 +338,20 @@ func (e *Event) ensureExecutionOwnership(sessionID string, previous []Event) {
 				stringField(payload, "execution_kind"),
 				"background_agent",
 			)
+		case e.Type == "auto_notification_steered" && backgroundAgentID != "":
+			e.ExecutionID = backgroundAgentID
+			e.ParentExecutionID = firstNonEmptyString(parentExecutionID, "main:"+sessionID)
+			e.ExecutionKind = firstNonEmptyString(
+				stringField(payload, "execution_kind"),
+				inferExecutionKind(backgroundAgentID, sessionID),
+			)
 		case autoNotificationExecutionID != "":
 			e.ExecutionID = autoNotificationExecutionID
 			e.ParentExecutionID = "main:" + sessionID
-			e.ExecutionKind = inferExecutionKind(autoNotificationExecutionID, sessionID)
+			e.ExecutionKind = firstNonEmptyString(
+				stringField(payload, "execution_kind"),
+				inferExecutionKind(autoNotificationExecutionID, sessionID),
+			)
 		case stepID != "":
 			if parentExecutionID != "" {
 				e.ExecutionID = "workflow-step:" + parentExecutionID + ":" + stepID
@@ -535,8 +557,10 @@ type Subscriber struct {
 // Events are stored by sessionID, allowing multiple observers to view the same session
 type EventStore struct {
 	events              map[string][]Event // sessionID -> events
-	sessionStartIndices map[string]int     // sessionID -> startIndex (offset for events in memory)
-	sessionOwners       map[string]string  // sessionID -> userID
+	terminalEvents      map[string]map[string][]Event
+	nextSequence        map[string]int64
+	sessionStartIndices map[string]int    // sessionID -> startIndex (offset for events in memory)
+	sessionOwners       map[string]string // sessionID -> userID
 	mu                  sync.RWMutex
 	maxEvents           int // Maximum events per session
 	cleanupTicker       *time.Ticker
@@ -558,6 +582,8 @@ func NewEventStore(maxEvents int) *EventStore {
 func NewEventStoreWithActivityCallback(maxEvents int, activityCallback ActivityCallback) *EventStore {
 	store := &EventStore{
 		events:              make(map[string][]Event),
+		terminalEvents:      make(map[string]map[string][]Event),
+		nextSequence:        make(map[string]int64),
 		sessionStartIndices: make(map[string]int),
 		sessionOwners:       make(map[string]string),
 		maxEvents:           maxEvents,
@@ -656,9 +682,31 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 		es.sessionStartIndices[sessionID] = 0
 	}
 	event.ensureExecutionOwnership(sessionID, es.events[sessionID])
+	if event.Sequence <= 0 {
+		es.nextSequence[sessionID]++
+		event.Sequence = es.nextSequence[sessionID]
+	} else if event.Sequence > es.nextSequence[sessionID] {
+		es.nextSequence[sessionID] = event.Sequence
+	}
+	if event.TerminalOwnerID == "" {
+		event.TerminalOwnerID = ResolveTerminalOwnerID(sessionID, event, nil)
+	}
+	if event.TerminalID == "" {
+		event.TerminalID = TerminalIDForOwner(sessionID, event.TerminalOwnerID)
+	}
 
 	// Add event
 	es.events[sessionID] = append(es.events[sessionID], event)
+	if event.TerminalID != "" {
+		if es.terminalEvents[sessionID] == nil {
+			es.terminalEvents[sessionID] = make(map[string][]Event)
+		}
+		owned := append(es.terminalEvents[sessionID][event.TerminalID], event)
+		if es.maxEvents > 0 && len(owned) > es.maxEvents {
+			owned, _ = pruneEventsForRetention(owned, es.maxEvents)
+		}
+		es.terminalEvents[sessionID][event.TerminalID] = owned
+	}
 
 	// Remove old events if over limit
 	if len(es.events[sessionID]) > es.maxEvents {
@@ -666,6 +714,11 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 		es.events[sessionID], droppedCount = pruneEventsForRetention(es.events[sessionID], es.maxEvents)
 		// Update start index to reflect dropped events
 		es.sessionStartIndices[sessionID] += droppedCount
+		// The terminal index is an alternate view over the bounded session
+		// working set, not a second unbounded history store. Rebuild after global
+		// retention so unopened terminals cannot keep otherwise-evicted payloads
+		// alive in backend memory.
+		es.rebuildTerminalEventsLocked(sessionID)
 	}
 
 	// Call activity callback if set (call outside of lock to avoid deadlock)
@@ -700,6 +753,17 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 		}
 	}
 	es.subscribersMu.RUnlock()
+}
+
+func (es *EventStore) rebuildTerminalEventsLocked(sessionID string) {
+	indexed := make(map[string][]Event)
+	for _, event := range es.events[sessionID] {
+		if event.TerminalID == "" {
+			continue
+		}
+		indexed[event.TerminalID] = append(indexed[event.TerminalID], event)
+	}
+	es.terminalEvents[sessionID] = indexed
 }
 
 // ToolCallSummary holds a compact representation of a tool call event.
@@ -827,6 +891,25 @@ type GetEventsResult struct {
 	TotalCount         int
 	LastProcessedIndex int  // Last index processed in unfiltered array (for forward polling with filtering)
 	HasMore            bool // Whether there are more events available (for initial fetch with sinceIndex=0)
+}
+
+// GetTerminalEventsOptions selects a stable page from one canonical terminal
+// transcript. BeforeSequence and AfterSequence are exclusive global event
+// cursors; at most one may be set.
+type GetTerminalEventsOptions struct {
+	Limit          int
+	BeforeSequence int64
+	AfterSequence  int64
+}
+
+// GetTerminalEventsResult is a cursor page for one terminal transcript.
+type GetTerminalEventsResult struct {
+	Events         []Event
+	Exists         bool
+	HasOlder       bool
+	HasNewer       bool
+	OldestSequence int64
+	LatestSequence int64
 }
 
 // GetEvents retrieves events for a session with various options
@@ -1002,6 +1085,101 @@ func (es *EventStore) GetEvents(sessionID string, opts GetEventsOptions) GetEven
 	}
 }
 
+// GetTerminalEvents retrieves only events assigned to terminalID. New events
+// use the write-time terminal index; the fallback scan keeps restored legacy
+// events readable while old history ages out.
+func (es *EventStore) GetTerminalEvents(sessionID, terminalID string, opts GetTerminalEventsOptions) GetTerminalEventsResult {
+	es.mu.RLock()
+	defer es.mu.RUnlock()
+
+	sessionID = strings.TrimSpace(sessionID)
+	terminalID = strings.TrimSpace(terminalID)
+	if sessionID == "" || terminalID == "" {
+		return GetTerminalEventsResult{Events: []Event{}}
+	}
+
+	owned := es.terminalEvents[sessionID][terminalID]
+	if len(owned) == 0 {
+		// Compatibility for events restored before TerminalID was materialized.
+		for _, event := range es.events[sessionID] {
+			resolvedID := event.TerminalID
+			if resolvedID == "" {
+				ownerID := ResolveTerminalOwnerID(sessionID, event, nil)
+				resolvedID = TerminalIDForOwner(sessionID, ownerID)
+			}
+			if resolvedID == terminalID {
+				owned = append(owned, event)
+			}
+		}
+	}
+
+	filtered := make([]Event, 0, len(owned))
+	for _, event := range owned {
+		if shouldReturnEvent(event.Type, false) {
+			filtered = append(filtered, event)
+		}
+	}
+	if len(filtered) == 0 {
+		_, sessionExists := es.events[sessionID]
+		return GetTerminalEventsResult{Events: []Event{}, Exists: sessionExists}
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = InitialEventsLimit
+	}
+	if limit > MaxPollingLimit {
+		limit = MaxPollingLimit
+	}
+
+	start, end := 0, len(filtered)
+	switch {
+	case opts.AfterSequence > 0:
+		start = len(filtered)
+		for i, event := range filtered {
+			if event.Sequence > opts.AfterSequence {
+				start = i
+				break
+			}
+		}
+		end = start + limit
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+	case opts.BeforeSequence > 0:
+		end = 0
+		for i, event := range filtered {
+			if event.Sequence >= opts.BeforeSequence {
+				end = i
+				break
+			}
+			end = i + 1
+		}
+		start = end - limit
+		if start < 0 {
+			start = 0
+		}
+	default:
+		start = len(filtered) - limit
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	page := append([]Event(nil), filtered[start:end]...)
+	result := GetTerminalEventsResult{
+		Events:   page,
+		Exists:   true,
+		HasOlder: start > 0,
+		HasNewer: end < len(filtered),
+	}
+	if len(page) > 0 {
+		result.OldestSequence = page[0].Sequence
+		result.LatestSequence = page[len(page)-1].Sequence
+	}
+	return result
+}
+
 // GetSessionStatus returns the status of a session
 func (es *EventStore) GetSessionStatus(sessionID string) (int, bool) {
 	es.mu.RLock()
@@ -1021,6 +1199,8 @@ func (es *EventStore) RemoveSession(sessionID string) {
 	defer es.mu.Unlock()
 
 	delete(es.events, sessionID)
+	delete(es.terminalEvents, sessionID)
+	delete(es.nextSequence, sessionID)
 	delete(es.sessionStartIndices, sessionID)
 	delete(es.sessionOwners, sessionID)
 }
@@ -1062,6 +1242,8 @@ func (es *EventStore) cleanupInactiveSessions() {
 		// Remove sessions with no events (inactive)
 		if len(events) == 0 {
 			delete(es.events, sessionID)
+			delete(es.terminalEvents, sessionID)
+			delete(es.nextSequence, sessionID)
 		}
 	}
 }

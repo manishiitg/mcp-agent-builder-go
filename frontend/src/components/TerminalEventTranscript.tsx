@@ -153,7 +153,13 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
 }
 
 const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> = ({ item }) => {
-  const [expanded, setExpanded] = useState(false)
+  // Open by default. This view exists to answer "what did this agent actually
+  // do", and tool calls are the answer — collapsing them hides the substance
+  // behind a count and makes every batch a click. It also hid failures: a batch
+  // reading "6 tool calls" looks identical whether they succeeded or not, which
+  // is how bridge errors stayed invisible even after the result formatter
+  // learned to mark them.
+  const [expanded, setExpanded] = useState(true)
   const label = useMemo(() => toolBatchLabel(item.events), [item.events])
   const pairs = useMemo(() => pairToolCalls(item.events), [item.events])
   const toggle = useCallback(() => setExpanded(prev => !prev), [])
@@ -193,6 +199,12 @@ interface TerminalEventTranscriptProps {
   // terminal's own scoping does not need it.
   siblingTerminals?: TerminalSnapshot[]
   onSendMessage?: (msg: string) => void
+  loading?: boolean
+  loadingOlder?: boolean
+  hasOlder?: boolean
+  error?: string
+  onLoadOlder?: () => void
+  onRetry?: () => void
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -200,6 +212,12 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   terminal,
   siblingTerminals,
   onSendMessage,
+  loading = false,
+  loadingOlder = false,
+  hasOlder = false,
+  error,
+  onLoadOlder,
+  onRetry,
 }) => {
   const scoped = useMemo(
     () => selectTerminalEvents(events, terminal, siblingTerminals),
@@ -211,15 +229,19 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     const state = (terminal?.state || '').trim().toLowerCase()
     const failed = state === 'failed' || state === 'error' || state === 'stale'
     const completed = state === 'completed' || state === 'closing'
-    const Icon = failed ? XCircle : completed ? CheckCircle2 : CircleDashed
-    const title = failed
+    const Icon = error ? XCircle : failed ? XCircle : completed ? CheckCircle2 : CircleDashed
+    const title = loading
+      ? 'Loading conversation…'
+      : error
+        ? 'Conversation could not be loaded.'
+        : failed
       ? 'This agent did not finish.'
       : completed
         ? 'This agent completed.'
         : 'Waiting for this agent to begin.'
-    const detail = completed || failed
+    const detail = error || (completed || failed
       ? 'Conversation details are not available for this retained run.'
-      : 'Its conversation will appear here when the first event arrives.'
+      : 'Its conversation will appear here when the first event arrives.')
     return (
       <div
         data-testid="terminal-clear-view-empty"
@@ -228,12 +250,27 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         <div className="flex max-w-md items-start gap-3 text-left">
           <Icon
             className={`mt-0.5 h-5 w-5 shrink-0 ${
-              failed ? 'text-red-400' : completed ? 'text-emerald-400' : 'animate-spin text-cyan-400'
+              error || failed
+                ? 'text-red-400'
+                : completed
+                  ? 'text-emerald-400'
+                  : loading
+                    ? 'animate-spin text-cyan-400'
+                    : 'text-cyan-400'
             }`}
           />
           <div>
             <div className="text-sm font-medium text-neutral-200">{title}</div>
             <div className="mt-1 text-xs leading-5 text-neutral-500">{detail}</div>
+            {error && onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-3 rounded border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+              >
+                Retry
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -241,12 +278,39 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }
 
   return (
-    <div data-testid="terminal-clear-view" className="min-w-0 flex-1 overflow-hidden bg-[#0b0d0c]">
+    <div data-testid="terminal-clear-view" className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0b0d0c]">
+      {(hasOlder || loadingOlder || error) && (
+        <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
+          error
+            ? 'border-red-900/60 bg-red-950/25 text-red-300'
+            : 'border-neutral-800 bg-neutral-950/80 text-neutral-500'
+        }`}>
+          {error ? (
+            <>
+              <span className="truncate">Refresh failed: {error}</span>
+              {onRetry && (
+                <button type="button" onClick={onRetry} className="ml-auto shrink-0 text-red-200 hover:text-white">
+                  Retry
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={!hasOlder || loadingOlder}
+              className="mx-auto rounded px-2 py-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
+            >
+              {loadingOlder ? 'Loading earlier events…' : 'Load earlier events'}
+            </button>
+          )}
+        </div>
+      )}
       {/* Virtualized: the tree inherited this from EventHierarchy. A flat list
           that rendered every event would regress long sessions badly. */}
       <Virtuoso
         data={items}
-        className="h-full"
+        className="min-h-0 flex-1"
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}

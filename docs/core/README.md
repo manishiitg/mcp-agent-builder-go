@@ -31,4 +31,3 @@ These docs describe platform subsystems that cut across workflow and multi-agent
 - `secrets.md`
 - `skills.md`
 - `streaming_llm_output.md`
-- `tool_search_mode.md`

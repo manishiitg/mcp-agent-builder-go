@@ -848,7 +848,7 @@ func (s *WorkshopChatSession) UpdateEnabledGroupNames(ctx context.Context, enabl
 // RegisterWorkshopChatTools registers the complete workshop-only tool surface on
 // the given agent using the session's controller.
 func RegisterWorkshopChatTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -1067,7 +1067,7 @@ func (s *WorkshopChatSession) DetachSecretFromWorkflow(ctx context.Context, name
 //
 // See the post-step KB update agent for the extraction counterpart.
 func RegisterReorganizeKnowledgebaseTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -1123,7 +1123,7 @@ func RegisterReorganizeKnowledgebaseTool(
 // Runs synchronously — blocks until the agent finishes — but serialized through
 // kbUpdateQueue so it can't race with live post-step updates or a reorganize call.
 func RegisterConsolidateKnowledgebaseTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -1168,7 +1168,7 @@ func RegisterConsolidateKnowledgebaseTool(
 // RegisterRunFullEvaluationTool registers a run_full_evaluation tool that executes all
 // evaluation steps against a target execution run and publishes their outputs. Runs in background.
 func RegisterRunFullEvaluationTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -1649,7 +1649,7 @@ func truncateResult(s string, maxLen int) string {
 // when execution completes. This is the workshop-builder equivalent of the orchestrator-mode
 // full execution, but triggered as a tool call.
 func RegisterRunFullWorkflowTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	session *WorkshopChatSession,
 	logger loggerv2.Logger,
 ) {
@@ -2022,7 +2022,7 @@ func RegisterRunFullWorkflowTool(
 // RegisterEvaluationValidationTools is the exported wrapper for registering evaluation
 // plan validation tools on an MCP agent. Used by server.go for workflow-builder chat sessions.
 func RegisterEvaluationValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2038,7 +2038,7 @@ func RegisterEvaluationValidationTools(
 // validate_report_plan tool on an MCP agent. Used by server.go for workflow-builder
 // chat sessions. Validates reports/report_plan.json.
 func RegisterReportPlanValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2050,7 +2050,7 @@ func RegisterReportPlanValidationTools(
 // JSON report plan read/write tools on an MCP agent. Used by server.go for
 // workflow-builder and optimizer chat sessions.
 func RegisterReportPlanManagementTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2064,7 +2064,7 @@ func RegisterReportPlanManagementTools(
 // and optimizer chat sessions so the agent can inspect the final report structure
 // and resolved data without relying on the frontend UI.
 func RegisterReportRenderPreviewTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2075,7 +2075,7 @@ func RegisterReportRenderPreviewTool(
 // RegisterPlanModificationTools is the exported wrapper for registering plan modification tools
 // on an MCP agent. Used by server.go for workflow phase chat sessions.
 func RegisterPlanModificationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),

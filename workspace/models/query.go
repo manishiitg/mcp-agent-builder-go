@@ -5,10 +5,11 @@ type QueryRequest struct {
 	// DBPath is a workspace-relative path to the SQLite file,
 	// e.g. "Workflow/social-media/db/db.sqlite".
 	DBPath string `json:"db_path" binding:"required"`
-	// SQL is the read-only query to run. The connection is opened read-only
-	// (mode=ro + query_only) so writes are rejected by the engine; the caller
-	// (the report widget author) owns LIMIT/shape of the result.
+	// SQL is the read-only query to run. The server validates the statement and
+	// uses a WAL-capable connection with query_only enabled.
 	SQL string `json:"sql" binding:"required"`
+	// MaxRows bounds rows returned to the caller. Zero uses the server default.
+	MaxRows int `json:"max_rows,omitempty"`
 }
 
 // QueryResponse is the result of a read-only SQL query: rows are returned as an
@@ -17,6 +18,34 @@ type QueryRequest struct {
 type QueryResponse struct {
 	Columns []string                 `json:"columns"`
 	Rows    []map[string]interface{} `json:"rows"`
+	// Truncated is true when additional rows existed beyond MaxRows.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MutationStatement is one permitted DML operation in an atomic workflow DB
+// mutation. Schema changes use the workflow migration path, not this API.
+type MutationStatement struct {
+	SQL    string        `json:"sql" binding:"required"`
+	Params []interface{} `json:"params,omitempty"`
+}
+
+// MutationRequest executes all statements in one transaction against an
+// existing workflow database.
+type MutationRequest struct {
+	DBPath     string              `json:"db_path" binding:"required"`
+	Statements []MutationStatement `json:"statements" binding:"required"`
+}
+
+// MutationStatementResult reports the deterministic receipt for one statement.
+type MutationStatementResult struct {
+	RowsAffected int64 `json:"rows_affected"`
+	LastInsertID int64 `json:"last_insert_id,omitempty"`
+}
+
+// MutationResponse is returned only after the complete transaction commits.
+type MutationResponse struct {
+	Results           []MutationStatementResult `json:"results"`
+	TotalRowsAffected int64                     `json:"total_rows_affected"`
 }
 
 // DBTablesResponse describes the tables in a workflow's SQLite DB, for the

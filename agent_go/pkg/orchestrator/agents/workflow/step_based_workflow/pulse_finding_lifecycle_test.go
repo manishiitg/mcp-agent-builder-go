@@ -518,3 +518,257 @@ func TestFindingBacklogLeadsWithTheLargestCluster(t *testing.T) {
 		t.Fatalf("the isolated finding should follow the cluster, got %q", lifecycles[3].StepID)
 	}
 }
+
+// TestAwaitingUserRequiresARealPendingQuestion closes the gap that left
+// rtslatency with five findings marked awaiting_user and zero pending
+// questions: the operator was told five things needed their decision and had
+// nothing to answer, with no way to discover why.
+func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "eval_health"
+	pulseRunID := "pulse-1"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, module,
+		"eval steps declare no max_score scale")
+
+	disposition := PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint,
+		FindingID:   "EVAL-1",
+		Disposition: FindingDispositionAwaitingUser,
+		Summary:     "Needs a decision on the score scale.",
+	}
+
+	// No question at all: the label alone must not be accepted.
+	if err := validateFindingDisposition(disposition); err == nil ||
+		!strings.Contains(err.Error(), "requires human_input_id") {
+		t.Fatalf("awaiting_user was accepted with no question to answer: %v", err)
+	}
+
+	// A question that was never created must not satisfy it either.
+	disposition.HumanInputID = "invented-id"
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+	err = RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, "")
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("awaiting_user accepted a human input id that was never created: %v", err)
+	}
+
+	// An answered question does not keep a finding waiting either.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO report_human_inputs (id, status) VALUES ('answered-q', 'answered')`); err != nil {
+		t.Fatalf("seed answered question: %v", err)
+	}
+	disposition.HumanInputID = "answered-q"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil ||
+		!strings.Contains(err.Error(), "only wait on a pending decision") {
+		t.Fatalf("a finding was parked on an already-answered question: %v", err)
+	}
+
+	// A real pending question is accepted.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO report_human_inputs (id, status) VALUES ('open-q', 'pending')`); err != nil {
+		t.Fatalf("seed pending question: %v", err)
+	}
+	disposition.HumanInputID = "open-q"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err != nil {
+		t.Fatalf("a genuine pending decision was rejected: %v", err)
+	}
+}
+
+// TestAwaitingRunSeparatesWaitingFromBlocked covers the distinction rtslatency
+// had no way to express.
+//
+// Four of its nine "blocked" findings were only waiting for data: security rows
+// missing because those steps had not run, and an approved experiment unable to
+// ship because the digest step had not executed since 2026-07-29. blocked
+// absorbed them because changed_unverified demands a fix attempt with changed
+// files, and nothing was fixed. Reading those as blockers points the operator at
+// decisions that do not exist.
+func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
+	base := PulseFindingDisposition{
+		Fingerprint: "fp", FindingID: "SEC-1",
+		Disposition: FindingDispositionAwaitingRun,
+		Summary:     "security_daily_metrics has no rows; those steps did not run.",
+	}
+
+	// Waiting with no stated boundary is indistinguishable from stalling.
+	if err := validateFindingDisposition(base); err == nil ||
+		!strings.Contains(err.Error(), "requires next_check") {
+		t.Fatalf("awaiting_run accepted with no evidence boundary: %v", err)
+	}
+
+	// A finding that changed files is a fix awaiting proof, not a wait.
+	withFix := base
+	withFix.NextCheck = "next scheduled dev collection run"
+	withFix.ChangedFiles = []string{"planning/plan.json"}
+	if err := validateFindingDisposition(withFix); err == nil ||
+		!strings.Contains(err.Error(), "changed_unverified") {
+		t.Fatalf("a finding with changes applied was accepted as awaiting_run: %v", err)
+	}
+
+	valid := base
+	valid.NextCheck = "next scheduled dev collection run"
+	if err := validateFindingDisposition(valid); err != nil {
+		t.Fatalf("a genuine wait-for-data finding was rejected: %v", err)
+	}
+
+	// It must not land in the acknowledged bucket that blocked and awaiting_user
+	// share, or the UI cannot tell them apart.
+	status, event, _ := lifecycleStatusForDisposition(FindingDispositionAwaitingRun)
+	if status != ConcernStatusAwaitingRun || status == ConcernStatusAcknowledged {
+		t.Fatalf("awaiting_run mapped to status %q; it must be distinguishable from blocked", status)
+	}
+	if event != "awaiting_run" {
+		t.Fatalf("awaiting_run event = %q", event)
+	}
+}
+
+// TestVerificationCanCloseAnAttemptFromAnEarlierRun covers the flow the
+// lifecycle mandates and used to block.
+//
+// changed_unverified exists so a fix whose proof needs a future run is recorded
+// now and verified later — fix-verification, post-run-monitor and the Fixer
+// contract all say to record it with reason awaiting_next_valid_run. Requiring
+// the attempt to belong to the closing run made that impossible: the evidence
+// arrives a run later, and the disposition carrying it was rejected as
+// belonging to a previous Pulse run. social-media hit this on 2026-08-01 and
+// preserved the unresolved state rather than forcing a second write.
+func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "bug_review"
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", module, "collector writes a null column")
+
+	// Run 1 applies the fix; proof needs the next producing run.
+	attempt, err := StartPulseFixAttempt(ctx, workspacePath, "pulse-1", module,
+		"Repair the writer.", []PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "BUG-1"}},
+		[]string{"planning/plan.json"}, []string{"before"})
+	if err != nil {
+		t.Fatalf("start attempt: %v", err)
+	}
+	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionChangedUnverified, Summary: "Applied; awaiting next valid run.",
+		NextCheck:    "next scheduled dev collection run writes latency_daily_metrics",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
+	}})
+
+	// Run 2 has the evidence and closes the same attempt.
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionFixedVerified, Summary: "Next run produced a non-null column.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationPassed}},
+	}}, ""); err != nil {
+		t.Fatalf("a later run could not verify its own module's earlier attempt: %v", err)
+	}
+
+	// Another module still cannot close it.
+	if err := RecordPulseFindingDispositionsTx(ctx, db, "stores_health", "pulse-2", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
+		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
+	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
+		t.Fatalf("another module closed an attempt it did not make: %v", err)
+	}
+}
+
+// TestChangedUnverifiedMustNameWhatWillSettleIt makes the verification loop
+// closable.
+//
+// A fix awaiting proof is only verifiable if the next reviewer can tell whether
+// the evidence has arrived. Without a named boundary it cannot, so it re-attempts
+// the fix instead of checking it — rtslatency carried a finding at seen_count 4,
+// still awaiting_verification, repaired again on every pass because nothing ever
+// checked the run that had since produced its evidence.
+func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
+	base := PulseFindingDisposition{
+		Fingerprint: "fp", FindingID: "BUG-1", AttemptID: "fix-1",
+		Disposition:  FindingDispositionChangedUnverified,
+		Summary:      "Collector now writes the column.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
+	}
+
+	if err := validateFindingDisposition(base); err == nil ||
+		!strings.Contains(err.Error(), "requires next_check") {
+		t.Fatalf("a fix awaiting proof was accepted with nothing naming what would settle it: %v", err)
+	}
+
+	settled := base
+	settled.NextCheck = "next dev collection run writes latency_daily_metrics"
+	if err := validateFindingDisposition(settled); err != nil {
+		t.Fatalf("a fix naming its evidence boundary was rejected: %v", err)
+	}
+}
+
+// The consolidated Fixer is instructed to pass module="pulse_fixer", meaning
+// every due module. This read path treats module as a plain step_id filter, so
+// the sentinel matched nothing: get_pulse_finding_backlog returned 0 rows for
+// the one value the Fixer's own contract tells it to send, against 149 for an
+// omitted filter on social-media. It only did any work by falling back to
+// omitting the module.
+func TestPulseFixerSentinelLoadsEveryModulesBacklog(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-consolidated"
+	// Filed directly: filedReviewConcern asserts a single open concern exists,
+	// and this case needs two modules represented at once.
+	for module, text := range map[string]string{
+		"bug_review":    "reply targets repeat across runs",
+		"stores_health": "follower delta writer is missing",
+	} {
+		if _, err := RecordRunConcerns(
+			ctx, workspacePath, pulseRunID, "", module, ConcernPhaseReview, "CONCERNS: "+text,
+		); err != nil {
+			t.Fatalf("record %s concern: %v", module, err)
+		}
+	}
+
+	sentinel, err := LoadPulseFindingLifecycles(ctx, workspacePath, "pulse_fixer", -1)
+	if err != nil {
+		t.Fatalf("load backlog for the fixer sentinel: %v", err)
+	}
+	everything, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		t.Fatalf("load complete backlog: %v", err)
+	}
+	if len(sentinel) != len(everything) {
+		t.Fatalf("pulse_fixer returned %d findings, want the complete backlog of %d",
+			len(sentinel), len(everything))
+	}
+	if len(sentinel) != 2 {
+		t.Fatalf("sentinel backlog = %d findings, want both modules", len(sentinel))
+	}
+
+	// A real module must still filter, or the sentinel fix would have widened
+	// every per-module read into a full-backlog read.
+	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "bug_review", -1)
+	if err != nil {
+		t.Fatalf("load scoped backlog: %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].StepID != "bug_review" {
+		t.Fatalf("bug_review backlog = %+v, want only its own finding", scoped)
+	}
+}

@@ -1,14 +1,14 @@
 ## Starter HTML skeleton for `builder/improve.html`
 
-Use this document only when creating a new `builder/improve.html` or doing the required one-time upgrade from an old-format Pulse/improve log. For log semantics, entry kinds, close-out rules, and migration triggers, first load `get_reference_doc(kind="review-improve-log")`.
+Use this document only when creating a new `builder/improve.html` or doing the required one-time upgrade from an old-format Pulse/improve log. For log semantics, entry kinds, close-out rules, and migration triggers, first load `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`.
 
-### Starter HTML skeleton (copy this exactly)
+### Starter HTML skeleton
 
-`builder/improve.html` renders in a full sandboxed iframe — the same way reports render — so it supports real CSS, web fonts, and themes. There is no excuse for a plain or ugly log: match the polish below. When bootstrapping a new log, write this document verbatim, fill the header, and leave the `<!-- LOG ENTRIES: newest first -->` anchor in place. On every later turn, insert new entry cards **immediately after that anchor** (newest on top). Keep the CSS block stable so the look stays consistent run to run.
+`builder/improve.html` renders in a full sandboxed iframe — the same way reports render — so it supports real CSS, web fonts, and themes. Match the polish below. When bootstrapping a new log, copy the structure, CSS, and script, fill the live content, and leave the `<!-- LOG ENTRIES: newest first -->` anchor in place. Do **not** copy instructional comments or example cards into the saved HTML. On every later turn, insert only material lifecycle cards immediately after the anchor (newest on top). Keep the CSS block stable so the look stays consistent run to run.
 
 ```html
 <!doctype html>
-<html lang="en" data-pulse-schema="2">
+<html lang="en" data-pulse-schema="3">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -71,14 +71,16 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   .briefitem.ok{border-color:color-mix(in srgb,var(--ok) 18%,var(--line));background:color-mix(in srgb,var(--ok-bg) 22%,var(--surface))}
   .briefitem.warn{border-color:color-mix(in srgb,var(--warn) 20%,var(--line));background:color-mix(in srgb,var(--warn-bg) 26%,var(--surface))}
   .briefitem.bad{border-color:color-mix(in srgb,var(--bad) 20%,var(--line));background:color-mix(in srgb,var(--bad-bg) 24%,var(--surface))}
+  .worksummary{margin-top:16px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow);padding:14px}
+  .workhead{display:flex;align-items:center;justify-content:space-between;gap:10px;font:700 10.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+  .workstats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}.workstat{padding:9px 10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);min-width:0}.workstat b{display:block;font-size:20px;line-height:1;color:var(--ink)}.workstat span{display:block;margin-top:5px;font:600 9.5px/1.2 var(--mono);color:var(--ink-3);text-transform:uppercase}
+  .workqueues{display:grid;grid-template-columns:1fr;gap:10px;margin-top:10px}.workqueue{border:1px solid var(--line);border-radius:10px;overflow:hidden}.workqueue h2{margin:0;padding:9px 11px;font:700 10px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--ink-2);background:var(--surface-2)}.workitem{padding:9px 11px;border-top:1px solid var(--line)}.workitem b{display:block;font-size:13px;line-height:1.35}.workitem p,.workempty,.workmore{margin:3px 0 0;font-size:12px;line-height:1.4;color:var(--ink-2)}.workempty,.workmore{padding:9px 11px;margin:0;border-top:1px solid var(--line)}
   .assumptions{margin-top:16px;border:1px solid color-mix(in srgb,var(--major) 28%,var(--line-2));border-radius:var(--r);background:linear-gradient(180deg,color-mix(in srgb,var(--major-bg) 40%,var(--surface)),var(--surface));box-shadow:var(--shadow);overflow:hidden}
   .assumptions .ah{padding:12px 14px;border-bottom:1px solid color-mix(in srgb,var(--major) 16%,var(--line));font:700 10.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--major)}
   .assumption{padding:12px 14px;border-top:1px solid var(--line)}.assumption:first-of-type{border-top:0}.assumption b{display:block;font-size:13.5px;line-height:1.4}.assumption p{margin:5px 0 0;color:var(--ink-2);font-size:12.5px;line-height:1.5}.assumption .source{font:540 10.5px/1.4 var(--mono);color:var(--ink-3)}
   .technical{margin-top:24px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
   .technical>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;padding:13px 15px;font-weight:650;color:var(--ink)}.technical>summary::-webkit-details-marker{display:none}.technical>summary::after{content:"+";font:700 16px/1 var(--mono);color:var(--ink-3)}.technical[open]>summary::after{content:"−"}.technical>summary span{margin-left:auto;font:540 11px/1.35 var(--mono);color:var(--ink-3)}
   .technical .techbody{padding:0 14px 16px;border-top:1px solid var(--line)}.technical .grouplbl{margin-top:22px}
-  .agentlog{margin-top:34px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface-2);overflow:hidden}
-  .agentlog>summary{display:flex;align-items:center;gap:10px;cursor:pointer;list-style:none;padding:12px 14px;font:650 12px/1.3 var(--mono);color:var(--ink-2)}.agentlog>summary::-webkit-details-marker{display:none}.agentlog>summary::after{content:"+";margin-left:auto;font:700 15px/1 var(--mono);color:var(--ink-3)}.agentlog[open]>summary::after{content:"−"}.agentlog>summary span{font:520 10.5px/1.35 var(--mono);color:var(--ink-3)}
   .agentbody{padding:10px 14px 13px;border-top:1px solid var(--line);display:grid;gap:8px}.agentrow{display:grid;gap:3px;font:520 11px/1.45 var(--mono);color:var(--ink-3)}.agentrow b{color:var(--ink-2);font-weight:650}.agentrow code{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-3)}
   .filters{display:grid;grid-template-columns:1fr;gap:9px;margin:28px 0 0;padding:12px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);box-shadow:var(--shadow)}
   .filters label{display:grid;gap:6px;font:700 9.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
@@ -108,12 +110,12 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   .run .col b{color:var(--ink);font-weight:620}.run .note{grid-column:1/-1;color:var(--ink-2);font:560 12px/1.4 var(--sans);min-width:0;overflow-wrap:anywhere}.run.flag .note{color:var(--warn)}.run .ago{grid-column:1/-1;color:var(--ink-3)}
   .entry{position:relative;background:var(--surface);border:1px solid var(--line-2);border-radius:13px;padding:15px 14px 15px 18px;margin-bottom:12px;box-shadow:var(--shadow);min-width:0}
   .entry::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--line-2)}
-  .entry.monitor::before{background:var(--warn)} .entry.maintenance::before{background:var(--teal)} .entry.agent::before{background:var(--ok)} .entry.decision::before{background:var(--decision)} .entry.decision.major::before{background:var(--major);width:4px} .entry.user::before{background:var(--user)} .entry.input::before{background:var(--user)} .entry.open::before{background:var(--bad)} .entry.note::before{background:var(--ink-3)}
+  .entry.monitor::before{background:var(--warn)} .entry.maintenance::before{background:var(--teal)} .entry.agent::before{background:var(--ok)} .entry.decision::before{background:var(--decision)} .entry.decision.major::before{background:var(--major);width:4px} .entry.user::before{background:var(--user)} .entry.input::before{background:var(--user)} .entry.note::before{background:var(--ink-3)}
   .entry.decision{border-color:color-mix(in srgb,var(--decision) 28%,var(--line-2));background:linear-gradient(180deg,color-mix(in srgb,var(--decision-bg) 46%,var(--surface)),var(--surface) 72%)}
   .entry.decision.major{border-color:color-mix(in srgb,var(--major) 38%,var(--line-2));background:linear-gradient(180deg,color-mix(in srgb,var(--major-bg) 62%,var(--surface)),var(--surface) 76%);box-shadow:0 0 0 1px color-mix(in srgb,var(--major) 15%,transparent),var(--shadow)}
   .ehead{display:flex;align-items:center;gap:7px;margin-bottom:8px;flex-wrap:wrap}
   .tag{font:700 9.5px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:6px}
-  .tag.monitor{background:var(--warn-bg);color:var(--warn)} .tag.maintenance{background:var(--teal-bg);color:var(--teal)} .tag.agent{background:var(--ok-bg);color:var(--ok)} .tag.decision{background:var(--decision-bg);color:var(--decision);border:1px solid color-mix(in srgb,var(--decision) 22%,transparent)} .entry.major .tag.decision{background:var(--major-bg);color:var(--major);border-color:color-mix(in srgb,var(--major) 25%,transparent)} .tag.user,.tag.input{background:var(--user-bg);color:var(--user)} .tag.open{background:var(--bad-bg);color:var(--bad)} .tag.note{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line-2)}
+  .tag.monitor{background:var(--warn-bg);color:var(--warn)} .tag.maintenance{background:var(--teal-bg);color:var(--teal)} .tag.agent{background:var(--ok-bg);color:var(--ok)} .tag.decision{background:var(--decision-bg);color:var(--decision);border:1px solid color-mix(in srgb,var(--decision) 22%,transparent)} .entry.major .tag.decision{background:var(--major-bg);color:var(--major);border-color:color-mix(in srgb,var(--major) 25%,transparent)} .tag.user,.tag.input{background:var(--user-bg);color:var(--user)} .tag.note{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line-2)}
   .kind{font:700 8.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:4px 7px;border-radius:6px;border:1px solid}
   .kind.bug{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 22%,transparent)} .kind.goal{color:var(--goal);border-color:color-mix(in srgb,var(--goal) 22%,transparent)}
   .worklabel{font:700 8.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line-2);color:var(--ink-2)}
@@ -156,15 +158,6 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   .entry.gate::before{background:var(--decision)}
   .entry.gate{border-color:color-mix(in srgb,var(--decision) 18%,var(--line-2))}
   .tag.gate{background:var(--decision-bg);color:var(--decision)}
-  /* Per-reviewer generated-field detail, used inside a normal .entry (monitor,
-     open, agent, etc.) in place of (or alongside) the plain takeaway/impact
-     prose, when the module has structured fields worth showing directly
-     rather than only prose — e.g. bug_review's finding/evidence/classification/
-     recommended_fix, or llm_ops_review's cost/token/efficiency buckets. */
-  .modfields{margin-top:9px;padding-left:10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:4px}
-  .mf{display:flex;gap:8px;font:540 12px/1.5 var(--sans)}
-  .mf .mfk{flex:none;width:128px;font:600 10px/1.4 var(--mono);letter-spacing:.03em;color:var(--ink-3)}
-  .mf .mfv{color:var(--ink-2)}
   .archive{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);overflow:hidden;box-shadow:var(--shadow)}
   .arow{display:block;padding:13px 14px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink-2)} .arow:first-child{border-top:none} .arow b{color:var(--ink);font-weight:620} .arow .n{display:block;margin-top:4px;font:540 11px/1.35 var(--mono);color:var(--ink-3)}
   footer{margin-top:42px;padding-top:18px;border-top:1px solid var(--line);font:540 11.5px/1.5 var(--mono);color:var(--ink-3)}
@@ -176,6 +169,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     .verdicts{margin-top:0}.pill{font-size:13px;padding:9px 14px 9px 12px}
     .status{align-items:center;gap:12px;margin-top:22px;padding:15px 19px;font-size:15.5px}.status .txt{flex:1 1 auto}.status .when{margin-left:auto;flex-basis:auto;white-space:nowrap;font-size:12px}
     .brief{padding:16px}.briefgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .worksummary{padding:16px}.workqueues{grid-template-columns:repeat(2,minmax(0,1fr))}
     .filters{grid-template-columns:150px minmax(160px,1fr) auto auto;align-items:end;padding:13px 14px}.filtercount{justify-self:end;white-space:nowrap}
     .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile{padding:15px 16px}
     .run{display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto;gap:8px 14px;align-items:center;padding:12px 16px;font-size:13px;line-height:1.25}.run .id{grid-column:1;grid-row:1;min-width:44px}.run .st{grid-column:2;grid-row:1}.run .col{grid-row:1;min-width:78px}.run .note{grid-column:1/-1;grid-row:2;margin-top:4px;font-size:13px;line-height:1.45}.run .ago{grid-column:5;grid-row:1;justify-self:end;margin-left:0}
@@ -262,6 +256,19 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     </div>
   </div>
 
+  <section class="worksummary" data-source="sqlite">
+    <div class="workhead"><span>Current work</span><span><!-- refreshed YYYY-MM-DD --></span></div>
+    <div class="workstats">
+      <div class="workstat" data-status="open" data-count="0"><b>0</b><span>Open</span></div>
+      <div class="workstat" data-status="in_progress" data-count="0"><b>0</b><span>Fixing</span></div>
+      <div class="workstat" data-status="in_review" data-count="0"><b>0</b><span>Verify</span></div>
+    </div>
+    <div class="workqueues">
+      <div class="workqueue" data-queue="attention"><h2>Important now</h2><p class="workempty">Nothing needs attention.</p></div>
+      <div class="workqueue" data-queue="verification"><h2>Needs verification</h2><p class="workempty">No fixes are waiting for a producing run.</p></div>
+    </div>
+  </section>
+
   <details class="technical">
     <summary>Technical details <span>signals · cost · maintenance</span></summary>
     <div class="techbody">
@@ -313,7 +320,6 @@ Use this document only when creating a new `builder/improve.html` or doing the r
       <option value="advisor">Advisor</option>
       <option value="cos">Chief of Staff</option>
       <option value="input">Question + answer</option>
-      <option value="open">Open finding</option>
       <option value="user">User rule</option>
       <option value="note">Note</option>
     </select></label>
@@ -323,25 +329,9 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   </div>
 
   <div class="seclabel">Activity</div>
-  <!-- ACTIVITY — grouped by date, not two separate lists. Each date is one
-       .daygroup: a plain visual wrapper (NOT a .run/.entry/.pulse-record
-       itself — see the CSS comment above) holding what the workflow did that
-       day (.run) directly above what Pulse did about it that day, as
-       SEPARATE sibling .entry cards — one Gate dispatch note, one per module
-       that ran, one Fixer action. Each keeps its own individual data-module
-       so the Pulse popup (WorkflowToolbar's per-reviewer tabs, which clones
-       top-level .entry elements by data-module and skips anything nested
-       inside another .entry) can still find and show it under that
-       reviewer's own tab — do NOT combine multiple modules' findings into
-       one entry, that hides them from their own tab. Never create two
-       .daygroup blocks for the same date — if today's already exists, edit
-       it in place, inserting new module/Fixer entries into it. A day with a
-       workflow run but nothing due for Pulse still gets a Gate entry saying
-       so ("0 of 8 checked · all current, nothing due") rather than being
-       omitted — omitting it reads as "did Pulse even run," not "nothing
-       needed attention." Full semantics for .run and every entry kind below
-       are unchanged from before and covered in review-improve-log.md; this
-       section only adds the daygroup date wrapper and the "gate" kind. -->
+  <!-- ACTIVITY — group by date and add cards only for runs, one compact Gate
+       summary, and material issue/fix/verification/decision transitions.
+       Clean reviewer results stay in coverage and SQLite. -->
   <!-- LOG ENTRIES: newest first -->
   <!-- Example .daygroup with a real Pulse pass (2 modules, 1 with a finding).
        Compare to the plain "day where nothing was due" example after it.
@@ -351,9 +341,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
 
     <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 8 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> bug_review, llm_ops_review — skipped the other 6 (recent clean reviews, no new evidence).</p><p class="meta"><b>Why bug_review:</b> plain-language trigger reason.</p></div>
 
-    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><div class="modfields"><div class="mf"><span class="mfk">Evidence</span><span class="mfv">exact evidence, not a path/id</span></div><div class="mf"><span class="mfk">Classification</span><span class="mfv">correctness_bug</span></div><div class="mf"><span class="mfk">Recommended fix</span><span class="mfv">plain-language bounded fix</span></div></div></div>
-
-    <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="llm_ops_review"><div class="ehead"><span class="tag monitor">Ops review</span><span class="etitle">Clean</span><span class="when">…</span></div><div class="modfields"><div class="mf"><span class="mfk">Workflow execution</span><span class="mfv">$0.31 · 41k tokens · wall 4m12s</span></div></div></div>
+    <div class="entry monitor" data-issue-id="PUL-…" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><p class="meta"><b>Next:</b> plain-language next action.</p></div>
 
     <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">what was actually applied</span><span class="when">…</span></div><p class="takeaway">What was applied, or what's left open and why.</p></div>
   </div>
@@ -372,12 +360,10 @@ Use this document only when creating a new `builder/improve.html` or doing the r
        <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language fix summary first.</p><p class="resolved">Resolved YYYY-MM-DD — how.</p></div>
        <div class="entry decision major" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="goal_advisor"><div class="ehead"><span class="tag decision">Decision - Goal Advisor - Applied</span><span class="kind goal">Goal</span><span class="worklabel improvement">Improvement</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language decision summary first.</p><div class="decisiongrid"><div><b>Why now</b><span>Plain business evidence.</span></div><div><b>Change</b><span>…</span></div><div><b>Expected impact</b><span>…</span></div><div><b>Risk / gap</b><span>…</span></div></div></div>
        <div class="entry decision major advisor-experiment" data-date="YYYY-MM-DD" data-kind="advisor" data-pulse-section="improvements" data-module="goal_advisor" data-experiment-kind="strategy" data-advisor-experiment-id="advisor-exp-<stable-slug>" data-status="proposed"><div class="ehead"><span class="tag decision">Decision - Goal Advisor - Proposed</span><span class="kind goal">Goal</span><span class="worklabel advisor">Advisor idea</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language advisor idea first.</p><div class="decisiongrid"><div><b>Why now</b><span>Plain business evidence.</span></div><div><b>Change</b><span>Proposal only — out-of-plan idea and next decision.</span></div><div><b>Expected impact</b><span>…</span></div><div><b>Risk / gap</b><span>…</span></div></div></div>
-       <div class="entry open" id="of-YYYY-MM-DD-slug" data-date="YYYY-MM-DD" data-kind="open" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag open">Open finding</span><span class="kind bug">Needs attention</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> Plain-language problem.</p><p class="impact"><b>Why it matters:</b> Plain-language user impact.</p><p class="meta"><b>Next:</b> Plain-language next step.</p></div>
        Pending questions stay only in db/db.sqlite and Runloop's source-owned Needs your decision surface. After an answer, add one historical card under whoever asked it. Goal Advisor example:
        <div class="entry input" data-date="YYYY-MM-DD" data-kind="input" data-pulse-section="improvements" data-module="goal_advisor" data-question-id="input-YYYY-MM-DD-slug" data-status="answered"><div class="ehead"><span class="tag input">Goal Advisor · user answer</span><span class="etitle">…</span><span class="when">…</span></div><div class="decisiongrid"><div><b>Question</b><span>…</span></div><div><b>Answer</b><span>selected option and/or free-form text</span></div><div><b>Outcome</b><span>Plain-language current outcome.</span></div></div></div>
        <div class="entry user" data-date="YYYY-MM-DD" data-kind="user" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag user">User rule · authoritative</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language rule first.</p></div>
        <div class="entry note" data-date="YYYY-MM-DD" data-kind="note" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag note">Note</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language note first.</p></div>
-       Close an open finding by editing its card to add: <p class="resolved">Resolved YYYY-MM-DD — how.</p>
        Confirm a Decision worked (or didn't) by editing its card to add ONE outcome stamp once a later run measures it:
        <p class="outcome ok">Confirmed on YYYY-MM-DD — login-skip gone, eval 0.72 → 0.81 over 2 runs.</p>
        <p class="outcome bad">No effect by YYYY-MM-DD — reopened as a Goal finding.</p>

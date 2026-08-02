@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
-
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 // kebabCaseWorkflowName matches a kebab-case workflow folder name:
@@ -27,7 +25,7 @@ var kebabCaseWorkflowName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 //   - no-overwrite of existing workflows
 //
 // Registered only for multi-agent chat (not workflow phase).
-func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerWorkflowCreatorTool(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}

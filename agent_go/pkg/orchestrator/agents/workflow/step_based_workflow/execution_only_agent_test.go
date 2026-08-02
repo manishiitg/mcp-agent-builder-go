@@ -52,7 +52,7 @@ func TestExecutionOnlyPromptRequiresDurableConcernHandoff(t *testing.T) {
 	}
 }
 
-func TestExecutionOnlyPromptUsesAbsoluteDBPathEnv(t *testing.T) {
+func TestExecutionOnlyPromptUsesManagedWorkflowDBTools(t *testing.T) {
 	agent := &WorkflowExecutionOnlyAgent{}
 
 	prompt := agent.executionOnlySystemPromptProcessor(map[string]string{
@@ -68,21 +68,23 @@ func TestExecutionOnlyPromptUsesAbsoluteDBPathEnv(t *testing.T) {
 		"IsEvaluationMode":      "false",
 		"IsCodeExecutionMode":   "false",
 		"IsScriptedMode":        "false",
+		"DBAccess":              DBAccessReadWrite,
 	})
 
 	requiredSnippets := []string{
-		"Always use the absolute `$DB_PATH` env var",
-		"sqlite3 \"$DB_PATH\" \"SELECT ...\"",
-		"NEVER use relative `db/db.sqlite` from step code or shell",
-		"persist your results to the workflow database via the absolute `$DB_PATH`",
+		"Use `query_workflow_db` for schema discovery and reads",
+		"`mutate_workflow_db` for transactional INSERT/UPDATE/DELETE operations",
+		"persist results with `mutate_workflow_db`",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(prompt, snippet) {
 			t.Fatalf("expected prompt to contain %q\n\nPrompt:\n%s", snippet, prompt)
 		}
 	}
-	if strings.Contains(prompt, "sqlite3 db/db.sqlite") {
-		t.Fatalf("execution prompt still teaches relative sqlite path\n\nPrompt:\n%s", prompt)
+	for _, forbidden := range []string{"$DB_PATH", "sqlite3"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("managed execution prompt still teaches raw DB access %q\n\nPrompt:\n%s", forbidden, prompt)
+		}
 	}
 }
 
@@ -117,9 +119,33 @@ func TestEvaluationPromptsUseOnlyFileOutputContract(t *testing.T) {
 			}
 		}
 	}
-	for _, required := range []string{"READ-ONLY workflow evidence", "Evaluation findings are never persisted"} {
+	for _, required := range []string{"READ-ONLY workflow evidence", "Read it with `query_workflow_db`"} {
 		if !strings.Contains(systemPrompt, required) {
 			t.Fatalf("evaluation system prompt missing %q\n\nPrompt:\n%s", required, systemPrompt)
+		}
+	}
+}
+
+func TestReadOnlyExecutionPromptCannotRecommendMutationOrRawSQLite(t *testing.T) {
+	agent := &WorkflowExecutionOnlyAgent{}
+	prompt := agent.executionOnlySystemPromptProcessor(map[string]string{
+		"WorkspacePath":         "/app/workspace-docs/Workflow/test/runs/run/execution",
+		"WorkflowRoot":          "/app/workspace-docs/Workflow/test",
+		"StepExecutionPath":     "/app/workspace-docs/Workflow/test/runs/run/execution/reader",
+		"StepContextOutput":     "result.json",
+		"KnowledgebasePath":     "/app/workspace-docs/Workflow/test/knowledgebase",
+		"FolderGuardReadPaths":  "/app/workspace-docs/Workflow/test/db",
+		"FolderGuardWritePaths": "/app/workspace-docs/Workflow/test/runs/run/execution/reader",
+		"IsEvaluationMode":      "false",
+		"IsScriptedMode":        "false",
+		"DBAccess":              DBAccessRead,
+	})
+	if !strings.Contains(prompt, "READ-ONLY workflow evidence") || !strings.Contains(prompt, "query_workflow_db") {
+		t.Fatalf("read-only DB guidance missing:\n%s", prompt)
+	}
+	for _, forbidden := range []string{"mutate_workflow_db", "$DB_PATH", "sqlite3", "INSERT ... ON CONFLICT"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("read-only prompt contains %q:\n%s", forbidden, prompt)
 		}
 	}
 }
@@ -171,12 +197,14 @@ func TestExecutionOnlyPromptsTreatSkillAsAdvisory(t *testing.T) {
 	systemSnippets := []string{
 		"Treat learnings/skill content as advisory guidance from previous runs",
 		"the current step description, orchestrator instructions, and human input are the source of truth",
-		"Skill content is guidance from previous runs, not a replacement for the current task",
 	}
 	for _, snippet := range systemSnippets {
 		if !strings.Contains(systemPrompt, snippet) {
 			t.Fatalf("expected system prompt to contain %q\n\nPrompt:\n%s", snippet, systemPrompt)
 		}
+	}
+	if strings.Contains(systemPrompt, "Use the legacy selector.") {
+		t.Fatal("attached-skill mode must not recursively inline legacy learning history")
 	}
 
 	userPrompt := agent.executionOnlyUserMessageProcessor(map[string]string{

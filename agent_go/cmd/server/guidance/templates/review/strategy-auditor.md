@@ -8,10 +8,10 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 Use `{{.RunFolder}}` as the newest evidence anchor, then compare it with the
 smallest useful retained window.{{end}}
 
-1. Load `get_reference_doc(kind="post-run-monitor")`,
-   `get_reference_doc(kind="strategy-auditor")`,
-   `get_reference_doc(kind="assumption-audit")`, and
-   `get_reference_doc(kind="review-improve-log")`. The Strategy Auditor
+1. Load `read_skill(skill_name="builder-reference", path="references/post-run-monitor.md")`,
+   `read_skill(skill_name="builder-reference", path="references/strategy-auditor.md")`,
+   `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`, and
+   `read_skill(skill_name="builder-reference", path="references/review-improve-log.md")`. The Strategy Auditor
    reference is the classification and evidence contract. These references
    belong to the parent; never give the reviewer HTML/CSS/formatting work.
 2. Read the objective and success criteria from `soul/soul.md`, then inspect the
@@ -34,7 +34,8 @@ smallest useful retained window.{{end}}
    structured finding lifecycle. The reviewer must not edit files or databases,
    run producing actions, publish, notify, ask the user, create/consume
    decisions, update Pulse state, or launch another agent. SQLite access is
-   read-only.
+   read-only. `call_generic_agent` returns an `execution_id` immediately; end
+   the current turn and resume only from the automatic completion notification.
 5. Require one primary classification: `strategy_flaw`, `execution_bug`,
    `measurement_gap`, `insufficient_evidence`, or `no_material_problem`.
    Require the goal/causal chain, evidence window and exclusions,
@@ -47,7 +48,7 @@ smallest useful retained window.{{end}}
    evidence or module handoff rather than a plan mutation, verification, and
    `user_judgment_required` with reason.
 6. Read the persisted result with `get_pulse_review_result` using the exact
-   `review_run_id` and `module` returned by `call_generic_agent`. Validate and
+   `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that complete result against `builder/improve.html`. As the
    parent, append one compact newest-first diagnostic entry with
    `data-pulse-section="signals" data-module="strategy_auditor"`. Do not edit

@@ -200,9 +200,6 @@ content, err := json.MarshalIndent(file, "", "  ")
 | `use_code_execution_mode` | `boolean` | Preset default (nil = use preset) | Step-level code execution mode override (nil = use preset default, true/false = override) |
 | `enable_context_offloading` | `boolean` | `true` (nil = enabled) | Enable/disable context offloading virtual tools |
 
-Legacy note:
-`use_tool_search_mode` and `pre_discovered_tools` should not be treated as active workflow step config fields anymore. The current workflow editor strips those legacy keys on save, and the canonical documentation now lives in [Core Tool Search Mode](../core/tool_search_mode.md).
-
 ### Prerequisite Detection Configuration
 
 | Field | Type | Default | Purpose |

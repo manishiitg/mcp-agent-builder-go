@@ -22,8 +22,8 @@ var workflowVersionUpgrades = []workflowVersionUpgrade{
 This is a product-managed Pulse pre-step. Do ONLY this upgrade check, then stop and wait for the normal Pulse Gate step.
 
 1. Read workflow.json and builder/improve.html. Treat a missing workflow.json "version" as "1.0.0".
-2. Call get_reference_doc(kind="review-improve-log") and get_reference_doc(kind="post-run-monitor"). If builder/improve.html uses the old narrow Pulse layout, update it to the current responsive workflow Pulse contract: viewport meta, no horizontal overflow, mobile-first/wide-safe cards, metadata under titles on narrow widths, overflow-wrap for long run notes, and compact latest-run/cost/time sections.
-3. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call get_reference_doc(kind="publish-strategy") and refresh the workflow's publish instructions/config notes to the current password-protected static publish contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default StatiCrypt page, and record only visibility + secret_name/status. If publish is not enabled or not password/private, do nothing for publish.
+2. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and read_skill(skill_name="builder-reference", path="references/post-run-monitor.md"). If builder/improve.html uses the old narrow Pulse layout, update it to the current responsive workflow Pulse contract: viewport meta, no horizontal overflow, mobile-first/wide-safe cards, metadata under titles on narrow widths, overflow-wrap for long run notes, and compact latest-run/cost/time sections.
+3. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call read_skill(skill_name="builder-reference", path="references/publish-strategy.md") and refresh the workflow's publish instructions/config notes to the current password-protected static publish contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default StatiCrypt page, and record only visibility + secret_name/status. If publish is not enabled or not password/private, do nothing for publish.
 4. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.0 to v1.0.1 and lists what was applied or skipped.
 5. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.1". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
 
@@ -38,7 +38,7 @@ Report the files changed and any intentional no-op decisions, then stop.`,
 This is a product-managed Pulse pre-step. Do ONLY this upgrade check, then stop and wait for the normal Pulse Gate step.
 
 1. Read workflow.json, publish/status.json if it exists, and builder/improve.html.
-2. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call get_reference_doc(kind="publish-strategy") and refresh the workflow's publish instructions/config notes to the current Runloop dark password-gate contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default green/white StatiCrypt page, and record only visibility + secret_name/status. Do not change the destination URL, do not expose the password, and do not do the deploy in this upgrade step; the normal verified publish turn will republish with the new gate.
+2. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call read_skill(skill_name="builder-reference", path="references/publish-strategy.md") and refresh the workflow's publish instructions/config notes to the current Runloop dark password-gate contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default green/white StatiCrypt page, and record only visibility + secret_name/status. Do not change the destination URL, do not expose the password, and do not do the deploy in this upgrade step; the normal verified publish turn will republish with the new gate.
 3. If publish is not enabled or not password/private, make no publish changes.
 4. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.1 to v1.0.2 and whether private publish styling was applied or skipped.
 5. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.2". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
@@ -78,7 +78,7 @@ This is a product-managed Pulse pre-step. Do ONLY this Pulse report readability 
 Goal: refresh workflow Pulse logs so builder/improve.html reads like a concise human/operator dashboard first, with the detailed evidence log below. This upgrade is for layout, readability, and stale-count cleanup only; do not change workflow behavior.
 
 1. Read workflow.json, builder/improve.html if it exists, soul.md if it exists, recent run/cost/timing evidence if needed, and reports/report_plan.json only if it helps understand current report naming. Treat a missing workflow.json "version" as "1.0.0".
-2. Call get_reference_doc(kind="review-improve-log") and update builder/improve.html to the current Pulse skeleton/CSS where needed:
+2. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and update builder/improve.html to the current Pulse skeleton/CSS where needed:
    - first screen: two Bug/Goal verdict pills, one short status headline, chips, a "What matters now" brief, goal card, grouped signal tiles, and compact cost/time tiles;
    - recent runs: metadata row first, long prose/evidence note on a full-width second row, metadata/chips/timestamps no-wrap, prose/evidence fields wrap safely, no one-character metadata columns;
    - timeline: keep exactly one ` + "`<!-- LOG ENTRIES: newest first -->`" + ` anchor before the newest-first cards;
@@ -101,7 +101,7 @@ This is a product-managed Pulse pre-step. Do ONLY this filterability upgrade, th
 Goal: make builder/improve.html searchable by activity kind and text so the user can inspect Pulse / Goal Advisor / Chief of Staff actions and notes without a separate date picker. Visible dates remain searchable as text.
 
 1. Read workflow.json and builder/improve.html. Treat a missing workflow.json "version" as "1.0.0".
-2. Call get_reference_doc(kind="review-improve-log") and update builder/improve.html to the current filterable Pulse skeleton where needed:
+2. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and update builder/improve.html to the current filterable Pulse skeleton where needed:
    - add the .filters bar with Kind, Search, Reset, and match count controls; do not add a date picker;
    - add the static filter script from the reference doc; this UI script is allowed and is not a legacy JSON data block;
    - add data-date="YYYY-MM-DD" and data-kind="run|monitor|artifact|decision|advisor|cos|open|user|note" to every recent-run row and timeline entry;
@@ -124,7 +124,7 @@ This is a product-managed Pulse pre-step. Do ONLY this richer Pulse dashboard up
 Goal: make builder/improve.html more colorful, less text-heavy, and more widget-oriented so the user can understand workflow state quickly in the right panel.
 
 1. Read workflow.json, builder/improve.html if it exists, soul.md if it exists, and recent run/cost/timing evidence only when needed to populate visible tiles. Treat a missing workflow.json "version" as "1.0.0".
-2. Call get_reference_doc(kind="review-improve-log") and update builder/improve.html to the current rich widget Pulse shell where needed:
+2. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and update builder/improve.html to the current rich widget Pulse shell where needed:
    - first screen has two Bug/Goal verdict pills, a one-sentence status banner, What matters now widget cards, a goal card, color-coded signal tiles, and cost/time tiles;
    - use .tile.ok, .tile.warn, .tile.bad, .tile.info, .tile.goal, and .tile.cost classes where the status is known;
    - replace dense first-screen prose/tables with compact widgets, chips, and card sections;
@@ -171,7 +171,7 @@ This is a product-managed Pulse pre-step. Do ONLY this Pulse filter cleanup, the
 Goal: remove the date picker from builder/improve.html while retaining useful activity filtering.
 
 1. Read workflow.json and builder/improve.html if it exists.
-2. Call get_reference_doc(kind="review-improve-log") and update builder/improve.html where needed:
+2. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and update builder/improve.html where needed:
    - remove the Date label and input (including id="filter-date") from the .filters bar;
    - remove dateInput and exact-date filtering logic from the static filter script;
    - keep Kind, Search, Reset, and match count controls working;
@@ -202,7 +202,7 @@ Goals:
    - keep an optional ## Constraints section only for boundaries explicitly stated or approved by the user;
    - remove architecture, step design, provider/tool/model choices, implementation details, historical decision logs, references, and agent-inferred assumptions from soul.md;
    - do not lose material context: when removed architecture is already represented by plan/config, cite those artifacts in the upgrade entry; when a consequential restriction is not clearly user-approved, preserve it as an active Assumptions challenged item in builder/improve.html with its source, evidence, and validation/retirement condition. Create a human-input request only when deciding whether it is a durable user constraint would materially change workflow behavior.
-3. Call get_reference_doc(kind="review-improve-log") and get_reference_doc(kind="review-improve-log-skeleton"). Upgrade builder/improve.html in place when it exists:
+3. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and read_skill(skill_name="builder-reference", path="references/review-improve-log-skeleton.md"). Upgrade builder/improve.html in place when it exists:
    - replace the vague What matters now brief with Today's outcome cells: Outcome, Goal progress, Issues & fixes, Next Pulse;
    - add the optional Assumptions challenged block near the top, with at most three active consequential assumptions and no empty-state block;
    - wrap signal, cost/time, Maintenance Radar, cadence, and raw technical details in a closed-by-default <details class="technical"> section;
@@ -248,7 +248,7 @@ This is a product-managed Pulse report preflight. Do ONLY this builder/improve.h
 
 Goal: bring every workflow onto the current human-readable, responsive Pulse history contract. builder/improve.html remains the durable time-series source of truth. Runloop renders Goal directly from soul/soul.md and uses explicit section/module metadata to present the HTML history by Issues and reviews, Decisions and analysis, and Fixes and improvements.
 
-1. Read workflow.json and builder/improve.html. Call get_reference_doc(kind="review-improve-log") and get_reference_doc(kind="review-improve-log-skeleton"). Do not run the workflow or invent fresh findings merely to complete this migration.
+1. Read workflow.json and builder/improve.html. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and read_skill(skill_name="builder-reference", path="references/review-improve-log-skeleton.md"). Do not run the workflow or invent fresh findings merely to complete this migration.
 2. If builder/improve.html is missing, create it from the current skeleton with an empty history and one concise migration entry. If it exists, upgrade it in place. Preserve every useful historical run, finding, decision, user rule, user answer, outcome, evidence pointer, archive link, and unresolved item. Do not discard old evidence because its markup is obsolete; move very old detail into the existing Archive only when needed for readability.
 3. Make the document conform to the current report contract:
    - the root html element has data-pulse-schema="2", a viewport meta tag, responsive full-width layout, safe wrapping, no fixed-width text columns, and no horizontal overflow;
@@ -304,7 +304,7 @@ This is a product-managed Pulse history preflight. Do ONLY this question-ownersh
 
 Goal: historical questions and answers in builder/improve.html must remain under the component that asked them instead of all appearing in Reflection, and backend identifiers must not leak into the human-facing Pulse report.
 
-1. Read workflow.json and builder/improve.html. If builder/improve.html exists, call get_reference_doc(kind="review-improve-log") for the current attribution contract.
+1. Read workflow.json and builder/improve.html. If builder/improve.html exists, call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") for the current attribution contract.
 2. Inspect historical question/answer cards (for example data-kind="input" or cards with data-question-id). Preserve their visible question, selected option/free-form answer, outcome, date, and status. Reclassify only when the asker is supported by real card or question evidence:
    - Goal Advisor -> data-pulse-section="improvements", data-module="goal_advisor";
    - a known Pulse reviewer -> data-pulse-section="signals", data-module="<that canonical reviewer module>";
@@ -376,7 +376,7 @@ Goal: every eval step's own output already carries the real verdict — there is
 
 If evaluation/evaluation_plan.json does not exist, this is a no-op — skip to the version bump.
 
-1. Read evaluation/evaluation_plan.json and evaluation/step_config.json. Call get_reference_doc(kind="evaluation-plan") for the current output contract: each step's own output_content should carry "score" (0-10), "max_score" (typically 10), "reasoning" or "pass_fail_reason" (either is accepted), and "evidence".
+1. Read evaluation/evaluation_plan.json and evaluation/step_config.json. Call read_skill(skill_name="builder-reference", path="references/evaluation-plan.md") for the current output contract: each step's own output_content should carry "score" (0-10), "max_score" (typically 10), "reasoning" or "pass_fail_reason" (either is accepted), and "evidence".
 2. For each eval step, inspect its description and validation_schema, and — if a prior real run exists — its actual output under evaluation/runs/iteration-0/.../execution/<step-id>/output_content.json, to judge whether it already emits a numeric "score" key. Steps that already do (on a 0-10 scale) need no change.
 3. For a step using an old 0-100 scale ("score_0_to_100" or similar), rewrite its description and validation_schema to emit "score" on a 0-10 scale (divide by 10, preserving relative strictness) rather than adding a second field alongside the old one.
 4. For a step using a wholly different mechanism (legacy eval_logic/pass_condition/severity, or any other bespoke shape with no "score" key), rewrite its description to instruct writing score/max_score/reasoning-or-pass_fail_reason/evidence directly into output_content, evaluating the exact same underlying checks/intent the step already performs. This changes what is emitted, not what is measured — do not alter the step's actual checks, thresholds, or pass/fail intent while doing this.
@@ -399,6 +399,26 @@ Report: which eval steps needed changes vs. were already compliant, the old-shap
 This is a trusted backend compatibility migration from filesystem Pulse review Markdown to SQLite. Do not edit or delete review files manually. The backend imports every recognized pulse/reviews/**/*.md artifact byte-for-byte into pulse_review_log, imports only explicit CONCERNS lines into the structured finding lifecycle, verifies each transaction, retains the legacy source files for rollback/read parity, and stamps workflow.json version 1.0.17. New reviewers write their complete human-readable Markdown directly to SQLite and create no review file.
 
 If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
+	},
+	{
+		from:  workflowContractPulseReviewSQLiteVersion,
+		to:    workflowContractCompactPulseReportVersion,
+		label: "upgrade-1.0.18",
+		query: `WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18.
+
+This is a product-managed Pulse presentation migration. Do ONLY this compact-report upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
+
+Goal: builder/improve.html remains the readable published history, while SQLite and the Pulse popup own the complete operational issue tracker. Make the active HTML lighter without deleting history.
+
+1. Read workflow.json and builder/improve.html. Call read_skill(skill_name="builder-reference", path="references/review-improve-log.md") and read_skill(skill_name="builder-reference", path="references/review-improve-log-skeleton.md"). Call get_pulse_finding_backlog without a module filter.
+2. If builder/improve.html exists, upgrade it to data-pulse-schema="3" while preserving the verdict/status header, coverage, Today's outcome, collapsed Technical details, filters, material Activity history, hidden #pulse-agent-handoff, and Archive links.
+3. Add exactly one data-source="sqlite" Current work section after Today's outcome. Derive Open, Fixing, and Verify counts from the returned issue statuses. Show at most three Important now items and three Needs verification items, with a compact +N more in Pulse note when truncated. Stable issue ids may appear only in data-issue-id attributes.
+4. Do not copy skeleton instructions or example comments into the saved HTML. Remove visible raw agent output, .modfields reviewer field dumps, and any visible Agent log. Full review evidence already lives in SQLite.
+5. Standing .entry.open cards are no longer active state. Preserve them unchanged in their matching monthly builder/improve-archive/YYYY-MM.html file, then remove them from the active Activity timeline. Keep one-time material lifecycle events such as filed, fixed, verified, reopened, escalated, and consequential decisions. Do not create cards for clean reviewer results; coverage and SQLite retain them.
+6. Verify the active file has exactly one log insertion anchor, one Current work section, no active .entry.open/.modfields/.agentlog, no duplicated Goal/Profile card, and still contains all non-standing material history. Do not impose a byte or character budget.
+7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.18". Do not change schema_version, plans, steps, schedules, notifications, publishing, or any unrelated file.
+
+Report the before/after active card count, how many standing cards moved to monthly archives, whether raw reviewer/Agent blocks were removed, the three Current work counts, and any blocker, then stop.`,
 	},
 }
 

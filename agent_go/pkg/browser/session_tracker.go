@@ -310,11 +310,11 @@ func (t *SessionTracker) ActiveSessions() []map[string]string {
 	result := make([]map[string]string, 0, len(t.sessions))
 	for _, s := range t.sessions {
 		result = append(result, map[string]string{
-			"browser_session":     s.browserSession,
-			"agent_session":       s.agentSessionID,
-			"workflow_session":    s.workflowSessionID,
-			"age":                 time.Since(s.createdAt).Round(time.Second).String(),
-			"idle":                time.Since(s.lastUsed).Round(time.Second).String(),
+			"browser_session":  s.browserSession,
+			"agent_session":    s.agentSessionID,
+			"workflow_session": s.workflowSessionID,
+			"age":              time.Since(s.createdAt).Round(time.Second).String(),
+			"idle":             time.Since(s.lastUsed).Round(time.Second).String(),
 		})
 	}
 	return result

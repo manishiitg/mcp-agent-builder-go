@@ -1,8 +1,8 @@
-## Pulse independent backlog review and module fixer
+## Pulse independent reviews and one consolidated Fixer
 
-Use only after Gate. The scheduler supplies one due module, Pulse run ID, and
-dated review run ID. This parent owns that module until it has one terminal
-result.
+Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
+dated review run ID. It runs one read-only review stage per selected module,
+then exactly one consolidated Fixer stage for the pass.
 
 Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -23,27 +23,30 @@ outcome-bearing checkpoint. Otherwise run Auditor. Strategy Auditor runs before 
 launch Advisor only for an actionable diagnosis or its own
 answered-decision/experiment checkpoint.
 
-The scheduler invokes this contract once per due module, in module order. This
-stage owns only the supplied module. First inspect its current-run result,
+The scheduler invokes the reviewer phase once per due module, in module order.
+Each review stage owns only the supplied module. First inspect its current-run result,
 active retained backlog, answered decisions, awaiting-verification work, and
-any already-saved reviewer result. Drain actionable retained work before doing
-more discovery. Do not launch a reviewer merely because the module is due: if
-the saved review and lifecycle evidence are sufficient to apply or verify a
-bounded fix, do that now.
+any already-saved reviewer result. Do not launch a reviewer merely because the
+module is due: if saved review and lifecycle evidence already answer the review
+question, stop and leave that evidence for the consolidated Fixer. Reviewer
+stages never mutate, start fix attempts, or mark module state.
 
 When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
 make exactly one `call_generic_agent` call for this module. Never combine
 reviewers in one shell command, run curl in the background, use `&`/`wait`, or
 wait for another module. In coding-agent mode, use the documented API bridge
-shell transport without imposing a short shell timeout on the reviewer. If the
-outer bridge call backgrounds, stop and await its automatic notification.
+shell transport. The call returns an `execution_id` immediately; record it,
+end the current turn, and resume only from its automatic notification of completion.
 Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
-its complete Markdown directly in SQLite; call `get_pulse_review_result` with
-that review run and module before fixing. Immediately process a successful
-result; do not wait for any other reviewer. Reviewer failure is a terminal
-`Review incomplete` result for this module only and cannot block later modules.
+its complete Markdown and structured verification results directly in SQLite;
+call `get_pulse_review_result` with that review run and module before the review
+stage ends. Reviewer failure is retained as `Review incomplete` evidence for
+this module only and cannot block later reviewers. The consolidated Fixer
+records the terminal module result.
 
-Give each reviewer scope, Gate evidence, focused guidance, and this response contract:
+Give each reviewer scope, Gate evidence, focused guidance, and this response
+contract, loading each named doc with
+`read_skill(skill_name="builder-reference", path="references/<name>.md")`:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
 `llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
 DB/run evidence; or the Auditor diagnosis plus goal/experiment evidence for Goal
@@ -55,6 +58,26 @@ thesis, relationship to the active experiment, and why incremental repair is
 insufficient. Reject maintenance- or instrumentation-only Advisor results.
 Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 
+**Verify before discovering.** The reviewer is the independent check on fixes it
+did not make. Before looking for anything new, take every `changed_unverified`
+finding this module owns whose `next_check` evidence has since arrived, and
+judge it against the post-change evidence: `passed`, `failed`, or
+`inconclusive`. Emit the required `PULSE_VERIFICATION_JSON` marker with
+finding ID, fingerprint, attempt ID, verdict, expected, observed, evidence, and
+next-check boundary when inconclusive. The backend validates and transports
+these records separately from prose. Return those verdicts as a verification
+list, separate from new findings. The Fixer routes them — passed closes the finding as `fixed_verified`,
+failed reopens it, inconclusive leaves it awaiting the boundary it still names.
+
+Verification does not count against the finding cap. It is not discovery, and
+charging it to the same budget makes a reviewer choose between confirming past
+work and finding new problems.
+
+Without this, only failure is detectable. A fix that worked is never confirmed,
+so it is re-attempted every pass: rtslatency carried a finding at seen_count 4,
+still awaiting_verification, repaired again on each cycle because nothing ever
+checked the run that had since produced its evidence.
+
 Require a verdict, next check, and every evidence-backed ordered finding with
 stable ID, target, claim, evidence, bounded fix, verification, and judgment
 reason. Classify retained findings rather than omitting them. Clean means an
@@ -62,12 +85,39 @@ empty finding-ID manifest.
 An Auditor `measurement_gap` names the missing target/source/action/outcome
 linkage and blocked decision. Give Goal Advisor a separate read-only critic.
 
+A tool refusal is not evidence that a finding is unfixable. Check the target's
+actual type before concluding anything: rtslatency recorded two collectors as
+"not editable" after `update_scripted_step` was refused, when they were
+message_sequence steps and `update_message_sequence_step` was in the same tool
+surface. Before `blocked` or `external_action_required` on a rejected edit, name
+the tool you used, the target's real type, and the tool that type requires.
+
 Use `external_action_required` only when the finding is real but no workflow
 change can address it. Record `external_owner`, a stable `reason_code`, and an
 evidence/capability/user `reopen_condition`. This removes it from Pulse's active
 queue and suppresses unchanged rediscovery while keeping it visible on the
-external-action board. `blocked` remains for retryable/current blockers;
-`awaiting_user` remains in the decision queue.
+external-action board. `awaiting_run` is a real finding waiting only on a scheduled run to produce its
+evidence: no fix was applied and nobody is stuck. It requires `next_check`
+naming that run. Use it rather than `blocked` whenever the answer is "the data
+does not exist yet" — calling that blocked points the operator at a decision
+that does not exist and hides the ones that do.
+`blocked` remains for retryable/current blockers;
+Escalate to the operator only for a real decision. Before choosing
+`awaiting_user`, state the cost of acting, the alternative, and why `soul.md`
+does not already settle it. If the goal implies the answer and the cost is
+negligible, decide, act, and record the reasoning — asking anyway spends the
+operator's attention and buries the decisions that genuinely need them. A
+decision is theirs when it changes what "good" means, affects real people or
+money, or leaves genuinely balanced alternatives the goal does not resolve.
+rtslatency asked whether to retain per-turn latency rows: ~30MB a year against a
+2MB database, required by its own success criterion for reproducible
+percentiles. Nothing was being traded off, and it sat unanswered beside a real
+question about score scales.
+
+`awaiting_user` remains in the decision queue and requires a still-pending
+`create_human_input_request`, passed as `human_input_id`. Create the decision
+first: a finding marked awaiting_user with no question leaves the operator told
+that something needs them and given nothing to answer.
 
 Deduplicate findings before filing: match stable target/component, behavioral
 claim, and evidence boundary against active and suppressed findings. Reuse the
@@ -79,20 +129,34 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-Then start the only Pulse Fixer for this module as one `call_generic_agent` with
-`role="fixer"`, passing this run's `pulse_run_id`, a fresh `review_run_id`, and
-`module`. Never run two at once: it is the single writer. Do not apply fixes
-inline in this turn — a scheduled turn's model is pinned for its whole life, so
-an inline fixer mutates on a weaker tier than the reviewers that only read. The
-stage runs on the maintenance tier and is lent write authority for this run
-alone. It applies safe fixes sequentially.
+After every selected reviewer stage finishes, start exactly one Pulse Fixer as
+one `call_generic_agent` with `role="fixer"`, this run's `pulse_run_id`, dated
+`review_run_id`, and `module="pulse_fixer"`. Never run a Fixer per module and
+never run two Fixers at once. Do not apply fixes inline in the parent turn.
+Record its `execution_id`, end the current turn, and resume only from its
+automatic completion notification. The stage runs on the maintenance tier and
+is lent write authority for this run alone.
+
+The Fixer first builds one compact, priority-ordered Fix queue across all due
+modules. Each queue item is a coherent repair bundle. Group findings only when
+they share the same root cause, require compatible changes to the same target,
+and have one verification condition. Cross-reviewer grouping is allowed;
+conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
+externally owned findings stay visible but do not enter the actionable queue.
+There is no arbitrary queue cap and no finding may disappear. For each
+actionable bundle, `start_pulse_fix_attempt` is the durable queue record: link
+every affected finding before mutation, process bundles sequentially, and
+checkpoint/disposition one bundle before beginning the next.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
-`fix-verification`; old artifacts or successful writes are not proof. If proof
+`read_skill(skill_name="builder-reference", path="references/fix-verification.md")`;
+old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint
 created from its `CONCERNS:` line, and call `start_pulse_fix_attempt` before
-mutation. Keep its `attempt_id`. If a finding lacks a fingerprint, block it as a
-reviewer-contract failure instead of making an untracked change.
+mutation. From `get_pulse_finding_backlog`, pass `issue.id` as `finding_id` and
+the fingerprint from that same item; keep its `attempt_id`. IDs address records
+but never decide semantic sameness. If a finding lacks either value, block it as
+a reviewer-contract failure instead of making an untracked change.
 
 Reconcile every finding ID to one disposition; missing/duplicates block its
 module. Strategy/LLM-Ops changes need exact valid approval.
@@ -103,7 +167,7 @@ to challenge the causal claim. Advisor operational findings remain handoffs.
 Only the parent mutates workflow state. Neither reviewer nor Fixer writes Pulse
 HTML; the dedicated Dashboard owns it.
 
-Record `mark_pulse_module_result` for every due module. For every finding pass a
+Record `mark_pulse_module_result` exactly once for every due module. For every finding pass a
 structured `finding_dispositions` row with fingerprint, finding id, disposition,
 summary, attempt id when changed, changed files, and exact verification objects.
 Verification verdict is exactly `passed`, `failed`, or `inconclusive`.

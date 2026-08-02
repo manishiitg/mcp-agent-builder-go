@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   Clock3,
+  Circle,
   Database,
   FileText,
   Loader2,
@@ -28,6 +29,8 @@ import {
   buildPulseModuleActivity,
   acknowledgedReason,
   isPulseFindingClosed,
+  isPulseOwnedFinding,
+  pulseIssueForFinding,
   summarizePulseModule,
 } from './pulseModuleInspectorUtils'
 import {
@@ -81,32 +84,56 @@ function finalCommandLabel(state?: PulseFinalCommandState): string {
 }
 
 function FindingStatus({ finding }: { finding: PulseFindingLifecycle }) {
-  const closed = isPulseFindingClosed(finding.status)
-  const external = finding.status === 'external_action_required'
-  const tone = external
+  const issue = pulseIssueForFinding(finding)
+  const tone = issue.status === 'external'
     ? 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'
-    : closed
+    : issue.status === 'done' || issue.status === 'canceled'
     ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-    : finding.status === 'fixing'
+    : issue.status === 'in_progress'
       ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-      : finding.status === 'awaiting_verification'
+      : issue.status === 'in_review'
         ? 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+        : issue.status === 'needs_input'
+          ? 'border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300'
+          : issue.status === 'blocked'
+            ? 'border-slate-500/25 bg-slate-500/10 text-slate-700 dark:text-slate-300'
         : 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'
   return (
     <span className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold capitalize ${tone}`}>
-      {external ? 'external action' : closed ? 'closed' : readable(finding.status)}
+      {readable(issue.status)}
+    </span>
+  )
+}
+
+function IssuePriority({ finding }: { finding: PulseFindingLifecycle }) {
+  const priority = pulseIssueForFinding(finding).priority
+  const tone = priority === 'urgent'
+    ? 'text-red-600 dark:text-red-400'
+    : priority === 'high'
+      ? 'text-orange-600 dark:text-orange-400'
+      : priority === 'medium'
+        ? 'text-amber-600 dark:text-amber-400'
+        : priority === 'low'
+          ? 'text-sky-600 dark:text-sky-400'
+          : 'text-muted-foreground/50'
+  return (
+    <span title={`${readable(priority)} priority`} className={`flex h-5 w-5 items-center justify-center ${tone}`}>
+      <Circle className={`h-3.5 w-3.5 ${priority === 'urgent' || priority === 'high' ? 'fill-current' : ''}`} />
     </span>
   )
 }
 
 /** Which slice of the backlog the findings list is showing. */
-type PulseFocus = 'all' | 'awaiting_user' | 'open' | 'blocked' | 'fixing' | 'awaiting_verification' | 'closed'
+type PulseFocus = 'all' | 'awaiting_user' | 'open' | 'proposals' | 'workflow_reported' | 'blocked' | 'awaiting_run' | 'fixing' | 'awaiting_verification' | 'closed'
 
 const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Needs attention',
   awaiting_user: 'Waiting on you',
   open: 'Pulse can fix these',
+  proposals: 'Recorded proposals',
+  workflow_reported: 'Reported by workflow runs',
   blocked: 'Blocked',
+  awaiting_run: 'Waiting for data',
   fixing: 'Being fixed now',
   awaiting_verification: 'Waiting for proof',
   closed: 'Closed',
@@ -116,7 +143,10 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   all: 'Open findings across every review module',
   awaiting_user: 'Each one needs a decision only you can make',
   open: 'Queued for a fixer; nothing is blocking them',
+  proposals: 'Understood and written down; Pulse chose not to repair them',
+  workflow_reported: 'Filed by the workflow\u2019s own steps while running \u2014 evidence for the Gate, not Pulse\u2019s queue',
   blocked: 'Diagnosed, but Pulse has no action available',
+  awaiting_run: 'Real, but the next scheduled run has to produce the evidence',
   fixing: 'A fixer holds these right now',
   awaiting_verification: 'Changed, but not proven until the next valid run',
   closed: 'Resolved, rejected, or handed to another owner',
@@ -140,14 +170,16 @@ function Metric({
   onFocus?: (focus: PulseFocus) => void
 }) {
   const body = (
-    <>
-      <div className="text-[10px] font-semibold uppercase tracking-wide opacity-75">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
-      <div className="mt-0.5 text-[10px] opacity-75">{detail}</div>
-    </>
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="text-base font-semibold tabular-nums">{value}</span>
+      <span className="min-w-0">
+        <span className="block text-[10px] font-semibold uppercase tracking-wide">{label}</span>
+        <span className="block truncate text-[9px] opacity-70">{detail}</span>
+      </span>
+    </div>
   )
   if (!focus || !onFocus) {
-    return <div className={`rounded-xl border p-3 ${tone}`}>{body}</div>
+    return <div className={`rounded-md border px-3 py-2 ${tone}`}>{body}</div>
   }
   const selected = activeFocus === focus
   // A count with nothing behind it should not look clickable — the empty list
@@ -159,7 +191,7 @@ function Metric({
       aria-pressed={selected}
       disabled={empty}
       onClick={() => onFocus(selected ? 'all' : focus)}
-      className={`rounded-xl border p-3 text-left transition ${tone} ${
+      className={`rounded-md border px-3 py-2 text-left transition ${tone} ${
         empty
           ? 'cursor-default opacity-60'
           : 'cursor-pointer hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current'
@@ -193,11 +225,18 @@ function FindingEvidence({
         ? 'text-red-700 dark:text-red-300'
         : 'text-amber-700 dark:text-amber-300'
   )
+  const issue = pulseIssueForFinding(finding)
   return (
     <div
       className="mt-2 space-y-3 rounded-lg border bg-muted/30 p-3 text-[11px] leading-5"
       onClick={(event) => event.stopPropagation()}
     >
+      {issue.description && (
+        <div>
+          <div className="font-semibold text-foreground">Description</div>
+          <div className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">{issue.description}</div>
+        </div>
+      )}
       {finding.resolution_note && (
         <div>
           <div className="font-semibold text-foreground">Why it is in this state</div>
@@ -291,8 +330,8 @@ function FindingEvidence({
         >
           Open {finding.module || 'module'} review
         </button>
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {finding.step_id} · seen {finding.seen_count}× · first {formatDate(finding.first_seen_at)}
+        <span className="text-[10px] text-muted-foreground">
+          Source {finding.step_id} · first seen {formatDate(issue.created_at)}
         </span>
       </div>
     </div>
@@ -403,8 +442,10 @@ export function PulseWorkspace({
     () => {
       const matchesFocus = (finding: PulseFindingLifecycle) => {
         switch (focus) {
+          // Every focus except workflow_reported is a slice of Pulse's own
+          // backlog, so a concern the workflow filed is excluded up front.
           case 'all':
-            return !isPulseFindingClosed(finding.status)
+            return isPulseOwnedFinding(finding) && !isPulseFindingClosed(finding.status)
           case 'closed':
             return isPulseFindingClosed(finding.status)
           case 'fixing':
@@ -415,10 +456,16 @@ export function PulseWorkspace({
             return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'awaiting_user'
           case 'blocked':
             return finding.status === 'acknowledged' && acknowledgedReason(finding) === 'blocked'
+          case 'proposals':
+            return isPulseOwnedFinding(finding)
+              && finding.status === 'acknowledged' && acknowledgedReason(finding) === 'proposal'
+          case 'workflow_reported':
+            return !isPulseOwnedFinding(finding)
           case 'open':
-            return finding.status !== 'acknowledged'
-              ? finding.status === 'open'
-              : acknowledgedReason(finding) === 'other'
+            return isPulseOwnedFinding(finding)
+              && (finding.status !== 'acknowledged'
+                ? finding.status === 'open'
+                : acknowledgedReason(finding) === 'other')
           default:
             return true
         }
@@ -501,7 +548,7 @@ export function PulseWorkspace({
               <span className="text-xs text-muted-foreground">{health.detail}</span>
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
-              {reviews.length} stored review{reviews.length === 1 ? '' : 's'} · {findings.length} tracked finding{findings.length === 1 ? '' : 's'}
+              {findings.length} issue{findings.length === 1 ? '' : 's'} · {reviews.length} stored review{reviews.length === 1 ? '' : 's'}
             </div>
             {storageSummary.migrated > 0 && (
               <div className="mt-2 inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-[10px] text-emerald-700 dark:text-emerald-300">
@@ -557,7 +604,7 @@ export function PulseWorkspace({
         real items, 12 blocked, and 4 questions read as 25 outstanding problems
         and gave no way to tell a healthy workflow from a struggling one.
       */}
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+      <section className="grid grid-cols-2 gap-1.5 lg:grid-cols-7">
         <Metric
           label="Needs you"
           focus="awaiting_user"
@@ -577,6 +624,24 @@ export function PulseWorkspace({
           tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
         />
         <Metric
+          label="From workflow runs"
+          focus="workflow_reported"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={summary.workflowReported}
+          detail="reported by steps, not Pulse's queue"
+          tone="border-orange-500/25 bg-orange-500/5 text-orange-700 dark:text-orange-300"
+        />
+        <Metric
+          label="Proposals"
+          focus="proposals"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={summary.proposals}
+          detail="recorded, not repaired"
+          tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
+        />
+        <Metric
           label="Blocked"
           focus="blocked"
           activeFocus={focus}
@@ -584,6 +649,15 @@ export function PulseWorkspace({
           value={summary.blocked}
           detail="no action available to Pulse"
           tone="border-slate-500/25 bg-slate-500/5 text-slate-700 dark:text-slate-300"
+        />
+        <Metric
+          label="Waiting for data"
+          focus="awaiting_run"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={summary.awaitingRun}
+          detail="the next run produces the evidence"
+          tone="border-teal-500/25 bg-teal-500/5 text-teal-700 dark:text-teal-300"
         />
         <Metric
           label="Being fixed"
@@ -614,6 +688,17 @@ export function PulseWorkspace({
             : `${summary.passedChecks} passed verification${summary.passedChecks === 1 ? '' : 's'}`}
           tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
         />
+        {/* Only ever visible when the backend has a disposition this build does
+            not model. Silence here would mean findings vanishing from every
+            count rather than inflating one of them. */}
+        {summary.unclassified > 0 && (
+          <Metric
+            label="Unclassified"
+            value={summary.unclassified}
+            detail="status this UI does not recognise"
+            tone="border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-300"
+          />
+        )}
       </section>
 
       <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
@@ -622,15 +707,16 @@ export function PulseWorkspace({
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Issues</h3>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
                 {FOCUS_TITLES[focus]}
                 {moduleFilter && (
-                  <span className="ml-1.5 font-normal text-muted-foreground">
+                  <span className="ml-1 font-normal">
                     in {moduleSummaries.find((m) => m.id === moduleFilter)?.label || moduleFilter}
                   </span>
                 )}
-              </h3>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{FOCUS_HINTS[focus]}</p>
+                {' · '}{FOCUS_HINTS[focus]}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               {(focus !== 'all' || moduleFilter) && (
@@ -657,6 +743,7 @@ export function PulseWorkspace({
             <div className="divide-y">
               {attentionFindings.map((finding) => {
                 const module = moduleSummaries.find((item) => item.id === finding.module)
+                const issue = pulseIssueForFinding(finding)
                 return (
                   // A div, not a button: browsers suppress text selection inside
                   // buttons, and these rows carry the exact paths, fields and
@@ -664,7 +751,7 @@ export function PulseWorkspace({
                   // module, but only when it was a click rather than the end of
                   // a drag-select.
                   <div
-                    key={finding.fingerprint}
+                    key={issue.id}
                     role="button"
                     tabIndex={0}
                     onClick={() => {
@@ -676,22 +763,24 @@ export function PulseWorkspace({
                       event.preventDefault()
                       setExpandedFinding(expandedFinding === finding.fingerprint ? null : finding.fingerprint)
                     }}
-                    className="block w-full cursor-pointer select-text px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="block w-full cursor-pointer select-text px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[10px] font-semibold text-primary">{module?.label || finding.module || 'Review'}</span>
+                    <div className="grid min-w-0 grid-cols-[20px_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[20px_78px_minmax(0,1fr)_auto_auto_auto]">
+                      <IssuePriority finding={finding} />
+                      <span className="font-mono text-[10px] text-muted-foreground">{issue.id}</span>
+                      <span className="min-w-0 truncate text-xs font-medium text-foreground">{issue.title}</span>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">{module?.label || issue.module || 'Review'}</span>
                       <FindingStatus finding={finding} />
-                      {finding.seen_count > 1 && (
+                      <span className="hidden whitespace-nowrap text-[9px] text-muted-foreground sm:inline">{formatDate(issue.updated_at)}</span>
+                    </div>
+                    <div className="ml-7 mt-1 flex flex-wrap items-center gap-2 sm:ml-[106px]">
+                      {issue.seen_count > 1 && (
                         <span className="inline-flex items-center gap-1 text-[9px] font-medium text-amber-700 dark:text-amber-300">
                           <RotateCcw className="h-3 w-3" />
-                          Seen {finding.seen_count} times
+                          Recurred {issue.seen_count}×
                         </span>
                       )}
-                    </div>
-                    <div className="mt-1.5 whitespace-pre-wrap break-words text-xs leading-5 text-foreground">{finding.text}</div>
-                    <div className="mt-1 text-[10px] text-muted-foreground">
-                      {finding.finding_id || finding.fingerprint} · {formatDate(finding.last_seen_at)}
-                      <span className="ml-1.5 text-primary">
+                      <span className="text-[9px] text-primary">
                         {expandedFinding === finding.fingerprint ? 'hide evidence' : 'show evidence'}
                       </span>
                     </div>

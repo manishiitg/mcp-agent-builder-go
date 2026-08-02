@@ -343,6 +343,38 @@ func TestCheckRejectsWorkspaceTraversal(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyObservesCheckpointedWALWithoutSidecars(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/wal-loopclosure"
+	fixture := openLoopClosureFixtureDB(t, root, workspacePath)
+	if _, err := fixture.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('observed')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, filepath.FromSlash(workspacePath), "db", "db.sqlite")
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+
+	db, exists, err := openReadOnly(context.Background(), workspacePath)
+	if err != nil || !exists {
+		t.Fatalf("loop closure could not open checkpointed WAL without sidecars: exists=%v err=%v", exists, err)
+	}
+	defer db.Close()
+	var value string
+	if err := db.QueryRow(`SELECT value FROM marker`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "observed" {
+		t.Fatalf("value=%q, want observed", value)
+	}
+}
+
 func openLoopClosureFixtureDB(t *testing.T, root, workspacePath string) *sql.DB {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(workspacePath), "db", "db.sqlite")

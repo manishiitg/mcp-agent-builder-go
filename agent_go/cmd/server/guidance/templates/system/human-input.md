@@ -121,4 +121,4 @@ into a text field).
 - **`execute_step(step_id, group_name, human_input="<response>")`** — in workshop mode, test by passing the response directly via `human_input`. Skips the actual prompt UX.
 
 For the full signatures + parameters see
-`get_reference_doc(kind="workflow-tools")`.
+`read_skill(skill_name="builder-reference", path="references/workflow-tools.md")`.

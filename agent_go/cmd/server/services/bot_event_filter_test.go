@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/manishiitg/mcpagent/events"
 	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	"github.com/manishiitg/mcpagent/events"
 )
 
 func TestSuppressWorkflowRuntimeChatterDefaultsForSlackAndWhatsApp(t *testing.T) {

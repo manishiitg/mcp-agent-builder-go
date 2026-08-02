@@ -290,7 +290,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// Register this turn as steerable for its whole duration, so a follow-up
 	// message the child sends while it's still running can be injected live
 	// (see steer.go) instead of only ever being queued for afterward.
-	registerActiveTurn(activityDir, sess.Agent())
+	registerActiveTurn(activityDir, sess)
 	defer clearActiveTurn()
 
 	reply, err := sess.Ask(ctx, history)

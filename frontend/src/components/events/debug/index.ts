@@ -18,10 +18,6 @@ export { ContextCancelledEventDisplay } from './ContextCancelledEvent'
 export { CacheEventDisplay } from './CacheEvent'
 export { ComprehensiveCacheEventDisplay } from './ComprehensiveCacheEvent'
 
-// Structured output event components
-export { StructuredOutputStartEventDisplay } from './StructuredOutputStartEvent'
-export { StructuredOutputEndEventDisplay } from './StructuredOutputEndEvent'
-
 // Context summarization event components
 export { ContextSummarizationStartedEventDisplay } from './ContextSummarizationStartedEvent'
 export { ContextSummarizationCompletedEventDisplay } from './ContextSummarizationCompletedEvent'

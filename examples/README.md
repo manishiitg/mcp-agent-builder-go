@@ -1,6 +1,6 @@
 # Runloop Examples
 
-Runloop is most useful when it coordinates real workflows, not toy agents. This page collects flagship workflow blueprints that show what teams can build, plus pointers to the runnable Go examples that live under `agent_go/examples/`.
+Runloop is most useful when it coordinates real workflows, not toy agents. This page collects flagship workflow blueprints that show what teams can build.
 
 ## Flagship Workflow Blueprints
 
@@ -81,10 +81,6 @@ Expected output:
 - Recommended edits
 - Escalation queue
 - Audit trail for reviewers
-
-## Runnable Go Examples
-
-The lower-level SDK examples live in [agent_go/examples](../agent_go/examples/README.md). They show how to run local agents, connect workspace tools, and exercise CLI providers such as Claude Code and Pi.
 
 ## Demo GIF Storyboard
 

@@ -128,8 +128,8 @@ func (deo *DelegationEventObserver) HandleEvent(ctx context.Context, event *even
 	taggedEvent.Component = fmt.Sprintf("delegation-%d", deo.depth)
 	taggedEvent.HierarchyLevel = deo.depth + 1 // Sub-agent events are one level deeper
 	taggedEvent.SessionID = deo.sessionID
-	taggedEvent.CorrelationID = deo.delegationID                   // Links all events in this delegation
-	taggedEvent.ParentID = deo.delegationStartEventID              // Makes events children of delegation_start
+	taggedEvent.CorrelationID = deo.delegationID      // Links all events in this delegation
+	taggedEvent.ParentID = deo.delegationStartEventID // Makes events children of delegation_start
 
 	// Create the store event with the tagged data
 	randomSuffix := fmt.Sprintf("%d", time.Now().UnixNano()%1000000)

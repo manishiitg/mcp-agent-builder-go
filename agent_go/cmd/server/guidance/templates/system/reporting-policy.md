@@ -11,7 +11,7 @@ HTML remains the authored report format. The only native control is an
 `interaction` widget that the user explicitly asks Workshop to configure; do
 not create these automatically from Pulse or agent findings. The canonical report model, the full
 `window.report` API, and the content + formatting + design guide all live in
-`get_reference_doc(kind="report-plan")` — load it before authoring or editing a
+`read_skill(skill_name="builder-reference", path="references/report-plan.md")` — load it before authoring or editing a
 report. This policy only covers when/where reports apply and the mode boundary.
 
 ## Workshop mode: own the report plan
@@ -26,7 +26,7 @@ unless the user also asked for workflow behavior or eval changes.
 - The answer is: **author an HTML document** (live data via `window.report`,
   renders its own charts/tables/branded layout) and register it in
   `reports/report_plan.json` with a `file` widget (`renderFormat: "html"`).
-  Start from the shipped HTML skeleton — `get_reference_doc(kind="html-output")`
+  Start from the shipped HTML skeleton — `read_skill(skill_name="builder-reference", path="references/html-output.md")`
   — so even a simple narrative report is quick to author and looks consistent.
 - **Author the document once; wire it to read data LIVE.** Do NOT add a
   workflow step that (re)generates the report each run — the workflow's normal
@@ -48,7 +48,7 @@ unless the user also asked for workflow behavior or eval changes.
   Give it a stable widget id, `question`, `responseKind`, optional `options`, and
   optional `instanceKey` / subject version/hash. The current run never blocks.
   If the response should affect execution, also edit the intended consumer step
-  so it reads the matching `report_widget_responses` row from `$DB_PATH` on a
+  so it reads the matching `report_widget_responses` row through `query_workflow_db` (or `$DB_PATH` in saved scripted code) on a
   later run. This is not the dynamic Pulse `report_human_inputs` flow.
 
 ### Live data + how to author
@@ -56,8 +56,8 @@ unless the user also asked for workflow behavior or eval changes.
 HTML reports read `db/db.sqlite` live via `window.report` and draw their own
 charts/tables/CSS. The full `window.report` API, **what to put in the report
 (content/insight), the formatting + design-quality bar, theming, and responsive
-rules** are all in `get_reference_doc(kind="report-plan")`; the HTML skeleton is
-in `get_reference_doc(kind="html-output")`. Load those before authoring — don't
+rules** are all in `read_skill(skill_name="builder-reference", path="references/report-plan.md")`; the HTML skeleton is
+in `read_skill(skill_name="builder-reference", path="references/html-output.md")`. Load those before authoring — don't
 restate them here.
 
 A report dashboard should answer the workflow's business question, not just list
@@ -96,4 +96,4 @@ via shell/direct file writes from Run mode.
 For the report-plan toolchain (registering documents, tabs, per-report
 themes, the `window.report` API, the good-document + design-quality guide,
 missing-data triage, full workflow), call
-`get_reference_doc(kind="report-plan")`.
+`read_skill(skill_name="builder-reference", path="references/report-plan.md")`.

@@ -21,6 +21,8 @@ type contextKey string
 
 const orchestratorIDKey contextKey = "orchestrator_id"
 
+func boolPointer(value bool) *bool { return &value }
+
 // AgentMode represents the mode of operation for an agent
 type AgentMode string
 
@@ -105,6 +107,12 @@ type BaseAgent struct {
 	maxTurns     int
 	provider     string
 	mcpSessionID string
+	toolPolicy   mcpagent.ToolPolicy
+	definition   mcpagent.AgentDefinition
+	runtime      mcpagent.RuntimeConfig
+	lastHandle   *mcpagent.AgentSessionHandle
+	finalized    bool
+	session      *mcpagent.Session
 }
 
 // NewBaseAgent creates a new BaseAgent instance with comprehensive functionality
@@ -115,6 +123,7 @@ func NewBaseAgent(
 	llm llmtypes.Model,
 	instructions string,
 	serverNames []string,
+	directTools []mcpagent.ToolDefinition,
 	selectedTools []string, // NEW parameter
 	useCodeExecutionMode bool, // NEW parameter
 	mode AgentMode,
@@ -150,23 +159,15 @@ func NewBaseAgent(
 	cliSecurityPolicy *llmtypes.CLISecurityPolicy, // Server-resolved immutable CLI security policy
 	runtimeOverrides mcpclient.RuntimeOverrides, // Runtime config overrides for MCP servers (e.g., output directories)
 ) (*BaseAgent, error) {
-	// Convert AgentMode to mcpagent.AgentMode
-	// All agents use Simple mode
-	var mcpMode mcpagent.AgentMode = mcpagent.SimpleAgent
-
-	// Prepare agent options
-	agentOptions := []mcpagent.AgentOption{
-		mcpagent.WithMode(mcpMode),
-		mcpagent.WithTemperature(temperature),
-		mcpagent.WithToolChoice(toolChoice),
-		mcpagent.WithMaxTurns(maxTurns),
-		mcpagent.WithProvider(internalLLM.Provider(provider)),
+	generation := mcpagent.GenerationRuntimeConfig{
+		Provider:    internalLLM.Provider(provider),
+		Temperature: temperature,
+		ToolChoice:  toolChoice,
+		MaxTurns:    maxTurns,
+		APIKeys:     apiKeys,
 	}
-
-	// Add LLM config if provided
 	if llmConfig != nil {
-		// Convert orchestrator LLMConfig to mcpagent AgentLLMConfiguration
-		mcpConfig := mcpagent.AgentLLMConfiguration{
+		generation.LLM = mcpagent.AgentLLMConfiguration{
 			Primary: mcpagent.LLMModel{
 				Provider: llmConfig.Primary.Provider,
 				ModelID:  llmConfig.Primary.ModelID,
@@ -177,7 +178,7 @@ func NewBaseAgent(
 			Fallbacks: make([]mcpagent.LLMModel, len(llmConfig.Fallbacks)),
 		}
 		for i, fb := range llmConfig.Fallbacks {
-			mcpConfig.Fallbacks[i] = mcpagent.LLMModel{
+			generation.LLM.Fallbacks[i] = mcpagent.LLMModel{
 				Provider: fb.Provider,
 				ModelID:  fb.ModelID,
 				APIKey:   fb.APIKey,
@@ -185,169 +186,95 @@ func NewBaseAgent(
 				Options:  fb.Options,
 			}
 		}
-		agentOptions = append(agentOptions, mcpagent.WithLLMConfig(mcpConfig))
 	}
 
-	// Note: API keys are now extracted directly from the LLM instance
-	// via extractAPIKeysFromLLM() in mcpagent, so no need to pass them explicitly
-
-	// Add selected servers for "all tools" mode determination
-	if len(serverNames) > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithSelectedServers(serverNames))
-	}
-
-	// Add selected tools if provided
-	if len(selectedTools) > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithSelectedTools(selectedTools))
-	}
-
-	if useCodeExecutionMode {
-		agentOptions = append(agentOptions, mcpagent.WithCodeExecutionMode(true))
-	}
-
-	// Add context offloading option if specified
-	// Default to true if nil (backward compatible)
-	contextOffloadingEnabled := true
-	if enableContextOffloading != nil {
-		contextOffloadingEnabled = *enableContextOffloading
-	}
-	agentOptions = append(agentOptions, mcpagent.WithContextOffloading(contextOffloadingEnabled))
-
-	// Add large output threshold if specified (0 = use default: 10000 tokens)
-	if largeOutputThreshold > 0 {
-		agentOptions = append(agentOptions, mcpagent.WithLargeOutputThreshold(largeOutputThreshold))
-	}
-
-	// Add context summarization configuration
-	if enableContextSummarization {
-		agentOptions = append(agentOptions, mcpagent.WithContextSummarization(true))
-		if summarizeOnTokenThreshold {
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnTokenThreshold(true, tokenThresholdPercent))
-		}
-		if summarizeOnFixedTokenThreshold && fixedTokenThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummarizeOnFixedTokenThreshold(true, fixedTokenThreshold))
-		}
-		if summaryKeepLastMessages > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithSummaryKeepLastMessages(summaryKeepLastMessages))
-		}
-	}
-
-	// Add context editing configuration
-	if enableContextEditing {
-		agentOptions = append(agentOptions, mcpagent.WithContextEditing(true))
-		if contextEditingThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithContextEditingThreshold(contextEditingThreshold))
-		}
-		if contextEditingTurnThreshold > 0 {
-			agentOptions = append(agentOptions, mcpagent.WithContextEditingTurnThreshold(contextEditingTurnThreshold))
-		}
-	}
-
-	// Add parallel tool execution if enabled
-	if enableParallelToolExecution {
-		agentOptions = append(agentOptions, mcpagent.WithParallelToolExecution(true))
-	}
-
-	// Removed verbose logging
-
-	// Use logger directly (already loggerv2.Logger)
-	v2Logger := logger
-
-	// Determine server name (join multiple servers with comma, or use first server, or AllServers)
-	// NewAgentConnection supports comma-separated server names to connect to multiple servers
-	serverName := mcpclient.AllServers
-	if len(serverNames) > 0 {
-		if len(serverNames) == 1 {
-			serverName = serverNames[0]
-		} else {
-			// Multiple servers: join with comma for NewAgentConnection
-			serverName = strings.Join(serverNames, ",")
-		}
-	}
-
-	// Build options from parameters
-	options := agentOptions
-	if serverName != "" && serverName != mcpclient.AllServers {
-		options = append(options, mcpagent.WithServerName(serverName))
-	}
-	if tracer != nil {
-		options = append(options, mcpagent.WithTracer(tracer))
-	}
-	if traceID != "" {
-		options = append(options, mcpagent.WithTraceID(traceID))
-	}
-	if v2Logger != nil {
-		options = append(options, mcpagent.WithLogger(v2Logger))
-	}
-
-	// Add MCP session ID for connection sharing across agents in the same workflow
-	// When set, connections are stored in a session registry and reused
 	if mcpSessionID != "" {
-		options = append(options, mcpagent.WithSessionID(mcpSessionID))
 		logger.Info("🔗 Using MCP session for connection sharing",
 			loggerv2.String("session_id", mcpSessionID),
 			loggerv2.String("agent_name", name))
 	}
 
 	if workingDir := strings.TrimSpace(codingAgentWorkingDir); workingDir != "" {
-		options = append(options, mcpagent.WithCodingAgentWorkingDir(workingDir))
 		logger.Info("🔗 Using coding-agent working directory",
 			loggerv2.String("working_dir", workingDir),
 			loggerv2.String("agent_name", name))
 	}
 	if codingAgentKeepAlive {
-		options = append(options,
-			mcpagent.WithClaudeCodePersistentInteractiveSession(true),
-			mcpagent.WithCodexPersistentInteractiveSession(true),
-			mcpagent.WithCursorPersistentInteractiveSession(true),
-			mcpagent.WithPiPersistentInteractiveSession(true),
-		)
 		logger.Info("🔗 Keeping tmux-backed coding-agent session alive after completion",
 			loggerv2.String("agent_name", name))
 	}
 	if isolateCodingAgentWorkspace {
-		options = append(options, mcpagent.WithIsolatedSessionWorkspace(true))
 		logger.Info("🔒 Isolating coding-agent session in a fresh tmp dir (workflow-step isolation)",
 			loggerv2.String("agent_name", name))
 	}
 	if cliSecurityPolicy != nil {
-		options = append(options, mcpagent.WithCLISecurityPolicy(*cliSecurityPolicy))
 		logger.Info("🔒 Using server-resolved coding-agent CLI security policy",
 			loggerv2.String("mode", string(cliSecurityPolicy.Mode)),
 			loggerv2.String("agent_name", name))
 	}
 	if forceStructuredCodingAgent {
-		options = append(options, mcpagent.WithCodingAgentTransport(internalLLM.CodingAgentTransportStructured))
 		logger.Info("🔧 Structured JSON transport selected for coding-agent CLIs (step transport=structured)",
 			loggerv2.String("agent_name", name))
 	}
 
-	// Enable provider streaming for workflow-step agents so the
-	// synthetic terminal (driven by opts.StreamChan) can emit
-	// terminal pane snapshots for API-provider steps. Without this
-	// the agent runs in non-streaming mode and the StreamChan is
-	// never attached — the terminal pane stays empty for every
-	// non-tmux step. WithGenerationStreamingEvents(false) keeps
-	// per-token chat events out of the workflow event store; the
-	// terminal-chunk carve-out in mcpagent's processChunks still
-	// emits the terminal snapshots regardless.
-	options = append(options,
-		mcpagent.WithStreaming(true),
-		mcpagent.WithGenerationStreamingEvents(false),
-	)
-
-	// Add runtime overrides for workflow-specific MCP server configuration
-	// e.g., setting unique output directories per workflow run
 	if runtimeOverrides != nil {
-		options = append(options, mcpagent.WithRuntimeOverrides(runtimeOverrides))
 		logger.Info("🔧 Using runtime overrides for MCP servers",
 			loggerv2.String("agent_name", name),
 			loggerv2.Int("overrides_count", len(runtimeOverrides)))
 	}
 
-	// Create agent with all options
-	// modelID is automatically extracted from llm
-	agent, err := mcpagent.NewAgent(ctx, llm, configPath, options...)
+	mcpSources := make([]mcpagent.MCPToolSource, 0, len(serverNames))
+	for _, serverName := range serverNames {
+		if name := strings.TrimSpace(serverName); name != "" {
+			mcpSources = append(mcpSources, mcpagent.MCPToolSource{Name: name})
+		}
+	}
+
+	// Create the agent from one identity value. Runtime options remain on the
+	// compatibility path while sessions/events are migrated, but instructions,
+	// direct tools, and MCP sources are now fixed before construction.
+	definition := mcpagent.AgentDefinition{
+		Instructions: instructions,
+		Tools: mcpagent.ToolSet{
+			Direct: directTools,
+			MCP:    mcpSources,
+		},
+	}
+	runtime := mcpagent.RuntimeConfig{
+		Model:         llm,
+		MCPConfigPath: configPath,
+		Generation:    generation,
+		Tools: mcpagent.ToolRuntimeConfig{
+			SelectedTools: selectedTools, SelectedServers: serverNames,
+			CodeExecution: useCodeExecutionMode, ParallelExecution: enableParallelToolExecution,
+		},
+		Context: mcpagent.ContextRuntimeConfig{
+			Offloading: enableContextOffloading, LargeOutputThreshold: largeOutputThreshold,
+			SummarizationEnabled:      enableContextSummarization,
+			SummarizeOnTokenThreshold: summarizeOnTokenThreshold, TokenThresholdPercent: tokenThresholdPercent,
+			SummarizeOnFixedThreshold: summarizeOnFixedTokenThreshold, FixedTokenThreshold: fixedTokenThreshold,
+			SummaryKeepLastMessages: summaryKeepLastMessages,
+			EditingEnabled:          enableContextEditing, EditingThreshold: contextEditingThreshold,
+			EditingTurnThreshold: contextEditingTurnThreshold,
+		},
+		Coding: mcpagent.CodingRuntimeConfig{
+			PersistentClaudeCode: codingAgentKeepAlive, PersistentCodex: codingAgentKeepAlive,
+			PersistentCursor: codingAgentKeepAlive, PersistentPi: codingAgentKeepAlive,
+			CLISecurityPolicy: cliSecurityPolicy,
+		},
+		MCP: mcpagent.MCPRuntimeConfig{SessionID: mcpSessionID, RuntimeOverrides: runtimeOverrides},
+		Workspace: mcpagent.WorkspaceRuntimeConfig{
+			CodingAgentWorkingDir: codingAgentWorkingDir, IsolatedSession: isolateCodingAgentWorkspace,
+		},
+		Observability: mcpagent.ObservabilityRuntimeConfig{
+			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
+			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(false),
+		},
+	}
+	if forceStructuredCodingAgent {
+		runtime.Coding.Transport = internalLLM.CodingAgentTransportStructured
+	}
+	agent, err := mcpagent.NewAgentFromDefinition(ctx, definition, runtime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
@@ -370,6 +297,8 @@ func NewBaseAgent(
 		maxTurns:     maxTurns,
 		provider:     provider,
 		mcpSessionID: mcpSessionID,
+		definition:   definition,
+		runtime:      runtime,
 	}, nil
 }
 
@@ -379,25 +308,15 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 
 	// Set or append system prompt if provided
 	if systemPrompt != "" {
-		if overwriteSystemPrompt {
-			ba.agent.SetSystemPrompt(systemPrompt)
-		} else {
-			ba.agent.AppendSystemPrompt(systemPrompt)
+		if err := ba.ApplyInstructions(ctx, systemPrompt, overwriteSystemPrompt); err != nil {
+			return "", nil, err
 		}
+	}
+	if err := ba.finalizeDefinition(ctx); err != nil {
+		return "", nil, err
 	}
 
 	startTime := time.Now()
-
-	// Prepare messages: always append userMessage to conversation history
-	messages := make([]llmtypes.MessageContent, len(conversationHistory))
-	copy(messages, conversationHistory)
-
-	// Always append the user message
-	userMessageContent := llmtypes.MessageContent{
-		Role:  llmtypes.ChatMessageTypeHuman,
-		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: userMessage}},
-	}
-	messages = append(messages, userMessageContent)
 
 	// Execute the agent with orchestrator context and conversation history
 	orchestratorCtx := context.WithValue(ctx, orchestratorIDKey, fmt.Sprintf("%s_%s_%d", ba.agentType, ba.name, time.Now().UnixNano()))
@@ -407,14 +326,12 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		// scoped folder guard instead of falling back to the parent workflow guard.
 		orchestratorCtx = context.WithValue(orchestratorCtx, common.ChatSessionIDKey, ba.mcpSessionID)
 	}
-	var answer string
-	var updatedConversationHistory []llmtypes.MessageContent
-	var err error
-	if handle := ba.agent.CurrentAgentSessionHandle(); handle != nil && !handle.Provider.Empty() {
-		answer, updatedConversationHistory, _, err = ba.agent.ContinueAgentSessionWithHistory(orchestratorCtx, handle, messages)
-	} else {
-		answer, updatedConversationHistory, err = ba.agent.AskWithHistory(orchestratorCtx, messages)
-	}
+	result, err := ba.session.Run(orchestratorCtx, mcpagent.Turn{
+		Input:      userMessage,
+		History:    conversationHistory,
+		ToolPolicy: ba.toolPolicy,
+	})
+	ba.lastHandle = result.Handle
 
 	executionTime := time.Since(startTime)
 
@@ -425,7 +342,229 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 	// Removed verbose logging
 	_ = executionTime
 
-	return answer, updatedConversationHistory, nil
+	return result.Text, result.History, nil
+}
+
+// ApplyInstructions creates a new immutable agent identity when a caller needs
+// a different prompt. Provider continuation is carried through the opaque
+// handle; the existing Agent is never mutated in place.
+func (ba *BaseAgent) ApplyInstructions(ctx context.Context, systemPrompt string, overwrite bool) error {
+	if strings.TrimSpace(systemPrompt) == "" {
+		return nil
+	}
+	if !ba.finalized {
+		if overwrite {
+			ba.definition.Instructions = strings.TrimSpace(systemPrompt)
+		} else {
+			appendDefinitionInstructions(&ba.definition, systemPrompt)
+		}
+		ba.instructions = ba.definition.Instructions
+		return nil
+	}
+
+	nextInstructions := systemPrompt
+	if !overwrite && strings.TrimSpace(ba.definition.Instructions) != "" {
+		nextInstructions = ba.definition.Instructions + "\n\n" + systemPrompt
+	}
+	if nextInstructions == ba.definition.Instructions {
+		return nil
+	}
+
+	nextDefinition := ba.definition
+	nextDefinition.Instructions = nextInstructions
+	return ba.replaceDefinition(ctx, nextDefinition, false)
+}
+
+// ApplyIdentity rebuilds the agent with additional construction-time skills
+// and prompt supplements. It exists for workflow factories that resolve these
+// inputs after their base configuration is loaded but before the first turn.
+func (ba *BaseAgent) ApplyIdentity(ctx context.Context, skills []*llmtypes.Skill, supplements ...string) error {
+	if !ba.finalized {
+		for _, skill := range skills {
+			if skill == nil {
+				return fmt.Errorf("assemble agent skill: skill cannot be nil")
+			}
+			ba.definition.Skills = append(ba.definition.Skills, skill)
+		}
+		for _, supplement := range supplements {
+			appendDefinitionInstructions(&ba.definition, supplement)
+		}
+		ba.instructions = ba.definition.Instructions
+		return nil
+	}
+
+	nextDefinition := ba.definition
+	nextDefinition.Skills = append(append([]*llmtypes.Skill(nil), nextDefinition.Skills...), skills...)
+	for _, supplement := range supplements {
+		if strings.TrimSpace(supplement) == "" {
+			continue
+		}
+		if strings.TrimSpace(nextDefinition.Instructions) == "" {
+			nextDefinition.Instructions = supplement
+		} else {
+			nextDefinition.Instructions += "\n\n" + supplement
+		}
+	}
+	return ba.replaceDefinition(ctx, nextDefinition, false)
+}
+
+// ApplyTool adds a construction-time tool to the immutable definition. The
+// structured-output path uses this for its completion contract before the
+// first turn; a later contract change rebuilds the definition rather than
+// mutating the live Agent registry.
+func (ba *BaseAgent) ApplyTool(ctx context.Context, tool mcpagent.ToolDefinition) error {
+	for _, existing := range ba.definition.Tools.Direct {
+		if existing.Name == tool.Name {
+			return nil
+		}
+	}
+	if !ba.finalized {
+		ba.definition.Tools.Direct = append(ba.definition.Tools.Direct, tool)
+		return nil
+	}
+
+	nextDefinition := ba.definition
+	nextDefinition.Tools.Direct = append(append([]mcpagent.ToolDefinition(nil), nextDefinition.Tools.Direct...), tool)
+	return ba.replaceDefinition(ctx, nextDefinition, true)
+}
+
+// RegisterCustomTool appends a direct tool to the construction-time
+// AgentDefinition. Tool registration after the first turn is deliberately
+// rejected; callers must create a replacement definition instead.
+func (ba *BaseAgent) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), displayGroup string) error {
+	return ba.RegisterCustomToolWithTimeout(name, description, parameters, execute, 0, displayGroup)
+}
+
+func (ba *BaseAgent) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, displayGroup string) error {
+	if ba.finalized {
+		return fmt.Errorf("agent definition is already finalized")
+	}
+	return ba.ApplyTool(context.Background(), mcpagent.ToolDefinition{
+		Name:         name,
+		Description:  description,
+		InputSchema:  parameters,
+		Execute:      execute,
+		Timeout:      timeout,
+		DisplayGroup: displayGroup,
+	})
+}
+
+func (ba *BaseAgent) AttachSkill(skill *llmtypes.Skill) error {
+	return ba.ApplyIdentity(context.Background(), []*llmtypes.Skill{skill})
+}
+
+func (ba *BaseAgent) AttachedSkills() []*llmtypes.Skill {
+	return append([]*llmtypes.Skill(nil), ba.definition.Skills...)
+}
+
+func (ba *BaseAgent) AddObserver(observer mcpagent.AgentEventListener) error {
+	if ba.finalized {
+		return fmt.Errorf("agent definition is already finalized")
+	}
+	if observer == nil {
+		return fmt.Errorf("observer cannot be nil")
+	}
+	ba.runtime.Observability.Observers = append(ba.runtime.Observability.Observers, observer)
+	return nil
+}
+
+func (ba *BaseAgent) finalizeDefinition(ctx context.Context) error {
+	if ba.finalized {
+		return nil
+	}
+	runtime := ba.runtime
+	runtime.ResumeHandle = ba.lastHandle
+	nextAgent, err := mcpagent.NewAgentFromDefinition(ctx, ba.definition, runtime)
+	if err != nil {
+		return fmt.Errorf("finalize immutable agent definition: %w", err)
+	}
+	old := ba.agent
+	nextSession, err := nextAgent.Start(ctx)
+	if err != nil {
+		nextAgent.Close()
+		return fmt.Errorf("start finalized agent session: %w", err)
+	}
+	ba.agent = nextAgent
+	ba.session = nextSession
+	ba.instructions = ba.definition.Instructions
+	ba.finalized = true
+	mcpagent.RetireReplacedAgent(old)
+	return nil
+}
+
+func appendDefinitionInstructions(definition *mcpagent.AgentDefinition, instruction string) {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return
+	}
+	if definition.Instructions != "" {
+		definition.Instructions += "\n\n"
+	}
+	definition.Instructions += instruction
+}
+
+func (ba *BaseAgent) replaceDefinition(ctx context.Context, nextDefinition mcpagent.AgentDefinition, force bool) error {
+	if !force && nextDefinition.Instructions == ba.definition.Instructions && len(nextDefinition.Skills) == len(ba.definition.Skills) {
+		return nil
+	}
+	nextRuntime := ba.runtime
+	nextRuntime.ResumeHandle = ba.lastHandle
+	nextAgent, err := mcpagent.NewAgentFromDefinition(ctx, nextDefinition, nextRuntime)
+	if err != nil {
+		return fmt.Errorf("rebuild agent identity: %w", err)
+	}
+	nextSession, err := nextAgent.Start(ctx)
+	if err != nil {
+		nextAgent.Close()
+		return fmt.Errorf("start rebuilt agent session: %w", err)
+	}
+	if ba.session != nil {
+		_ = ba.session.Close()
+	}
+	mcpagent.RetireReplacedAgent(ba.agent)
+	ba.agent = nextAgent
+	ba.session = nextSession
+	ba.definition = nextDefinition
+	ba.instructions = nextDefinition.Instructions
+	ba.finalized = true
+	return nil
+}
+
+// Resume reconstructs the runtime around persisted continuation state without
+// mutating the existing Agent instance.
+func (ba *BaseAgent) Resume(ctx context.Context, handle *mcpagent.AgentSessionHandle) error {
+	if handle == nil || handle.Empty() {
+		return nil
+	}
+	ba.lastHandle = handle
+	return ba.replaceDefinition(ctx, ba.definition, true)
+}
+
+// SessionHandle returns the latest opaque continuation state produced by Run.
+func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
+	return ba.lastHandle
+}
+
+// SetToolPolicy applies a runtime authorization view to subsequent turns. It
+// does not mutate the agent definition or its request-time tool registry.
+func (ba *BaseAgent) SetToolPolicy(toolNames []string) {
+	ba.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
+}
+
+// SetWorkspacePolicy configures filesystem enforcement as runtime policy,
+// separate from immutable instructions, skills, and tools.
+func (ba *BaseAgent) SetWorkspacePolicy(readPaths, writePaths []string) {
+	ba.runtime.Workspace.ReadPaths = append([]string(nil), readPaths...)
+	ba.runtime.Workspace.WritePaths = append([]string(nil), writePaths...)
+}
+
+// Send routes input into the active runtime session without exposing Agent
+// transport internals to workflow callers.
+func (ba *BaseAgent) Send(ctx context.Context, input string) (mcpagent.DeliveryResult, error) {
+	if ba.session == nil {
+		return mcpagent.DeliveryResult{}, fmt.Errorf("agent session is not running")
+	}
+	return ba.session.Send(ctx, input)
 }
 
 // Agent returns the underlying MCP agent
@@ -460,6 +599,9 @@ func (ba *BaseAgent) GetServerNames() []string {
 
 // Close closes the agent
 func (ba *BaseAgent) Close() error {
+	if ba.session != nil {
+		_ = ba.session.Close()
+	}
 	if ba.agent != nil {
 		ba.agent.Close()
 	}

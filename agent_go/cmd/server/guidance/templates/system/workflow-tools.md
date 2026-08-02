@@ -6,7 +6,7 @@ cheat sheet; this skill is the deep reference with full signatures,
 parameters, when-to-use rules, and gotchas.
 
 If you need to confirm an exact parameter shape that isn't documented
-here, call `get_api_spec(server_name="workflow", tool_name="...")` — that
+here, call `get_api_spec(tool_name="...")` — that
 returns the live JSON schema for the tool.
 
 ### Coding-CLI bridge routing
@@ -17,7 +17,7 @@ CLI, the native bridge exposes only `execute_shell_command`,
 `diff_patch_workspace_file`, `agent_browser`, and `get_api_spec`. Never try
 `api-bridge.list_executions`, `api-bridge.query_step`, or another catalog name
 as a native bridge call. For every non-native tool, call
-`get_api_spec(server_name="workflow", tool_name="<name>")` first, then use
+`get_api_spec(tool_name="<name>")` first, then use
 `execute_shell_command` to invoke the endpoint it returns with the supplied
 `$MCP_MCP`/`$MCP_CUSTOM` route and `$MCP_AUTH`. Do not guess or hardcode an
 HTTP URL.
@@ -38,7 +38,7 @@ HTTP URL.
 ## Step Config & Analysis (Workshop mode)
 
 - **`update_step_config(step_id, ...)`** — Update servers, tools, skills, learning settings, execution mode, LLMs, locks, review notes, description review state, and read-only `additional_read_paths` grants for declared workflow-relative inputs outside the standard run/db/KB/learnings surfaces. For eval steps this writes to `evaluation/step_config.json`.
-- **Pulse Bug Review/Fixer** — Scheduled Pulse runs the independent backlog/review/fixer module stages. The Bug Review is read-only and returns evidence, recommendations, and verification steps. The parent Pulse Fixer is the only writer and applies bounded safe fixes before recording the module result. Explicit `/pulse-fixer` uses `begin_pulse_fixer_run` to drain existing SQLite findings without Gate or a new reviewer.
+- **Pulse reviews + Fixer** — Scheduled Pulse runs independent read-only module reviews, then one consolidated Fixer for the pass. The reviewers return evidence, recommendations, and structured verification results. The Fixer is the only writer: it groups compatible findings into durable repair bundles, applies them sequentially, and records every module result. Explicit `/pulse-fixer` uses the same single-writer path after `begin_pulse_fixer_run`, without Gate or new reviewers.
 - **Objective + success criteria** — Edit `soul/soul.md` directly via shell (fill in the `## Objective` and `## Success Criteria` sections). `soul.md` is stable intent, not architecture: never add step design, provider/tool choices, implementation decisions, inferred assumptions, or a decision log. Optional constraints belong there only when the user explicitly approved them as durable boundaries. `plan.json` owns the current implementation attempt. No dedicated tool — use `diff_patch_workspace_file` or a shell heredoc.
 - **Notification preferences** — Keep execution reporting separate from Pulse reporting. `update_workflow_config(run_notification_instructions="...")` controls the **Run outcome** section: outputs, failures, goal movement, and metrics from the workflow execution. `update_workflow_config(pulse_notification_instructions="...")` controls the **What Pulse did** section: reviews, fixes, recommendations, decisions, backup/publish state, and next actions. If the user explicitly says a preference applies to every notification, save it in both fields. `workflow.json` `capabilities.notifications.run_summary_instructions` and `pulse_summary_instructions` are authoritative and supplied to Workflow Builder and Pulse finalization. Never put notification preferences in `soul/soul.md`; that file owns goal and user-approved outcome constraints, not presentation or delivery behavior. Missing preferences use Pulse defaults.
 - **Goal Advisor proposals and experiments** — Material strategy/path changes use the existing report interaction flow, not a separate plan-change workflow. Scheduled Pulse obtains a read-only strategy review plus an independent critic in its Goal Advisor module stage; manual `/goal-advisor` may use the dedicated background advisor. Both are strategy-first: they must state the current strategy ceiling and one materially different highest-leverage thesis before plan mechanics. They maintain at most one active **strategy** `.advisor-experiment` in `builder/improve.html` using `data-experiment-kind="strategy"`, preserving the baseline, metric, guardrails, checkpoint, and rollback condition through proposal, approval, running, measurement, and terminal outcome. Instrumentation-only tracking is a Pulse module handoff, not an Advisor experiment and does not block strategy review. Goal Advisor may create or refresh `create_human_input_request(source="goal_advisor", input_id="plan-proposal-...", options=[approve,reject,defer], context="<proposal + exact intended edits + rationale + expected impact + risk + evidence>")`. A later Pulse run may apply an approved proposal with normal plan modification/config/eval/report tools, call `mark_human_input_consumed`, and advance the same experiment card. In active manual Workshop chat, apply a bounded evidence-backed plan change directly only when the user is asking for improvement and the evidence is strong.
@@ -88,7 +88,7 @@ HTTP URL.
 For the operational cheat sheet on creating / editing / deleting schedules
 (cron syntax and workshop run payload shape), see this section. For the
 multi-agent-only schedule cron flow, see
-`get_reference_doc(kind="schedule-management")` instead.
+`read_skill(skill_name="builder-reference", path="references/schedule-management.md")` instead.
 
 - **Tools**: `list_schedules`, `create_schedule`, `create_calendar_schedule`, `update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`.
 - To view existing schedules, call `list_schedules`; it includes schedule IDs, type, mode, workshop mode, cron/calendar shape, timezone, enabled state, groups, and recent runtime state. `get_workflow_config` also includes a Schedules section when you are already inspecting broader workflow settings.
@@ -128,7 +128,7 @@ Every schedule in `workflow.json` has a `schedule_type` — `"cron"` (default) o
 - **Mode is the same as cron**: workflow schedules use `mode="workshop"`. Supply per-item `messages` or a top-level default `messages` array when the default full-workflow run instruction is not specific enough.
 - Past-dated items are skipped — only future items get registered. To change a calendar schedule, update its `calendar_items` (add/remove dates); editing tools (`update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`) work on calendar schedules too.
 
-> The cron flow for **multi-agent chat** schedules (`multiagent-schedules.json`, edited via shell) is separate and cron-only — see `get_reference_doc(kind="schedule-management")`. Calendar schedules are a **workflow-schedule** feature and live in `workflow.json`.
+> The cron flow for **multi-agent chat** schedules (`multiagent-schedules.json`, edited via shell) is separate and cron-only — see `read_skill(skill_name="builder-reference", path="references/schedule-management.md")`. Calendar schedules are a **workflow-schedule** feature and live in `workflow.json`.
 
 ### How workflow schedules execute
 
@@ -142,7 +142,7 @@ Workflow schedules always use the workshop builder execution path. Do not create
 
 ### Back up scheduled workflows
 
-Scheduled runs execute unattended and accumulate state (`workflow.json`, `planning/`, `knowledgebase/`, `learnings/`, `db/`, reports) that otherwise lives only on local disk. **Whenever you set up a recurring schedule, also arrange a backup** so each run persists its output off-box. Load `get_reference_doc(kind="backup-strategy")`, follow it once to initialise the workflow's backup destination, and persist the result in `workflow.json.backup`.
+Scheduled runs execute unattended and accumulate state (`workflow.json`, `planning/`, `knowledgebase/`, `learnings/`, `db/`, reports) that otherwise lives only on local disk. **Whenever you set up a recurring schedule, also arrange a backup** so each run persists its output off-box. Load `read_skill(skill_name="builder-reference", path="references/backup-strategy.md")`, follow it once to initialise the workflow's backup destination, and persist the result in `workflow.json.backup`.
 
 - Set `workflow.json.backup.enabled=true`, `mode="agent"`, `triggers.after_scheduled_run=true`, and a `destinations` entry for each backup target (git/github for config, R2/S3/B2/HuggingFace for large artifacts as needed).
 - After each backup attempt, write `backup/status.json` with the destination results, timestamps, summary, and errors. Do not put changing backup status in `workflow.json`.

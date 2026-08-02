@@ -164,6 +164,9 @@ func (api *StreamingAPI) handleGetSessionEvents(w http.ResponseWriter, r *http.R
 	// Get events for session with options
 	getEventsResult := api.eventStore.GetEvents(sessionID, opts)
 	sessionEvents := getEventsResult.Events
+	if r.URL.Query().Get("working_set") == "session" {
+		sessionEvents = events.FilterSessionWorkingSet(sessionID, sessionEvents)
+	}
 	exists := getEventsResult.Exists
 
 	lastProcessedIndex := getEventsResult.LastProcessedIndex

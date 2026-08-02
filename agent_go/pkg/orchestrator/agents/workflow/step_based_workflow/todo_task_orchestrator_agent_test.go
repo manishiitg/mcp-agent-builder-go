@@ -40,7 +40,7 @@ func TestTodoTaskOrchestratorPromptIncludesSharedCodeExecutionSection(t *testing
 		"**CODE EXECUTION MODE — Access MCP Tools via HTTP API:**",
 		"{{TOOL_STRUCTURE}}",
 		"MCP_CUSTOM and MCP_AUTH",
-		"get_api_spec(server_name=\"...\", tool_name=\"...\")",
+		"get_api_spec(tool_name=\"...\")",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(prompt, snippet) {

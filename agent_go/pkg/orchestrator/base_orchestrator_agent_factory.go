@@ -203,8 +203,6 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 	phase string,
 	step, iteration int,
 	stepID string, // Step ID (e.g., "fetch-data", "process-results")
-	customTools []llmtypes.Tool,
-	customToolExecutors map[string]interface{},
 ) error {
 	// Initialize agent
 	if err := agent.Initialize(ctx); err != nil {
@@ -237,7 +235,9 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 		// Ensure iteration folder is applied to bridge (for token persistence)
 		// This ensures all agents automatically get the iteration folder if it's been set
 		bo.applyIterationFolderToBridge()
-		mcpAgent.AddEventListener(cab)
+		if err := baseAgent.AddObserver(cab); err != nil {
+			return fmt.Errorf("attach event observer to %s: %w", agentName, err)
+		}
 		// Removed verbose logging
 	} else {
 		// Fallback for interface-based bridge
@@ -252,30 +252,24 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 		}
 		// Ensure iteration folder is applied to bridge (for token persistence)
 		bo.applyIterationFolderToBridge()
-		mcpAgent.AddEventListener(eventBridge)
+		if err := baseAgent.AddObserver(eventBridge); err != nil {
+			return fmt.Errorf("attach event observer to %s: %w", agentName, err)
+		}
 		bo.GetLogger().Info(fmt.Sprintf("🔗 Reused context-aware bridge connected to %s (step %d, agent %s)", phase, step+1, baseAgentName))
 		bo.GetLogger().Info(fmt.Sprintf("ℹ️ Skipping StartAgentSession for %s - handled at orchestrator level", phase))
-	}
-
-	// Register custom tools (pass config to check agent-specific code execution mode)
-	if customTools != nil && customToolExecutors != nil {
-		if err := bo.registerCustomToolsForAgent(mcpAgent, baseAgent, config, agentName, customTools, customToolExecutors); err != nil {
-			return err
-		}
 	}
 
 	return nil
 }
 
-// registerCustomToolsForAgent registers custom tools for an agent with folder guard and category validation
-func (bo *BaseOrchestrator) registerCustomToolsForAgent(
-	mcpAgent *mcpagent.Agent,
-	baseAgent *agents.BaseAgent,
+// prepareToolDefinitionsForAgent resolves custom tools into construction-time
+// definitions with folder guards, event context, timeout, and display metadata
+// already applied. It must run before the concrete mcpagent is created.
+func (bo *BaseOrchestrator) prepareToolDefinitionsForAgent(
 	config *agents.OrchestratorAgentConfig,
-	agentName string,
 	customTools []llmtypes.Tool,
 	customToolExecutors map[string]interface{},
-) error {
+) ([]mcpagent.ToolDefinition, error) {
 	// Determine whether to use per-agent folder guard paths (from config) or shared orchestrator state.
 	// Per-agent paths prevent race conditions when parallel sub-agents share the same orchestrator.
 	usePerAgentPaths := len(config.FolderGuardReadPaths) > 0 || len(config.FolderGuardWritePaths) > 0
@@ -307,6 +301,7 @@ func (bo *BaseOrchestrator) registerCustomToolsForAgent(
 		filteredTools, wrappedExecutors = bo.PrepareWorkspaceToolsWithFolderGuard(filteredTools, customToolExecutors)
 	}
 
+	definitions := make([]mcpagent.ToolDefinition, 0, len(filteredTools))
 	for _, tool := range filteredTools {
 		if executor, exists := wrappedExecutors[tool.Function.Name]; exists {
 			// Convert Parameters to map[string]interface{}
@@ -339,16 +334,16 @@ func (bo *BaseOrchestrator) registerCustomToolsForAgent(
 						bo.GetLogger().Error(fmt.Sprintf("❌ [DISCOVERY] Tool %s not found in ToolCategories map - category is REQUIRED!", tool.Function.Name), nil)
 						bo.GetLogger().Error(fmt.Sprintf("❌ [DISCOVERY] Available keys in ToolCategories map: %v", getMapKeys(bo.ToolCategories)), nil)
 						bo.GetLogger().Error(fmt.Sprintf("❌ [DISCOVERY] Tool name being looked up: '%s' (len=%d)", tool.Function.Name, len(tool.Function.Name)), nil)
-						return fmt.Errorf("tool %s not found in ToolCategories map - category is REQUIRED", tool.Function.Name)
+						return nil, fmt.Errorf("tool %s not found in ToolCategories map - category is REQUIRED", tool.Function.Name)
 					}
 				} else {
 					bo.GetLogger().Error(fmt.Sprintf("❌ [DISCOVERY] ToolCategories map is nil - category is REQUIRED for tool %s!", tool.Function.Name), nil)
-					return fmt.Errorf("ToolCategories map is nil - category is REQUIRED for tool %s", tool.Function.Name)
+					return nil, fmt.Errorf("ToolCategories map is nil - category is REQUIRED for tool %s", tool.Function.Name)
 				}
 
 				// Validate category is not empty
 				if toolCategory == "" {
-					return fmt.Errorf("tool %s has empty category - category is REQUIRED", tool.Function.Name)
+					return nil, fmt.Errorf("tool %s has empty category - category is REQUIRED", tool.Function.Name)
 				}
 
 				// Wrap human tools to inject SessionEventEmitter via the orchestrator's bridge.
@@ -367,28 +362,14 @@ func (bo *BaseOrchestrator) registerCustomToolsForAgent(
 					}
 				}
 
-				if tool.Function.Name == "call_sub_agent" {
-					if err := mcpAgent.RegisterCustomToolWithTimeout(
-						tool.Function.Name,
-						tool.Function.Description,
-						params,
-						finalExecutor,
-						0,
-						toolCategory,
-					); err != nil {
-						return fmt.Errorf("failed to register tool %s with extended timeout: %w", tool.Function.Name, err)
-					}
-				} else {
-					if err := mcpAgent.RegisterCustomTool(
-						tool.Function.Name,
-						tool.Function.Description,
-						params,
-						finalExecutor,
-						toolCategory,
-					); err != nil {
-						return fmt.Errorf("failed to register tool %s: %w", tool.Function.Name, err)
-					}
-				}
+				definitions = append(definitions, mcpagent.ToolDefinition{
+					Name:         tool.Function.Name,
+					Description:  tool.Function.Description,
+					InputSchema:  params,
+					Execute:      finalExecutor,
+					Timeout:      0,
+					DisplayGroup: toolCategory,
+				})
 			} else {
 				bo.GetLogger().Warn(fmt.Sprintf("Warning: Failed to convert executor for tool %s", tool.Function.Name))
 			}
@@ -397,24 +378,7 @@ func (bo *BaseOrchestrator) registerCustomToolsForAgent(
 
 	// Removed excessive category summary logging
 
-	// 🔧 CRITICAL FIX: Explicitly update code execution registry after all tools are registered
-	// This ensures workspace and human tools are available in code execution mode
-	// Check agent config first (if provided), otherwise fall back to orchestrator level
-	useCodeExecutionMode := false
-	if config != nil {
-		useCodeExecutionMode = config.UseCodeExecutionMode
-	} else {
-		// Fallback to orchestrator level if config not provided (backward compatibility)
-		useCodeExecutionMode = bo.GetUseCodeExecutionMode()
-	}
-	if useCodeExecutionMode {
-		if err := mcpAgent.UpdateCodeExecutionRegistry(); err != nil {
-			bo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to update code execution registry for %s: %v", agentName, err))
-			// Don't fail agent creation if registry update fails, but log the warning
-		}
-	}
-
-	return nil
+	return definitions, nil
 }
 
 // CreateAndSetupStandardAgent creates and sets up an agent with standardized configuration
@@ -432,12 +396,19 @@ func (bo *BaseOrchestrator) CreateAndSetupStandardAgent(
 ) (agents.OrchestratorAgent, error) {
 	// Create standardized agent configuration using agentName as agentType
 	config := bo.CreateStandardAgentConfig(agentName, maxTurns, outputFormat)
+	if customTools != nil && customToolExecutors != nil {
+		definitions, err := bo.prepareToolDefinitionsForAgent(config, customTools, customToolExecutors)
+		if err != nil {
+			return nil, err
+		}
+		config.DirectTools = definitions
+	}
 
 	// Create agent using provided factory function
 	agent := createAgentFunc(config, bo.GetLogger(), bo.GetTracer(), bo.GetContextAwareBridge())
 
 	// Setup agent using common helper (pass config to check agent-specific code execution mode)
-	if err := bo.setupStandardAgent(ctx, agent, config, agentName, phase, step, iteration, stepID, customTools, customToolExecutors); err != nil {
+	if err := bo.setupStandardAgent(ctx, agent, config, agentName, phase, step, iteration, stepID); err != nil {
 		return nil, err
 	}
 
@@ -461,12 +432,19 @@ func (bo *BaseOrchestrator) CreateAndSetupStandardAgentWithConfig(
 	// Apply overwriteSystemPrompt parameter to config so callers can override default system prompt behavior
 	config.OverwriteSystemPrompt = &overwriteSystemPrompt
 	syncCodingAgentWorkingDirWithShellSession(config)
+	if customTools != nil && customToolExecutors != nil {
+		definitions, err := bo.prepareToolDefinitionsForAgent(config, customTools, customToolExecutors)
+		if err != nil {
+			return nil, err
+		}
+		config.DirectTools = definitions
+	}
 
 	// Create agent using provided factory function with pre-created config
 	agent := createAgentFunc(config, bo.GetLogger(), bo.GetTracer(), bo.GetContextAwareBridge())
 
 	// Setup agent using common helper (pass config to check agent-specific code execution mode)
-	if err := bo.setupStandardAgent(ctx, agent, config, config.AgentName, phase, step, iteration, stepID, customTools, customToolExecutors); err != nil {
+	if err := bo.setupStandardAgent(ctx, agent, config, config.AgentName, phase, step, iteration, stepID); err != nil {
 		return nil, err
 	}
 

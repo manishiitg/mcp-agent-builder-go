@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 
@@ -109,13 +108,7 @@ func testContextCancellationDuringLLMGeneration(provider string, logger loggerv2
 	// Create agent with valid context first
 	// modelID is automatically extracted from llmModel
 	ctx := context.Background()
-	agent, err := mcpagent.NewAgent(
-		ctx,
-		llmModel,
-		"configs/mcp_servers_simple.json",     // config path
-		mcpagent.WithServerName("filesystem"), // server name
-		mcpagent.WithMaxTurns(5),
-	)
+	agent, err := createTestingAgent(ctx, llmModel, "configs/mcp_servers_simple.json", "filesystem", 5, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create agent: %w", err)
 	}
@@ -146,7 +139,7 @@ func testContextCancellationDuringLLMGeneration(provider string, logger loggerv2
 		examples of AI tools, their benefits and limitations, and future trends in the field." Please be thorough and 
 		comprehensive in your response, covering multiple aspects and providing concrete examples.`
 
-		result, err := agent.Ask(ctx, complexPrompt)
+		result, err := runAgentText(ctx, agent, complexPrompt)
 		if err != nil {
 			errChan <- err
 			return

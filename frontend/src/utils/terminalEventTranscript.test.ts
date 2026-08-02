@@ -217,6 +217,92 @@ describe('buildTranscriptItems', () => {
     expect(buildTranscriptItems(events).map(item => item.key)).toEqual(['rich-agent-start'])
   })
 
+  it('collapses a message-sequence background banner into its richer step card', () => {
+    const events = [
+      evt({
+        id: 'sequence-background-start', session_id: 's1',
+        execution_id: 'workflow-step:exec-check-cdp:check-cdp',
+        type: 'background_agent_started',
+        data: {
+          data: {
+            agent_id: 'msgseq-check-cdp-execute-and-verify-1785661200000000000',
+            name: 'Message sequence item > Check CDP connection / Execute and verify (User message)',
+          },
+        } as never,
+      }),
+      evt({
+        id: 'rich-sequence-step', session_id: 's1',
+        execution_id: 'workflow-step:exec-check-cdp:check-cdp',
+        type: 'orchestrator_agent_start',
+        data: {
+          data: {
+            agent_name: 'message-sequence-check-cdp-execute-and-verify',
+            agent_type: 'workshop-step-execution',
+            provider: 'codex-cli',
+            metadata: {
+              agent_id: 'msgseq-check-cdp-execute-and-verify-1785661200000000000',
+              message_sequence_item: true,
+            },
+          },
+        } as never,
+      }),
+    ]
+
+    expect(buildTranscriptItems(events).map(item => item.key)).toEqual(['rich-sequence-step'])
+  })
+
+  it('drops generic message-sequence running and completed banners', () => {
+    const events = [
+      evt({
+        id: 'sequence-running', session_id: 's1',
+        type: 'background_agent_started',
+        data: {
+          data: {
+            agent_id: 'msgseq-search-prove-and-repair-1',
+            name: 'Message sequence item > Search / Prove and repair (User message)',
+          },
+        } as never,
+      }),
+      evt({
+        id: 'real-step', session_id: 's1',
+        type: 'orchestrator_agent_start',
+        data: {
+          data: {
+            agent_name: 'message-sequence-search-prove-and-repair',
+            agent_type: 'workshop-step-execution',
+            metadata: { message_sequence_item: true },
+          },
+        } as never,
+      }),
+      evt({
+        id: 'sequence-completed', session_id: 's1',
+        type: 'background_agent_completed',
+        data: {
+          data: {
+            agent_id: 'msgseq-search-final-gate-2',
+            name: 'Message sequence item > Search / Final gate (Prevalidation)',
+            status: 'completed',
+          },
+        } as never,
+      }),
+      evt({ id: 'prevalidation', session_id: 's1', type: 'pre_validation_completed' }),
+    ]
+
+    expect(buildTranscriptItems(events).map(item => item.key)).toEqual(['real-step', 'prevalidation'])
+  })
+
+  it('keeps standalone background lifecycle cards', () => {
+    const events = [
+      evt({
+        id: 'review-started', session_id: 's1',
+        type: 'background_agent_started',
+        data: { data: { agent_id: 'review-plan-1', name: 'Review workflow plan' } } as never,
+      }),
+    ]
+
+    expect(buildTranscriptItems(events).map(item => item.key)).toEqual(['review-started'])
+  })
+
   it('replaces all aliased start events with one completion event', () => {
     const events = [
       evt({
@@ -583,6 +669,23 @@ describe('full-run container rows', () => {
     const items = buildTranscriptItems([ev('msg', 'user_message', 'full_run')])
     const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
     expect(ids).toContain('msg')
+  })
+
+  it('drops legacy full-run completion and delivery diagnostics that lost their kind', () => {
+    const items = buildTranscriptItems([
+      {
+        ...ev('done', 'background_agent_completed'),
+        execution_id: 'workflow-full-job-search-1',
+        data: { data: { agent_id: 'workflow-full-job-search-1', name: 'Full Workflow Execution' } },
+      },
+      {
+        ...ev('steered', 'auto_notification_steered'),
+        execution_id: 'workflow-full-job-search-1',
+        data: { data: { agent_id: 'workflow-full-job-search-1', name: 'full-run [job-search / iteration-0]' } },
+      },
+    ])
+
+    expect(items).toEqual([])
   })
 })
 

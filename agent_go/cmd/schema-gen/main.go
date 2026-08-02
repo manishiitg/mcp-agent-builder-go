@@ -25,12 +25,18 @@ import (
 // PollingEventActual matches the actual Event struct from event_store.go
 // This is what the backend sends to the frontend over the wire
 type PollingEventActual struct {
-	ID        string               `json:"id" jsonschema:"description=Unique event identifier"`
-	Type      events.EventType     `json:"type" jsonschema:"description=Event type discriminator"`
-	Timestamp time.Time            `json:"timestamp" jsonschema:"description=Event timestamp"`
-	SessionID string               `json:"session_id,omitempty" jsonschema:"description=Session identifier"`
-	Error     string               `json:"error,omitempty" jsonschema:"description=Error message if any"`
-	Data      *AgentEventForSchema `json:"data,omitempty" jsonschema:"description=The AgentEvent containing event details"`
+	ID                string               `json:"id" jsonschema:"description=Unique event identifier"`
+	Type              events.EventType     `json:"type" jsonschema:"description=Event type discriminator"`
+	Timestamp         time.Time            `json:"timestamp" jsonschema:"description=Event timestamp"`
+	SessionID         string               `json:"session_id,omitempty" jsonschema:"description=Session identifier"`
+	ExecutionID       string               `json:"execution_id,omitempty" jsonschema:"description=Canonical execution identifier"`
+	ParentExecutionID string               `json:"parent_execution_id,omitempty" jsonschema:"description=Parent execution identifier"`
+	ExecutionKind     string               `json:"execution_kind,omitempty" jsonschema:"description=Execution kind"`
+	TerminalOwnerID   string               `json:"terminal_owner_id,omitempty" jsonschema:"description=Canonical owner identifier for one terminal transcript"`
+	TerminalID        string               `json:"terminal_id,omitempty" jsonschema:"description=Canonical terminal transcript identifier"`
+	Sequence          int64                `json:"sequence,omitempty" jsonschema:"description=Stable session event sequence cursor"`
+	Error             string               `json:"error,omitempty" jsonschema:"description=Error message if any"`
+	Data              *AgentEventForSchema `json:"data,omitempty" jsonschema:"description=The AgentEvent containing event details"`
 }
 
 // AgentEventForSchema matches AgentEvent from data.go - this is the wrapper around actual event data
@@ -157,11 +163,6 @@ type EventDataUnion struct {
 	RequestHumanFeedback      *orchestrator_events.RequestHumanFeedbackEvent      `json:"request_human_feedback,omitempty"`
 	BlockingHumanFeedback     *orchestrator_events.BlockingHumanFeedbackEvent     `json:"blocking_human_feedback,omitempty"`
 	HumanVerificationResponse *orchestrator_events.HumanVerificationResponseEvent `json:"human_verification_response,omitempty"`
-
-	// Structured Output Events
-	StructuredOutputStart *events.StructuredOutputStartEvent `json:"structured_output_start,omitempty"`
-	StructuredOutputEnd   *events.StructuredOutputEndEvent   `json:"structured_output_end,omitempty"`
-	StructuredOutputError *events.StructuredOutputErrorEvent `json:"structured_output_error,omitempty"`
 
 	// Streaming Events
 	StreamingStart          *events.StreamingStartEvent          `json:"streaming_start,omitempty"`
@@ -313,11 +314,6 @@ var EventRegistry = map[events.EventType]string{
 	orchestrator_events.RequestHumanFeedback:      "request_human_feedback",
 	orchestrator_events.BlockingHumanFeedback:     "blocking_human_feedback",
 	orchestrator_events.HumanVerificationResponse: "human_verification_response",
-
-	// Structured Output Events
-	events.StructuredOutputStart: "structured_output_start",
-	events.StructuredOutputEnd:   "structured_output_end",
-	events.StructuredOutputError: "structured_output_error",
 
 	// Streaming Events
 	events.StreamingStart:          "streaming_start",
@@ -604,11 +600,6 @@ type UnifiedEvent struct {
 	TodoStepsExtractedEvent       todo_creation_human.TodoStepsExtractedEvent       `json:"todo_steps_extracted"`
 	VariablesExtractedEvent       todo_creation_human.VariablesExtractedEvent       `json:"variables_extracted"`
 	IndependentStepsSelectedEvent todo_creation_human.IndependentStepsSelectedEvent `json:"independent_steps_selected"`
-
-	// Structured Output Events
-	StructuredOutputStartEvent events.StructuredOutputStartEvent `json:"structured_output_start"`
-	StructuredOutputEndEvent   events.StructuredOutputEndEvent   `json:"structured_output_end"`
-	StructuredOutputErrorEvent events.StructuredOutputErrorEvent `json:"structured_output_error"`
 
 	// Workspace Events
 	WorkspaceFileOperationEvent events.WorkspaceFileOperationEvent `json:"workspace_file_operation"`

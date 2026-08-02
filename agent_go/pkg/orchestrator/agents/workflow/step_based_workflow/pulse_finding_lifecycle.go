@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 const pulseFixAttemptsSchema = `CREATE TABLE IF NOT EXISTS pulse_fix_attempts (
@@ -64,6 +66,7 @@ const pulseFindingEventsSchema = `CREATE TABLE IF NOT EXISTS pulse_finding_event
 const (
 	ConcernStatusFixing               = "fixing"
 	ConcernStatusAwaitingVerification = "awaiting_verification"
+	ConcernStatusAwaitingRun          = "awaiting_run"
 )
 
 const (
@@ -74,8 +77,20 @@ const (
 	FindingDispositionAwaitingUser      = "awaiting_user"
 	FindingDispositionBlocked           = "blocked"
 	FindingDispositionExternalAction    = "external_action_required"
-	FindingDispositionFailed            = "failed"
-	FindingDispositionRejected          = "rejected"
+	// FindingDispositionAwaitingRun is a real finding that no one is stuck on:
+	// the evidence to resolve it simply has not been produced yet, and the next
+	// scheduled run will produce it.
+	//
+	// blocked used to absorb these because changed_unverified requires a fix
+	// attempt with changed files, and nothing was fixed — the data was never
+	// collected. So rtslatency reported 9 blocked when 4 were only waiting: the
+	// security and latency rows were missing because those steps had not run,
+	// and the approved experiment could not ship because the digest step had not
+	// executed since 2026-07-29. Reading those as blockers points the operator at
+	// decisions that do not exist, and hides the ones that do.
+	FindingDispositionAwaitingRun = "awaiting_run"
+	FindingDispositionFailed      = "failed"
+	FindingDispositionRejected    = "rejected"
 )
 
 const (
@@ -116,19 +131,25 @@ type PulseFindingVerification struct {
 }
 
 type PulseFindingDisposition struct {
-	Fingerprint     string                     `json:"fingerprint"`
-	FindingID       string                     `json:"finding_id"`
-	AttemptID       string                     `json:"attempt_id,omitempty"`
-	Disposition     string                     `json:"disposition"`
-	Summary         string                     `json:"summary"`
-	ChangedFiles    []string                   `json:"changed_files,omitempty"`
-	BeforeRefs      []string                   `json:"before_refs,omitempty"`
-	AfterRefs       []string                   `json:"after_refs,omitempty"`
-	NextCheck       string                     `json:"next_check,omitempty"`
-	ExternalOwner   string                     `json:"external_owner,omitempty"`
-	ReasonCode      string                     `json:"reason_code,omitempty"`
-	ReopenCondition string                     `json:"reopen_condition,omitempty"`
-	Verification    []PulseFindingVerification `json:"verification,omitempty"`
+	Fingerprint     string   `json:"fingerprint"`
+	FindingID       string   `json:"finding_id"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	Disposition     string   `json:"disposition"`
+	Summary         string   `json:"summary"`
+	ChangedFiles    []string `json:"changed_files,omitempty"`
+	BeforeRefs      []string `json:"before_refs,omitempty"`
+	AfterRefs       []string `json:"after_refs,omitempty"`
+	NextCheck       string   `json:"next_check,omitempty"`
+	ExternalOwner   string   `json:"external_owner,omitempty"`
+	ReasonCode      string   `json:"reason_code,omitempty"`
+	ReopenCondition string   `json:"reopen_condition,omitempty"`
+	// HumanInputID links an awaiting_user finding to the question actually put
+	// to the operator. Without it "waiting on the user" is recordable while the
+	// user is never asked, which is exactly what happened: rtslatency held five
+	// findings marked awaiting_user and zero pending questions, so the operator
+	// had nothing to answer and no way to discover that.
+	HumanInputID string                     `json:"human_input_id,omitempty"`
+	Verification []PulseFindingVerification `json:"verification,omitempty"`
 }
 
 type PulseFindingEvent struct {
@@ -142,6 +163,7 @@ type PulseFindingEvent struct {
 }
 
 type PulseFindingLifecycle struct {
+	Issue           PulseIssue                 `json:"issue"`
 	Fingerprint     string                     `json:"fingerprint"`
 	FindingID       string                     `json:"finding_id,omitempty"`
 	Module          string                     `json:"module,omitempty"`
@@ -222,6 +244,7 @@ func NormalizePulseFindingDisposition(disposition PulseFindingDisposition) Pulse
 	disposition.ExternalOwner = strings.TrimSpace(disposition.ExternalOwner)
 	disposition.ReasonCode = strings.TrimSpace(disposition.ReasonCode)
 	disposition.ReopenCondition = strings.TrimSpace(disposition.ReopenCondition)
+	disposition.HumanInputID = strings.TrimSpace(disposition.HumanInputID)
 	for index := range disposition.Verification {
 		verification := &disposition.Verification[index]
 		verification.Check = strings.TrimSpace(verification.Check)
@@ -374,7 +397,7 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		FindingDispositionChangedUnverified: true, FindingDispositionProposalOnly: true,
 		FindingDispositionAwaitingUser: true, FindingDispositionBlocked: true,
 		FindingDispositionExternalAction: true, FindingDispositionFailed: true,
-		FindingDispositionRejected: true,
+		FindingDispositionRejected: true, FindingDispositionAwaitingRun: true,
 	}
 	if !allowed[disposition.Disposition] {
 		return fmt.Errorf("finding %q has invalid disposition %q", disposition.FindingID, disposition.Disposition)
@@ -414,6 +437,14 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
 			return fmt.Errorf("changed_unverified finding %q requires paired before_refs and after_refs", disposition.FindingID)
 		}
+		// next_check names the evidence that will settle this. Without it the
+		// next reviewer cannot tell whether the producing run has happened, so
+		// the finding is re-attempted instead of verified — rtslatency held one
+		// at seen_count 4, still awaiting_verification, because each pass
+		// re-fixed it rather than checking the run that had since occurred.
+		if disposition.NextCheck == "" {
+			return fmt.Errorf("changed_unverified finding %q requires next_check naming the run, table, or artifact whose arrival proves or disproves this fix", disposition.FindingID)
+		}
 		if inconclusive == 0 || failed > 0 {
 			return fmt.Errorf("changed_unverified finding %q requires an inconclusive verification and no failed check", disposition.FindingID)
 		}
@@ -424,6 +455,23 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	case FindingDispositionFailed:
 		if len(disposition.Verification) > 0 && failed == 0 {
 			return fmt.Errorf("failed finding %q with verification evidence requires a failed check", disposition.FindingID)
+		}
+	case FindingDispositionAwaitingRun:
+		// Naming the evidence boundary is what separates waiting from stalling:
+		// without it nobody can tell whether the run that would resolve this has
+		// already happened.
+		if disposition.NextCheck == "" {
+			return fmt.Errorf("awaiting_run finding %q requires next_check naming the run or evidence that will resolve it", disposition.FindingID)
+		}
+		if len(disposition.ChangedFiles) > 0 {
+			return fmt.Errorf("awaiting_run finding %q changed files; a finding with a fix applied is changed_unverified, not awaiting_run", disposition.FindingID)
+		}
+	case FindingDispositionAwaitingUser:
+		// A finding cannot wait on a decision nobody was asked for. Requiring
+		// the question id here is what turns "awaiting_user" from a label into
+		// something the operator can actually act on.
+		if disposition.HumanInputID == "" {
+			return fmt.Errorf("awaiting_user finding %q requires human_input_id: create the decision with create_human_input_request first, or use blocked/proposal_only if no question is being asked", disposition.FindingID)
 		}
 	case FindingDispositionExternalAction:
 		if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
@@ -454,6 +502,8 @@ func lifecycleStatusForDisposition(disposition string) (status, eventType, resol
 		return ConcernStatusAcknowledged, "awaiting_user", ""
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
+	case FindingDispositionAwaitingRun:
+		return ConcernStatusAwaitingRun, "awaiting_run", ""
 	case FindingDispositionExternalAction:
 		return ConcernStatusExternalActionRequired, "external_action_required", "pulse"
 	default:
@@ -504,6 +554,24 @@ func RecordPulseFindingDispositionsTx(
 		if concernExists != 1 {
 			return fmt.Errorf("no concern with fingerprint %q", fingerprint)
 		}
+		// Prove the decision exists and is still open. A claimed id is not
+		// evidence: an already-answered or invented question would leave the
+		// finding parked on a decision the operator can never make.
+		if disposition.Disposition == FindingDispositionAwaitingUser {
+			var inputStatus string
+			err := db.QueryRowContext(ctx,
+				`SELECT status FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
+			).Scan(&inputStatus)
+			if err != nil {
+				if err == sql.ErrNoRows {
+					return fmt.Errorf("awaiting_user finding %q references human input %q, which does not exist", findingID, disposition.HumanInputID)
+				}
+				return err
+			}
+			if inputStatus != "pending" {
+				return fmt.Errorf("awaiting_user finding %q references human input %q with status %q; a finding can only wait on a pending decision", findingID, disposition.HumanInputID, inputStatus)
+			}
+		}
 		if attemptID != "" {
 			var attemptModule, attemptRun string
 			if err := db.QueryRowContext(ctx, `SELECT module, pulse_run_id FROM pulse_fix_attempts WHERE attempt_id=?`, attemptID).Scan(&attemptModule, &attemptRun); err != nil {
@@ -512,8 +580,23 @@ func RecordPulseFindingDispositionsTx(
 				}
 				return err
 			}
-			if attemptModule != strings.TrimSpace(module) || attemptRun != strings.TrimSpace(pulseRunID) {
-				return fmt.Errorf("fix attempt %q belongs to module=%q pulse_run_id=%q", attemptID, attemptModule, attemptRun)
+			// The module must match: an attempt belongs to the module that made
+			// it, and letting another module close it would let one module take
+			// credit for work it did not do.
+			//
+			// The run deliberately need not match. changed_unverified exists
+			// precisely so a fix whose proof needs a future run is recorded now
+			// and verified later — fix-verification, post-run-monitor and the
+			// Fixer contract all instruct exactly that, with reason
+			// awaiting_next_valid_run. Requiring the attempt to belong to the
+			// closing run made that impossible: the evidence arrives a run or
+			// more after the attempt, and the disposition that would record it
+			// was rejected as belonging to a previous Pulse run. social-media hit
+			// this on 2026-08-01 and correctly preserved the unresolved state
+			// rather than forcing a second lifecycle write, which would have
+			// invented a fresh attempt for work already done.
+			if attemptModule != strings.TrimSpace(module) {
+				return fmt.Errorf("fix attempt %q belongs to module %q, not %q", attemptID, attemptModule, module)
 			}
 			var linked int
 			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_fix_attempt_findings
@@ -640,6 +723,17 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 		limit = 100
 	}
 	module = strings.TrimSpace(module)
+	// "pulse_fixer" is the consolidated Fixer's module sentinel, meaning every
+	// due module rather than a module of that name. The write path has always
+	// understood it; this read path did not, and `module` here is a plain
+	// step_id filter. No concern carries step_id "pulse_fixer" and no attempt is
+	// recorded under it, so the tool that hands the Fixer its queue returned an
+	// empty list for the exact value its own contract tells it to pass — 0 rows
+	// against 149 for an omitted module on social-media, 2026-08-01. The Fixer
+	// only did any work at all by falling back to omitting the filter.
+	if module == pulsemodules.PseudoPulseFixerID {
+		module = ""
+	}
 	// Lead with the step carrying the most unresolved work, and keep its rows
 	// together.
 	//
@@ -814,6 +908,14 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			out[index].Events = append(out[index].Events, event)
 		}
 		eventRows.Close()
+		out[index].Issue = NewPulseIssue(out[index])
+		// Ordinary and migrated concerns predate reviewer-assigned IDs. Expose
+		// the deterministic compact issue ID through the legacy lifecycle field
+		// too, because fixer write tools use finding_id as the durable human
+		// address while fingerprint remains the internal matching key.
+		if strings.TrimSpace(out[index].FindingID) == "" {
+			out[index].FindingID = out[index].Issue.ID
+		}
 	}
 	return out, nil
 }

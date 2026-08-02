@@ -263,6 +263,15 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 	}
 
 	if workflowMode {
+		workflowDBRegistry := virtualtools.CreateWorkflowDBToolRegistry(getWorkspaceAPIURL(), userID, sessionID)
+		allTools = append(allTools, workflowDBRegistry.Tools...)
+		for name, executor := range workflowDBRegistry.Executors {
+			allExecutors[name] = executor
+		}
+		for name, category := range workflowDBRegistry.Categories {
+			toolCategories[name] = category
+		}
+
 		reportHumanInputTools, reportHumanInputExecutors, reportHumanInputCategories := createReportHumanInputTools()
 		allTools = append(allTools, reportHumanInputTools...)
 		for name, executor := range reportHumanInputExecutors {

@@ -36,6 +36,27 @@ func TestExtractReviewVerdictHandlesRealArtifactShapes(t *testing.T) {
 	}
 }
 
+func TestExtractPulseReviewVerificationsReturnsValidatedStructuredTransport(t *testing.T) {
+	artifact := `## Verification
+PULSE_VERIFICATION_JSON: {"finding_id":"ISS-9","fingerprint":"fp-9","attempt_id":"fix-9","verdict":"passed","expected":"new run contains a populated value","observed":"run-12 row contains 42","evidence":["runs/run-12/result.json"]}
+
+The next producing run proves the repair held.`
+	got, err := ExtractPulseReviewVerifications(artifact)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(got) != 1 || got[0].FindingID != "ISS-9" || got[0].AttemptID != "fix-9" || got[0].Verdict != VerificationPassed {
+		t.Fatalf("unexpected verifications: %#v", got)
+	}
+}
+
+func TestExtractPulseReviewVerificationsRejectsInconclusiveWithoutBoundary(t *testing.T) {
+	artifact := `PULSE_VERIFICATION_JSON: {"finding_id":"ISS-9","fingerprint":"fp-9","attempt_id":"fix-9","verdict":"inconclusive","expected":"new row","observed":"no new run yet"}`
+	if _, err := ExtractPulseReviewVerifications(artifact); err == nil || !strings.Contains(err.Error(), "next_check") {
+		t.Fatalf("expected missing next_check rejection, got %v", err)
+	}
+}
+
 // An artifact with no recognizable verdict still means the reviewer ran, which is
 // itself the fact Gate lacks. Inventing a verdict would poison the history it is
 // meant to trust.

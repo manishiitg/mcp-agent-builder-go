@@ -125,6 +125,7 @@ func TestMissingCDPPageActionTabErrorShowsWaitRetry(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		`agent_browser(command="wait", args=["--cdp","http://localhost:9222","tab","<tab-id-or-label>","6000"])`,
+		`agent_browser(command="status", args=[], session="<same-session>")`,
 		"Do not put the command name inside args",
 		"Selected CDP tab: t12",
 	} {

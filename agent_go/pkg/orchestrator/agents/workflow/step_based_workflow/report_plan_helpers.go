@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/reportinteraction"
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
@@ -1438,7 +1437,7 @@ func cleanupReportPlanDocument(doc *reportPlanDocument) *reportPlanDocument {
 // registerReportPlanValidationTools registers the validate_report_plan tool on an
 // MCP agent. Parallels registerEvaluationValidationTools in evaluation_helpers.go.
 func registerReportPlanValidationTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -1478,7 +1477,7 @@ func registerReportPlanValidationTools(
 }
 
 func registerReportPlanManagementTools(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
@@ -2023,7 +2022,7 @@ func registerReportPlanManagementTools(
 }
 
 func registerReportRenderPreviewTool(
-	mcpAgent *mcpagent.Agent,
+	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),

@@ -876,7 +876,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	var capturedSystemPrompt string
 	if executionAgent != nil {
 		if ba := executionAgent.GetBaseAgent(); ba != nil && ba.Agent() != nil {
-			capturedSystemPrompt = ba.Agent().GetSystemPrompt()
+			capturedSystemPrompt = ba.Agent().Definition().Instructions
 		}
 	}
 	promptsPath := fmt.Sprintf("%s/%s-prompts.json", logDir, filenameBase)
@@ -1488,10 +1488,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			"StepDescription":           stepDescriptionForPrompt,
 			"StepSuccessCriteria":       "",
 			"StepContextOutput":         ResolveVariables(step.GetContextOutput().String(), hcpo.variableValues),
-			"WorkspacePath":             toAbsPath(executionWorkspacePath),                                                                    // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
-			"LearningsPath":             toAbsPath(learningsPath),                                                                             // Absolute learnings folder path
-			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                                                                         // Absolute knowledgebase folder path
-			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())),                                                        // Absolute db folder path (always enabled)
+			"WorkspacePath":             toAbsPath(executionWorkspacePath),             // Absolute execution folder path (e.g., "/app/workspace-docs/Workflow/HRMS/runs/...")
+			"LearningsPath":             toAbsPath(learningsPath),                      // Absolute learnings folder path
+			"KnowledgebasePath":         toAbsPath(knowledgebasePath),                  // Absolute knowledgebase folder path
+			"DBPath":                    toAbsPath(getDBPath(hcpo.GetWorkspacePath())), // Absolute db folder path (always enabled)
+			"DBAccess":                  dbAccess,
+			"DBDirectAccess":            fmt.Sprintf("%v", isScriptedMode),
 			"UseKnowledgebase":          fmt.Sprintf("%v", useKnowledgebase),                                                                  // Whether knowledgebase is enabled (deprecated, retained for backward compat)
 			"KbAccess":                  kbAccess,                                                                                             // KB access mode: "read" | "write" | "read-write" | "none"
 			"KbAccessLabel":             kbAccessLabel(kbAccess),                                                                              // Human-readable label for prompt display
@@ -1589,6 +1591,23 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			templateVars["ValidationSchema"] = ""
 		}
 
+		// Hand the step its own previous validation failures, the way a failed
+		// scripted step is handed ScriptedPriorError. Without this an agentic step
+		// receives the schema, writes output that violates it, prevalidation runs
+		// afterwards and files a concern, and the next run reads an identical
+		// prompt — so it writes the same wrong shape indefinitely.
+		// deliver-briefing did exactly that: five concerns at seen_count 3, all
+		// "$.delivery_status must exist but was not found", across three runs.
+		//
+		// Best-effort: a step that cannot read its own history should still run.
+		templateVars["PriorValidationFailures"] = ""
+		if priorFailures, priorErr := LoadPriorPreValidationFailures(ctx, hcpo.GetWorkspacePath(), step.GetID(), 10); priorErr != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not load prior validation failures for step %s: %v", step.GetID(), priorErr))
+		} else if rendered := FormatPriorPreValidationFailures(priorFailures); rendered != "" {
+			templateVars["PriorValidationFailures"] = rendered
+			hcpo.GetLogger().Info(fmt.Sprintf("🔁 Step %s carries %d unresolved validation failure(s) into this run", step.GetID(), len(priorFailures)))
+		}
+
 		// Inner loop: Automatic retry logic
 		var validationResponse *ValidationResponse
 		// KB contribution self-review is one-shot per step execution (direct mode with a
@@ -1608,7 +1627,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		// Learn code mode: attempt fast path execution with saved script (before any LLM work).
 		if isScriptedMode && !learnCodeFastPathDone {
 			fastResult := hcpo.tryRunSavedScriptedScript(ctx, step, stepIndex, stepPath, allSteps,
-				stepExecutionPath, executionWorkspacePath)
+				stepExecutionPath, executionWorkspacePath, dbAccess)
 			if fastResult.RanScript {
 				// Emit UI event for the saved-script execution attempt
 				savedScriptPath := getScriptedScriptAbsPath(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), step.GetID(), hcpo.isEvaluationMode)
@@ -1894,8 +1913,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					if eoa, ok := executionAgent.(*WorkflowExecutionOnlyAgent); ok {
 						preSystemPrompt := eoa.executionOnlySystemPromptProcessor(templateVars)
 						if ba := executionAgent.GetBaseAgent(); ba != nil {
-							if mcpAg := ba.Agent(); mcpAg != nil {
-								preSystemPrompt = composePromptWithAppendedSystemPrompts(preSystemPrompt, mcpAg)
+							if ba.Agent() != nil {
+								if err := ba.ApplyInstructions(ctx, preSystemPrompt, true); err != nil {
+									return "", updatedContextFiles, fmt.Errorf("prepare execution agent instructions: %w", err)
+								}
+								preSystemPrompt = ba.Agent().Definition().Instructions
 							}
 						}
 						preUserMessage := eoa.executionOnlyUserMessageProcessor(templateVars)

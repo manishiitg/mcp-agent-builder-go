@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 )
@@ -1157,7 +1156,7 @@ func estimateLLMCost(args map[string]interface{}) (map[string]interface{}, error
 	}, nil
 }
 
-func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}
@@ -1262,7 +1261,7 @@ func registerLLMCapabilityDiscoveryTools(registerTool func(string, string, map[s
 	return nil
 }
 
-func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent *mcpagent.Agent) error {
+func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent definitionToolRegistrar) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}

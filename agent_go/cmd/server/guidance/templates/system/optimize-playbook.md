@@ -61,7 +61,7 @@ Mature workflows accumulate three kinds of state that you can freeze independent
 - **`lock_code` does NOT auto-unlock.** If you changed the description semantically and `lock_code` is set, the frozen main.py may now be wrong for the new intent — clear it explicitly: `update_step_config(step_id, lock_code=false)`.
 - Pure **rewording** (clarifying existing instructions without changing intent) may still change the description hash used in metadata. Treat the hash as review evidence, not as an automatic lock lifecycle.
 - When you meaningfully change a step's description, clear `description_reviewed` so future reviewers know the description needs a fresh eyeballing.
-- **Reconcile the blast radius.** When a bounded fix changes a step's output contract, db writes, or behavior, run `get_reference_doc(kind="plan-change-impact")` and reconcile the dependents (downstream steps, evals, report dashboard, db, learnings, KB) before treating the fix as done — do not repair one step and silently break what reads it.
+- **Reconcile the blast radius.** When a bounded fix changes a step's output contract, db writes, or behavior, run `read_skill(skill_name="builder-reference", path="references/plan-change-impact.md")` and reconcile the dependents (downstream steps, evals, report dashboard, db, learnings, KB) before treating the fix as done — do not repair one step and silently break what reads it.
 
 **Reviewing descriptions during repair**: Treat each touched step's `description` as a first-class review target, not just something to fix when it is obviously stale. Ask: does it still describe what the step actually does and should produce this run? A drifted or vague description silently corrupts the learnings and scripted code generated against it. Realign it when it no longer matches, then clear the matching `lock_learnings`/`lock_code` and `description_reviewed` so regenerated artifacts track the real intent.
 
@@ -95,7 +95,7 @@ You can read, edit, and delete them using **execute_shell_command** and **diff_p
 ### 3b. Debugging & Fixing Scripted Code Steps (scripted)
 
 When patching `learnings/{step-id}/main.py`, also load the full main.py authoring rules:
-`get_reference_doc(kind="code-authoring")` — covers env access, sys.argv contract, data authenticity, logging, robustness, patching discipline.
+`read_skill(skill_name="builder-reference", path="references/code-authoring.md")` — covers env access, sys.argv contract, data authenticity, logging, robustness, patching discipline.
 
 For steps in scripted mode, the saved Python script at `learnings/{step-id}/main.py` is the primary artifact. When a scripted step fails, follow this workflow:
 

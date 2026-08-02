@@ -1,17 +1,15 @@
 package testing
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/utils"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 var largeOutputIntegrationTestCmd = &cobra.Command{
@@ -114,96 +112,23 @@ func testLargeToolOutputDetection(testDir string) error {
 
 func testVirtualToolsForLargeOutput(testDir string) error {
 	logger := GetTestLogger()
-	logger.Info("Testing virtual tools for large output...")
-
-	// Create an agent with large output virtual tools enabled
-	agent := &mcpagent.Agent{
-		EnableContextOffloading: true,
-	}
-
-	// Set up the tool output handler
-	toolOutputHandler := mcpagent.NewToolOutputHandler()
-	toolOutputHandler.OutputFolder = testDir
-	toolOutputHandler.SessionID = "test-session-virtual"
-	toolOutputHandler.Threshold = mcpagent.DefaultLargeToolOutputThreshold
-
-	// Set the tool output handler using the setter method
-	agent.SetToolOutputHandler(toolOutputHandler)
-
-	// Create a test file with large content
-	testFileName := "tool_20250802_213000_test_large_tool.json"
-	testFilePath := filepath.Join(testDir, "test-session-virtual", testFileName)
-
-	if err := os.MkdirAll(filepath.Dir(testFilePath), 0755); err != nil {
-		return fmt.Errorf("failed to create test directory: %w", err)
-	}
-
+	logger.Info("Testing configured large-output storage...")
+	toolOutputHandler := mcpagent.NewToolOutputHandlerWithConfig(
+		1000, testDir, "test-session-virtual", true, true,
+	)
 	largeContent := generateLargeOutput(8000)
-	if err := os.WriteFile(testFilePath, []byte(largeContent), 0644); err != nil {
-		return fmt.Errorf("failed to write test file: %w", err)
-	}
-
-	ctx := context.Background()
-
-	// Test 1: read operation
-	logger.Info("Testing search_large_output read operation...")
-	result, err := agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
-		"filename":  testFileName,
-		"operation": "read",
-		"start":     float64(1),
-		"end":       float64(100),
-	})
+	filePath, err := toolOutputHandler.WriteToolOutputToFile(largeContent, "test_large_tool")
 	if err != nil {
-		return fmt.Errorf("search_large_output read failed: %w", err)
+		return fmt.Errorf("write large output: %w", err)
 	}
-	if len(result) != 100 {
-		return fmt.Errorf("search_large_output read returned wrong length: expected 100, got %d", len(result))
-	}
-	logger.Info(fmt.Sprintf("✅ search_large_output read works correctly (read %d characters)", len(result)))
-
-	// Test 2: search_large_output tool
-	logger.Info("Testing search_large_output tool...")
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
-		"filename":       testFileName,
-		"operation":      "search",
-		"pattern":        "test",
-		"case_sensitive": false,
-		"max_results":    float64(10),
-	})
+	written, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("search_large_output failed: %w", err)
+		return fmt.Errorf("read stored large output: %w", err)
 	}
-	logger.Info(fmt.Sprintf("✅ search_large_output works correctly: %s", result))
-
-	// Test 3: query operation
-	logger.Info("Testing search_large_output query operation...")
-	jsonContent := `{"name":"test","items":[{"id":1,"value":"test1"},{"id":2,"value":"test2"}]}`
-	jsonFileName := "tool_20250802_213000_test_json.json"
-	jsonFilePath := filepath.Join(testDir, "test-session-virtual", jsonFileName)
-	if err := os.WriteFile(jsonFilePath, []byte(jsonContent), 0644); err != nil {
-		return fmt.Errorf("failed to write JSON test file: %w", err)
+	if string(written) != largeContent {
+		return fmt.Errorf("stored large output changed: got %d bytes, want %d", len(written), len(largeContent))
 	}
-
-	result, err = agent.HandleLargeOutputVirtualTool(ctx, "search_large_output", map[string]interface{}{
-		"filename":  jsonFileName,
-		"operation": "query",
-		"query":     ".items[0].value",
-		"compact":   false,
-		"raw":       true,
-	})
-	if err != nil {
-		logger.Info(fmt.Sprintf("⚠️ search_large_output query failed: %v", err))
-		logger.Info(fmt.Sprintf("⚠️ This is expected if jq is not available or if there are permission issues"))
-		logger.Info("✅ Skipping search_large_output query test (not critical for core functionality)")
-	} else {
-		// Trim whitespace and newlines from the result
-		result = strings.TrimSpace(result)
-		if result != "test1" {
-			return fmt.Errorf("search_large_output query failed: %w", err)
-		}
-		logger.Info(fmt.Sprintf("✅ search_large_output query works correctly: %s", result))
-	}
-
+	logger.Info("✅ Configured large-output storage works")
 	return nil
 }
 
@@ -211,17 +136,10 @@ func testRealAgentConversation(testDir string) error {
 	logger := GetTestLogger()
 	logger.Info("Testing real agent conversation with large output...")
 
-	// Create a simple agent for testing
-	agent := &mcpagent.Agent{
-		EnableContextOffloading: true,
-	}
-
 	// Set up tool output handler for testing
-	toolOutputHandler := mcpagent.NewToolOutputHandler()
-	toolOutputHandler.OutputFolder = testDir
-	toolOutputHandler.SessionID = "test-session-agent"
-	toolOutputHandler.Threshold = 1000 // Lower threshold for testing
-	agent.SetToolOutputHandler(toolOutputHandler)
+	toolOutputHandler := mcpagent.NewToolOutputHandlerWithConfig(
+		1000, testDir, "test-session-agent", true, true,
+	)
 
 	// Create a mock tool that produces large output
 	largeOutput := generateLargeOutput(2000) // Over the 1000 character threshold

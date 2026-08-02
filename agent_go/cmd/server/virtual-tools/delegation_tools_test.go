@@ -139,7 +139,7 @@ func TestHandleDelegatePrefersAsyncBackgroundDelegate(t *testing.T) {
 
 // TestHandleDelegateBuildsChildSpec verifies that delegate(...) translates its
 // tool args into the SubAgentSpec the sub-agent creation path consumes:
-// explicit-pass skills, server restriction, browser isolation, tier, and the
+// additive skills, server restriction, browser isolation, tier, and the
 // incremented depth. If this propagation breaks, sub-agents silently get the
 // defaults with no diagnostic — this test catches it at the boundary.
 func TestHandleDelegateBuildsChildSpec(t *testing.T) {
@@ -184,11 +184,10 @@ func TestHandleDelegateBuildsChildSpec(t *testing.T) {
 	}
 }
 
-// TestHandleDelegateNoSkillsArgMeansNoInheritance is the corollary:
-// when the parent omits skills=[...], the child spec must carry no
-// skills (so server.go's attach loop is a no-op and the sub-agent
-// starts clean). Phase 6 explicit-pass.
-func TestHandleDelegateNoSkillsArgMeansNoInheritance(t *testing.T) {
+// TestHandleDelegateNoSkillsArgMeansNoAdditionalSkills verifies that the
+// typed spec stays empty when a call requests no additions. Parent-skill
+// inheritance is carried independently by the server launch context.
+func TestHandleDelegateNoSkillsArgMeansNoAdditionalSkills(t *testing.T) {
 	var captured SubAgentSpec
 
 	bgDelegate := BackgroundDelegateFunc(func(ctx context.Context, _, _ string) (string, error) {
@@ -273,7 +272,7 @@ func TestSubAgentSpecContextRoundTrip(t *testing.T) {
 // TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret locks in
 // the prompt refactor that moved Schedule and Secret management deep docs
 // into templates/system/{schedule-management,secret-management}.md. The
-// inline prompt should keep brief cheat sheets + get_reference_doc pointers
+// inline prompt should keep brief cheat sheets + read_skill pointers
 // — not the old ~80-line JSON file format / detailed tool description
 // blocks that every chat turn used to carry.
 func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testing.T) {
@@ -292,8 +291,8 @@ func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testin
 		"never echo / print / log a plaintext secret",
 		// Pointers to the reference docs — agent needs these to know to
 		// load the deep guide before scheduling / managing secrets.
-		`get_reference_doc(kind="schedule-management")`,
-		`get_reference_doc(kind="secret-management")`,
+		`read_skill(skill_name="builder-reference", path="references/schedule-management.md")`,
+		`read_skill(skill_name="builder-reference", path="references/secret-management.md")`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
@@ -395,7 +394,7 @@ func TestGetMultiAgentDelegationInstructionsSize(t *testing.T) {
 	const minBytes = 4_000 // floor catches accidental gutting.
 
 	if size > maxBytes {
-		t.Errorf("delegation prompt %d bytes exceeds ceiling %d (~%d tokens) — move new content to templates/system/*.md and reference via get_reference_doc",
+		t.Errorf("delegation prompt %d bytes exceeds ceiling %d (~%d tokens) — move new content to templates/system/*.md and reference via read_skill",
 			size, maxBytes, estTokens)
 	}
 	if size < minBytes {

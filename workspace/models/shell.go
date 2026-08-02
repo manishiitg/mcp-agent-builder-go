@@ -14,6 +14,12 @@ type ExecuteShellRequest struct {
 	// for runtime prefixes plus DB_PATH and PYTHONDONTWRITEBYTECODE.
 	ExtraEnv map[string]string `json:"extra_env,omitempty"`
 
+	// DBReadSnapshot is a trusted harness-only request. Before launching the
+	// child process, the workspace service replaces DB_PATH with a consistent
+	// standalone snapshot stored under STEP_OUTPUT_DIR. The public shell tool
+	// schema does not expose this field.
+	DBReadSnapshot bool `json:"db_read_snapshot,omitempty"`
+
 	// ArtifactTransfer asks the trusted workspace server to move a browser artifact
 	// from its managed staging directory into a path authorized by FolderGuard.
 	// The command itself stays sandboxed; only this narrowly validated transfer is

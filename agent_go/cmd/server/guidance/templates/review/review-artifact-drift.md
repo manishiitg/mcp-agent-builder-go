@@ -11,15 +11,16 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   module="artifact_review")`. Do not pass `pulse_run_id` or `review_run_id`;
   the backend generates standalone identities, stores the complete Markdown in
   SQLite, and files its `CONCERNS:` lines into the structured finding lifecycle.
-  Load the persisted result with `get_pulse_review_result` before the parent
-  validates, reports, or records any outcome.
-- `call_generic_agent` is synchronous. Its direct result is authoritative; do not poll, sleep, call `query_step`, or wait for an auto-notification.
+  The call returns an `execution_id` immediately. End the current turn, wait for
+  the automatic completion notification, then load the persisted result with
+  `get_pulse_review_result` before the parent validates, reports, or records any
+  outcome. Do not poll, sleep, or repeatedly call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config, write `builder/improve.html`, mark changelog entries, or mark Pulse module state.
 - Read only the matching Artifact Review cursor, open findings, and relevant
   recent decision/outcome regions in `builder/improve.html`. Do not load HTML
   style/skeleton guidance, inspect CSS, migrate markup, or format cards.
 
-Load `get_reference_doc(kind="assumption-audit")`. While tracing changed surfaces, identify dependent artifacts that preserved an old architecture, tactic, schema, metric, or execution assumption after the plan evolved. Keep consequential unresolved restrictions under Pulse's Assumptions challenged.
+Load `read_skill(skill_name="builder-reference", path="references/assumption-audit.md")`. While tracing changed surfaces, identify dependent artifacts that preserved an old architecture, tactic, schema, metric, or execution assumption after the plan evolved. Keep consequential unresolved restrictions under Pulse's Assumptions challenged.
 
 ## Audit checklist
 

@@ -18,6 +18,10 @@ func getToolNamesByCategory(category string) map[string]bool {
 		for toolName := range virtualtools.WorkspaceToolNamesByCategory(category) {
 			toolNames[toolName] = true
 		}
+	case virtualtools.WorkflowDBToolCategory:
+		for toolName := range virtualtools.WorkflowDBToolNames() {
+			toolNames[toolName] = true
+		}
 	case "human_tools":
 		// Get tool names from human tool executors (source of truth)
 		executors := virtualtools.CreateHumanToolExecutors()

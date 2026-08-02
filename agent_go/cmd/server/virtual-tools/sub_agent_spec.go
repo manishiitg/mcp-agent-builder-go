@@ -28,9 +28,9 @@ type SubAgentSpec struct {
 	// inherit all of the parent's servers.
 	Servers []string
 
-	// Skills is the explicit-pass skill list: sub-agents inherit NO skills
-	// from the parent; the parent must enumerate every skill the sub-agent
-	// needs in its delegate(skills=[...]) call.
+	// Skills is an additive explicit skill list. Chief of Staff sub-agents
+	// inherit the skills attached to the parent agent; names here attach extra
+	// skills that are not already present.
 	Skills []string
 
 	// ShareBrowser controls browser session isolation. true (the default)

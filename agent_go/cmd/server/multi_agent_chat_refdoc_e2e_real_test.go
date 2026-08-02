@@ -25,19 +25,18 @@ import (
 // TestMultiAgentChatPromptSteersToReferenceDocs is a real-LLM e2e test for
 // the multi-agent chat prompt refactor. It verifies that the new
 // schedule/secret cheat-sheet+pointer pattern actually steers the LLM to
-// call get_reference_doc(kind="...") before performing rare-path actions,
+// call read_skill(skill_name="builder-reference", path="references/....md") before performing rare-path actions,
 // instead of inventing the file format / tool semantics from memory.
 //
 // What it does:
 //  1. Builds the same system prompt the multi-agent chat session would see
 //     (GetMultiAgentDelegationInstructionsWithUser).
-//  2. Defines the get_reference_doc tool with the same schema the live agent
-//     exposes (kind: enum of valid reference kinds).
+//  2. Defines read_skill with mcpagent's intrinsic attached-skill schema.
 //  3. Sends a "schedule a daily task" user message OR a "store a secret"
 //     user message via the Anthropic API with claude-haiku.
 //  4. Asserts the model's first response contains a tool_use block for
-//     get_reference_doc with the expected kind. The system prompt pointer
-//     ("call get_reference_doc(kind=\"schedule-management\") first") only
+//     read_skill with the expected bundled path. The system prompt pointer
+//     ("call read_skill(skill_name=\"builder-reference\", path=\"references/schedule-management.md\") first") only
 //     produces correct behavior if the LLM actually parses and acts on it.
 //
 // Gating:
@@ -63,23 +62,26 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 
 	systemPrompt := virtualtools.GetMultiAgentDelegationInstructionsWithUser("Chats", "default")
 
-	// get_reference_doc tool — matches the schema RegisterReferenceDocTool
-	// publishes in production. Kind enum lists the multi-agent-accessible
-	// reference docs (schedule-management, secret-management).
+	// read_skill is intrinsic to mcpagent whenever a skill is attached. Keep
+	// this direct-API probe aligned with that stable transport-neutral schema.
 	tools := []anthropic.ToolUnionParam{
 		{
 			OfTool: &anthropic.ToolParam{
-				Name:        "get_reference_doc",
-				Description: anthropic.String("Load the full reference documentation for a workshop concept (schedule-management, secret-management, etc.)."),
+				Name:        "read_skill",
+				Description: anthropic.String("Read an attached skill or one of its bundled supporting files."),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Properties: map[string]any{
-						"kind": map[string]any{
+						"skill_name": map[string]any{
 							"type":        "string",
-							"enum":        []string{"schedule-management", "secret-management"},
-							"description": "Which reference doc to load.",
+							"enum":        []string{"builder-reference"},
+							"description": "Exact attached skill name.",
+						},
+						"path": map[string]any{
+							"type": "string",
+							"enum": []string{"references/schedule-management.md", "references/secret-management.md"},
 						},
 					},
-					Required: []string{"kind"},
+					Required: []string{"skill_name", "path"},
 				},
 			},
 		},
@@ -129,20 +131,21 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 			t.Logf("response stop_reason=%q, content blocks=%d", msg.StopReason, len(msg.Content))
 
 			foundRefDocCall := false
-			var calledKind string
+			var calledPath string
 			for _, block := range msg.Content {
 				switch v := block.AsAny().(type) {
 				case anthropic.ToolUseBlock:
-					if v.Name == "get_reference_doc" {
+					if v.Name == "read_skill" {
 						var input struct {
-							Kind string `json:"kind"`
+							SkillName string `json:"skill_name"`
+							Path      string `json:"path"`
 						}
 						if err := json.Unmarshal(v.Input, &input); err != nil {
 							t.Errorf("decode tool input: %v (raw=%s)", err, string(v.Input))
 							continue
 						}
-						calledKind = input.Kind
-						if input.Kind == tc.expectKind {
+						calledPath = input.Path
+						if input.SkillName == "builder-reference" && input.Path == "references/"+tc.expectKind+".md" {
 							foundRefDocCall = true
 						}
 					}
@@ -155,11 +158,11 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 			}
 
 			if !foundRefDocCall {
-				t.Errorf("expected get_reference_doc(kind=%q) before performing action; calledKind=%q stop_reason=%q",
-					tc.expectKind, calledKind, msg.StopReason)
+				t.Errorf("expected read_skill(builder-reference, references/%s.md) before performing action; calledPath=%q stop_reason=%q",
+					tc.expectKind, calledPath, msg.StopReason)
 				t.Logf("Full response blocks: %s", dumpBlocks(msg.Content))
 			} else {
-				t.Logf("✅ agent called get_reference_doc(kind=%q) before action", tc.expectKind)
+				t.Logf("✅ agent called read_skill(path=references/%s.md) before action", tc.expectKind)
 			}
 		})
 	}
@@ -199,7 +202,7 @@ func dumpBlocks(blocks []anthropic.ContentBlockUnion) string {
 // via MCP servers configured externally; the adapter does NOT accept
 // inline tool definitions. So this test can't verify a literal tool_use
 // block was emitted. Instead it verifies the **model's stated intent** —
-// does the text response mention calling `get_reference_doc(kind="...")`
+// does the text response mention calling `read_skill(skill_name="builder-reference", path="references/....md")`
 // with the expected kind? That proves the inline cheat-sheet pointer is
 // strong enough to steer the LLM's plan, which is what we care about.
 //
@@ -238,13 +241,13 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 			name:        "schedule_request_describes_schedule_doc_load",
 			userMsg:     "I want to schedule a multi-agent task that runs every weekday at 9 AM. Walk me through exactly what tools you would call, in order, to set this up. Be specific about tool names and arguments.",
 			expectKind:  "schedule-management",
-			mustMention: []string{"get_reference_doc"},
+			mustMention: []string{"read_skill"},
 		},
 		{
 			name:        "secret_storage_describes_secret_doc_load",
 			userMsg:     "I want to save a Slack API token as SLACK_TOKEN. Walk me through exactly what tools you would call, in order, to store it correctly. Be specific about tool names and arguments.",
 			expectKind:  "secret-management",
-			mustMention: []string{"get_reference_doc"},
+			mustMention: []string{"read_skill"},
 		},
 	}
 
@@ -268,13 +271,13 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 			t.Logf("model response (%d chars):\n%s", len(text), truncateRefdocLog(text, 1200))
 
 			// Stated-intent check: does the response mention calling
-			// get_reference_doc with the expected kind? Allow common
+			// read_skill with the expected kind? Allow common
 			// formatting variations (kind=..., kind: ..., kind:"...").
 			lower := strings.ToLower(text)
 			kindMentioned := strings.Contains(lower, strings.ToLower(tc.expectKind))
-			refDocMentioned := strings.Contains(lower, "get_reference_doc")
+			refDocMentioned := strings.Contains(lower, "read_skill")
 			if !refDocMentioned {
-				t.Errorf("expected response to mention get_reference_doc; got text=%s", truncateRefdocLog(text, 600))
+				t.Errorf("expected response to mention read_skill; got text=%s", truncateRefdocLog(text, 600))
 			}
 			if !kindMentioned {
 				t.Errorf("expected response to mention kind %q; got text=%s", tc.expectKind, truncateRefdocLog(text, 600))
@@ -285,7 +288,7 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 				}
 			}
 			if refDocMentioned && kindMentioned {
-				t.Logf("✅ model stated intent to call get_reference_doc(kind=%q) before action", tc.expectKind)
+				t.Logf("✅ model stated intent to call read_skill(path=references/%s.md) before action", tc.expectKind)
 			}
 		})
 	}
@@ -303,7 +306,7 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 //   - The full assembled system prompt (delegation rules + synthetic
 //     employees/workflow context) holds together
 //     and steers the LLM on every relevant axis.
-//   - get_reference_doc pointers actually steer the model on schedule and
+//   - read_skill pointers actually steer the model on schedule and
 //     secret asks (same as the per-capability tests above, but verified in
 //     a real session not just a one-shot).
 //   - Auto-injected employees context lets the model resolve "who handles
@@ -400,7 +403,7 @@ This workflow is ` + workflowDescription + `. It runs continuously and updates `
 			name:    "1_schedule_request",
 			userMsg: "Hi. I want to schedule a multi-agent task that runs every weekday at 9:00 AM. Walk me through exactly what tools you would call, in order, to set this up.",
 			mustMentionAny: [][]string{
-				{"get_reference_doc"},
+				{"read_skill"},
 				{"schedule-management"},
 			},
 		},
@@ -408,7 +411,7 @@ This workflow is ` + workflowDescription + `. It runs continuously and updates `
 			name:    "2_secret_storage",
 			userMsg: "Different topic — I also want to save a Slack API token as SLACK_TOKEN. What tool do you call first, before doing anything else?",
 			mustMentionAny: [][]string{
-				{"get_reference_doc"},
+				{"read_skill"},
 				{"secret-management"},
 			},
 		},

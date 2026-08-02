@@ -29,6 +29,7 @@ import (
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/mcpagent/llm"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 func safeDelegationRuntimeID(id string) string {
@@ -294,7 +295,9 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		if toolCb, ok := ctx.Value(virtualtools.ToolEventCallbackKey).(events.ToolEventCallback); ok && toolCb != nil {
 			subAgentObserver.OnToolEvent = toolCb
 		}
-		underlyingAgent.AddEventListener(subAgentObserver)
+		if err := subAgent.AddObserver(subAgentObserver); err != nil {
+			return "", fmt.Errorf("attach delegation event observer: %w", err)
+		}
 		parentUserID, _ := ctx.Value(common.UserIDKey).(string)
 		subAgentCostObserver := newCostObserver(
 			api.costLedger,
@@ -309,28 +312,36 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 				delegationID,
 			),
 		)
-		underlyingAgent.AddEventListener(subAgentCostObserver)
-		defer underlyingAgent.RemoveEventListener(subAgentObserver)
-		defer underlyingAgent.RemoveEventListener(subAgentCostObserver)
+		if err := subAgent.AddObserver(subAgentCostObserver); err != nil {
+			return "", fmt.Errorf("attach delegation cost observer: %w", err)
+		}
 		log.Printf("[DELEGATION] Added event observers for sub-agent at depth %d", currentDepth)
 
-		// Phase 6 explicit-pass: sub-agents inherit NO skills from the
-		// parent. The parent must enumerate skills the sub-agent needs
-		// in its delegate() call (skills=[...]). delegation_tools.go
-		// threads those names through the SubAgentSpec.
+		// Chief of Staff delegation inherits the root agent's exact attached
+		// skill bundles. This includes the multi-agent reference surface and
+		// user-selected skills, with supporting files intact for projection
+		// into the child's isolated coding-agent runtime directory.
+		inheritedSkills := delegatedParentSkillsFromContext(ctx)
+		identitySkills := append([]*llmtypes.Skill(nil), inheritedSkills...)
+		// skills=[...] remains an additive override for skills that are not
+		// already attached to the Chief of Staff parent. Attach the combined
+		// set once so assembly-time identity also deduplicates correctly before
+		// the wrapper finalizes its immutable mcpagent definition.
 		if len(spec.Skills) > 0 {
 			if attached := skills.LoadAttachable(getWorkspaceAPIURL(), spec.Skills); len(attached) > 0 {
-				for _, s := range attached {
-					underlyingAgent.AttachSkill(s)
-				}
-				log.Printf("[DELEGATION] Attached %d skill(s) to sub-agent (explicit pass)", len(attached))
+				identitySkills = append(identitySkills, attached...)
 			}
 		}
+		attachedCount, attachErr := attachMissingDelegatedSkills(subAgent, identitySkills)
+		if attachErr != nil {
+			return "", fmt.Errorf("attach delegated agent skills: %w", attachErr)
+		}
+		log.Printf("[DELEGATION] Attached %d skill(s) to sub-agent (parent=%d, explicit_names=%d)", attachedCount, len(inheritedSkills), len(spec.Skills))
 
 		// Append prompt sections contributed by active conditional grants
 		// (resolved above in subResolvedGrants before this block).
 		for _, section := range subResolvedGrants.PromptSections {
-			underlyingAgent.AppendSystemPrompt(section)
+			_ = subAgent.AddInstructions(section)
 		}
 		if len(subResolvedGrants.PromptSections) > 0 {
 			log.Printf("[DELEGATION] Appended %d grant prompt section(s) to sub-agent: %v", len(subResolvedGrants.PromptSections), subResolvedGrants.AppliedNames)
@@ -340,14 +351,14 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		if loadedTemplate != nil {
 			templatePrompt := fmt.Sprintf("\n## Sub-Agent Role: %s\n\n%s\n",
 				loadedTemplate.Frontmatter.Name, loadedTemplate.Content)
-			underlyingAgent.AppendSystemPrompt(templatePrompt)
+			_ = subAgent.AddInstructions(templatePrompt)
 			log.Printf("[DELEGATION] Injected sub-agent template instructions: %s", loadedTemplate.Frontmatter.Name)
 		}
 
 		// Merge global secrets with parent's decrypted secrets — inject names into prompt (values are in env vars)
 		allDelegationSecrets := mergeGlobalSecrets(parentReq.DecryptedSecrets, parentReq.SelectedGlobalSecrets)
 		if len(allDelegationSecrets) > 0 {
-			underlyingAgent.AppendSystemPrompt(buildSecretNamesPrompt(allDelegationSecrets))
+			_ = subAgent.AddInstructions(buildSecretNamesPrompt(allDelegationSecrets))
 			log.Printf("[DELEGATION] Injected %d secret names (not values) into sub-agent system prompt", len(allDelegationSecrets))
 		}
 
@@ -356,22 +367,22 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		// Use the same per-user Chats folder as the parent session.
 		subAgentChatsFolder := perUserChatsFolderFor(subAgentUserID)
 		subShellRoot := fsutil.WorkspaceShellRoot()
-		underlyingAgent.AppendSystemPrompt(GetWorkspaceMap(subShellRoot, subAgentChatsFolder))
-		underlyingAgent.AppendSystemPrompt(GetWorkspaceReference(subShellRoot, subAgentChatsFolder))
+		_ = subAgent.AddInstructions(GetWorkspaceMap(subShellRoot, subAgentChatsFolder))
+		_ = subAgent.AddInstructions(GetWorkspaceReference(subShellRoot, subAgentChatsFolder))
 		log.Printf("[DELEGATION] Added workspace instructions to sub-agent (chats=%s)", subAgentChatsFolder)
 
 		// [BROWSER] Add browser instructions using standardized builder (same as parent chat agent).
 		// Sub-agents need their own transformer registration because each Agent instance has
 		// its own toolArgTransformers map — the parent's transformer doesn't propagate.
 		if subBrowserPrompt := browserinstructions.BuildBrowserInstructions(subBrowserCfg); subBrowserPrompt != "" {
-			underlyingAgent.AppendSystemPrompt(subBrowserPrompt)
+			_ = subAgent.AddInstructions(subBrowserPrompt)
 			log.Printf("[BROWSER] Added agent-browser instructions to sub-agent (configured_mode=%s candidate_cdp_ports=%v)", subBrowserCfg.Mode, subBrowserCfg.CdpPorts)
 		}
 
 		// Browser isolation: when share_browser=false, tell the sub-agent to use a unique
 		// session name with the agent_browser tool to avoid sharing browser state.
 		if !spec.ShareBrowser {
-			underlyingAgent.AppendSystemPrompt(fmt.Sprintf("## Browser Isolation\nYou have an isolated browser session. When using the agent_browser tool, use a unique session name (e.g., \"isolated-%d\") instead of \"default\" to avoid sharing browser state with other agents.", time.Now().UnixNano()))
+			_ = subAgent.AddInstructions(fmt.Sprintf("## Browser Isolation\nYou have an isolated browser session. When using the agent_browser tool, use a unique session name (e.g., \"isolated-%d\") instead of \"default\" to avoid sharing browser state with other agents.", time.Now().UnixNano()))
 			log.Printf("[DELEGATION] Added browser isolation guidance to sub-agent system prompt")
 		}
 	}
@@ -399,7 +410,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		}
 		// Inject LLM config fallback for read_image HTTP calls (e.g., from claude CLI subprocess)
 		if underlying := subAgent.GetUnderlyingAgent(); underlying != nil {
-			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, underlying.GetLLMModelConfig())
+			virtualtools.SetReadImageFallbackLLMConfig(workspaceExecutors, mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig)
 		}
 
 		// Conditional grants already resolved above into subResolvedGrants.
@@ -473,7 +484,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 					})
 				}
 
-				if err := underlyingAgent.RegisterCustomTool(
+				if err := subAgent.RegisterCustomTool(
 					toolName,
 					enhancedDescription,
 					params,
@@ -513,7 +524,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 						continue
 					}
 
-					if err := underlyingAgent.RegisterCustomTool(
+					if err := subAgent.RegisterCustomTool(
 						toolName,
 						tool.Function.Description,
 						params,
@@ -531,7 +542,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 
 		// Minimal worker context — tells the sub-agent its role and output conventions.
 		subWorkerChatsFolder := perUserChatsFolderFor(subAgentUserID)
-		underlyingAgent.AppendSystemPrompt(fmt.Sprintf(`## Your Role
+		_ = subAgent.AddInstructions(fmt.Sprintf(`## Your Role
 You are a focused background worker. Complete the assigned task using available tools and return a clear, concise result.
 - You cannot spawn further sub-agents
 - You do not share hidden context with the caller — all context is in the instruction you received

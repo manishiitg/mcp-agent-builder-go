@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	pkgevents "github.com/manishiitg/mcpagent/events"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
-	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 )
 
 // EventBridge defines the interface for event bridges

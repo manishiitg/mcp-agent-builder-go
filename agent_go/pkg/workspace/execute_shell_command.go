@@ -63,6 +63,11 @@ type ExecuteShellCommandParams struct {
 	UseShell         *bool              `json:"use_shell,omitempty"`
 	FolderGuard      *FolderGuardConfig `json:"folder_guard,omitempty"` // Set internally — never from LLM args
 	ExtraEnv         map[string]string  `json:"extra_env,omitempty"`
+	// DBReadSnapshot asks the trusted workspace service to replace DB_PATH with
+	// a consistent, standalone snapshot for this shell process. It is set by
+	// the workflow harness for read-only scripted steps and is not exposed in
+	// the execute_shell_command tool schema.
+	DBReadSnapshot bool `json:"db_read_snapshot,omitempty"`
 }
 
 var shellCommandSecretReplacements = []struct {
@@ -240,6 +245,7 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	// Look up per-session shell config (working dir + folder guard)
 	sessionID := c.sessionIDFromContext(ctx)
 	sessionCfg := GetSessionShellConfig(sessionID)
+	sessionEnv := common.GetSessionShellEnv(sessionID)
 
 	// Block agent-browser browser-driving CLI calls via shell — catches direct calls,
 	// bash -c wrapping, piping, etc. The agent_browser tool handles CDP URL
@@ -257,7 +263,7 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 		log.Printf("[SHELL] Blocked agent-browser CLI call. Command: %s", redactShellCommandForLog(params.Command))
 
 		return ShellCommandResult{
-			Stderr:   "ERROR: Do not call agent-browser directly via execute_shell_command for browser actions. Use the agent_browser tool instead.\n\nAllowed shell exception for docs only:\n  agent-browser skills list\n  agent-browser skills get core\n  agent-browser skills get core --full\n\nFor direct tool call mode:\n  agent_browser(command=\"open\", args=[\"https://example.com\"], session=\"default\")\n\nFor code execution mode (MCP bridge):\n  Call get_api_spec(server_name=\"agent_browser\") to get the HTTP API spec,\n  then POST to the agent_browser endpoint via HTTP.\n\nThe agent_browser tool handles CDP connection, session management, and folder sandboxing automatically. Calling agent-browser CLI directly for browser actions bypasses CDP URL resolution and will fail inside Docker.",
+			Stderr:   "ERROR: Do not call agent-browser directly via execute_shell_command for browser actions. Use the agent_browser tool instead.\n\nAllowed shell exception for docs only:\n  agent-browser skills list\n  agent-browser skills get core\n  agent-browser skills get core --full\n\nFor direct tool call mode:\n  agent_browser(command=\"open\", args=[\"https://example.com\"], session=\"default\")\n\nFor code execution mode (MCP bridge):\n  Call get_api_spec(tool_name=\"agent_browser\") to get the HTTP API spec,\n  then POST to the agent_browser endpoint via HTTP.\n\nThe agent_browser tool handles CDP connection, session management, and folder sandboxing automatically. Calling agent-browser CLI directly for browser actions bypasses CDP URL resolution and will fail inside Docker.",
 			ExitCode: 1,
 		}, nil
 	}
@@ -273,7 +279,9 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	redactedCommandForLog := redactShellCommandForLog(params.Command)
 
 	// Set default working directory:
-	// Priority: param > session config > client field > ExtraEnv > empty (workspace root)
+	// Priority: param > session config > client field > ExtraEnv. Non-workflow
+	// callers may still leave it empty and use workspace root; workflow steps
+	// fail closed below because root is never a valid implicit step cwd.
 	if params.WorkingDirectory == "" {
 		if sessionCfg != nil && sessionCfg.WorkingDir != "" {
 			params.WorkingDirectory = sessionCfg.WorkingDir
@@ -282,6 +290,13 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 		} else if dir, ok := c.ExtraEnv["_DEFAULT_WORKING_DIR"]; ok && dir != "" {
 			params.WorkingDirectory = dir
 		}
+	}
+	if params.WorkingDirectory == "" && isWorkflowStepShellRequest(c.ExtraEnv, sessionEnv, params.ExtraEnv) {
+		log.Printf("[SHELL] Refusing workflow-step shell request with no cwd: session=%s cmd=%s", sessionID, redactedCommandForLog)
+		return ShellCommandResult{}, fmt.Errorf(
+			"WORKFLOW STEP CONFIG ERROR: execute_shell_command has no working directory for session %q; refusing workspace-root fallback",
+			sessionID,
+		)
 	}
 
 	// Populate folder guard configuration for the Isolator.
@@ -372,9 +387,18 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	// write RUNLOOP_* and MCP shortcut variables into the same map.
 	params.ExtraEnv = mergeShellCommandEnv(
 		c.ExtraEnv,
-		common.GetSessionShellEnv(sessionID),
+		sessionEnv,
 		params.ExtraEnv,
 	)
+	// Script-repair shells use the ordinary execute_shell_command executor, so
+	// infer the same snapshot behavior from their trusted session capability.
+	// The saved-script fast path sets DBReadSnapshot explicitly because it does
+	// not run through a session-scoped agent executor.
+	if !params.DBReadSnapshot &&
+		strings.TrimSpace(sessionEnv["WORKFLOW_DB_ACCESS"]) == "read" &&
+		strings.TrimSpace(params.ExtraEnv["DB_PATH"]) != "" {
+		params.DBReadSnapshot = true
+	}
 	populateRunloopProcessEnv(params.ExtraEnv, sessionID, params.WorkingDirectory, params.Command)
 	common.PopulateMCPBridgeShortEnv(params.ExtraEnv)
 
@@ -397,6 +421,19 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 		log.Printf("[SHELL_RESULT_DEBUG] call_sub_agent via shell: stdout_len=%d raw_resp_len=%d", len(result.Stdout), len(respBody))
 	}
 	return result, nil
+}
+
+// isWorkflowStepShellRequest identifies shell calls owned by a workflow step
+// before RUNLOOP_* inference runs. STEP_OUTPUT_DIR is registered on every
+// agentic/scripted step session; RUNLOOP_STEP_ID covers callers that supply the
+// ownership fields directly.
+func isWorkflowStepShellRequest(envs ...map[string]string) bool {
+	for _, env := range envs {
+		if strings.TrimSpace(env["STEP_OUTPUT_DIR"]) != "" || strings.TrimSpace(env["RUNLOOP_STEP_ID"]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeShellCommandEnv returns a new map for each request. Values are applied

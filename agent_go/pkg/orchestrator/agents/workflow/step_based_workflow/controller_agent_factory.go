@@ -290,6 +290,40 @@ func resolveEffectiveDBAccess(stepConfig *AgentConfigs, evaluationMode, evaluati
 	return DBAccessRead
 }
 
+const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
+
+// configureWorkflowDBSession records the trusted logical DB capability for the
+// tool executor and, for managed agents, hard-blocks raw db.sqlite/WAL/SHM file
+// access. db/README.md and db/assets/ remain governed by the ordinary read/write
+// paths. Saved scripted steps retain direct DB access during migration.
+func configureWorkflowDBSession(sessionID, workspacePath, dbAccess string, direct bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	common.SetSessionShellEnv(sessionID, map[string]string{workflowDBAccessEnv: dbAccess})
+	if direct {
+		return
+	}
+	blocked := []string{}
+	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil {
+		blocked = append(blocked, cfg.BlockedPaths...)
+	}
+	dbPath := filepath.Join(workspacePath, DBFolderName, "db.sqlite")
+	blocked = append(blocked, dbPath, dbPath+"-wal", dbPath+"-shm")
+	common.SetSessionFolderGuardBlockedPaths(sessionID, common.DeduplicateStrings(blocked))
+}
+
+func dbWritePathGranted(writePaths []string, workspacePath string) bool {
+	want := filepath.Clean(getDBPath(workspacePath))
+	for _, path := range writePaths {
+		if filepath.Clean(path) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // setupBrowserDownloadsPathOverride configures the Downloads path for browser automation tools.
 // Execution and orchestrator agents share this run-specific agent_browser folder.
 func (hcpo *StepBasedWorkflowOrchestrator) setupBrowserDownloadsPathOverride(ctx context.Context, _ *agents.OrchestratorAgentConfig, _ *AgentConfigs) {
@@ -388,7 +422,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// WorkflowWritableSubfolders, and isProtectedPlanningPath is the runtime backstop;
 	// plan.json/step_config.json are only ever mutated through the typed plan-mod tools.
 	planningPath := fmt.Sprintf("%s/%s", baseWorkspacePath, PlanningFolderName)
-	readPaths = []string{executionWorkspacePath, soulPath, builderPath, planningPath}
+	// runWorkspacePath, not just its execution/ child. A step is told its outputs
+	// live at runs/<run>/execution/<step>/, and confirming that path means walking
+	// down to it — but only the leaf was readable, so `ls runs/iteration-0/default`
+	// returned "Operation not permitted" while `ls .../execution/<step>` would have
+	// worked. A CDP test step on 2026-08-02 burned four calls on exactly that walk.
+	// The run folder also holds logs/ and run_metadata.json, which are ordinary
+	// evidence for a step reasoning about its own run. Read-only, and scoped to
+	// this run — it grants nothing outside what execution/ already exposes.
+	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write
@@ -776,6 +818,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			enabledTools = append(enabledTools, "workspace_advanced:*")
 			hcpo.GetLogger().Info("🔧 Auto-including workspace_advanced:*")
 		}
+		// Workflow DB tools are capability-derived, not model-selected. A custom
+		// tool allowlist may narrow other tools but cannot remove the safe query
+		// path or escalate a read-only step to mutation authority.
+		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
+		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
+			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
+		}
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -809,6 +858,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		defaultEnabledTools := []string{
 			"workspace_advanced:*",
 			"human_tools:*",
+			"workflow_db:query_workflow_db",
+		}
+		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
+			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
 		}
 		// Auto-include browser tools if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true)
@@ -829,10 +882,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 	return toolsToRegister, executorsToUse
 }
 
-// prepareWorkspaceToolsOnly prepares minimal workspace tools for learning agents.
-// Learning agents only need shell_command (for reading files) and diff_patch_workspace_file
-// (for writing learnings). They should NOT have human tools (like human_feedback) since
-// they are pure LLM analysis agents that should not block on human input.
+// prepareWorkspaceToolsOnly prepares minimal tools for KB maintenance agents.
+// They can inspect structured workflow state through query_workflow_db and can
+// update their authorized files, but they do not receive database mutation or
+// human tools.
 func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtypes.Tool, map[string]interface{}) {
 	tools, executors := orchestrator.FilterCustomToolsByCategory(
 		hcpo.WorkspaceTools,
@@ -840,9 +893,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtyp
 		[]string{
 			"workspace_advanced:execute_shell_command",
 			"workspace_advanced:diff_patch_workspace_file",
+			"workflow_db:query_workflow_db",
 		},
 	)
-	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Prepared %d learning agent tools (execute_shell_command + diff_patch, no human tools)", len(tools)))
+	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Prepared %d KB maintenance tools (shell + diff_patch + DB query, no mutation/human tools)", len(tools)))
 	return tools, executors
 }
 
@@ -891,24 +945,47 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupSubAgentSessionGuard(agentKind s
 	return sessionID
 }
 
+// workflowStepShellWorkingDir returns the server-side cwd every workflow-step
+// tool session must use. It is derived from the step's own execution context,
+// not inherited through the parent HTTP/group session chain: those sessions use
+// different identities and are created in different orders in workshop and
+// batch execution.
+func (hcpo *StepBasedWorkflowOrchestrator) workflowStepShellWorkingDir() string {
+	workspacePath := strings.TrimRight(strings.TrimSpace(hcpo.GetWorkspacePath()), "/")
+	runFolder := strings.Trim(strings.TrimSpace(hcpo.selectedRunFolder), "/")
+	if workspacePath == "" || runFolder == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/runs/%s/execution", workspacePath, runFolder)
+}
+
 func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(sessionID string, agentKind string, stepID string, readPaths []string, writePaths []string) {
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
 	hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
 
-	// Carry the parent group session's working directory onto the dedicated
-	// session so `ls learnings/_global/` style relative commands still resolve
-	// against the workspace. Without this, the shell falls back to the Go
-	// process's cwd (agent_go/), which would break every relative path the
-	// learning/KB agents use.
-	if parentSessionID := strings.TrimSpace(hcpo.GetMCPSessionID()); parentSessionID != "" {
-		if parentCfg := common.GetSessionShellConfig(parentSessionID); parentCfg != nil && parentCfg.WorkingDir != "" {
-			common.SetSessionWorkingDir(sessionID, parentCfg.WorkingDir)
+	// Set the child identity's cwd directly. The run cwd used to be recorded on
+	// httpSessionID, while shell calls carry this dedicated sessionID. Group
+	// creation copied only folder guards, so inheriting through the group missed
+	// the cwd and silently fell back to workspace root. Deriving it here also
+	// makes workshop and batch setup order irrelevant.
+	workingDir := hcpo.workflowStepShellWorkingDir()
+	if workingDir == "" {
+		// Preserve compatibility for non-run maintenance callers. A real workflow
+		// step also carries STEP_OUTPUT_DIR and is rejected by the shell bridge if
+		// neither this direct value nor a parent fallback is available.
+		if parentSessionID := strings.TrimSpace(hcpo.GetMCPSessionID()); parentSessionID != "" {
+			if parentCfg := common.GetSessionShellConfig(parentSessionID); parentCfg != nil {
+				workingDir = strings.TrimSpace(parentCfg.WorkingDir)
+			}
 		}
+	}
+	if workingDir != "" {
+		common.SetSessionWorkingDir(sessionID, workingDir)
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf(
-		"🔒 Sub-agent session %q (%s/%s) — folder guard set at session level Read=%v Write=%v",
-		sessionID, agentKind, stepID, readPaths, writePaths,
+		"🔒 Sub-agent session %q (%s/%s) — cwd=%q folder guard set at session level Read=%v Write=%v",
+		sessionID, agentKind, stepID, workingDir, readPaths, writePaths,
 	))
 }
 
@@ -958,6 +1035,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-consolidate", stepID, readPaths, writePaths)
+	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB consolidate agent - Read: %v, Write: %v", readPaths, writePaths))
 
@@ -1001,7 +1079,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KB consolidate agent: %w", err)
 	}
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, false); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
 	return agent, nil
@@ -1016,6 +1094,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-reorganize", stepID, readPaths, writePaths)
+	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB reorganize agent - Read: %v, Write: %v", readPaths, writePaths))
 
@@ -1059,7 +1138,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KB reorganize agent: %w", err)
 	}
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, false); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
 	return agent, nil
@@ -1069,37 +1148,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 // This includes setting folder guard paths and optionally updating the code execution registry
 // agent: The orchestrator agent to configure
 // agentName: Name of the agent (for logging)
-// shouldUpdateRegistry: If true, updates the code execution registry after setting folder guard paths
-func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.OrchestratorAgent, agentName string, shouldUpdateRegistry bool) error {
+func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.OrchestratorAgent, agentName string) error {
 	baseAgent := agent.GetBaseAgent()
 	if baseAgent == nil {
 		return nil // No base agent, nothing to configure
 	}
 
-	mcpAgent := baseAgent.Agent()
-	if mcpAgent == nil {
-		return nil // No MCP agent, nothing to configure
-	}
-
 	// Set folder guard paths on MCP agent (required for both code execution mode and simple mode)
 	// This ensures path validation works at the tool executor level
 	readPaths, writePaths := hcpo.GetFolderGuardPaths()
-	mcpAgent.SetFolderGuardPaths(readPaths, writePaths)
+	baseAgent.SetWorkspacePolicy(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Folder guard paths set for %s agent - Read: %v, Write: %v", agentName, readPaths, writePaths))
-
-	// Update code execution registry AFTER setting folder guard paths (if requested)
-	// Note: Base factory has already updated the registry (if bo.GetUseCodeExecutionMode() is true), but it didn't have folder guard paths set.
-	// This update ensures the registry has the correct path validation code with folder guard enabled.
-	if shouldUpdateRegistry {
-		// CRITICAL: Folder guard paths must be set BEFORE registry update
-		// The registry generation uses these paths to create the path validation code
-		// This ensures LLM-generated code can only access paths within allowed boundaries
-		if err := mcpAgent.UpdateCodeExecutionRegistry(); err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to update code execution registry for %s: %v", agentName, err))
-			return err
-		}
-		hcpo.GetLogger().Info(fmt.Sprintf("✅ [CODE_EXECUTION] Registry updated for %s agent - folder guard enabled", agentName))
-	}
 
 	return nil
 }
@@ -1137,6 +1196,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 			stepEnvOutputPathOverride = writePaths[0]
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
+		if dbAccess == DBAccessReadWrite && !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
+			dbAccess = DBAccessRead
+		}
 	}
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
@@ -1200,6 +1262,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		execSessionID = hcpo.setupSubAgentSessionGuard("exec", stepID, readPaths, writePaths)
 	}
 	config.MCPSessionID = execSessionID
+	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	// Keep browser-sharing behavior unchanged: bind the per-step execution session to the
 	// same shared browser session the group session uses. If a caller later requests
 	// share_browser=false, the isolated browser session override below still wins.
@@ -1247,6 +1311,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 5. Prepare custom tools (filtered by step config)
 	toolsToRegister, executorsToUse := hcpo.prepareCustomTools(stepConfig)
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
+			}
+			filtered = append(filtered, tool)
+		}
+		toolsToRegister = filtered
+		delete(executorsToUse, "mutate_workflow_db")
+	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
 	// and STEP_EXECUTION_DIR to read sibling step outputs.
@@ -1258,7 +1333,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		}
 		stepOutputAbsPath := filepath.Join(GetPromptDocsRoot(), stepExecutionPath)
 		stepExecutionAbsPath := filepath.Dir(stepOutputAbsPath)
-		dbAbsPath := filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		dbAbsPath := ""
+		if directDBAccess {
+			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
 		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
 		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
@@ -1292,18 +1370,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	if baseAgent == nil {
 		return nil, fmt.Errorf("base agent is nil after creation for %s - this should never happen", agentName)
 	}
-	mcpAgent := baseAgent.Agent()
-	if mcpAgent == nil {
-		return nil, fmt.Errorf("mcp agent is nil after creation for %s - this should never happen", agentName)
-	}
-
 	// Inject supplementary prompts (skills, browser isolation, secrets, browser instructions)
 	isolatedSessionID, _ := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string)
 	attachGlobalLearnings := !hcpo.isEvaluationMode && learningsAccess != LearningsAccessNone
-	hcpo.appendSupplementaryPrompts(ctx, mcpAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings)
+	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings)
 
 	// Apply post-setup configuration (folder guard paths and optional registry update)
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, isCodeExecutionMode); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		// Log warning but don't fail agent creation
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", agentName, err))
 	}
@@ -1494,6 +1567,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	todoReadPaths, todoWritePaths := hcpo.GetFolderGuardPaths()
 	todoSessionID := hcpo.setupSubAgentSessionGuard("todo", stepID, todoReadPaths, todoWritePaths)
 	config.MCPSessionID = todoSessionID
+	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
+	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1570,6 +1646,43 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using all workspace tools for todo task orchestrator agent: %d tools", len(toolsToRegister)))
 	}
+	// DB capability tools are always derived from trusted db_access even when a
+	// step supplies a narrower custom-tool list.
+	hasTool := func(name string) bool {
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
+		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
+			continue
+		}
+		if !hasTool(name) {
+			for _, tool := range hcpo.WorkspaceTools {
+				if tool.Function != nil && tool.Function.Name == name {
+					toolsToRegister = append(toolsToRegister, tool)
+					if executor, ok := hcpo.WorkspaceToolExecutors[name]; ok {
+						executorsToUse[name] = executor
+					}
+					break
+				}
+			}
+		}
+	}
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
+		for _, tool := range toolsToRegister {
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
+			}
+			filtered = append(filtered, tool)
+		}
+		toolsToRegister = filtered
+		delete(executorsToUse, "mutate_workflow_db")
+	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the
 	// todo-task orchestrator's own shell calls resolve sibling step outputs via env vars
@@ -1581,7 +1694,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		// The todo-task orchestrator now uses a dedicated MCP session for shell/file tools.
 		// Browser reuse is bound separately above, so this session override narrows
 		// filesystem scope without breaking shared browser behavior with the builder.
-		dbAbsPath := filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		dbAbsPath := ""
+		if directDBAccess {
+			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
 		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
 		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
@@ -1671,16 +1787,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 
 	// Post-setup: folder guard paths (todo task orchestrator agent may use code execution mode, so registry update may be needed)
 	// Note: Folder guard paths are already set on orchestrator by caller, but we need to apply them to the agent
-	if err := hcpo.applyPostSetupToAgent(agent, agentName, isCodeExecutionMode); err != nil {
+	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
 		return nil, fmt.Errorf("failed to apply post-setup to todo task orchestrator agent: %w", err)
 	}
 
 	// Inject supplementary prompts (skills, secrets, browser instructions).
 	effectiveSkills := GetEffectiveSkills(stepConfig, hcpo.BaseOrchestrator)
 	if baseAgent := agent.GetBaseAgent(); baseAgent != nil {
-		if mcpAgent := baseAgent.Agent(); mcpAgent != nil {
+		if baseAgent.Agent() != nil {
 			attachGlobalLearnings := !hcpo.isEvaluationMode && resolveLearningsAccess(stepConfig) != LearningsAccessNone
-			hcpo.appendSupplementaryPrompts(ctx, mcpAgent, config, effectiveSkills, "", attachGlobalLearnings)
+			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, "", attachGlobalLearnings)
+			if inherited := backgroundAgentSkillsFromContext(ctx); len(inherited) > 0 {
+				if err := applyInheritedBackgroundSkills(ctx, baseAgent, inherited); err != nil {
+					return nil, fmt.Errorf("apply inherited background orchestrator skills: %w", err)
+				}
+				hcpo.GetLogger().Info(fmt.Sprintf("🎯 Inherited %d workflow-builder skill(s) for background todo task", len(backgroundSkillNames(inherited))))
+			}
 		}
 	}
 

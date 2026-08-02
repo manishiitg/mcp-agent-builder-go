@@ -89,9 +89,6 @@ import type {
   RequestHumanFeedbackEvent,
   BlockingHumanFeedbackEvent,
   HumanVerificationResponseEvent,
-  StructuredOutputStartEvent,
-  StructuredOutputEndEvent,
-  StructuredOutputErrorEvent,
   // New Streaming Events
   StreamingStartEvent,
   StreamingChunkEvent,
@@ -247,9 +244,6 @@ export type EventTypeString =
   | 'request_human_feedback'
   | 'blocking_human_feedback'
   | 'human_verification_response'
-  | 'structured_output_start'
-  | 'structured_output_end'
-  | 'structured_output_error'
   // Streaming Events
   | 'streaming_start'
   | 'streaming_chunk'
@@ -377,9 +371,6 @@ export interface EventTypeToDataMap {
   'request_human_feedback': RequestHumanFeedbackEvent;
   'blocking_human_feedback': BlockingHumanFeedbackEvent;
   'human_verification_response': HumanVerificationResponseEvent;
-  'structured_output_start': StructuredOutputStartEvent;
-  'structured_output_end': StructuredOutputEndEvent;
-  'structured_output_error': StructuredOutputErrorEvent;
   // Streaming Events
   'streaming_start': StreamingStartEvent;
   'streaming_chunk': StreamingChunkEvent;
@@ -891,9 +882,6 @@ export type {
   RequestHumanFeedbackEvent,
   BlockingHumanFeedbackEvent,
   HumanVerificationResponseEvent,
-  StructuredOutputStartEvent,
-  StructuredOutputEndEvent,
-  StructuredOutputErrorEvent,
   // Streaming Events
   StreamingStartEvent,
   StreamingChunkEvent,

@@ -18,6 +18,28 @@ import (
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
+func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t *testing.T) {
+	review := []step_based_workflow.PulseReviewVerificationResult{{
+		FindingID: "ISS-9", Fingerprint: "fp-9", AttemptID: "fix-9",
+		Verdict:  step_based_workflow.VerificationPassed,
+		Expected: "new run contains value", Observed: "run-12 contains 42",
+	}}
+	if err := validateReviewerVerificationDispositions(review, nil); err == nil {
+		t.Fatal("verification-only module must not become terminal without a disposition")
+	}
+	dispositions := []step_based_workflow.PulseFindingDisposition{{
+		FindingID: "ISS-9", Fingerprint: "fp-9", AttemptID: "fix-9",
+		Disposition: step_based_workflow.FindingDispositionFixedVerified,
+		Verification: []step_based_workflow.PulseFindingVerification{{
+			Verdict:  step_based_workflow.VerificationPassed,
+			Expected: "new run contains value", Observed: "run-12 contains 42",
+		}},
+	}}
+	if err := validateReviewerVerificationDispositions(review, dispositions); err != nil {
+		t.Fatalf("matching disposition rejected: %v", err)
+	}
+}
+
 func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -446,9 +468,13 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	); err != nil {
 		t.Fatalf("record reviewer finding: %v", err)
 	}
-	concerns, err := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, 10)
-	if err != nil || len(concerns) != 1 {
-		t.Fatalf("load reviewer finding: concerns=%+v err=%v", concerns, err)
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, 10)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
+	}
+	selected := findings[0]
+	if selected.FindingID == "" || selected.FindingID != selected.Issue.ID || !strings.HasPrefix(selected.FindingID, "PUL-") {
+		t.Fatalf("legacy finding did not receive compact issue identity: %+v", selected)
 	}
 	startFix := executors["start_pulse_fix_attempt"].(func(context.Context, map[string]interface{}) (string, error))
 	startedJSON, err := startFix(ctx, map[string]interface{}{
@@ -457,8 +483,8 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"module":         pulseModuleBugReview,
 		"summary":        "Repair the stale run binding.",
 		"findings": []map[string]interface{}{{
-			"fingerprint": concerns[0].Fingerprint,
-			"finding_id":  "BUG-1",
+			"fingerprint": selected.Fingerprint,
+			"finding_id":  selected.Issue.ID,
 		}},
 		"intended_files": []string{"planning/step_config.json"},
 		"before_refs":    []string{"step_config:sha256:before"},
@@ -485,8 +511,8 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"before_refs":    []string{"step_config:sha256:before"},
 		"after_refs":     []string{"step_config:sha256:after"},
 		"finding_dispositions": []map[string]interface{}{{
-			"fingerprint":   concerns[0].Fingerprint,
-			"finding_id":    "BUG-1",
+			"fingerprint":   selected.Fingerprint,
+			"finding_id":    selected.Issue.ID,
 			"attempt_id":    started.Attempt.AttemptID,
 			"disposition":   "fixed_verified",
 			"summary":       "The stale run binding was corrected and the targeted test passed.",
@@ -685,8 +711,8 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 	t.Run("rejects malformed technical nesting from production regression", func(t *testing.T) {
 		malformed := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "malformed"),
-			`</div></div><details class="technical"><summary>Technical details</summary><div class="techbody">`,
-			`</div><div class="tiles"></div>`,
+			`<section class="worksummary"`,
+			`</div><section class="worksummary"`,
 			1,
 		)
 		workspaceState.mu.Lock()
@@ -743,6 +769,38 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		}
 	})
 
+	t.Run("requires SQLite current work projection", func(t *testing.T) {
+
+		missing := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "missing-current-work"),
+			`<section class="worksummary" data-source="sqlite">`,
+			`<section class="legacy-work">`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = missing
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "Current work") {
+			t.Fatalf("missing Current work error = %v", err)
+		}
+	})
+
+	t.Run("rejects duplicated reviewer field dumps", func(t *testing.T) {
+
+		withDump := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "reviewer-dump"),
+			`<div id="pulse-agent-handoff"`,
+			`<div class="modfields">raw reviewer fields</div><div id="pulse-agent-handoff"`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = withDump
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "field dumps") {
+			t.Fatalf("reviewer dump error = %v", err)
+		}
+	})
+
 	t.Run("requires canonical handoff attribute", func(t *testing.T) {
 		wrongAttribute := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "wrong-attribute"),
@@ -772,9 +830,44 @@ func pulseImproveHTMLFixture(pulseRunID, marker string) string {
 		`<div class="briefitem"><div class="k">Open now</div><p>Nothing open.</p></div>` +
 		`<div class="briefitem"><div class="k">Next Pulse</div><p>Later.</p></div>` +
 		`</div></div>` +
+		`<section class="worksummary" data-source="sqlite"><div class="workstats">` +
+		`<div class="workstat" data-status="open" data-count="0"><b>0</b><span>Open</span></div>` +
+		`<div class="workstat" data-status="in_progress" data-count="0"><b>0</b><span>Fixing</span></div>` +
+		`<div class="workstat" data-status="in_review" data-count="0"><b>0</b><span>Verify</span></div>` +
+		`</div><div class="workqueues">` +
+		`<div class="workqueue" data-queue="attention"><p class="workempty">Nothing open.</p></div>` +
+		`<div class="workqueue" data-queue="verification"><p class="workempty">Nothing to verify.</p></div>` +
+		`</div></section>` +
 		`<details class="technical"><summary>Technical details</summary><div class="techbody">Details.</div></details>` +
 		`<div id="pulse-agent-handoff" data-pulse-run-id="` + pulseRunID + `" hidden>` + marker + `</div>` +
 		`</body></html>`
+}
+
+func TestValidatePulseDashboardFindingCountsMatchesSQLiteProjection(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/dashboard-counts"
+	if _, err := step_based_workflow.RecordRunConcerns(
+		context.Background(), workspacePath, "run-1", "", pulseModuleBugReview,
+		step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: the report omits the latest completed run",
+	); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load finding: findings=%+v err=%v", findings, err)
+	}
+	html := pulseImproveHTMLFixture("pulse-1", "counts")
+	html = strings.Replace(html, `data-status="open" data-count="0"><b>0</b>`, `data-status="open" data-count="1"><b>1</b>`, 1)
+	html = strings.Replace(html, `<p class="workempty">Nothing open.</p>`, `<div class="workitem" data-issue-id="`+findings[0].Issue.ID+`"><b>`+findings[0].Issue.Title+`</b><p>Pulse will inspect it.</p></div>`, 1)
+	if err := validatePulseDashboardFindingCounts(context.Background(), workspacePath, html); err != nil {
+		t.Fatalf("matching Current work projection rejected: %v", err)
+	}
+	stale := strings.Replace(html, `data-status="open" data-count="1"><b>1</b>`, `data-status="open" data-count="0"><b>0</b>`, 1)
+	if err := validatePulseDashboardFindingCounts(context.Background(), workspacePath, stale); err == nil || !strings.Contains(err.Error(), "SQLite has 1") {
+		t.Fatalf("stale Current work count error = %v", err)
+	}
 }
 
 func TestRestorePulseDashboardArtifactsRestoresBothFiles(t *testing.T) {
@@ -933,6 +1026,13 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	finding := payload.Findings[0]
 	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleBugReview {
 		t.Fatalf("finding identity/status mismatch: %+v", finding)
+	}
+	if finding.Issue.ID == "" || finding.Issue.Title != "selector keeps targeting the same accounts" ||
+		finding.Issue.Status != "backlog" || finding.Issue.Priority != "none" {
+		t.Fatalf("compact issue projection missing: %+v", finding.Issue)
+	}
+	if finding.FindingID != finding.Issue.ID || !strings.HasPrefix(finding.FindingID, "PUL-") {
+		t.Fatalf("fixer-compatible finding id missing: finding_id=%q issue=%+v", finding.FindingID, finding.Issue)
 	}
 	if len(finding.Events) != 1 || finding.Events[0].EventType != "filed" {
 		t.Fatalf("filed lifecycle event missing: %+v", finding.Events)

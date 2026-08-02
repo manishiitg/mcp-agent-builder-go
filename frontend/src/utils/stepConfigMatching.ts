@@ -46,8 +46,6 @@ export interface AgentConfigs {
   enabled_skills?: string[];
   enable_context_offloading?: boolean;
   use_code_execution_mode?: boolean;
-  use_tool_search_mode?: boolean;             // Legacy field still cleaned up by older editor flows
-  pre_discovered_tools?: string[];            // Legacy field still cleaned up by older editor flows
   todo_task_orchestrator_tier?: number;       // 1/2/3 - tier for orchestrator agent in tiered mode
   orchestrator_llm?: AgentLLMConfig;          // Direct LLM override for orchestrator (works in both tiered and manual modes)
   sub_agent_llm?: AgentLLMConfig;             // Direct LLM override for ALL sub-agents spawned by this step (works in both tiered and manual modes)

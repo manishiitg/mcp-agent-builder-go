@@ -23,6 +23,30 @@ export interface PollingEvent {
    */
   session_id?: string;
   /**
+   * Canonical execution identifier
+   */
+  execution_id?: string;
+  /**
+   * Parent execution identifier
+   */
+  parent_execution_id?: string;
+  /**
+   * Execution kind
+   */
+  execution_kind?: string;
+  /**
+   * Canonical owner identifier for one terminal transcript
+   */
+  terminal_owner_id?: string;
+  /**
+   * Canonical terminal transcript identifier
+   */
+  terminal_id?: string;
+  /**
+   * Stable session event sequence cursor
+   */
+  sequence?: number;
+  /**
    * Error message if any
    */
   error?: string;
@@ -144,9 +168,6 @@ export interface EventDataUnion {
   request_human_feedback?: RequestHumanFeedbackEvent;
   blocking_human_feedback?: BlockingHumanFeedbackEvent;
   human_verification_response?: HumanVerificationResponseEvent;
-  structured_output_start?: StructuredOutputStartEvent;
-  structured_output_end?: StructuredOutputEndEvent;
-  structured_output_error?: StructuredOutputErrorEvent;
   streaming_start?: StreamingStartEvent;
   streaming_chunk?: StreamingChunkEvent;
   streaming_end?: StreamingEndEvent;
@@ -195,7 +216,6 @@ export interface AgentStartEvent {
   model_id?: string;
   provider?: string;
   use_code_execution_mode?: boolean;
-  use_tool_search_mode?: boolean;
 }
 export interface AgentEndEvent {
   timestamp?: string;
@@ -722,7 +742,6 @@ export interface TokenUsageEvent {
   context?: string;
   agent_mode?: string;
   use_code_execution_mode?: boolean;
-  use_tool_search_mode?: boolean;
   cache_discount?: number;
   reasoning_tokens?: number;
   input_cost_usd?: number;
@@ -1288,7 +1307,6 @@ export interface OrchestratorAgentStartEvent {
   iteration?: number;
   use_code_execution_mode?: boolean;
   use_learn_code_mode?: boolean;
-  use_tool_search_mode?: boolean;
   system_prompt?: string;
   user_message?: string;
 }
@@ -1313,9 +1331,6 @@ export interface OrchestratorAgentEndEvent {
     [k: string]: string;
   };
   result?: string;
-  structured_response?: {
-    [k: string]: unknown;
-  };
   success?: boolean;
   error?: string;
   duration?: number;
@@ -1402,6 +1417,7 @@ export interface BackgroundAgentCompletedEvent {
   error?: string;
   duration?: string;
   parent_execution_id?: string;
+  execution_kind?: string;
 }
 export interface BackgroundAgentTerminatedEvent {
   timestamp?: string;
@@ -1459,6 +1475,7 @@ export interface AutoNotificationSteeredEvent {
   name?: string;
   status?: string;
   provider?: string;
+  execution_kind?: string;
 }
 export interface StepTokenUsageEvent {
   timestamp?: string;
@@ -1759,61 +1776,6 @@ export interface HumanVerificationResponseEvent {
   response?: string;
   feedback?: string;
   requires_revision?: boolean;
-}
-export interface StructuredOutputStartEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  schema_name?: string;
-  target_type?: string;
-}
-export interface StructuredOutputEndEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  success?: boolean;
-  schema_name?: string;
-  target_type?: string;
-  parsed_output?: string;
-}
-export interface StructuredOutputErrorEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  error?: string;
-  schema_name?: string;
-  target_type?: string;
-  raw_output?: string;
 }
 export interface StreamingStartEvent {
   timestamp?: string;

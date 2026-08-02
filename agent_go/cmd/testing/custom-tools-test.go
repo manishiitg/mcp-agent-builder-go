@@ -107,24 +107,10 @@ This test demonstrates:
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		// modelID is automatically extracted from llmModel
-		agent, err := mcpagent.NewAgent(
-			ctx,
-			llmModel,
-			"configs/mcp_servers_simple.json",     // config path
-			mcpagent.WithServerName("fileserver"), // server name
-			mcpagent.WithMaxTurns(5),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create agent: %w", err)
-		}
-
-		// Now register the weather tool directly with the external agent
-		// This maintains proper encapsulation while allowing custom tool registration
-		agent.RegisterCustomTool(
-			"get_weather",
-			"Get current weather information for a specific location. This tool provides real-time weather data including temperature, humidity, wind speed, pressure, and weather conditions. Use this tool when users ask about weather, temperature, or weather forecasts for any city or location.",
-			map[string]interface{}{
+		weatherDefinition := mcpagent.ToolDefinition{
+			Name:        "get_weather",
+			Description: "Get current weather information for a specific location. This tool provides real-time weather data including temperature, humidity, wind speed, pressure, and weather conditions. Use this tool when users ask about weather, temperature, or weather forecasts for any city or location.",
+			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"location": map[string]interface{}{
@@ -139,7 +125,7 @@ This test demonstrates:
 				},
 				"required": []string{"location"},
 			},
-			func(ctx context.Context, args map[string]interface{}) (string, error) {
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 				location, ok := args["location"].(string)
 				if !ok {
 					return "", fmt.Errorf("location parameter is required for get_weather")
@@ -153,8 +139,12 @@ This test demonstrates:
 				// Call the actual weather tool
 				return weatherTool.Call(ctx, fmt.Sprintf(`{"location": "%s", "units": "%s"}`, location, units))
 			},
-			"test_tools",
-		)
+			DisplayGroup: "test_tools",
+		}
+		agent, err := createTestingAgent(ctx, llmModel, "configs/mcp_servers_simple.json", "fileserver", 5, logger, []mcpagent.ToolDefinition{weatherDefinition})
+		if err != nil {
+			return fmt.Errorf("failed to create agent: %w", err)
+		}
 
 		logger.Info(fmt.Sprintf("✅ Registered weather tool with external agent"))
 
@@ -164,7 +154,7 @@ This test demonstrates:
 		weatherQuestion := "What's the weather like in New York City?"
 		logger.Info(fmt.Sprintf("Testing weather tool with question: %s", weatherQuestion))
 
-		response, err := agent.Ask(ctx, weatherQuestion)
+		response, err := runAgentText(ctx, agent, weatherQuestion)
 		if err != nil {
 			logger.Error(fmt.Sprintf("❌ Weather tool test failed: %v", err), nil)
 			return fmt.Errorf("weather tool test failed: %w", err)
@@ -178,16 +168,15 @@ This test demonstrates:
 		fmt.Printf("📝 Response: %s\n", response)
 
 		// Show agent capabilities
-		toolNames := make([]string, 0, len(agent.Tools))
-		for _, tool := range agent.Tools {
-			if tool.Function != nil {
-				toolNames = append(toolNames, tool.Function.Name)
-			}
+		definition := agent.Definition()
+		toolNames := make([]string, 0, len(definition.Tools))
+		for _, tool := range definition.Tools {
+			toolNames = append(toolNames, tool.Name)
 		}
 		fmt.Printf("\n📊 Available Tools: %v\n", toolNames)
 
 		// Show connected servers
-		serverNames := agent.GetServerNames()
+		serverNames := mcpagent.ReadAgentDiagnostics(agent).ServerNames
 		fmt.Printf("\n🛠️ Connected Servers: %v\n", serverNames)
 
 		// Close the agent

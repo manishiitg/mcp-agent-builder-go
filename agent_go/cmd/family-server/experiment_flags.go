@@ -9,7 +9,7 @@ import (
 
 // experimentCodingAgentTransport lets a one-off run A/B the two coding-agent
 // process transports (see agentsession.Config.Transport /
-// mcpagent.WithCodingAgentTransport) without a code change on either side:
+// mcpagent.RuntimeConfig.Coding.Transport) without a code change on either side:
 // set FAMILY_CODING_TRANSPORT=structured before starting family-server to run
 // every turn (parent and child both) over the CLI's one-shot JSON mode
 // instead of the default tmux pane. Empty/unset/anything else keeps the

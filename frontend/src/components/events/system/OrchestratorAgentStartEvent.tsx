@@ -166,21 +166,25 @@ export const OrchestratorAgentStartEventDisplay: React.FC<OrchestratorAgentStart
 
   const getAgentColor = () => {
     if (isMessageSequenceItem) return 'slate'
-    if (isWorkflowStepExecution) return 'cyan'
+    if (isWorkflowStepExecution) return 'slate'
     if (isEvaluationAgent) return 'blue'
-    if (agentType === 'workshop-step-execution') return 'cyan'
+    if (agentType === 'workshop-step-execution') return 'slate'
     if (agentType === 'workshop-step-learning') return 'amber'
     if (agentType === 'workshop-step-debug') return 'orange'
     if (agentType === 'workshop-background-task') return 'slate'
-    if (agentType === 'todo_planner_execution') return 'purple'
-    if (agentType === 'generic_execution') return 'purple'
+    if (agentType === 'todo_planner_execution') return 'slate'
+    if (agentType === 'generic_execution') return 'slate'
     if (agentType === 'todo_task_orchestrator') return 'indigo'
     if (agentType === 'plan_breakdown') return 'emerald'
     if (agentType === 'planning') return 'blue'
     if (agentType === 'execution') return 'purple'
     if (agentType === 'validation') return 'emerald'
     if (agentType === 'organizer') return 'orange'
-    return 'yellow'
+    // Ordinary work uses one neutral task-card treatment regardless of
+    // whether it was launched as a workflow step or a background sub-agent.
+    // Colour remains reserved for meaningful roles such as evaluation,
+    // learning, and repair rather than transport/runtime differences.
+    return 'slate'
   }
 
   const agentColor = getAgentColor();

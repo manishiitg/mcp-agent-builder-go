@@ -640,6 +640,79 @@ func validatePulseDashboardArtifact(ctx context.Context, workspacePath, pulseRun
 	if err := validatePulseImproveHTMLContract(html); err != nil {
 		return fmt.Errorf("Pulse Dashboard wrote an outdated builder/improve.html: %w", err)
 	}
+	if err := validatePulseDashboardFindingCounts(ctx, workspacePath, html); err != nil {
+		return fmt.Errorf("Pulse Dashboard wrote stale Current work counts: %w", err)
+	}
+	return nil
+}
+
+func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, content string) error {
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return fmt.Errorf("read finding backlog: %w", err)
+	}
+	expected := map[string]int{"open": 0, "in_progress": 0, "in_review": 0}
+	issueStatuses := make(map[string]string, len(findings))
+	for _, finding := range findings {
+		issueStatuses[finding.Issue.ID] = finding.Issue.Status
+		switch finding.Issue.Status {
+		case "in_progress":
+			expected["in_progress"]++
+		case "in_review":
+			expected["in_review"]++
+		case "backlog", "blocked", "needs_input":
+			expected["open"]++
+		}
+	}
+	document, err := htmlpkg.Parse(strings.NewReader(content))
+	if err != nil {
+		return fmt.Errorf("parse HTML: %w", err)
+	}
+	workSummary, err := requireSinglePulseElement(document, "worksummary", "Current work summary")
+	if err != nil {
+		return err
+	}
+	for _, stat := range pulseElementsWithClass(workSummary, "workstat") {
+		status := strings.TrimSpace(pulseHTMLAttribute(stat, "data-status"))
+		want, known := expected[status]
+		if !known {
+			continue
+		}
+		got, parseErr := strconv.Atoi(strings.TrimSpace(pulseHTMLAttribute(stat, "data-count")))
+		if parseErr != nil {
+			return fmt.Errorf("parse %s count: %w", status, parseErr)
+		}
+		if got != want {
+			return fmt.Errorf("%s count is %d; SQLite has %d", status, got, want)
+		}
+	}
+	for _, queue := range pulseElementsWithClass(workSummary, "workqueue") {
+		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
+		items := pulseElementsWithClass(queue, "workitem")
+		expectedItems := expected["in_review"]
+		if queueName == "attention" {
+			expectedItems = expected["open"] + expected["in_progress"]
+		}
+		if expectedItems > 0 && len(items) == 0 {
+			return fmt.Errorf("%s queue is empty; SQLite has %d matching issues", queueName, expectedItems)
+		}
+		if expectedItems == 0 && len(items) > 0 {
+			return fmt.Errorf("%s queue has items; SQLite has none", queueName)
+		}
+		for _, item := range items {
+			issueID := strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id"))
+			status, exists := issueStatuses[issueID]
+			if !exists {
+				return fmt.Errorf("%s queue references unknown issue %q", queueName, issueID)
+			}
+			if queueName == "verification" && status != "in_review" {
+				return fmt.Errorf("verification queue issue %q has SQLite status %q", issueID, status)
+			}
+			if queueName == "attention" && status != "backlog" && status != "blocked" && status != "needs_input" && status != "in_progress" {
+				return fmt.Errorf("attention queue issue %q has SQLite status %q", issueID, status)
+			}
+		}
+	}
 	return nil
 }
 
@@ -780,6 +853,76 @@ func validatePulseImproveHTMLContract(content string) error {
 		seenBrief[label] = true
 	}
 
+	workSummary, err := requireSinglePulseElement(document, "worksummary", "Current work summary")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(pulseHTMLAttribute(workSummary, "data-source")) != "sqlite" {
+		return fmt.Errorf("Current work must declare data-source=\"sqlite\"")
+	}
+	workStats := pulseElementsWithClass(workSummary, "workstat")
+	expectedWorkStats := map[string]bool{"open": true, "in_progress": true, "in_review": true}
+	if len(workStats) != len(expectedWorkStats) {
+		return fmt.Errorf("Current work must contain exactly %d status counts (found %d)", len(expectedWorkStats), len(workStats))
+	}
+	seenWorkStats := make(map[string]bool, len(workStats))
+	for _, stat := range workStats {
+		status := strings.TrimSpace(pulseHTMLAttribute(stat, "data-status"))
+		if !expectedWorkStats[status] {
+			return fmt.Errorf("Current work contains unknown data-status %q", status)
+		}
+		if seenWorkStats[status] {
+			return fmt.Errorf("Current work contains duplicate data-status %q", status)
+		}
+		seenWorkStats[status] = true
+		countText := strings.TrimSpace(pulseHTMLAttribute(stat, "data-count"))
+		count, parseErr := strconv.Atoi(countText)
+		if parseErr != nil || count < 0 {
+			return fmt.Errorf("Current work data-status %q must have a non-negative data-count", status)
+		}
+		visibleCounts := pulseDirectChildrenByTag(stat, "b")
+		if len(visibleCounts) != 1 || strings.TrimSpace(pulseHTMLText(visibleCounts[0])) != countText {
+			return fmt.Errorf("Current work data-status %q visible count must match data-count", status)
+		}
+	}
+	workQueues := pulseElementsWithClass(workSummary, "workqueue")
+	expectedQueues := map[string]bool{"attention": true, "verification": true}
+	if len(workQueues) != len(expectedQueues) {
+		return fmt.Errorf("Current work must contain exactly %d queues (found %d)", len(expectedQueues), len(workQueues))
+	}
+	seenQueues := make(map[string]bool, len(workQueues))
+	for _, queue := range workQueues {
+		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
+		if !expectedQueues[queueName] {
+			return fmt.Errorf("Current work contains unknown data-queue %q", queueName)
+		}
+		if seenQueues[queueName] {
+			return fmt.Errorf("Current work contains duplicate data-queue %q", queueName)
+		}
+		seenQueues[queueName] = true
+		items := pulseElementsWithClass(queue, "workitem")
+		if len(items) > 3 {
+			return fmt.Errorf("Current work queue %q must contain at most 3 items", queueName)
+		}
+		for _, item := range items {
+			if strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id")) == "" {
+				return fmt.Errorf("Current work queue %q item is missing data-issue-id", queueName)
+			}
+			titles := pulseDirectChildrenByTag(item, "b")
+			if len(titles) != 1 || strings.TrimSpace(pulseHTMLText(titles[0])) == "" {
+				return fmt.Errorf("Current work queue %q item must have one short title", queueName)
+			}
+		}
+	}
+	if len(pulseElementsWithClass(document, "modfields")) > 0 || len(pulseElementsWithClass(document, "agentlog")) > 0 {
+		return fmt.Errorf("Current Pulse report must not contain reviewer field dumps or a visible Agent log")
+	}
+	for _, entry := range pulseElementsWithClass(document, "entry") {
+		if pulseHTMLHasClass(entry, "open") {
+			return fmt.Errorf("Current Pulse report must not keep standing open-finding cards in Activity")
+		}
+	}
+
 	technical, err := requireSinglePulseElement(document, "technical", "collapsed technical details")
 	if err != nil {
 		return err
@@ -787,8 +930,8 @@ func validatePulseImproveHTMLContract(content string) error {
 	if technical.Data != "details" {
 		return fmt.Errorf(".technical must be a details element")
 	}
-	if technical.Parent == nil || technical.Parent != brief.Parent {
-		return fmt.Errorf("Today's outcome and technical details must be sibling sections")
+	if technical.Parent == nil || technical.Parent != brief.Parent || workSummary.Parent != brief.Parent {
+		return fmt.Errorf("Today's outcome, Current work, and technical details must be sibling sections")
 	}
 	if len(pulseDirectChildrenByTag(technical, "summary")) != 1 {
 		return fmt.Errorf("technical details must contain exactly one direct summary")
@@ -933,6 +1076,15 @@ func pulseHTMLAttribute(node *htmlpkg.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func pulseHTMLHasClass(node *htmlpkg.Node, className string) bool {
+	for _, class := range strings.Fields(pulseHTMLAttribute(node, "class")) {
+		if class == className {
+			return true
+		}
+	}
+	return false
 }
 
 func pulseDirectChildrenWithClass(root *htmlpkg.Node, className string) []*htmlpkg.Node {
@@ -1614,7 +1766,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "mark_pulse_module_result",
-			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required. A fixed_verified finding needs a started attempt plus only passed post-change checks. changed_unverified needs an inconclusive check and remains open awaiting future evidence. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for attempt/finding/run linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
+			Description: "Mark a selected Pulse module as done, changed, blocked, failed, or skipped after its module review and Pulse Fixer work complete. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required. A fixed_verified finding needs a started attempt plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run; use it instead of blocked, which means no action is available at all. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for attempt/finding/run linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1638,7 +1790,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 								"fingerprint":      map[string]interface{}{"type": "string", "description": "Internal fingerprint from the selected backlog item; use the same pair passed to start_pulse_fix_attempt."},
 								"finding_id":       map[string]interface{}{"type": "string", "description": "Selected backlog item issue.id; use the same pair passed to start_pulse_fix_attempt."},
 								"attempt_id":       map[string]interface{}{"type": "string", "description": "Required for fixed_verified and changed_unverified."},
-								"disposition":      map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "blocked", "external_action_required", "failed", "rejected"}},
+								"disposition":      map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "awaiting_run", "blocked", "external_action_required", "failed", "rejected"}},
 								"summary":          map[string]interface{}{"type": "string"},
 								"changed_files":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 								"before_refs":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
@@ -1647,6 +1799,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 								"external_owner":   map[string]interface{}{"type": "string", "enum": []string{"platform", "user", "vendor", "workflow_owner"}, "description": "Required for external_action_required."},
 								"reason_code":      map[string]interface{}{"type": "string", "description": "Required stable reason such as missing_platform_tool, permission_boundary, vendor_issue, policy, or accepted_risk."},
 								"reopen_condition": map[string]interface{}{"type": "string", "description": "Required evidence/capability/user boundary that makes this actionable again."},
+								"human_input_id":   map[string]interface{}{"type": "string", "description": "Required for awaiting_user: the id returned by create_human_input_request for the decision this finding is waiting on. The request must exist and still be pending, so the operator has something real to answer."},
 								"verification": map[string]interface{}{
 									"type": "array",
 									"items": map[string]interface{}{
@@ -1866,6 +2019,15 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			if err != nil {
 				return "", err
 			}
+			reviewerVerifications, err := step_based_workflow.LoadPulseReviewVerificationsForPulseRun(
+				ctx, workspacePath, pulseRunID, module,
+			)
+			if err != nil {
+				return "", fmt.Errorf("load structured reviewer verifications: %w", err)
+			}
+			if err := validateReviewerVerificationDispositions(reviewerVerifications, dispositions); err != nil {
+				return "", err
+			}
 			if strings.EqualFold(strings.TrimSpace(result), "changed") {
 				if len(audit.ChangedFiles) == 0 {
 					return "", fmt.Errorf("changed_files is required when result=changed")
@@ -1997,6 +2159,47 @@ func pulseFindingDispositionsFromToolArg(raw interface{}) ([]step_based_workflow
 		dispositions[index] = step_based_workflow.NormalizePulseFindingDisposition(dispositions[index])
 	}
 	return dispositions, nil
+}
+
+func validateReviewerVerificationDispositions(
+	reviews []step_based_workflow.PulseReviewVerificationResult,
+	dispositions []step_based_workflow.PulseFindingDisposition,
+) error {
+	for _, review := range reviews {
+		var matched *step_based_workflow.PulseFindingDisposition
+		for index := range dispositions {
+			candidate := &dispositions[index]
+			if candidate.FindingID == review.FindingID && candidate.Fingerprint == review.Fingerprint && candidate.AttemptID == review.AttemptID {
+				matched = candidate
+				break
+			}
+		}
+		if matched == nil {
+			return fmt.Errorf("reviewer verification for finding %q attempt %q requires a matching finding_disposition before the module can be terminal", review.FindingID, review.AttemptID)
+		}
+		wantDisposition := map[string]string{
+			step_based_workflow.VerificationPassed:       step_based_workflow.FindingDispositionFixedVerified,
+			step_based_workflow.VerificationFailed:       step_based_workflow.FindingDispositionFailed,
+			step_based_workflow.VerificationInconclusive: step_based_workflow.FindingDispositionChangedUnverified,
+		}[review.Verdict]
+		if matched.Disposition != wantDisposition {
+			return fmt.Errorf("reviewer verification %s for finding %q requires disposition %q, got %q", review.Verdict, review.FindingID, wantDisposition, matched.Disposition)
+		}
+		verificationMatched := false
+		for _, proof := range matched.Verification {
+			if proof.Verdict == review.Verdict && strings.TrimSpace(proof.Expected) == review.Expected && strings.TrimSpace(proof.Observed) == review.Observed {
+				verificationMatched = true
+				break
+			}
+		}
+		if !verificationMatched {
+			return fmt.Errorf("finding %q disposition must carry the reviewer's structured %s proof with identical expected and observed evidence", review.FindingID, review.Verdict)
+		}
+		if review.Verdict == step_based_workflow.VerificationInconclusive && strings.TrimSpace(matched.NextCheck) != review.NextCheck {
+			return fmt.Errorf("finding %q inconclusive disposition next_check must match the reviewer boundary %q", review.FindingID, review.NextCheck)
+		}
+	}
+	return nil
 }
 
 func pulseWorklistDecisionsFromArgs(raw interface{}) ([]PulseWorklistDecision, error) {
