@@ -1349,6 +1349,8 @@ export default function LearningApp() {
   const drawerOpen = true // right side always open
   const threadEndRef = useRef<HTMLDivElement>(null)
   const childThreadEndRef = useRef<HTMLDivElement>(null)
+  const threadScrollRef = useRef<HTMLDivElement>(null)
+  const childThreadScrollRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const childIframeRef = useRef<HTMLIFrameElement>(null)
 
@@ -2817,6 +2819,28 @@ export default function LearningApp() {
   const parentMicStateRef = useRef<MicState>('idle')
   const childMicRef = useRef<MicButtonHandle>(null)
   const childMicStateRef = useRef<MicState>('idle')
+  // Reactive (unlike the refs above) so the auto-scroll effects below can
+  // depend on it — the live listening banner appears the instant recording
+  // starts and needs the thread to scroll down for it right then, not on
+  // the next unrelated re-render.
+  const [parentMicRecording, setParentMicRecording] = useState(false)
+  const [childMicRecording, setChildMicRecording] = useState(false)
+  // The listening banner's reserved space (see .fl-thread:has(...) in
+  // learning-app.css) only grows how far the thread CAN scroll — nothing
+  // scrolls it there on its own. scrollIntoView on the end marker (used
+  // elsewhere for new messages) stops at the marker itself, before that
+  // trailing padding, so it doesn't reach far enough here; scrollTop =
+  // scrollHeight always reaches the true bottom, padding included.
+  useEffect(() => {
+    if (!parentMicRecording) return
+    const el = threadScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [parentMicRecording])
+  useEffect(() => {
+    if (!childMicRecording) return
+    const el = childThreadScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [childMicRecording])
   // The mic's onText callback can be a render or two stale by the time it
   // actually fires (see MicButton's comment on why) — a ref mirror gives the
   // auto-submit path the true latest value without stashing a side effect
@@ -3146,7 +3170,7 @@ export default function LearningApp() {
                 <RefreshCw size={14} /> New update — tap to refresh
               </button>
             )}
-            <div className="fl-thread" aria-label="Parent learning conversation">
+            <div className="fl-thread" aria-label="Parent learning conversation" ref={threadScrollRef}>
               <div className="fl-msg is-agent">
                 <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
                 <div className="fl-msg-col">
@@ -3358,7 +3382,7 @@ export default function LearningApp() {
               </button>
               <MicButton
                 ref={parentMicRef}
-                onStateChange={(s) => { parentMicStateRef.current = s }}
+                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording') }}
                 onText={(text, autoSubmit) => {
                   if (autoSubmit) {
                     const cur = focusInputRef.current
@@ -4285,7 +4309,7 @@ export default function LearningApp() {
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
-              <div className="fl-child-thread" aria-label="Tutor conversation">
+              <div className="fl-child-thread" aria-label="Tutor conversation" ref={childThreadScrollRef}>
                 {childRenderGroups.map((g, gi) => (
                   g.kind === 'photos' ? (
                     <div key={`photos-${gi}`} className="fl-tmsg is-tutor">
@@ -4445,7 +4469,7 @@ export default function LearningApp() {
                 </button>
                 <MicButton
                   ref={childMicRef}
-                  onStateChange={(s) => { childMicStateRef.current = s }}
+                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording') }}
                   onText={(text, autoSubmit) => {
                     if (autoSubmit) {
                       const cur = childInputRef.current
