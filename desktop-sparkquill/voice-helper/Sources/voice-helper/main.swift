@@ -75,6 +75,17 @@ let chunkSize: StreamingChunkSize = {
 let engine = StreamingEouAsrManager(chunkSize: chunkSize)
 var modelsLoaded = false
 
+// Second stage. The streaming EOU models emit no punctuation at any chunk size
+// (measured — see the refactor doc), which is fine for a live preview that is
+// allowed to revise itself, but not for the message the user actually sends.
+// parakeet-tdt-0.6b-v2 is the same model family as the MLX checkpoint currently
+// in use, which does punctuate, and runs ~120x realtime — so the committed text
+// can be both punctuated and fast.
+let batch = UnifiedAsrManager()
+var batchLoaded = false
+/// Every sample seen since `start`, for the batch pass to re-read on finish.
+var utterance: [Float] = []
+
 // Go waits for this exact line on stderr before sending any request — the
 // signal that setup finished, kept distinct from stdout (which carries only
 // JSON responses, and would be corrupted by anything else landing on it).
@@ -100,10 +111,15 @@ while let line = readLine(strippingNewline: true) {
                 try await engine.loadModels()
                 modelsLoaded = true
             }
+            if !batchLoaded {
+                try await batch.loadModels()
+                batchLoaded = true
+            }
             emit(["status": "ok"])
 
         case "start":
             await engine.reset()
+            utterance.removeAll(keepingCapacity: true)
             emit(["status": "ok"])
 
         case "audio":
@@ -115,15 +131,26 @@ while let line = readLine(strippingNewline: true) {
             }
             let samples = raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
             if !samples.isEmpty, let buffer = makeBuffer(samples) {
+                utterance.append(contentsOf: samples)
                 try await engine.appendAudio(buffer)
                 try await engine.processBufferedAudio()
             }
             emit(["partial": await engine.getPartialTranscript()])
 
         case "finish":
-            let text = try await engine.finish()
+            // Streaming state is flushed regardless (cheap, and it must be
+            // reset for the next utterance), but the batch pass over the whole
+            // utterance is what gets returned as the committed text.
+            let streamed = try await engine.finish()
             await engine.reset()
-            emit(["text": text, "final": true])
+            var response: [String: Any] = ["streamed": streamed, "final": true]
+            if batchLoaded, !utterance.isEmpty {
+                response["text"] = try await batch.transcribe(utterance)
+            } else {
+                response["text"] = streamed
+            }
+            utterance.removeAll(keepingCapacity: true)
+            emit(response)
 
         default:
             emit(["error": "unknown cmd \(cmd)"])

@@ -148,13 +148,32 @@ models, not a chunk-size tradeoff, so there is nothing to tune here.
 `Documentation/ASR/PostProcessing.md` does not address it either: that is
 Inverse Text Normalization (numbers, dates, currency), not punctuation.
 
-Capitalization has been confirmed acceptable for this product. Punctuation is
-the open decision, and there is an obvious way out that costs nothing already
-decided: **stream for the live preview, batch for the final text.** The preview
-is explicitly allowed to revise itself, so unpunctuated live text is fine; the
-committed message can come from a punctuating model. This also matches a choice
-already made independently — that the final transcription should always be a
-full, accurate pass rather than a reused preview.
+### Resolved: two-stage, and it is strictly better than today
+
+Punctuation is **solved**, not traded away. The helper now runs two models:
+`StreamingEouAsrManager` for the live preview, and `UnifiedAsrManager`
+(parakeet-tdt-0.6b-v2, the same family as the MLX checkpoint in use today) for
+the committed text. Measured on the same padded clip:
+
+| | Output |
+|---|---|
+| Live preview (streaming) | `the quick brown fox jumps over the lazy dog photosynthesis is how plants…` |
+| **Committed (batch, 102ms)** | `The quick brown fox jumps over the lazy dog. Photosynthesis is how plants make their own food using sunlight, water and carbon dioxide` |
+
+Capitalization, sentence-final period, and an interior comma — all present. So
+the committed message is **no worse than today's text and ~12–24x faster**
+(102ms against 1.2–2.4s), while the preview is effectively instant. There is no
+remaining quality argument against this path; the earlier "not viable for the
+composer" conclusion is withdrawn.
+
+Unpunctuated live text is fine because the preview is explicitly allowed to
+revise itself, and this shape matches a product decision already taken
+independently: the final transcription should always be a full accurate pass
+rather than a reused preview.
+
+Note the API in `Documentation/ASR/GettingStarted.md` is stale against v0.15.5
+(`AsrManager.initialize`/`transcribe(_:source:)` do not exist). `UnifiedAsrManager`
+— `loadModels()` then `transcribe([Float]) -> String` — is the current surface.
 
 A cold-start cliff remains: the first `audio` call after load took 3.6s (JIT),
 so the helper needs the same pre-warm the Python path already does via
