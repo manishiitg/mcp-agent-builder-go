@@ -69,7 +69,7 @@ const WARMING_UP_AFTER_MISSES = 2
  * onText, on stop) always re-transcribes the complete recording once more
  * for the authoritative version.
  */
-export function useMicDictation(onText: (text: string) => void, tier?: string) {
+export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => void, tier?: string) {
   const [state, setState] = useState<MicState>('idle')
   const [level, setLevel] = useState(0)
   const [liveText, setLiveText] = useState('')
@@ -107,6 +107,10 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
   // stop() has already torn everything down (its in-flight call can still
   // resolve after teardown clears the pending timer).
   const recordingActiveRef = useRef(false)
+  // Set right before stop() by stopAndSubmit() — read once in onstop below,
+  // then reset, so a plain stop() (mic button click) still just inserts the
+  // text as before and only the Enter-triggered path submits it directly.
+  const autoSubmitRef = useRef(false)
 
   // Everything the browser handed us has to be torn down explicitly: leaving
   // the MediaStream open keeps the OS mic indicator lit, which reads as "this
@@ -249,7 +253,9 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
         // for testing, but the live preview always used the auto-selected
         // one, so reusing it here would silently test the wrong model.
         if (!tier && finalChunkCount === lastPreviewChunkCountRef.current && lastPreviewTextRef.current) {
-          onText(lastPreviewTextRef.current)
+          const autoSubmit = autoSubmitRef.current
+          autoSubmitRef.current = false
+          onText(lastPreviewTextRef.current, autoSubmit)
           setState('idle')
           setLiveText('')
           return
@@ -266,8 +272,11 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
           const res = await fetch(`${FAMILY_API}/api/voice/transcribe`, { method: 'POST', body: form })
           const data = await res.json()
           if (!res.ok) throw new Error(data?.error || `transcribe failed: ${res.status}`)
-          if (data.text?.trim()) onText(data.text.trim())
+          const autoSubmit = autoSubmitRef.current
+          autoSubmitRef.current = false
+          if (data.text?.trim()) onText(data.text.trim(), autoSubmit)
         } catch (err) {
+          autoSubmitRef.current = false
           setError(err instanceof Error ? err.message : 'Could not transcribe that')
         } finally {
           setState('idle')
@@ -310,5 +319,16 @@ export function useMicDictation(onText: (text: string) => void, tier?: string) {
 
   const toggle = () => { if (state === 'recording') stop(); else if (state === 'idle') start() }
 
-  return { state, level, liveText, warmingUp, error, toggle, clearError: () => setError(null) }
+  // Enter, pressed while recording: stop, transcribe, and send directly —
+  // one keypress instead of Enter-to-transcribe then a second Enter-to-send
+  // (which also re-runs nothing extra; the final transcribe already only
+  // happens once per stop() either way, this just decides what onText does
+  // with the result).
+  const stopAndSubmit = () => {
+    if (state !== 'recording') return
+    autoSubmitRef.current = true
+    stop()
+  }
+
+  return { state, level, liveText, warmingUp, error, toggle, stopAndSubmit, clearError: () => setError(null) }
 }

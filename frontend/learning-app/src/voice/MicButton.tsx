@@ -1,6 +1,11 @@
-import { useEffect } from 'react'
+import { forwardRef, useEffect, useImperativeHandle } from 'react'
 import { Mic, Square, Loader2 } from 'lucide-react'
-import { useMicDictation } from './useMicDictation'
+import { useMicDictation, type MicState } from './useMicDictation'
+
+export type MicButtonHandle = {
+  /** No-op unless currently recording — see useMicDictation's stopAndSubmit. */
+  stopAndSubmit: () => void
+}
 
 /**
  * Mic button for a composer. Same control in parent and child chat, so it's
@@ -13,17 +18,23 @@ import { useMicDictation } from './useMicDictation'
  * Keyboard: the shortcut is owned here rather than by each composer, so both
  * chats get it automatically and can't drift apart.
  */
-export function MicButton({
+export const MicButton = forwardRef(function MicButton({
   onText,
   disabled,
   shortcutEnabled = true,
+  onStateChange,
 }: {
-  onText: (text: string) => void
+  onText: (text: string, autoSubmit?: boolean) => void
   disabled?: boolean
   /** Only the visible composer should own the global shortcut. */
   shortcutEnabled?: boolean
-}) {
-  const { state, level, liveText, warmingUp, error, toggle, clearError } = useMicDictation(onText)
+  /** Lets the composer know when Enter should stop+submit instead of send. */
+  onStateChange?: (state: MicState) => void
+}, ref: React.ForwardedRef<MicButtonHandle>) {
+  const { state, level, liveText, warmingUp, error, toggle, stopAndSubmit, clearError } = useMicDictation(onText)
+
+  useEffect(() => { onStateChange?.(state) }, [state, onStateChange])
+  useImperativeHandle(ref, () => ({ stopAndSubmit }), [stopAndSubmit])
 
   // Cmd/Ctrl+Shift+M — deliberately not a bare key: a child typing an answer
   // must never trigger recording by accident.
@@ -85,4 +96,4 @@ export function MicButton({
       )}
     </span>
   )
-}
+})
