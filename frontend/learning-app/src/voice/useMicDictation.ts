@@ -1,5 +1,13 @@
 import { useRef, useState } from 'react'
 import { FAMILY_API } from '../apiBase'
+import {
+  PCM_SAMPLE_RATE,
+  nativeStreamChunk,
+  nativeStreamFinish,
+  nativeStreamStart,
+  startPcmCapture,
+  type PcmCapture,
+} from './nativePcm'
 
 export type MicState = 'idle' | 'recording' | 'transcribing'
 
@@ -112,11 +120,27 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
   // text as before and only the Enter-triggered path submits it directly.
   const autoSubmitRef = useRef(false)
 
+  // --- native streaming path (see nativePcm.ts) ----------------------------
+  // Active only when the server reports the helper is available; everything
+  // below falls back to the MediaRecorder path otherwise, so a machine without
+  // it behaves exactly as before.
+  const nativeRef = useRef(false)
+  const pcmRef = useRef<PcmCapture | null>(null)
+  /** Chunks awaiting upload. Never dropped — the committed transcript is a
+   *  batch pass over the whole utterance, so losing audio would corrupt it. */
+  const pcmQueueRef = useRef<Float32Array[]>([])
+  /** Resolves when the queue has fully drained; awaited before finishing. */
+  const pumpRef = useRef<Promise<void> | null>(null)
+
   // Everything the browser handed us has to be torn down explicitly: leaving
   // the MediaStream open keeps the OS mic indicator lit, which reads as "this
   // app is still listening to me" long after it stopped.
   const teardown = () => {
     recordingActiveRef.current = false
+    // Native capture holds its own worklet/source nodes on the context this
+    // is about to close; disconnect them first.
+    pcmRef.current?.stop()
+    pcmRef.current = null
     if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
     if (previewTimerRef.current !== null) { window.clearTimeout(previewTimerRef.current); previewTimerRef.current = null }
     streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -175,7 +199,58 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
     if (previewMissStreakRef.current >= WARMING_UP_AFTER_MISSES) setWarmingUp(true)
   }
 
+  // Uploads queued chunks strictly in order, one at a time. Order matters:
+  // the helper appends each chunk to a live decoder, so out-of-order or
+  // concurrent delivery would scramble the utterance.
+  const pumpQueue = async () => {
+    while (pcmQueueRef.current.length > 0) {
+      const next = pcmQueueRef.current.shift()
+      if (!next) break
+      const partial = await nativeStreamChunk(next)
+      if (partial) {
+        setLiveText(partial)
+        previewMissStreakRef.current = 0
+        setWarmingUp(false)
+      }
+    }
+  }
+
+  const enqueueChunk = (pcm: Float32Array) => {
+    pcmQueueRef.current.push(pcm)
+    if (!pumpRef.current) {
+      pumpRef.current = pumpQueue().finally(() => { pumpRef.current = null })
+    }
+  }
+
+  const stopNative = async () => {
+    pcmRef.current?.stop()
+    pcmRef.current = null
+    teardown()
+    setState('transcribing')
+    const autoSubmit = autoSubmitRef.current
+    autoSubmitRef.current = false
+    try {
+      // Every chunk must land before finishing, or the batch pass transcribes
+      // a truncated utterance.
+      await pumpRef.current
+      await pumpQueue()
+      const text = await nativeStreamFinish()
+      if (text.trim()) onText(text.trim(), autoSubmit)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not transcribe that')
+    } finally {
+      nativeRef.current = false
+      pcmQueueRef.current = []
+      setState('idle')
+      setLiveText('')
+    }
+  }
+
   const stop = () => {
+    if (nativeRef.current) {
+      void stopNative()
+      return
+    }
     const rec = recorderRef.current
     if (rec && rec.state !== 'inactive') rec.stop() // onstop does the transcribe
     else { teardown(); setState('idle') }
@@ -189,11 +264,21 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
     lastPreviewTextRef.current = ''
     previewMissStreakRef.current = 0
 
-    // Fire-and-forget: if the worker unloaded from 15 minutes idle (see
-    // voice_worker.go), this overlaps its cold-start model-load with the
-    // parent already talking, instead of that cost landing invisibly on
-    // whichever live-preview tick happens to be first.
-    fetch(`${FAMILY_API}/api/voice/warm`, { method: 'POST' }).catch(() => {})
+    // `tier` forces a specific MLX model for per-tier testing in Settings, so
+    // it must stay on the Python path — the native helper runs its own models.
+    // A 503 here means no helper on this machine; fall back silently.
+    nativeRef.current = !tier && (await nativeStreamStart())
+    pcmQueueRef.current = []
+    pumpRef.current = null
+
+    if (!nativeRef.current) {
+      // Fire-and-forget: if the worker unloaded from 15 minutes idle (see
+      // voice_worker.go), this overlaps its cold-start model-load with the
+      // parent already talking, instead of that cost landing invisibly on
+      // whichever live-preview tick happens to be first. The native path does
+      // its own loading inside /stream/start above.
+      fetch(`${FAMILY_API}/api/voice/warm`, { method: 'POST' }).catch(() => {})
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -202,7 +287,10 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
       // Live level meter — also used to notice a natural pause and refresh
       // the preview right then (see PAUSE_DETECT_MS). Never stops the
       // recording — only the parent does that.
-      const ctx = new AudioContext()
+      // 16kHz for the native path so the worklet emits exactly what the
+      // helper expects, with no resampling step in between. The level meter
+      // below is unaffected by the rate.
+      const ctx = nativeRef.current ? new AudioContext({ sampleRate: PCM_SAMPLE_RATE }) : new AudioContext()
       audioCtxRef.current = ctx
       const analyser = ctx.createAnalyser()
       analyser.fftSize = 512
@@ -236,6 +324,16 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
+
+      if (nativeRef.current) {
+        // No MediaRecorder, no preview timer, no re-transcribing: chunks are
+        // uploaded as they are captured and the transcript comes back with
+        // each one.
+        pcmRef.current = await startPcmCapture(ctx, stream, enqueueChunk)
+        recordingActiveRef.current = true
+        setState('recording')
+        return
+      }
 
       const rec = new MediaRecorder(stream)
       recorderRef.current = rec

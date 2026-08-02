@@ -1,8 +1,11 @@
 # Native streaming speech-to-text
 
-**Status:** In progress — design agreed, implementation started. Nothing in this
-document describes the shipped system yet; live mic dictation still runs the
-Python/MLX path described under "What exists today".
+**Status:** In progress — end-to-end path implemented, NOT yet verified in the
+running app. The helper, server endpoints, and browser capture are all written
+and build clean, and the helper itself is verified against real speech
+standalone; what has never run is the whole chain inside SparkQuill with a real
+microphone. The Python/MLX path remains the automatic fallback whenever the
+helper binary is absent, so machines without it are unaffected.
 **Date:** 2026-08-02
 **Repositories:** `mcp-agent-builder-go` (SparkQuill: `agent_go/cmd/family-server`,
 `frontend/learning-app`, `desktop-sparkquill`)
@@ -199,11 +202,29 @@ so the helper needs the same pre-warm the Python path already does via
 
 ## Sequencing
 
-The Python path stays fully working until the Swift path is verified. Order:
+The Python path stays fully working until the Swift path is verified.
 
-1. Swift helper + protocol, exercised standalone from the command line.
-2. `voice_worker.go` able to drive it, behind a flag, with the Python path
-   still default.
-3. Frontend AudioWorklet + WebSocket, live preview on the new path.
-4. Accuracy/latency comparison on real audio.
-5. Only then: WhatsApp migration and Python removal.
+1. ~~Swift helper + protocol, exercised standalone.~~ Done; measured above.
+2. ~~`voice_worker.go` able to drive it.~~ Done — `voice_native.go` reuses
+   `voiceWorker` with a different launcher, covered by an opt-in integration
+   test that drives the real process (`SPARKQUILL_VOICE_STREAM_TEST=1`).
+3. ~~Frontend capture on the new path.~~ Done — `nativePcm.ts` (AudioWorklet →
+   raw PCM) and a branch in `useMicDictation`. Three POSTs rather than a
+   WebSocket; see `voice_stream_api.go` for why.
+4. **Next: use it with a real microphone.** Nothing below this line has been
+   exercised in the running app.
+5. Then: accuracy/latency comparison against the Python path on family audio.
+6. Only then: WhatsApp migration and Python removal.
+
+### Known-unverified, in likely-to-bite order
+
+- **Chunk upload keeping up with speech.** Chunks queue and upload strictly in
+  order (never dropped — the batch pass needs the whole utterance). At ~20ms
+  per upload against 160ms of audio there is ~8x headroom, but this has only
+  been reasoned about, not measured under a real recording.
+- **`AudioContext({sampleRate: 16000})`.** Chromium honours it; if a device
+  refuses, the worklet would emit at another rate and the helper would receive
+  mis-timed audio. No resampling guard exists yet.
+- **First-run download inside the app.** `/stream/start` blocks while weights
+  download (~96s measured). The UI shows "Listening" throughout, with no
+  progress — poor, though only once per machine.
