@@ -1565,7 +1565,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_pulse_finding_backlog",
-			Description: "Read the durable SDLC-style Pulse finding backlog from db/db.sqlite, including each finding's current lifecycle state, fix attempts, verification history, stable fingerprint/finding identity, and external-action disposition. Use this after get_pulse_module_state when reviewing, deduplicating, or running /pulse-fixer; never use Dashboard HTML as the source of truth.",
+			Description: "Read the durable SDLC-style Pulse issue backlog from db/db.sqlite, including each compact issue, current lifecycle state, fix attempts, verification history, internal fingerprint, and external-action disposition. issue.id is the stable human-facing finding_id; fingerprint is an internal lifecycle key. A fixer must pass both values from the same backlog item and must never derive sameness from either ID. Use this after get_pulse_module_state when reviewing, deduplicating, or running /pulse-fixer; never use Dashboard HTML as the source of truth.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1581,7 +1581,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "start_pulse_fix_attempt",
-			Description: "Durably start one Pulse Fixer attempt before mutating workflow state. Link every finding to its concern fingerprint from get_pulse_module_state and stable reviewer finding_id. The backend moves those concerns to fixing and returns an idempotent attempt_id. Use that attempt_id in mark_pulse_module_result.finding_dispositions after post-change verification. Never start an attempt for proposal-only, awaiting-user, or rejected findings.",
+			Description: "Durably start one Pulse Fixer attempt before mutating workflow state. For every selected get_pulse_finding_backlog item, pass issue.id as finding_id and the fingerprint from that same item. Do not use the issue ID to decide whether findings are duplicates; semantic reconciliation happens before selection. The backend moves those concerns to fixing and returns an idempotent attempt_id. Use that attempt_id and the same finding_id/fingerprint pair in mark_pulse_module_result.finding_dispositions after post-change verification. Never start an attempt for proposal-only, awaiting-user, or rejected findings.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1597,8 +1597,8 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 							"type":                 "object",
 							"additionalProperties": false,
 							"properties": map[string]interface{}{
-								"fingerprint": map[string]interface{}{"type": "string", "description": "Concern fingerprint from get_pulse_module_state."},
-								"finding_id":  map[string]interface{}{"type": "string", "description": "Stable finding id from the reviewer artifact."},
+								"fingerprint": map[string]interface{}{"type": "string", "description": "Internal lifecycle fingerprint from the selected get_pulse_finding_backlog item."},
+								"finding_id":  map[string]interface{}{"type": "string", "description": "The selected backlog item's issue.id (also returned as finding_id for compatibility)."},
 							},
 							"required": []string{"fingerprint", "finding_id"},
 						},
@@ -1635,8 +1635,8 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 							"type":                 "object",
 							"additionalProperties": false,
 							"properties": map[string]interface{}{
-								"fingerprint":      map[string]interface{}{"type": "string"},
-								"finding_id":       map[string]interface{}{"type": "string"},
+								"fingerprint":      map[string]interface{}{"type": "string", "description": "Internal fingerprint from the selected backlog item; use the same pair passed to start_pulse_fix_attempt."},
+								"finding_id":       map[string]interface{}{"type": "string", "description": "Selected backlog item issue.id; use the same pair passed to start_pulse_fix_attempt."},
 								"attempt_id":       map[string]interface{}{"type": "string", "description": "Required for fixed_verified and changed_unverified."},
 								"disposition":      map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "blocked", "external_action_required", "failed", "rejected"}},
 								"summary":          map[string]interface{}{"type": "string"},
@@ -1796,13 +1796,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// changelog already records every plan-mod call and artifact_review
 			// already stamps the ones that have been reconciled; nothing counted
 			// the remainder, so Gate had to derive it from the files each run.
-			// Record drift on artifacts that have no plan-modification tool
-			// before reading the backlog, so a change made by direct write shows
-			// up in the same changelog Artifact Review reads rather than being
-			// invisible to it.
-			step_based_workflow.RecordCanonicalArtifactDrift(
-				ctx, workspacePath, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
-			)
 			planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
 			// What each reviewer has actually been finding. Without this the choice
 			// between modules is a guess: nothing distinguished a module that keeps
@@ -1847,7 +1840,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{
 				"findings": findings,
 				"total":    len(findings),
-				"note":     "Durable finding, attempt, verification, and disposition history. Match stable target/claim/evidence and reuse existing identity before filing or fixing.",
+				"note":     "Durable issue, attempt, verification, and disposition history. issue.id is the stable finding_id; fingerprint is internal lifecycle plumbing. A fixer passes both from the same item. Match by affected behavior, expected outcome, and observed failure—not either identifier.",
 			})
 			return string(payload), nil
 		},

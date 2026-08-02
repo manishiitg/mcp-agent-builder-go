@@ -1378,6 +1378,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema",
+		"update_evaluation_plan",
 	}
 
 	// Variable & config tools
@@ -1531,7 +1532,7 @@ func filterWorkspaceToolsByName(allTools []llmtypes.Tool, allExecutors map[strin
 		}
 		filteredTools = append(filteredTools, tool)
 		if exec, ok := allExecutors[name]; ok {
-			filteredExecutors[name] = exec
+			filteredExecutors[name] = guardToolOnlyArtifactWrites(name, exec)
 		}
 	}
 
@@ -1601,7 +1602,7 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		// Bounded repair of what a review actually found.
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"update_step_config", "update_validation_schema", "validate_evaluation_plan",
+		"update_step_config", "update_validation_schema", "update_evaluation_plan", "validate_evaluation_plan",
 		"update_variable", "update_workflow_config",
 
 		// Durable finding lifecycle: read the backlog, open an attempt before
@@ -2107,16 +2108,58 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
+	blockedWrites := workshopBlockedWritePaths(workspacePath, writePaths)
+	if len(blockedWrites) > 0 {
+		common.SetSessionFolderGuardBlockedWritePaths(sessionID, blockedWrites)
+	}
 	iwm.controller.grantSessionCDPHostDownloadsReadOnly(sessionID)
 	if workspacePath != "" {
 		common.SetSessionWorkingDir(sessionID, workspacePath)
 	}
 
 	iwm.controller.GetLogger().Info(fmt.Sprintf(
-		"🔒 Workshop tool-agent session %q (%s) — cwd=%q Read=%v Write=%v",
-		sessionID, agentKind, workspacePath, readPaths, writePaths,
+		"🔒 Workshop tool-agent session %q (%s) — cwd=%q Read=%v Write=%v BlockedWrite=%v",
+		sessionID, agentKind, workspacePath, readPaths, writePaths, blockedWrites,
 	))
 	return sessionID
+}
+
+// workshopBlockedWritePaths denies writes to canonical files that must only
+// change through a tool, while leaving the folder around them writable.
+//
+// planning/ gets this for free by not being a write path at all, which is why
+// plan.json has always been tool-only and therefore always recorded in the
+// changelog. evaluation/ cannot use that trick: runs/ lives inside it and eval
+// executions write there constantly, so the whole folder is writable and
+// evaluation_plan.json was caught in the blast radius. It had no tool and no
+// protection, so every edit was a direct write that left no changelog entry —
+// social-media filed AR-20260729-2 three times over it and could not close it,
+// and the workflow still carries the hand-made .bak copies agents left behind
+// before editing it by hand.
+//
+// Reads stay permitted; only writes are denied, and the deny reaches the kernel
+// sandbox (macOS `(deny file-write*)`, Linux read-only bind-mount) so a shell
+// command cannot route around it either.
+func workshopBlockedWritePaths(workspacePath string, writePaths []string) []string {
+	workspacePath = strings.Trim(strings.TrimSpace(workspacePath), "/")
+	if workspacePath == "" {
+		return nil
+	}
+	evaluationRoot := workspacePath + "/evaluation"
+	writable := false
+	for _, path := range writePaths {
+		if strings.Trim(strings.TrimSpace(path), "/") == evaluationRoot {
+			writable = true
+			break
+		}
+	}
+	// Only deny what this session could otherwise write. Adding a deny for a
+	// path already outside the write set would claim protection this function
+	// is not providing.
+	if !writable {
+		return nil
+	}
+	return []string{workspacePath + "/" + evaluationPlanRelPath}
 }
 
 func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSession(config *agents.OrchestratorAgentConfig, agentKind string, readPaths []string, writePaths []string) func() {
