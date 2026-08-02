@@ -68,16 +68,21 @@ or referenced here.
 
 ```
 AudioWorklet (raw PCM 16k mono)
-      │  WebSocket  (audio up)
+      │  POST /api/voice/stream/chunk
       ▼
-family-server  ──stdin (length-prefixed PCM)──▶  voice-helper (Swift)
-      ▲                                                │
-      └──────── SSE/WS partials ◀── JSON lines ────────┘
+family-server  ──stdin (JSON + base64 PCM)──▶  voice-helper (Swift)
+      ▲                                              │
+      └──────── partial in response ◀── JSON lines ──┘
 ```
 
+(The original sketch here used a WebSocket. It was replaced during
+implementation: the audio only crosses loopback to a server on the same
+machine at ~6 chunks/second, so a socket bought nothing and would have added
+framing, a dependency, and its own backpressure failure modes.)
+
 1. **`desktop-sparkquill/voice-helper/`** — SwiftPM executable depending on
-   FluidAudio. Reads length-prefixed PCM frames on stdin, writes JSON lines on
-   stdout. The line protocol deliberately mirrors `voice_worker.py`'s shape so
+   FluidAudio. Reads JSON lines carrying base64 PCM on stdin, writes JSON
+   lines on stdout. The line protocol deliberately mirrors `voice_worker.py`'s shape so
    `voice_worker.go`'s supervision, warm-timeout, and teardown logic carry over
    rather than being rewritten.
 2. **Frontend** — replace the `MediaRecorder` preview path with an
@@ -85,8 +90,9 @@ family-server  ──stdin (length-prefixed PCM)──▶  voice-helper (Swift)
    problem that makes incremental decode impossible today: chunks after the
    first carry no container header, which is exactly why the current code has to
    resend the whole blob every time.
-3. **Server** — a WebSocket endpoint for the upstream audio (SSE is one-way and
-   cannot carry it), piping frames to the helper and streaming partials back.
+3. **Server** — three POST endpoints (`start`/`chunk`/`finish`) in
+   `voice_stream_api.go`, each forwarding to the helper and returning its
+   reply. Every one stays curl-debuggable, like the existing voice endpoints.
 4. **CI** — `swift build -c release --arch arm64` in
    `.github/workflows/sparkquill-desktop.yml`, binary staged into
    `extraResources` beside `family-server`. Swift 6.3.3 is present on the
