@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-// Per-chunk diagnostics are opt-out rather than always-on: one line per 160ms
-// of speech is exactly what's wanted while bringing this path up, and far too
-// much once it's routine. Set SPARKQUILL_VOICE_DEBUG=0 to silence.
-func voiceStreamDebug() bool { return os.Getenv("SPARKQUILL_VOICE_DEBUG") != "0" }
+// Per-chunk diagnostics: one line per 160ms of speech. Invaluable while
+// bringing this path up — it is what identified the frozen-preview bug — and
+// far too noisy now that it works, so opt IN with SPARKQUILL_VOICE_DEBUG=1.
+func voiceStreamDebug() bool { return os.Getenv("SPARKQUILL_VOICE_DEBUG") == "1" }
 
 var voiceChunkSeq atomic.Int64
 

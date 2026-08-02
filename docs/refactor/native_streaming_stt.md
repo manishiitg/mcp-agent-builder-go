@@ -1,11 +1,12 @@
 # Native streaming speech-to-text
 
-**Status:** In progress — end-to-end path implemented, NOT yet verified in the
-running app. The helper, server endpoints, and browser capture are all written
-and build clean, and the helper itself is verified against real speech
-standalone; what has never run is the whole chain inside SparkQuill with a real
-microphone. The Python/MLX path remains the automatic fallback whenever the
-helper binary is absent, so machines without it are unaffected.
+**Status:** Working and confirmed with a real microphone in the running app
+(2026-08-02). Live dictation now uses the native helper end to end: preview
+text appears while speaking, punctuated and identical to the committed text.
+The Python/MLX path remains the automatic fallback whenever the helper binary
+is absent, so machines without it are unaffected — and it is still the only
+path for WhatsApp voice notes, which is what the removal work below depends
+on. Not yet shipped in a release build.
 **Date:** 2026-08-02
 **Repositories:** `mcp-agent-builder-go` (SparkQuill: `agent_go/cmd/family-server`,
 `frontend/learning-app`, `desktop-sparkquill`)
