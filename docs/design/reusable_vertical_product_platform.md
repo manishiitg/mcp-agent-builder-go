@@ -44,10 +44,10 @@ transport/runtime machinery and Family product behavior. Copying this server
 would duplicate them, but extracting them correctly requires separating those
 two responsibilities first.
 
-**The second consumer already exists.** The reuse rule below says to extract only
-after a second real consumer demonstrates the common behavior. That condition is
-already met — not by Social, but by `cmd/server`, which implements the same
-capabilities independently today:
+**A second implementation already exists.** The reuse rule below says to extract
+only after a second real consumer demonstrates common behavior. `cmd/server`
+provides evidence of duplicate capability areas today, although the audit below
+shows that each common primitive still has to be proven rather than assumed:
 
 ```text
 capability   family-server   cmd/server
@@ -146,7 +146,7 @@ This yields a precise confidence statement:
                   agent execution, tools, skills, sessions
                                    |
                     Shared AgentWorks Platform
-        backend runtime + operations + connectors + frontend shell
+       backend runtime + operations + connectors + frontend runtime
                                    |
              +---------------------+---------------------+
              |                     |                     |
@@ -472,9 +472,10 @@ Extract a shared abstraction after a second real consumer demonstrates the
 common behavior. Do not generalize a Family-only, Social-only, or Trading-only
 concept in anticipation of reuse.
 
-For the services named in this document that condition is already satisfied by
-`cmd/server` and `cmd/family-server` — see Evidence. For anything not on that
-list, the rule still binds: wait for the second consumer.
+For the capability areas named in Evidence, `cmd/server` and `cmd/family-server`
+justify investigating extraction. A service enters the platform only after its
+common contract is demonstrated; similar names and line counts are not enough.
+For anything else, wait for the second consumer.
 
 ## Enforcement
 
@@ -586,7 +587,7 @@ supplies no duplication evidence and cannot demonstrate which abstraction is
 genuinely shared. More importantly, its failure modes are categorically different
 from the other products: real money, latency budgets, regulatory retention, and
 irreversible actions. A platform boundary discovered under those constraints is
-discovered expensively. Let Voice and one other product prove the seams first,
+discovered expensively. Let Family and Social prove the seams first,
 then let Trading exercise the approval, audit, and permission boundaries it
 actually needs — which is precisely the case this document already makes for when
 a dedicated application is justified.
@@ -596,7 +597,7 @@ new products from copying the current family-server infrastructure.
 
 ### Scope realism
 
-The eight steps above are written almost entirely about `cmd/family-server`,
+The twelve steps above are written primarily around `cmd/family-server`,
 which is the smallest of the three masses involved:
 
 ```text
@@ -605,8 +606,8 @@ agent_go/cmd/server     89,225 lines
 agent_go/cmd/family-server  11,020 lines
 ```
 
-Steps 1–6 address roughly 4% of the code this architecture claims. Two questions
-are load-bearing and currently unanswered:
+Those steps begin with roughly 4% of the code this architecture ultimately
+touches. Two questions are load-bearing and currently unanswered:
 
 **What becomes of `cmd/server`?** At 89,225 lines it holds the Pulse, scheduler,
 and workflow machinery this document proposes to share, so it is simultaneously
@@ -616,10 +617,13 @@ but no step describes that split. Converting family-server first is the easy
 direction; it proves the boundary on the smaller consumer without proving it can
 carry the bigger one.
 
-**Step 5 is one line for 147,006 lines of frontend.** "Share the frontend chat,
-event, schedule, and Pulse packages" describes a package split of the largest
-mass in the repository. It needs its own sequence, or it will be the step where
-the plan stalls.
+**Frontend extraction needs its own implementation plan.** Step 9 deliberately
+starts with event normalization and headless clients/reducers/hooks, but that is
+still only the boundary for a package split of the largest mass in the
+repository. Do not interpret it as authorization for a broad component move.
+Inventory consumers, pin the normalized contract, extract one state machine at
+a time, and keep both visual applications unchanged until each slice passes its
+conformance tests.
 
 Neither question changes the architecture, which the evidence supports. They
 change the estimate. This is a multi-quarter program, not a restructuring pass,
