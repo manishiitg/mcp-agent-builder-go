@@ -1,10 +1,11 @@
 # mcpagent public API simplification
 
-**Status:** Immutable cutover and planned public-surface reduction complete
+**Status:** Public-surface cutover complete; builder single-construction lifecycle follow-up open
 **Date:** 2026-08-01
 **Last updated:** 2026-08-02
 **Repositories:** `mcpagent`, `mcp-agent-builder-go`
-**Related:** `docs/bugs/custom_tool_category_as_agent_addressing.md`
+**Related:** `docs/bugs/custom_tool_category_as_agent_addressing.md`,
+`docs/bugs/mcp_startup_retry_and_double_construction.md`
 
 ## Implementation status
 
@@ -35,6 +36,18 @@ Completed core boundary:
 - Golden tests pin the exact 45-function inventory and the exact 14-function
   `Agent` facade, as well as the four/five method contracts, zero exported
   `Agent` fields, matching close contracts, and no exported `ForTesting` helper.
+
+Open builder lifecycle follow-up (confirmed 2026-08-02):
+
+- The public API reduction is complete, but `LLMAgentWrapper` still constructs
+  a placeholder `Agent` before chat/delegation definition assembly and replaces
+  it in `FinalizeDefinition`. Builder call sites use
+  `GetUnderlyingAgent() != nil` as a pre-finalization readiness gate, so the
+  intended single immutable construction boundary has not yet landed. With a
+  failing MCP server this repeats the complete startup/retry sequence. See
+  `docs/bugs/mcp_startup_retry_and_double_construction.md`.
+- The public API golden tests do not cover construction count; a builder
+  lifecycle regression test is required before this follow-up can be closed.
 
 Verified on the current working tree (2026-08-02):
 
@@ -612,10 +625,11 @@ The branch-level cutover now has a working end-to-end spine:
   the freeze includes static prompt supplements, cloned skill definitions,
   direct tool executors/schemas, and observers, while replacement retirement
   preserves shared tracers and MCP/provider state;
-- chat and delegation prompt/skill/tool assembly now builds a private
-  `AgentDefinition` draft and constructs one immutable Agent at finalization;
-  runtime `Agent` access is retained only for diagnostics, steering,
-  continuation, and explicit replacement retirement;
+- chat and delegation prompt/skill/tool assembly builds a private
+  `AgentDefinition` draft, but currently also constructs a placeholder Agent
+  before assembly and replaces it at finalization. This is the remaining
+  lifecycle violation tracked in
+  `docs/bugs/mcp_startup_retry_and_double_construction.md`;
 - the gRPC adapter now owns an explicit `Session` and returns response, history,
   usage, and costs from `Result` instead of calling legacy `Ask*`, token getters,
   or raw tool maps; and
@@ -635,13 +649,16 @@ The branch-level cutover now has a working end-to-end spine:
   goroutine-local channels, removing the construction/close race exposed by the
   new definition tests.
 
-The duplicate construction paths are gone: no `LegacyOptions`, exported
+The duplicate *public construction APIs* are gone: no `LegacyOptions`, exported
 `With*`, `DefinitionAssembly`, public legacy constructor, or legacy Tool Search
-mode remains. The remaining 14 Agent-related package functions are exact-listed
-because active production code uses them for context maintenance, diagnostics,
-resume, steering, transport startup, replacement, and the one manual
-virtual-tool test boundary. They are no longer an unbounded compatibility
-surface.
+mode remains. A separate duplicate runtime construction remains inside the
+builder wrapper: it creates a placeholder through `NewAgentFromDefinition`,
+then creates its final replacement through the same canonical constructor. The
+remaining 14 Agent-related package functions are exact-listed because active
+production code uses them for context maintenance, diagnostics, resume,
+steering, transport startup, replacement, and the one manual virtual-tool test
+boundary. They are no longer an unbounded public compatibility surface, but the
+builder lifecycle follow-up must still remove the placeholder construction.
 
 ## Review (2026-08-01)
 

@@ -311,6 +311,22 @@ func ValidateManifest(m *WorkflowManifest) error {
 		seenCDPPorts[port] = true
 	}
 
+	// Hyphen and underscore server names are compatibility aliases throughout
+	// MCP resolution. Reject equivalent duplicates here so a workflow cannot
+	// accidentally launch the same configured server more than once.
+	seenSelectedServers := make(map[string]string, len(m.Capabilities.SelectedServers))
+	for _, serverName := range m.Capabilities.SelectedServers {
+		trimmed := strings.TrimSpace(serverName)
+		if trimmed == "" {
+			return fmt.Errorf("capabilities.selected_servers cannot contain an empty server name")
+		}
+		aliasKey := strings.ReplaceAll(trimmed, "_", "-")
+		if existing, duplicate := seenSelectedServers[aliasKey]; duplicate {
+			return fmt.Errorf("duplicate capabilities.selected_servers entries %q and %q resolve to the same MCP server", existing, serverName)
+		}
+		seenSelectedServers[aliasKey] = serverName
+	}
+
 	// Validate LLM config if present
 	if m.Capabilities.LLMConfig != nil {
 		if err := workflowtypes.ValidatePresetLLMConfigPublic(m.Capabilities.LLMConfig); err != nil {

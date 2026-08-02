@@ -59,5 +59,6 @@ confirm the failure is actually visible — otherwise a fix cannot be verified.
 - [auto_unlock_loop_orchestration.md](auto_unlock_loop_orchestration.md)
 - [dependency_update_failure.md](dependency_update_failure.md)
 - [parallel_tool_lock_contention.md](parallel_tool_lock_contention.md)
+- [mcp_startup_retry_and_double_construction.md](mcp_startup_retry_and_double_construction.md)
 - [uvx_cache_bloat_latest_versions.md](uvx_cache_bloat_latest_versions.md)
 - [workspace_docs_path_inside_repo.md](workspace_docs_path_inside_repo.md)

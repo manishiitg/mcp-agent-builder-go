@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +24,19 @@ func TestValidateManifestCDPPorts(t *testing.T) {
 	manifest.Capabilities.CDPPorts = []int{9222, 9333, 9444, 9555, 9666}
 	if err := ValidateManifest(manifest); err == nil {
 		t.Fatal("more than four CDP ports should be rejected")
+	}
+}
+
+func TestValidateManifestRejectsEquivalentMCPServerAliases(t *testing.T) {
+	manifest := NewWorkflowManifest("Duplicate MCP aliases")
+	manifest.Capabilities.SelectedServers = []string{"google_sheets", "google-sheets"}
+
+	err := ValidateManifest(manifest)
+	if err == nil {
+		t.Fatal("equivalent MCP server aliases should be rejected")
+	}
+	if !strings.Contains(err.Error(), "resolve to the same MCP server") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 
