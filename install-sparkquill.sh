@@ -8,7 +8,7 @@
 # /Applications, clears the quarantine flag, and launches it.
 #
 # Env overrides (used by the in-app updater, and handy for testing):
-#   SPARKQUILL_VERSION    install this tag instead of latest, e.g. v0.2.0
+#   SPARKQUILL_VERSION    install this tag instead of latest, e.g. sparkquill-v0.2.0
 #   SPARKQUILL_DMG_PATH   use an already-downloaded dmg instead of fetching one
 set -euo pipefail
 
@@ -35,10 +35,20 @@ if [ -n "${SPARKQUILL_VERSION:-}" ]; then
   VERSION="$SPARKQUILL_VERSION"
 else
   log "Finding the latest release"
-  # Read the tag out of the /releases/latest redirect — no jq, no API token,
-  # no rate limit to trip over.
-  VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    "https://github.com/$REPO/releases/latest" | sed -E 's|.*/tag/||')"
+  # This repo also ships AgentWorks, which releases far more often — the
+  # plain /releases/latest redirect would almost always resolve to ITS latest
+  # release, not SparkQuill's. SparkQuill releases are tagged sparkquill-v*,
+  # so filter the release list to that prefix and take the newest (the API
+  # returns releases newest-first). No jq dependency: a plain grep/sed on the
+  # JSON is enough for one field, and this is a one-off, unauthenticated call.
+  # Captured to a variable and fed to grep via a here-string rather than a
+  # live pipe: grep -m1 exits right after its first match, and a process
+  # still writing to the read end of a pipe when that happens gets SIGPIPE,
+  # which fails the whole pipeline under `set -o pipefail`. A here-string has
+  # no such concurrent writer.
+  RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases")"
+  VERSION="$(grep -m1 -o '"tag_name": *"sparkquill-v[^"]*"' <<<"$RELEASES_JSON" \
+    | sed -E 's/.*"(sparkquill-v[^"]+)"/\1/')"
   [ -n "$VERSION" ] || die "Could not determine the latest version."
 fi
 log "Installing $APP_NAME $VERSION"
@@ -56,7 +66,7 @@ TMP="$(mktemp -d)"
 cleanup() { [ -n "${MOUNT:-}" ] && hdiutil detach -quiet "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-DMG_NAME="${APP_NAME}-${VERSION#v}-arm64.dmg"
+DMG_NAME="${APP_NAME}-${VERSION#sparkquill-v}-arm64.dmg"
 DMG="$TMP/$DMG_NAME"
 
 if [ -n "${SPARKQUILL_DMG_PATH:-}" ] && [ -s "${SPARKQUILL_DMG_PATH}" ]; then

@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense, type FormEvent, type ChangeEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
+import { visit } from 'unist-util-visit'
+import type { Element as HastElement } from 'hast'
 
 // Lazy-loaded the same way AgentWorks does it — react-syntax-highlighter's
 // language grammars are large, so keep them out of the initial bundle and
@@ -734,14 +738,54 @@ function stabilizeStreamingMarkdown(text: string): string {
   return out.replace(/\n[#>\-*+]+[ \t]*$/, '')
 }
 
+// Markdown has no native color syntax at all, but the model writes raw HTML
+// spans very fluently (it's an extremely common real-world pattern in the
+// GitHub-flavored markdown this kind of model is trained on) — far more
+// natural than inventing a bespoke {color}text{/color} syntax it would only
+// ever use if the prompt keeps reminding it to. rehype-raw parses that raw
+// HTML into real nodes; rehype-sanitize (extended to allow `style` on
+// `span`, which the default schema doesn't) strips anything actually
+// dangerous (script tags, event handlers, iframes, etc.); this schema and
+// the plugin below narrow what survives specifically to color.
+const colorSpanSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    span: [...(defaultSchema.attributes?.span ?? []), 'style'],
+  },
+}
+
+// A style attribute passing rehype-sanitize's schema is still an ARBITRARY
+// CSS declaration list (sanitize only allowlists which ATTRIBUTES exist, not
+// their values) — position/overlay/pointer-events tricks are a real UI-
+// spoofing concern even without script execution. This keeps only a `color`
+// declaration and discards everything else in the same style attribute, so
+// a span can change text color and nothing more.
+function restrictSpanStyleToColor() {
+  return (tree: HastElement) => {
+    visit(tree, 'element', (node: HastElement) => {
+      if (node.tagName !== 'span' || typeof node.properties?.style !== 'string') return
+      const match = /color\s*:\s*([#a-zA-Z0-9(),.\s%]+)/i.exec(node.properties.style)
+      if (match) {
+        node.properties.style = `color: ${match[1].trim()}`
+      } else {
+        delete node.properties.style
+      }
+    })
+  }
+}
+
 // Markdown renders the agent's reply with react-markdown + GFM — the same
 // battle-tested renderer the main AgentWorks frontend uses (handles tables,
 // nested lists, lazy-continuation of terminal-wrapped list items, mermaid
-// diagrams, and syntax-highlighted code, etc.).
+// diagrams, and syntax-highlighted code, etc.). Also allows a narrow,
+// sanitized `<span style="color:...">` for colored text — see
+// colorSpanSchema/restrictSpanStyleToColor above for why and how it's scoped.
 function Markdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, colorSpanSchema], restrictSpanStyleToColor]}
       components={{
         a: ChatLink,
         // The `code` renderer below returns its own fully-formed element for

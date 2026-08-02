@@ -95,6 +95,20 @@ def main():
     sys.stderr.write("WORKER_READY\n")
     sys.stderr.flush()
 
+    # MLX's cache limit defaults to the memory limit (i.e. unbounded) — its
+    # own docs say so plainly. That's fine for a short-lived script, but this
+    # process stays warm for up to voiceWorkerIdleTimeout (15 real minutes,
+    # see voice_worker.go) and can field many calls in that window: every
+    # live-preview tick during a recording (every ~1.2s — see
+    # LIVE_PREVIEW_INTERVAL_MS in useMicDictation.ts) on top of every real
+    # WhatsApp voice note and mic dictation. On Apple Silicon's UNIFIED memory,
+    # MLX's growing cache is the SAME physical RAM everything else on the
+    # machine needs — left unmanaged, a long voice-heavy session can run the
+    # whole system out of memory, not just this process. mx.clear_cache()
+    # after every single request keeps this process's footprint bounded by
+    # "one inference's worth," not "every inference this process has ever run."
+    import mlx.core as mx
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -105,6 +119,8 @@ def main():
                 resp = HANDLERS[req["cmd"]](req)
         except Exception as e:  # noqa: BLE001 - reported to the caller, not swallowed
             resp = {"error": f"{type(e).__name__}: {e}"}
+        finally:
+            mx.clear_cache()
         sys.stdout.write(json.dumps(resp) + "\n")
         sys.stdout.flush()
 
