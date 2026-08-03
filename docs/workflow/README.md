@@ -12,7 +12,8 @@ These docs cover workflow design, execution, and workflow-scoped runtime behavio
 
 ## Files
 
-- `self_improvement_and_reporting.md` — **start here.** System overview of the self-improvement + reporting layer: the Pulse (fix) and Auto-improve (improve) loops, notifications, and the Org dashboard — how workflows self-fix toward their goals and report up so a small team can manage 100+ agents and automations
+- `self_improvement_and_reporting.md` — **start here.** Product overview of the unified Pulse review/fix/goal-improvement system, notifications, and Org dashboard
+- `pulse_consolidation.md` — canonical current Pulse architecture and concise dated decision map; older proposal/review documents are retained as historical evidence
 - `auto_improvement_framework.md` — metric-backed workflow improvement: metrics as evidence, harden/replan decisions, schedules, and audit logs
 - `browser_automation.md` — durable selector and browser-discovery guidance for workflow browser steps
 - `cost_and_log_measurement.md` — token usage, cost files, phase/run aggregation, and log storage

@@ -1,12 +1,31 @@
-# Pulse: post-run pipeline consolidation
+# Pulse: current architecture and decision map
 
-> **Status (2026-07): superseded and evolved.** The June-2026 consolidation below
-> shipped, but Pulse has since moved past the fixed "back up → triage → fix →
-> notify" pipeline described in **Target model**. Read **Current architecture**
-> first; the sections after it are kept as the historical migration record. The
-> canonical, always-current spec is the `post-run-monitor` reference doc
-> (`agent_go/cmd/server/guidance/templates/system/post-run-monitor.md`); this
-> file only explains the shape and why it got here.
+> **Status (2026-08-03): canonical current design and rationale.** Read
+> **Current architecture** and **Current decisions** for the system that should
+> exist now. The sections under **Historical migration record** preserve why the
+> system changed; they are not implementation instructions. Executable agent
+> guidance remains in
+> `agent_go/cmd/server/guidance/templates/system/post-run-monitor.md`, while Go
+> registries and lifecycle validation remain the final runtime authority.
+
+## Documentation ownership
+
+Keep Pulse documentation split by purpose, not by competing versions:
+
+| Question | Authoritative place |
+|---|---|
+| What is the current Pulse design, and why? | This document |
+| What must a running agent do? | `post-run-monitor.md` and the focused skills it loads |
+| What does Go actually permit and persist? | The Pulse module registry, scheduler, worklist, finding lifecycle, and impact-ledger code |
+| What does the user see? | [`workflow_monitoring.md`](./workflow_monitoring.md) |
+| What experiments, objections, and measurements led here? | [`pulse_v2_proof_carrying_architecture.md`](./pulse_v2_proof_carrying_architecture.md) |
+| What was the reliability-first v2.1 experiment? | [`pulse_v2_1_experiment_proposal.md`](./pulse_v2_1_experiment_proposal.md), retained as history |
+| What did one real workflow review cost and produce? | [`linkedin_pulse_review_audit_2026-08-02.md`](./linkedin_pulse_review_audit_2026-08-02.md) and later cross-workflow measurements |
+
+Do not add another general Pulse architecture document. Put a shipped design
+change and its reason in **Current decisions** below; put detailed measurements,
+debate, and rejected alternatives in the proof-carrying architecture record;
+put a concrete defect in `docs/bugs/`.
 
 ## Current architecture (2026-08)
 
@@ -89,10 +108,70 @@ boot sweep reconciles final commands stranded by a crash.
 `knowledgebase/_freshness.json`) records when each store — and each reference
 file / topic note — was last confirmed by a run, stamped by the runtime at the
 learnings/KB contribution turns (not LLM-maintained, so it can't desync). Gate
-marks `stores_health` due on a confirmation-recency
+marks `workflow_review` due for its stores lens on a confirmation-recency
 signal, and the reviewer re-verifies → refreshes / demotes / retires aging
 knowledge (never deletes on age alone). This adds a *time/decay* axis to what was
 previously only contradiction-driven staleness.
+
+## Current decisions
+
+### One operational reviewer, two independent strategic reviewers (2026-08-03)
+
+The former operational modules are lenses inside one native ordered
+`workflow_review` conversation. It collects common evidence once, checks
+correctness and pending verification, plan/artifact drift, reports/evals,
+stores, and LLM/cost/tool/runtime operations, then semantically deduplicates one
+final review. This reduces repeated reads and contradictory duplicate findings
+without collapsing different kinds of reasoning into one prompt.
+
+`strategy_auditor` remains a separate agent because it critiques omissions and
+weaknesses inside the selected strategy. `goal_advisor` remains a separate,
+less-frequent agent because it searches outside the selected strategy for a
+materially better route to the goal. Neither depends on Workflow Review or on
+the other. All due reviewers may run concurrently; the Fixer starts only after
+their shared barrier. Background agents now support native ordered message
+sequences, so Workflow Review keeps one conversation, MCP session, folder guard,
+and isolated working directory across its seven turns.
+
+### One writer and one finding lifecycle (2026-08-01 to 2026-08-03)
+
+There is one consolidated Fixer, not one Fixer per reviewer. Reviewers are
+read-only. The Fixer reconciles semantically duplicate findings, applies bounded
+changes sequentially, and records attempt-scoped proof. SQLite is authoritative
+for findings, attempts, verification, review artifacts, module outcomes, and
+final-command status. `builder/improve.html` is still required, but it is a
+generated user-facing dashboard and publishable time-series artifact, not the
+database for closing or reopening findings. The Pulse popup reads structured
+SQLite projections and exposes raw reviewer Markdown only as supporting detail.
+
+### Verification has two valid timings (2026-08-01)
+
+A deterministic data or logic repair can be verified immediately by replay,
+re-read, or an exercised consumer path. A behavior change that affects a future
+producer remains `changed_unverified` until a later workflow run exercises it.
+On later passes, the relevant review lens checks eligible pending attempts; it
+does not create generic verification markers for unrelated retained findings.
+
+### Measure interventions across later runs (2026-08-03)
+
+Pulse impact is measured at the intervention level, not attributed directly to
+one reviewer. The ledger links reviews and findings to one coherent repair or
+approved experiment, records comparable success-criterion observations on
+later runs, and appends improved/regressed/inconclusive/awaiting assessments.
+Reliability, measurement quality, presentation maintenance, and direct goal
+impact remain separate categories so closing many bugs cannot masquerade as
+goal progress.
+
+### Rejected completed reviews are preserved (2026-08-03)
+
+**Implemented and verified.** Before launching a reviewer, the backend now
+derives an exact verification allowlist from owned `changed_unverified` attempts
+and appends it to the trusted reviewer instructions. A marker outside that list,
+or any malformed marker, cannot reach lifecycle disposition handling. The full
+review is instead retained as a non-actionable `contract_failed` artifact with
+the exact contract error, while valid sibling reviews remain available to the
+Fixer. A stopped Fixer is still not equivalent to a successfully terminal Pulse
+pass; durable module state remains the deciding evidence.
 
 ---
 

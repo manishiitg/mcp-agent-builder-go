@@ -2,8 +2,8 @@
 
 **Start here.** This is the map of how a workflow keeps itself healthy and moving toward
 its goals, and how that work is made visible and steerable for the user. It ties together
-five parts that are otherwise documented separately: **Pulse**, **Auto-improve**, the
-**scheduled step messages**, **notifications**, and the **Org dashboard**. Each section
+five parts that are otherwise documented separately: **Pulse**, its **review and
+fix lifecycle**, **scheduled step evidence**, **notifications**, and the **Org dashboard**. Each section
 links to the detailed doc.
 
 ## Why this is the critical layer — managing at scale
@@ -12,8 +12,9 @@ This is the most important subsystem in the product: it's what makes **100+ agen
 automations manageable** by a small team. Without it, every workflow needs a human watching
 it — which caps you at a handful. With it:
 
-- each workflow **self-heals** (Pulse fixes operational breakage) and **self-improves toward
-  its goal** (Auto-improve), so routine operation needs no human;
+- each workflow **self-heals** operational breakage and **self-improves toward its goal**
+  through Pulse's Workflow Review, Strategy Auditor, Goal Advisor, and Fixer, so routine
+  operation needs no human;
 - the reporting **rolls everything up** so a human manages **by exception** — the dashboard's
   triage bar surfaces only what needs attention, notifications fire only on real transitions
   (broke / recovered / new finding), and big changes wait as **proposals to approve**. You
@@ -34,63 +35,56 @@ automations and running 100+.
 
 Everything below is one of those two jobs, or the substrate that connects them.
 
-## 2. The two loops
+## 2. One Pulse system, three kinds of judgment
 
-Two loops run per workflow. They answer different questions and own different halves of a
-workflow's state.
+There is no separate recurring auto-improve control loop competing with Pulse.
+Gate selects from three independent reviewers: ordered **Workflow Review** asks
+whether the current workflow ran and is built correctly; **Strategy Auditor**
+asks what is missing or ineffective inside the selected strategy; less-frequent
+**Goal Advisor** searches for a materially different route to the goal. Due
+reviewers may run in parallel and never depend on one another's conclusions.
 
-| | **Pulse** | **Auto-improve** |
-|---|---|---|
-| Job | **FIX** — keep it *working* | **IMPROVE** — make it *win* |
-| Axis | 🩺 operational + 💵 spend/time ("does it run right, and did it spend sanely?") | 🎯 goal ("is it achieving its goal?") |
-| Trigger | **after every run** (reactive) | **scheduled** (proactive) |
-| Autonomy | applies low-risk fixes itself (`Pulse Bug Review/Fixer`) | **proposal-only** for big changes (replan); user/builder approve |
-| Statuses | healthy / bug / critical; normal / elevated / missing cost | on-track / at-risk / off-goal |
-| Code | `runPostRunMonitor` / `postRunMonitorSteps` (`scheduler.go`) | `optimizerScheduleMessages` (`scheduler.go`) |
-| Guidance | `post-run-monitor.md`, `optimize-playbook.md` | Goal Advisor guidance selected by Pulse Gate |
-| Detailed doc | `pulse_consolidation.md` | `auto_improvement_framework.md` |
+One Fixer then reconciles their findings and applies only bounded safe changes.
+Consequential strategy changes remain proposals requiring the existing human
+decision flow. One ordered finalizer renders the dashboard, backs up, publishes,
+and notifies. The canonical current topology and its rationale live in
+[`pulse_consolidation.md`](./pulse_consolidation.md).
 
-**Pulse step sequence** (one focused turn per step): triage → fix/harden → artifact review → LLM/cost report
-→ backup → publish → notify.
+"Working but off-goal" remains a normal, important state: operational health and
+goal progress are separate judgments, and a broken run cannot supply trustworthy
+goal evidence.
 
-**Auto-improve step sequence:** pre-backup → improve → final backup → publish → notify.
-The improve turn can also **adjust its own cadence** (run more often while actively
-improving, back off when stable) via `update_workflow_schedule` — see
-`workflow_scheduling.md`.
+## 3. The shared substrate (Pulse memory)
 
-"Working but off-goal" is a normal, important state: Pulse says it runs fine, Auto-improve
-says it isn't moving the goal yet.
-
-## 3. The shared substrate (the loops' memory)
-
-Both loops read and write **`builder/improve.html`** — the per-workflow Pulse/improve log,
-newest-first. It *is* the loop's memory:
+Pulse's durable memory is **SQLite**, including module results, reviews, findings,
+attempts, verification, finalization, interventions, and comparable goal observations.
+`builder/improve.html` is the required generated dashboard and publishable history, not
+the lifecycle database:
 - **Verdict pills** (Bug, Goal), stamped with the run they're as-of.
 - **Goal card** — each success criterion's Met/Short/At-risk + evidence.
 - **Decision cards** — each fix (harden/replan) the loop applied.
-- **Auto-improve major decision cards** — visually distinct decision entries with `Why now`,
+- **Material strategy decision cards** — visually distinct decision entries with `Why now`,
   evidence, change, expected impact, files touched, and remaining risk/gap, so material
   replans/report/eval/cadence changes do not look like routine Pulse notes.
 - **Self-verification** — on a later run the loop *confirms the last unconfirmed Decision*:
   `ok` (cite before→after), `bad` (regressed → reopen a finding), or `flat` (path not hit →
   stays pending). So "I fixed X last run → re-check X" is built in.
-- **Open findings** — anchored ids that persist across runs until a fix closes them.
+- **Open findings** — structured SQLite lifecycle records that persist until attempt-scoped proof closes them.
 - **Human input requests** — structured question cards with status, options/default, and evidence; notifications may point to them, but email is not the source of truth.
 
 See `review-improve-log.md` for the log's structure and the confirm-Decision rules.
 
-Each loop also writes a compact **dashboard card** in the workflow's own workspace, every
-run (overwrite), via current workspace write paths such as `diff_patch_workspace_file`:
-- Pulse final notify/summary step → `builder/card.health.html` (🩺 final post-Pulse status + compact named fields for state/fix/evidence/next, not the full email narrative)
-- Pulse report step → `builder/card.cost.html` (💵 cost/time status + headline/metric)
-- Auto-improve → `builder/card.progress.html` (🎯 status + goal + headline)
+Pulse also maintains compact **dashboard cards** in the workflow workspace:
+- the Dashboard stage overwrites `builder/card.health.html` after module and Fixer outcomes are known;
+- Goal Advisor updates `builder/card.progress.html` only when goal status, its active experiment, or its decision materially changes;
+- `builder/card.cost.html` remains a compatibility surface for workflows that already publish a separate cost card, while current cost/tool/runtime judgment belongs to Workflow Review.
 
 These are served to the UI by `getBuilderDoc(workspace, "card-health"|"card-progress"|"card-cost")`
 (`auto_improvement_endpoints.go`).
 
 ## 4. The reporting / steering surfaces
 
-The same verdicts/Decisions/cards the loops produce while fixing are what surface here —
+The same verdicts, decisions, and cards Pulse produces while reviewing and fixing are what surface here —
 *#2 is #1 seen again*, never a separate analysis.
 
 - **Notifications — `notify_user`** (active, "you need to know this"). Fans out to connected
@@ -115,11 +109,10 @@ also where the user *decides* (approve a replan, act on a recommendation), not j
 
 ## 5. How it fits together
 
-- **One substrate, two uses:** the loops' verdicts/Decisions/cards drive *both* the fixing
+- **One substrate, two uses:** Pulse verdicts, decisions, and cards drive *both* the fixing
   (harden/replan) and the reporting (improve.html → dashboard → notifications).
-- **Cadence:** Pulse runs per-run; Auto-improve runs on a schedule it can self-adjust;
-  Org Pulse runs daily. So the dashboard is fresh per-run (cards), while goal judgment is the
-  CoS's daily call.
+- **Cadence:** Pulse runs after producing workflow runs; Gate chooses which reviewers are
+  due. Goal Advisor is simply the less-frequent blank-sheet module. Org Pulse runs daily.
 - **Ownership (no write contention):** each workflow owns its `improve.html` + cards in its
   own workspace; the CoS owns `pulse/goals.html` + `pulse/org-pulse.html`. The dashboard
   *assembles* at view time — nothing shared is written by two writers.
@@ -129,9 +122,9 @@ also where the user *decides* (approve a replan, act on a recommendation), not j
 | Concern | Code | Doc |
 |---|---|---|
 | Pulse loop | `scheduler.go` (`runPostRunMonitor`, `postRunMonitorSteps`) | `pulse_consolidation.md`, guidance `post-run-monitor.md` |
-| Auto-improve loop | `scheduler.go` (`optimizerScheduleMessages`, `wrapOptimizerImproveMessage`) | `auto_improvement_framework.md`, guidance `optimize-playbook.md` |
-| Self-schedule cadence | `workflow_schedule_tools.go` (`update_workflow_schedule`) | `workflow_scheduling.md` |
-| improve.html log | served via `auto_improvement_endpoints.go` | guidance `review-improve-log.md` |
+| Review selection and ordered execution | Pulse scheduler + module registry | `pulse_consolidation.md`, guidance `pulse-gate.md`, `post-run-monitor.md` |
+| Finding/fix/verification/impact state | Pulse worklist, finding lifecycle, review log, and impact ledger | `pulse_consolidation.md`, `pulse_v2_proof_carrying_architecture.md` |
+| improve.html dashboard | Dashboard stage; served via `auto_improvement_endpoints.go` | guidance `review-improve-log.md` |
 | Dashboard cards | card writes in loop prompts (`scheduler.go`); `getBuilderDoc` card kinds (`auto_improvement_endpoints.go`) | `org_dashboard_design.md` |
 | Notifications | `virtual-tools/human_tools.go` (`notify_user`), `services/gmail_service.go` | (this doc) |
 | Org dashboard UI | `frontend/.../org/OrgDashboard.tsx`, `EmployeeDashboard.tsx`, `OrgHtmlPanels.tsx` | `org_dashboard_design.md` |
@@ -140,7 +133,7 @@ also where the user *decides* (approve a replan, act on a recommendation), not j
 
 ## Open / evolving
 - Dashboard cards are **v1: current status** (rolling trend deferred).
-- Pulse self-verification confirms a Decision **once** when the path is next exercised; a
-  persistent "watch for N runs" list would re-verify over several runs.
-- Auto-improve **can** change its cadence and the hook exists, but the *policy* (exactly when
-  to speed up vs slow down) is light and could be tightened.
+- Attempt-scoped proof eligibility must be generated by the backend, and invalid completed
+  reviews must be retained as quarantined evidence rather than discarded.
+- Longitudinal impact measurement is now present, but useful conclusions still require
+  comparable observations across more workflows and multiple later runs.

@@ -187,6 +187,17 @@ type PulseFindingLifecycle struct {
 	Events          []PulseFindingEvent        `json:"events"`
 }
 
+// PulseReviewVerificationCandidate is the backend-owned allowlist entry for a
+// reviewer checking a prior fix. A review may emit PULSE_VERIFICATION_JSON only
+// for one of these exact tuples; ordinary open, blocked, rejected, and already
+// resolved findings have no attempt to verify.
+type PulseReviewVerificationCandidate struct {
+	FindingID   string `json:"finding_id"`
+	Fingerprint string `json:"fingerprint"`
+	AttemptID   string `json:"attempt_id"`
+	NextCheck   string `json:"next_check"`
+}
+
 type pulseFindingLifecycleDB interface {
 	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
 	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
@@ -705,6 +716,77 @@ func decodeLifecycleStrings(raw string) []string {
 		return []string{}
 	}
 	return values
+}
+
+// LoadPulseReviewVerificationCandidates returns the exact changed_unverified
+// attempts a module is allowed to verify. Evidence arrival is still a reviewer
+// judgment, but attempt eligibility is not: it is derived from the lifecycle
+// tables and cannot be widened by caller-authored prose.
+func LoadPulseReviewVerificationCandidates(
+	ctx context.Context,
+	workspacePath, module string,
+) ([]PulseReviewVerificationCandidate, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []PulseReviewVerificationCandidate{}, err
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		return nil, err
+	}
+
+	module = pulsemodules.Normalize(module)
+	acceptedModules := []string{}
+	for _, candidate := range append(pulsemodules.IDs(), pulsemodules.RetiredIDs...) {
+		if pulsemodules.Normalize(candidate) == module {
+			acceptedModules = append(acceptedModules, candidate)
+		}
+	}
+	if len(acceptedModules) == 0 {
+		return []PulseReviewVerificationCandidate{}, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(acceptedModules)), ",")
+	args := make([]interface{}, 0, len(acceptedModules))
+	for _, accepted := range acceptedModules {
+		args = append(args, accepted)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT af.finding_id, af.fingerprint, a.attempt_id
+		FROM pulse_fix_attempt_findings af
+		JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+		JOIN run_concerns c ON c.fingerprint=af.fingerprint
+		WHERE af.disposition=? AND a.status=? AND c.status=?
+			AND a.module IN (`+placeholders+`)
+		ORDER BY a.completed_at ASC, a.started_at ASC, af.finding_id ASC`,
+		append([]interface{}{
+			FindingDispositionChangedUnverified,
+			ConcernStatusAwaitingVerification,
+			ConcernStatusAwaitingVerification,
+		}, args...)...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []PulseReviewVerificationCandidate{}
+	for rows.Next() {
+		var candidate PulseReviewVerificationCandidate
+		if err := rows.Scan(&candidate.FindingID, &candidate.Fingerprint, &candidate.AttemptID); err != nil {
+			return nil, err
+		}
+		var metadataJSON string
+		if err := db.QueryRowContext(ctx, `SELECT metadata_json FROM pulse_finding_events
+			WHERE fingerprint=? AND attempt_id=? AND event_type='verification_inconclusive'
+			ORDER BY recorded_at DESC LIMIT 1`, candidate.Fingerprint, candidate.AttemptID).Scan(&metadataJSON); err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		metadata := map[string]interface{}{}
+		_ = json.Unmarshal([]byte(metadataJSON), &metadata)
+		candidate.NextCheck, _ = metadata["next_check"].(string)
+		candidate.NextCheck = strings.TrimSpace(candidate.NextCheck)
+		out = append(out, candidate)
+	}
+	return out, rows.Err()
 }
 
 // LoadPulseFindingLifecycles returns current issue state plus its complete fix

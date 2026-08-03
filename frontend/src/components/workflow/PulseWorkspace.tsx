@@ -5,7 +5,6 @@ import {
   ArrowUpRight,
   CheckCircle2,
   Clock3,
-  Database,
   FileText,
   Loader2,
   RefreshCw,
@@ -32,7 +31,6 @@ import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFinding
 import {
   buildPulseWorkspaceModuleSummaries,
   selectPulseWorkspaceModule,
-  summarizePulseReviewStorage,
 } from './pulseWorkspaceUtils'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 import {
@@ -84,20 +82,20 @@ type PulseFocus = 'all' | PulseFindingQueue
 
 const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Current work',
-  needs_action: 'Needs action',
-  waiting_proof: 'Waiting for proof',
-  decisions: 'Decisions',
-  platform: 'Platform gaps',
+  needs_action: 'Pulse to fix',
+  waiting_proof: 'Waiting on a run',
+  decisions: 'Your decisions',
+  platform: 'Platform team',
   resolved: 'Resolved',
   workflow_reported: 'Workflow evidence',
 }
 
 const FOCUS_HINTS: Record<PulseFocus, string> = {
-  all: 'Everything still active across bugs, proof, decisions, and platform ownership',
-  needs_action: 'New bugs, active repairs, and failed verification',
-  waiting_proof: 'A fix exists, but the required verification evidence has not arrived',
-  decisions: 'User decisions and approval-gated proposals',
-  platform: 'Diagnosed work owned outside this workflow',
+  all: 'Open work, grouped by who or what can move it forward',
+  needs_action: 'Issues Pulse can diagnose, repair, or reopen',
+  waiting_proof: 'Fixes that need evidence from a future workflow run',
+  decisions: 'Items that cannot continue without your approval or direction',
+  platform: 'Diagnosed work that must be fixed outside this workflow',
   resolved: 'Verified fixes and legitimate no-change closures',
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
 }
@@ -257,7 +255,6 @@ export function PulseWorkspace({
     findings.forEach((finding) => { counts[pulseFindingPresentation(finding).queue] += 1 })
     return counts
   }, [findings])
-  const storageSummary = useMemo(() => summarizePulseReviewStorage(reviews), [reviews])
   const moduleSummaries = useMemo(
     () => buildPulseWorkspaceModuleSummaries(PULSE_MODULE_COMMANDS, findings, reviews),
     [findings, reviews],
@@ -333,14 +330,14 @@ export function PulseWorkspace({
 
   const health = queueCounts.needs_action > 0
     ? {
-        label: 'Action required',
-        detail: `${queueCounts.needs_action} issue${queueCounts.needs_action === 1 ? '' : 's'} need diagnosis or repair`,
+        label: 'Pulse work queued',
+        detail: `${queueCounts.needs_action} issue${queueCounts.needs_action === 1 ? '' : 's'} for Pulse to diagnose or repair`,
         tone: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
         Icon: AlertTriangle,
       }
     : queueCounts.decisions > 0
       ? {
-          label: 'Needs your decision',
+          label: 'Your decision needed',
           detail: `${queueCounts.decisions} item${queueCounts.decisions === 1 ? '' : 's'} cannot continue without approval`,
           tone: 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300',
           Icon: Clock3,
@@ -394,20 +391,12 @@ export function PulseWorkspace({
               <span className="text-xs text-muted-foreground">{health.detail}</span>
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
-              {findings.length} issue{findings.length === 1 ? '' : 's'} · {reviews.length} stored review{reviews.length === 1 ? '' : 's'}
+              <span className="font-medium text-foreground">Pulse:</span> {queueCounts.needs_action} to repair
+              <span className="px-1.5">·</span>
+              <span className="font-medium text-foreground">You:</span> {queueCounts.decisions} decision{queueCounts.decisions === 1 ? '' : 's'}
+              <span className="px-1.5">·</span>
+              <span className="font-medium text-foreground">Next run:</span> {queueCounts.waiting_proof} verification{queueCounts.waiting_proof === 1 ? '' : 's'}
             </div>
-            {storageSummary.migrated > 0 && (
-              <div className="mt-2 inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-[10px] text-emerald-700 dark:text-emerald-300">
-                <Database className="h-3 w-3 shrink-0" />
-                <span className="font-semibold">SQLite migration verified</span>
-                <span className="opacity-80">
-                  {storageSummary.migrated} legacy review{storageSummary.migrated === 1 ? '' : 's'} imported with source provenance
-                  {storageSummary.native > 0
-                    ? ` · ${storageSummary.native} database-native review${storageSummary.native === 1 ? '' : 's'} since migration`
-                    : ''}
-                </span>
-              </div>
-            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <button
@@ -440,7 +429,7 @@ export function PulseWorkspace({
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Goal impact over time</h3>
+            <h3 className="text-sm font-semibold text-foreground">Goal impact</h3>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
               Fixes and experiments linked to comparable success-criterion observations
             </p>
@@ -453,8 +442,9 @@ export function PulseWorkspace({
           </div>
         </div>
         {impactSummary.latest.length === 0 ? (
-          <div className="px-4 py-5 text-xs text-muted-foreground">
-            No comparable goal observations have been recorded yet. Pulse will keep reliability fixes separate from goal progress until a producing run supplies evidence.
+          <div className="flex items-start gap-2 px-4 py-3 text-xs text-muted-foreground">
+            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <span>No comparable result yet. A producing workflow run is needed before Pulse can say whether these changes improved the goal.</span>
           </div>
         ) : (
           <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
@@ -484,25 +474,25 @@ export function PulseWorkspace({
           repair as open, fixing, and awaiting verification at the same time. */}
       <section className="grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6">
         <Metric
-          label="Needs action"
+          label="Pulse to fix"
           focus="needs_action"
           activeFocus={focus}
           onFocus={setFocus}
           value={queueCounts.needs_action}
-          detail="diagnose, repair, or re-open"
+          detail="owned by Pulse"
           tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
         />
         <Metric
-          label="Waiting for proof"
+          label="Waiting on run"
           focus="waiting_proof"
           activeFocus={focus}
           onFocus={setFocus}
           value={queueCounts.waiting_proof}
-          detail="fix exists; evidence pending"
+          detail="verify after workflow runs"
           tone="border-amber-500/25 bg-amber-500/5 text-amber-700 dark:text-amber-300"
         />
         <Metric
-          label="Decisions"
+          label="Your decisions"
           focus="decisions"
           activeFocus={focus}
           onFocus={setFocus}
@@ -511,7 +501,7 @@ export function PulseWorkspace({
           tone="border-fuchsia-500/25 bg-fuchsia-500/5 text-fuchsia-700 dark:text-fuchsia-300"
         />
         <Metric
-          label="Platform gaps"
+          label="Platform team"
           focus="platform"
           activeFocus={focus}
           onFocus={setFocus}
@@ -545,7 +535,7 @@ export function PulseWorkspace({
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Issue lifecycle</h3>
+              <h3 className="text-sm font-semibold text-foreground">Issues</h3>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
                 {FOCUS_TITLES[focus]}
                 {moduleFilter && (
@@ -636,10 +626,10 @@ export function PulseWorkspace({
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Review modules</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Choose a module to inspect its verdict, findings, fixes, verification, and raw evidence</p>
+          <h3 className="text-sm font-semibold text-foreground">Reviewers</h3>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Choose a reviewer to see its latest judgment or open the full forensic report</p>
         </div>
-        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
           {moduleSummaries.map((module) => {
             const state = moduleStateByID.get(module.id)
             const active = selectedModule === module.id
@@ -703,6 +693,7 @@ export function PulseWorkspace({
             workspacePath={workspacePath}
             module={selectedDefinition.id}
             label={selectedDefinition.label}
+            reviews={reviews.filter((review) => review.module === selectedDefinition.id)}
           />
         </section>
       )}

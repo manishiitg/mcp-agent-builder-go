@@ -1,6 +1,11 @@
 # Pulse v2.1: Reliability-First Experiment Proposal
 
-> **Status:** Final decision document for the next implementation stage
+> **Status (2026-08-03): historical experiment decision.** The experiment shaped
+> the current hybrid design, but its proposed module topology and staging are no
+> longer the current operating contract. See
+> [`pulse_consolidation.md`](./pulse_consolidation.md) for current architecture
+> and [`pulse_v2_proof_carrying_architecture.md`](./pulse_v2_proof_carrying_architecture.md)
+> for the retained measurements and later decisions.
 >
 > **Date:** 2026-07-29
 >

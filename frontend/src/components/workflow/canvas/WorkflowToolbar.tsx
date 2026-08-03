@@ -48,7 +48,6 @@ import WorkflowPublishPopup from '../WorkflowPublishPopup'
 import { getPublishDotClass, formatPublishStateLabel } from '../publishStatus'
 import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
 import { PulseWorkspace } from '../PulseWorkspace'
-import PulseLoopClosureNotice from '../PulseLoopClosureNotice'
 import { formatNotificationStateLabel, getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
@@ -914,7 +913,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
 
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="p-3 sm:p-4">
-                <PulseLoopClosureNotice observation={pulseLoopClosureObservation} />
                 {workspacePath && (
                   <PulseWorkspace
                     workspacePath={workspacePath}

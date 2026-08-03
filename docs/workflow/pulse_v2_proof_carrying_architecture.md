@@ -1,6 +1,11 @@
 # Pulse v2: Proof-Carrying Workflows and Exception-Driven Autonomy
 
-> **Status:** Architecture proposal  
+> **Status (2026-08-03): historical proposal, review exchange, measurement
+> record, and detailed decision evidence.** It is intentionally retained rather
+> than rewritten so objections and rejected alternatives remain auditable. The
+> canonical current design and concise decision map is
+> [`pulse_consolidation.md`](./pulse_consolidation.md). Later dated decisions in
+> this file supersede conflicting statements in the original proposal.
 > **Date:** 2026-07-29  
 > **Scope:** Per-workflow Pulse, its post-run control loop, review/fix model,
 > durable state, reporting, notification, and relationship with Goal Advisor.
@@ -2284,7 +2289,7 @@ carried one finding at `seen_count` 4 for exactly this reason.
 
 ### Confirmed defect: attemptless verification can discard a complete review (2026-08-03)
 
-**Status: confirmed; design agreed; implementation still required.** The latest
+**Status: implemented and verified (2026-08-03).** The latest
 `build-in-public` Artifact Review demonstrated a contract seam between the
 review instructions and the persistence layer. The reviewer completed 11m40s
 of work, made 46 tool calls, and consumed 3.39M cumulative token operations,
@@ -2347,7 +2352,30 @@ valid, but do not erase an expensive completed analysis. The current all-or-
 nothing rejection loses both the human review and the evidence needed to debug
 the contract failure.
 
-Acceptance coverage must include:
+The same boundary failed in a different form on the 2026-08-03 `rtslatency`
+pass (`schedule-cron--42eca39a_1785724255409111000`). The Fixer process stopped,
+but `artifact_review` was durably terminal as `failed`: result submission first
+referred to fix attempt `fix-8b7c7f2747672088`, which belongs to `eval_health`,
+and subsequent retries failed the exact matching-disposition/proof checks. The
+other due modules recorded `changed`, and finalization continued honestly. This
+is additional evidence that process completion must never be presented as Pulse
+success and that verification eligibility must be backend-authored rather than
+reconstructed by the agent.
+
+The implementation keeps the strict proof validator and closes the seam at both
+boundaries:
+
+- reviewer launch receives a backend-generated allowlist of exact
+  `finding_id`/`fingerprint`/`attempt_id`/`next_check` tuples;
+- the allowlist is derived only from owned `changed_unverified` attempts that
+  are still awaiting verification, including retired module aliases normalized
+  to their current owner;
+- review persistence rejects markers outside that allowlist, but stores the raw
+  Markdown and exact error with status `contract_failed`;
+- loaders expose that quarantined report for human inspection but never return
+  its invalid markers to the Fixer.
+
+Acceptance coverage includes:
 
 1. Ten retained findings and zero eligible `changed_unverified` attempts: the
    reviewer emits zero markers, classifies all ten, and persists successfully.
@@ -2357,6 +2385,9 @@ Acceptance coverage must include:
    while the raw review is retained as `contract_failed` with the exact error.
 4. A missing or fabricated attempt ID never reaches terminal disposition
    handling.
+
+Focused allowlist/quarantine tests, the complete `step_based_workflow` package,
+and the Pulse/guidance/render server test subset passed on 2026-08-03.
 
 ### Standing cross-workflow research questions
 
@@ -2386,7 +2417,8 @@ the workflow's goal does not improve.
 
 ### Consolidated Workflow Review: one agent, native ordered turns
 
-**Implementation status (2026-08-03): shipped in the working tree.** The
+**Implementation status (2026-08-03): implemented and pushed to `main` in
+`561fa2ce`.** The
 operational reviewers are consolidated into one `workflow_review` agent, while
 `strategy_auditor` and `goal_advisor` remain independent agents. Workflow Review
 is not one oversized prompt and is not six separately spawned agents. The
@@ -2414,7 +2446,7 @@ and reasoning state.
 
 ### Longitudinal impact: did repeated Pulse work advance the goal?
 
-**Implementation status (2026-08-03): shipped in the working tree.** Gate now
+**Implementation status (2026-08-03): implemented on `main`.** Gate now
 records trustworthy comparable success-criterion observations on every producing
 Pulse run, even when no reviewer is due. The single Fixer records coherent
 interventions and matured assessments through `record_pulse_impact`. SQLite

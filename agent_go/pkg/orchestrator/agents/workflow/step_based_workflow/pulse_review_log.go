@@ -99,6 +99,7 @@ type PulseReviewVerificationResult struct {
 }
 
 const pulseVerificationMarker = "PULSE_VERIFICATION_JSON:"
+const pulseReviewStatusContractFailed = "contract_failed"
 
 func ExtractPulseReviewVerifications(artifact string) ([]PulseReviewVerificationResult, error) {
 	results := []PulseReviewVerificationResult{}
@@ -230,14 +231,66 @@ func truncateVerdict(s string) string {
 // Best-effort: a reviewer whose artifact was persisted must not fail because the
 // bookkeeping write did. Callers log and continue.
 func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, pulseRunID, artifactPath, artifact string) error {
-	if _, err := ExtractPulseReviewVerifications(artifact); err != nil {
-		return err
+	verifications, contractErr := ExtractPulseReviewVerifications(artifact)
+	if contractErr == nil {
+		contractErr = validatePulseReviewVerificationAllowlist(ctx, workspacePath, module, verifications)
 	}
-	return recordPulseReviewAt(
+	status := pulseReviewStatus(artifact)
+	persistedArtifact := artifact
+	if contractErr != nil {
+		// Keep the complete reviewer artifact even when one structured marker is
+		// malformed. Previously the validation error returned before persistence,
+		// so a long, otherwise useful review vanished and the consolidated Fixer
+		// could neither inspect the evidence nor terminalize the module honestly.
+		// Invalid markers remain quarantined: every structured-verification read
+		// path below skips contract_failed records.
+		status = pulseReviewStatusContractFailed
+		persistedArtifact = strings.TrimRight(artifact, "\n") +
+			"\n\n---\n\n**Pulse review contract failure:** " + contractErr.Error() + "\n"
+	}
+	recordErr := recordPulseReviewAt(
 		ctx, workspacePath, module, reviewRunID, pulseRunID, "review",
-		artifactPath, pulseReviewStatus(artifact), artifact,
+		artifactPath, status, persistedArtifact,
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
+	if recordErr != nil {
+		if contractErr != nil {
+			return fmt.Errorf("review contract failed (%w) and the artifact could not be retained: %w", contractErr, recordErr)
+		}
+		return recordErr
+	}
+	if contractErr != nil {
+		return fmt.Errorf("review contract failed; artifact retained with status %s: %w", pulseReviewStatusContractFailed, contractErr)
+	}
+	return nil
+}
+
+func validatePulseReviewVerificationAllowlist(
+	ctx context.Context,
+	workspacePath, module string,
+	verifications []PulseReviewVerificationResult,
+) error {
+	if len(verifications) == 0 {
+		return nil
+	}
+	candidates, err := LoadPulseReviewVerificationCandidates(ctx, workspacePath, module)
+	if err != nil {
+		return fmt.Errorf("load verification allowlist: %w", err)
+	}
+	allowed := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		allowed[candidate.FindingID+"\x00"+candidate.Fingerprint+"\x00"+candidate.AttemptID] = true
+	}
+	for _, verification := range verifications {
+		key := verification.FindingID + "\x00" + verification.Fingerprint + "\x00" + verification.AttemptID
+		if !allowed[key] {
+			return fmt.Errorf(
+				"verification marker for finding %q attempt %q is outside the backend allowlist for module %q",
+				verification.FindingID, verification.AttemptID, pulsemodules.Normalize(module),
+			)
+		}
+	}
+	return nil
 }
 
 func recordPulseReviewAt(
@@ -373,7 +426,7 @@ func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string,
 			return nil, err
 		}
 		artifact.Module = pulsemodules.Normalize(artifact.Module)
-		if includeMarkdown {
+		if includeMarkdown && artifact.Status != pulseReviewStatusContractFailed {
 			artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
 			if err != nil {
 				return nil, err
@@ -410,9 +463,11 @@ func LoadPulseReviewArtifact(ctx context.Context, workspacePath string, id int64
 		return nil, err
 	}
 	artifact.Module = pulsemodules.Normalize(artifact.Module)
-	artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
-	if err != nil {
-		return nil, err
+	if artifact.Status != pulseReviewStatusContractFailed {
+		artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &artifact, nil
 }
@@ -446,9 +501,11 @@ func LoadPulseReviewArtifactForRun(ctx context.Context, workspacePath, reviewRun
 		return nil, err
 	}
 	artifact.Module = pulsemodules.Normalize(artifact.Module)
-	artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
-	if err != nil {
-		return nil, err
+	if artifact.Status != pulseReviewStatusContractFailed {
+		artifact.Verifications, err = ExtractPulseReviewVerifications(artifact.Markdown)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &artifact, nil
 }
@@ -464,7 +521,8 @@ func LoadPulseReviewVerificationsForPulseRun(ctx context.Context, workspacePath,
 	}
 	module = pulsemodules.Normalize(module)
 	rows, err := db.QueryContext(ctx, `SELECT artifact_markdown FROM pulse_review_log
-		WHERE pulse_run_id=? AND module=? AND artifact_kind='review' AND status!='failed'
+		WHERE pulse_run_id=? AND module=? AND artifact_kind='review'
+			AND status NOT IN ('failed', 'contract_failed')
 		ORDER BY recorded_at ASC, _id ASC`, strings.TrimSpace(pulseRunID), module)
 	if err != nil {
 		return nil, err

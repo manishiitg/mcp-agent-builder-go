@@ -30,8 +30,10 @@ contents of the learnings folder, and Low is never selected automatically.
 A validation or execution failure does **not** change the selected tier. Normal
 validation retries continue the same agent conversation with validator feedback,
 and the controller carries the failure into the final `CONCERNS:` summary for
-Pulse. Persistent model/tier changes belong to Pulse `llm_ops_review` and the
-existing approval flow.
+Pulse. Persistent model/tier changes belong to the LLM/cost/tool/runtime lens of
+Pulse `workflow_review` and the existing approval flow. Historical
+`llm_ops_review` records remain valid evidence but are no longer scheduled as a
+separate reviewer.
 
 `disable_tier_optimization=true` still forces execution agents to Tier 1.
 

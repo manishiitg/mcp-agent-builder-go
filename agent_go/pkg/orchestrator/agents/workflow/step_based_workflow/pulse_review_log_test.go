@@ -57,6 +57,105 @@ func TestExtractPulseReviewVerificationsRejectsInconclusiveWithoutBoundary(t *te
 	}
 }
 
+func TestRecordPulseReviewRetainsAndQuarantinesContractFailure(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	invalid := `## Verdict
+The review found useful evidence, but its structured marker is incomplete.
+PULSE_VERIFICATION_JSON: {"finding_id":"ISS-9","fingerprint":"fp-9","attempt_id":"fix-9","verdict":"inconclusive","expected":"new row","observed":"no new run yet"}`
+
+	err := RecordPulseReview(ctx, ws, "artifact_review", "review-invalid", "pulse-1", "", invalid)
+	if err == nil || !strings.Contains(err.Error(), "artifact retained with status contract_failed") {
+		t.Fatalf("expected retained contract failure, got %v", err)
+	}
+
+	artifact, err := LoadPulseReviewArtifactForRun(ctx, ws, "review-invalid", "workflow_review")
+	if err != nil {
+		t.Fatalf("load retained artifact: %v", err)
+	}
+	if artifact.Status != pulseReviewStatusContractFailed || !strings.Contains(artifact.Markdown, invalid) ||
+		!strings.Contains(artifact.Markdown, "Pulse review contract failure") || !strings.Contains(artifact.Markdown, "next_check") {
+		t.Fatalf("contract-failed artifact was not retained intact: %#v", artifact)
+	}
+	if len(artifact.Verifications) != 0 {
+		t.Fatalf("invalid markers must be quarantined, got %#v", artifact.Verifications)
+	}
+
+	valid := `## Verdict
+The next run proved the fix.
+PULSE_VERIFICATION_JSON: {"finding_id":"ISS-10","fingerprint":"fp-10","attempt_id":"fix-10","verdict":"passed","expected":"new row contains 42","observed":"new row contains 42","evidence":["db row 42"]}`
+	if err := recordPulseReviewAt(ctx, ws, "workflow_review", "review-valid", "pulse-1", "review", "", "completed", valid, "2026-08-03T12:00:00Z"); err != nil {
+		t.Fatalf("record valid sibling review: %v", err)
+	}
+	verifications, err := LoadPulseReviewVerificationsForPulseRun(ctx, ws, "pulse-1", "workflow_review")
+	if err != nil {
+		t.Fatalf("load quarantined verifications: %v", err)
+	}
+	if len(verifications) != 1 || verifications[0].FindingID != "ISS-10" {
+		t.Fatalf("want only the valid sibling marker, got %#v", verifications)
+	}
+}
+
+func TestPulseReviewVerificationAllowlistComesFromChangedUnverifiedAttempts(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	concern := filedReviewConcern(t, ws, "pulse-fix", "eval_health", "score scale is not pinned")
+	attempt, err := StartPulseFixAttempt(
+		ctx, ws, "pulse-fix", "eval_health", "Pin the score scale.",
+		[]PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "EVAL-1"}},
+		[]string{"evaluation/evaluation_plan.json"}, []string{"scale:before"},
+	)
+	if err != nil {
+		t.Fatalf("start attempt: %v", err)
+	}
+	recordFindingDispositions(t, ws, "eval_health", "pulse-fix", []PulseFindingDisposition{{
+		Fingerprint:  concern.Fingerprint,
+		FindingID:    "EVAL-1",
+		AttemptID:    attempt.AttemptID,
+		Disposition:  FindingDispositionChangedUnverified,
+		Summary:      "Scale pinned; next evaluator run must prove it.",
+		ChangedFiles: []string{"evaluation/evaluation_plan.json"},
+		BeforeRefs:   []string{"scale:before"},
+		AfterRefs:    []string{"scale:after"},
+		NextCheck:    "the next evaluator workflow run emits the pinned max_score",
+		Verification: []PulseFindingVerification{{
+			Check:    "next evaluator workflow run",
+			Verdict:  VerificationInconclusive,
+			Expected: "pinned max_score",
+			Observed: "no evaluator run yet",
+		}},
+	}})
+
+	candidates, err := LoadPulseReviewVerificationCandidates(ctx, ws, "workflow_review")
+	if err != nil {
+		t.Fatalf("load candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].AttemptID != attempt.AttemptID ||
+		candidates[0].FindingID != "EVAL-1" || !strings.Contains(candidates[0].NextCheck, "next evaluator") {
+		t.Fatalf("unexpected allowlist: %#v", candidates)
+	}
+
+	valid := fmt.Sprintf(`## Verdict
+The producing run proved the scale.
+PULSE_VERIFICATION_JSON: {"finding_id":"EVAL-1","fingerprint":%q,"attempt_id":%q,"verdict":"passed","expected":"pinned max_score","observed":"pinned max_score","evidence":["evaluation row"]}`,
+		concern.Fingerprint, attempt.AttemptID)
+	if err := RecordPulseReview(ctx, ws, "workflow_review", "review-allowed", "pulse-review", "", valid); err != nil {
+		t.Fatalf("allowlisted marker rejected: %v", err)
+	}
+
+	outside := `## Verdict
+Invented verification.
+PULSE_VERIFICATION_JSON: {"finding_id":"OTHER","fingerprint":"other-fp","attempt_id":"other-attempt","verdict":"passed","expected":"x","observed":"x"}`
+	err = RecordPulseReview(ctx, ws, "workflow_review", "review-outside", "pulse-review", "", outside)
+	if err == nil || !strings.Contains(err.Error(), "outside the backend allowlist") {
+		t.Fatalf("expected out-of-allowlist quarantine, got %v", err)
+	}
+	artifact, loadErr := LoadPulseReviewArtifactForRun(ctx, ws, "review-outside", "workflow_review")
+	if loadErr != nil || artifact.Status != pulseReviewStatusContractFailed {
+		t.Fatalf("outside marker was not retained as contract_failed: artifact=%#v err=%v", artifact, loadErr)
+	}
+}
+
 // An artifact with no recognizable verdict still means the reviewer ran, which is
 // itself the fact Gate lacks. Inventing a verdict would poison the history it is
 // meant to trust.

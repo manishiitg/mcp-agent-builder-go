@@ -49,6 +49,12 @@ stage ends. Reviewer failure is retained as `Review incomplete` evidence for
 this module only and cannot block later reviewers. The consolidated Fixer
 records the terminal module result.
 
+If a saved review has status `contract_failed`, the backend retained its raw
+Markdown but quarantined its invalid structured verification markers. Do not
+copy, repair, or route those markers. Mark that module `failed` with the exact
+contract error, continue processing every other due module, and leave its
+findings unchanged for a clean reviewer retry on the next pass.
+
 Give each reviewer scope, Gate evidence, focused guidance, and this response
 contract. Workflow Review loads its focused docs together, then checks
 correctness, artifact drift, report/eval truth, stores, and LLM/tool operations

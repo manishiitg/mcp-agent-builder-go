@@ -1,9 +1,9 @@
 # Auto-Improvement Framework
 
-Pulse gives the workflow durable evidence, bounded maintenance, strategic review, and an audit trail. It is **one system running at several agent-selected cadences** over a **single time-series log** (`builder/improve.html`), all sharing the same **Bug / Goal** vocabulary:
+Pulse gives the workflow durable evidence, bounded maintenance, strategic review, and an audit trail. It is **one system running at several agent-selected cadences** over a SQLite-backed lifecycle and impact ledger, all sharing the same **Bug / Goal** vocabulary. `builder/improve.html` remains the generated, publishable dashboard; it is not the operational source of truth.
 
 - **Pulse Gate:** reads retained evidence and decides which review modules are due, with explicit evidence/cooldowns rather than assuming a successful run proves correctness.
-- **Read-only reviewers:** inspect bugs, artifact drift, learnings, KB, DB, eval, reports, cost/LLM operations, and Goal strategy without mutating the workspace.
+- **Read-only reviewers:** one ordered Workflow Review checks operational lenses; independent Strategy Auditor and Goal Advisor agents check in-strategy effectiveness and out-of-strategy headroom.
 - **One Pulse Fixer:** consumes those findings sequentially, applies only bounded verified repairs, and records blocked or failed work honestly.
 - **Goal Advisor:** proposes strategy/headroom experiments when goals are missed, the current strategy is capped, or a periodic healthy-workflow review is due. Material changes use the existing human-input approval flow.
 
@@ -21,7 +21,8 @@ They are orthogonal — a run can be Bug-broken while Goal-on-target, or Bug-cle
 ## Files
 
 - `soul/soul.md`: stable intent only — objective, success criteria, optional explicit user-approved constraints, and optional notification preferences. Architecture and agent assumptions are revisable and do not belong here. It stays Markdown; there is no `soul.html`.
-- `builder/improve.html`: the **Pulse history** — a schema-2, newest-first HTML time series. Every dated card is attributed to Signals / Kizuki, Reflection / Hansei, or Improvements / Kaizen plus one canonical module id, allowing Runloop to present the same history section-first. Pending decisions are rendered from structured `report_human_inputs`; answered question/outcome history belongs under Reflection. A bottom Agent log carries only compact handoff state and evidence pointers, never duplicate narrative. Read it before every Pulse pass. See `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` for the format.
+- `db/db.sqlite`: authoritative Pulse finding, attempt, verification, review-artifact, module-result, finalizer, intervention, and longitudinal-impact state.
+- `builder/improve.html`: the **generated Pulse dashboard and publishable history** — a compact, newest-first HTML projection with outcome, current work, recent history, and technical handoff. It remains required, but reviewers and the Fixer must read SQLite for lifecycle truth. See `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` for the render contract.
 - `builder/improve-archive/YYYY-MM.html`: monthly archive files for old resolved findings and routine entries. Read only the archive files referenced by the active log's archive index or an unresolved id.
 - `builder/card.health.html`: the compact per-run dashboard card the final dashboard/notify step overwrites each run (final post-Pulse status + headline/detail in `data-*` attributes). Goal / Ikigai itself remains in `soul/soul.md`; run verdicts and progress are time-stamped in Pulse history.
 - `route_selection.json`: which route a run took (so the monitor judges only that path).
@@ -37,7 +38,8 @@ Use this hierarchy when deciding what is true:
 2. `runs/iteration-0/<group>/...`: current reality from actual outputs, tool logs, validation, and eval reports.
 3. `evaluation/evaluation_plan.json`: measurement definition; fix it when it conflicts with `soul.md`.
 4. `planning/plan.json`: current implementation attempt, judged against `soul.md` and iteration-0 evidence.
-5. `builder/improve.html` + referenced `builder/improve-archive/*.html`: memory and audit trail for reviewer Signals, run/Q&A Reflection, past decisions, unresolved findings, deferred ideas, and measured outcomes.
+5. `db/db.sqlite`: durable lifecycle and impact truth for reviews, findings, fixes, verification, finalization, and comparable goal observations.
+6. `builder/improve.html` + referenced archives: generated human-readable and publishable history; never use it to override SQLite lifecycle state.
 
 ## Decision Model
 
@@ -63,7 +65,7 @@ Each module may return multiple findings. Pulse keeps all material findings, but
 
 ## Audit Discipline
 
-- **Open findings** carry a short anchor id only so a later fix can close them; closing a finding edits its card in place to add a `Resolved …` line — never delete it, never open a duplicate.
+- **Open findings** use stable human-facing IDs plus internal semantic fingerprints in SQLite. Closing or reopening happens through the finding lifecycle and attempt-scoped verification, never by editing an HTML card.
 - **Human input requests are durable.** Pulse stores current questions in structured `report_human_inputs`; Runloop renders them and saves selected options and/or free-form answers. Once processed, the question, answer, outcome, and evidence are preserved as Reflection history in `builder/improve.html`. Email is a delivery channel, not the source of truth.
 - **Decisions are confirmed, not assumed.** A Pulse Fixer or Goal Advisor decision states the effect it expects when written, and stays **unconfirmed** until a later run measures it — at which point Pulse stamps the decision card once: confirmed (cite before → after), no-effect/regressed (reopen a finding), or inconclusive (the run didn't exercise the changed path). A change that quietly failed is worse than no change, so it is never hidden.
 - Eval-score movement is evidence, not proof. Do not claim an improvement worked until run/eval evidence supports it, and call out confounds such as small sample size, source-data drift, rubric changes, or multiple decisions in the same window. Rubric changes are the loop's biggest confound — they change what scores mean, so they go through a deliberate eval-plan-improvement pass with a major Decision card, never bundled with a harden/replan.

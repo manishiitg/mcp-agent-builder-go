@@ -1,7 +1,12 @@
 # Org Dashboard — design
 
-**Status:** design (discussed, not built). Captures the agreed shape for a real
-at-a-glance org view that replaces today's two-embedded-docs Org page.
+**Status (2026-08-03): historical design record; implementation evolved.** The
+card-based Org dashboard was built, but the two-loop writer model and fixed Pulse
+sequence below are no longer the current Pulse contract. Read
+[`pulse_consolidation.md`](./pulse_consolidation.md) for current review/fix
+architecture and [`workflow_monitoring.md`](./workflow_monitoring.md) for the
+current database-native per-workflow Pulse popup. The body below is retained to
+explain the Org dashboard's card-assembly decisions.
 
 ## Problem
 Today the Org page (`frontend/.../org/OrgHtmlPanels.tsx`) just **embeds two HTML docs**

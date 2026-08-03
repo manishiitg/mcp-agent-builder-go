@@ -3935,7 +3935,20 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 			workspacePath := iwm.controller.GetWorkspacePath()
 			marker := pulseReviewerCompletionMarker(todoID)
-			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker)
+			stageInstructions := instructions
+			if isPulseReviewer {
+				candidates, allowlistErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, module)
+				allowlistJSON, _ := json.Marshal(candidates)
+				allowlistNote := ""
+				if allowlistErr != nil {
+					allowlistNote = " The allowlist could not be loaded; fail closed and emit zero verification markers. Error: " + allowlistErr.Error()
+				}
+				stageInstructions = strings.TrimSpace(stageInstructions) + fmt.Sprintf(
+					"\n\nTRUSTED VERIFICATION ALLOWLIST (backend generated): %s.%s Emit PULSE_VERIFICATION_JSON only for an exact finding_id + fingerprint + attempt_id tuple in this list. An empty list means emit no verification markers. Evidence that contradicts any other retained finding is a new/reopened finding, not verification of a nonexistent attempt.",
+					string(allowlistJSON), allowlistNote,
+				)
+			}
+			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, marker)
 			if isFixer {
 				stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, marker)
 			}
@@ -3944,7 +3957,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				// The completion marker belongs only to the last response. Keeping it
 				// out of the opening and intermediate turns prevents an early lens
 				// from looking terminal to the trusted persistence boundary.
-				stageInstruction = buildPulseReviewerInstruction(workspacePath, resultPath, instructions, "")
+				stageInstruction = buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, "")
 				if isFixer {
 					stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, "")
 				}

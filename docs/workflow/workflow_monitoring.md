@@ -9,7 +9,7 @@ It is worth keeping. The workflow UI still exposes execution logs, cost analysis
 There are three practical scopes:
 
 ### 1. Workflow-level views
-- **Pulse**: the single agent-curated HTML log (`builder/improve.html`) — the primary at-a-glance surface (see below)
+- **Pulse**: a database-native popup for current health, decisions, findings, reviews, fixes, verification, finalization, and longitudinal goal impact; `builder/improve.html` remains the generated dashboard/publishable history
 - **Costs**: aggregated token and USD usage across run folders
 - **Evaluation reports**: benchmark-style scoring across runs, with single-run drill-down
 - **Learnings**: current persisted learning state, including the global workflow skill
@@ -22,11 +22,11 @@ There are three practical scopes:
 - **Workflow overview**: recent run folders, status, timestamps, costs, and evaluation presence across workflows
 - **Scheduled runs panel**: cron job history, latest runs, live sessions, and drill-down into logs/costs/evaluation for scheduled executions
 
-## Pulse — the agent-curated log
+## Pulse — structured workspace plus generated dashboard
 
-The **Pulse** (`builder/improve.html`) is the primary workflow-level monitoring surface and the user's main window into a workflow. It is a single, self-contained HTML document the workflow's agents curate, rendered as a first-class right-panel view alongside Plan, Report, and Soul, and it follows the app's light/dark theme.
+The Pulse popup is the primary in-app monitoring surface. It reads structured SQLite projections and presents the workflow goal/success criteria, pending user decisions, current findings, lifecycle history, reviewer evidence, fix attempts, verification, final-command status, and goal impact over time. Full reviewer Markdown is available as supporting evidence, not used as the layout or lifecycle model.
 
-When pending input exists, Runloop renders **Needs your decision** first. Goal / Ikigai renders `soul/soul.md` directly. The HTML history is newest-first and time-based: active **Assumptions challenged** when needed, **Today's outcome**, collapsed technical detail, recent runs, attributed Signal / Reflection / Improvement cards, a collapsed **Agent log**, and archive. The Pulse popup uses each card's section/module metadata to show that same history by review. The Agent log contains only current handoff state, ids, cursors, cadence, and evidence pointers; it never duplicates the user narrative. Every workflow is judged on two independent axes, each stamped with the run it's as-of:
+`builder/improve.html` remains a separate required artifact: the Dashboard stage generates the compact, publishable, archive-linked Pulse report after review and fixing. The popup does not scrape or duplicate HTML snippets from that file. Every workflow is judged on two independent axes, each stamped with the run it is based on:
 
 - **Bug** — did it run correctly (errors, skipped steps, missing/empty artifacts, regressions)? Fixed by hardening.
 - **Goal** — is it achieving its success criteria (eval scores and outcome metrics vs `soul.md`)? Fixed by refining or replanning.
