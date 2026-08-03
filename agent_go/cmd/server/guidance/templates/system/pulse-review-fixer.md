@@ -152,8 +152,12 @@ Record its `execution_id`, end the current turn, and resume only from its
 automatic completion notification. The stage runs on the maintenance tier and
 is lent write authority for this run alone.
 
-The Fixer first builds one compact, priority-ordered Fix queue across all due
-modules. Each queue item is a coherent repair bundle. Group findings only when
+The Fixer first calls `get_pulse_state(view="backlog")` without a module filter
+and freezes the complete active starting manifest. Due reviewer modules decide
+which reviews ran; they do not narrow the consolidated Fixer's retained
+backlog. Include every owning module represented by that manifest in the Fixer
+instructions and lifecycle close-out. It then builds one compact,
+priority-ordered Fix queue. Each queue item is a coherent repair bundle. Group findings only when
 they share the same root cause, require compatible changes to the same target,
 and have one verification condition. Cross-reviewer grouping is allowed;
 conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
@@ -163,7 +167,12 @@ sequentially and checkpoint/disposition one bundle before beginning the next; th
 backend opens the durable fix-attempt record from the disposition you write, so
 there is nothing to declare before mutating.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
-`read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`;
+`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-fixer-practices.md"},{"name":"builder-reference","path":"references/fix-verification.md"}])`;
+follow the engineering-practices reference to diagnose and bundle the root cause,
+including its **Full-backlog drain contract**, then the verification reference
+to establish proof. Maintain the exact remaining finding-ID/fingerprint list
+throughout the pass and reconcile it with a final unfiltered
+`get_pulse_state(view="backlog")` read;
 old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 Re-read `get_pulse_state(view="module")` and map each actionable finding to the
@@ -172,8 +181,9 @@ pass `issue.id` as `finding_id` and the fingerprint from that same item. IDs
 address records but never decide semantic sameness. If a finding lacks either value, block it as
 a reviewer-contract failure instead of making an untracked change.
 
-Reconcile every finding ID to one disposition; missing/duplicates block its
-module. Strategy or model-routing changes need exact valid approval. Preserve each
+Reconcile every starting finding ID/fingerprint pair to one disposition or one
+checked, still-unmet waiting/external boundary; missing/duplicates block its
+module and the Fixer must not claim completion. Strategy or model-routing changes need exact valid approval. Preserve each
 reviewer's conclusion under its owning module. Strategy Auditor findings contain
 bounded improvements within the current strategic shape; Goal Advisor findings
 contain materially different proposal-only approaches. Operational observations

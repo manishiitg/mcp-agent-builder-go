@@ -221,24 +221,19 @@ func TestReviewerConcernsDedupeByModuleAcrossRuns(t *testing.T) {
 	}
 }
 
-// TestClusteredConcernsOutrankAnIsolatedRecurrence reproduces the social-media
-// shape that hid its own largest defect.
-//
-// One schema mismatch files once per field it names, so 38 concerns from
-// execute-find-opportunities all sat at seen_count=1 while 36 unrelated
-// seen-twice findings held the top of the list. Ranked by recurrence alone the
-// cluster landed at positions 62-132 of 135, every row looking like a one-off,
-// and four Pulse passes worked from the top and never reached it.
-func TestClusteredConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
+// Distinct execution/review findings on one step remain separate, but should
+// stay adjacent and outrank an isolated recurrence so a reviewer can reason
+// about their shared boundary together. Prevalidation uses a stronger rule:
+// every failed check on one step is one lifecycle finding.
+func TestRelatedStepConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()
 
-	// One cause, many distinct symptoms: each names a different field, so each
-	// gets its own fingerprint and is only ever seen once.
-	for _, field := range []string{"$.status", "$.targets", "$.synthesis_notes", "$.score"} {
-		artifact := "## Findings\n\nCONCERNS: prevalidation gate failed at opportunities.json " + field + "\n"
-		if _, err := RecordRunConcerns(ctx, ws, "run-1", "", "execute-find-opportunities", ConcernPhasePreValidation, artifact); err != nil {
-			t.Fatalf("record %s: %v", field, err)
+	// Four distinct behavioral symptoms, each seen once, share one step.
+	for _, symptom := range []string{"wrong source", "stale selector", "missing retry", "incorrect destination"} {
+		artifact := "## Findings\n\nCONCERNS: execution contract: " + symptom + "\n"
+		if _, err := RecordRunConcerns(ctx, ws, "run-1", "", "execute-find-opportunities", ConcernPhaseExecution, artifact); err != nil {
+			t.Fatalf("record %s: %v", symptom, err)
 		}
 	}
 
@@ -269,5 +264,72 @@ func TestClusteredConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
 	}
 	if open[4].StepID != "execute-digest" || open[4].SeenCount != 3 {
 		t.Fatalf("the isolated recurrence should follow the cluster, got %+v", open[4])
+	}
+}
+
+func TestLegacyPreValidationFieldRowsMigrateToOneStepFinding(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	db, err := openRunConcernsDB(ctx, ws, true)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	stepID := "execute-find-opportunities"
+	legacy := []struct {
+		fp, text, firstRun, lastRun string
+		seen                        int
+	}{
+		{"legacy-field-a", "prevalidation gate failed at opportunities.json $.targets", "run-1", "run-2", 2},
+		{"legacy-field-b", "prevalidation gate failed at opportunities.json $.coverage", "run-2", "run-2", 1},
+	}
+	for _, row := range legacy {
+		if _, err := db.ExecContext(ctx, `INSERT INTO run_concerns
+			(fingerprint,step_id,phase,text,first_seen_run,first_seen_at,last_seen_run,last_seen_at,seen_count,status)
+			VALUES (?,?,?,?,?,'2026-08-01T00:00:00Z',?,'2026-08-02T00:00:00Z',?,?)`,
+			row.fp, stepID, ConcernPhasePreValidation, row.text, row.firstRun, row.lastRun, row.seen, ConcernStatusOpen); err != nil {
+			t.Fatalf("insert legacy concern: %v", err)
+		}
+	}
+	for _, event := range []struct{ fp, run, kind string }{
+		{"legacy-field-a", "run-1", "filed-a"},
+		{"legacy-field-a", "run-2", "observed-a"},
+		{"legacy-field-b", "run-2", "filed-b"},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint,pulse_run_id,event_type,summary,metadata_json,recorded_at)
+			VALUES (?,?,?,?,'{}','2026-08-02T00:00:00Z')`, event.fp, event.run, event.kind, event.kind); err != nil {
+			t.Fatalf("insert legacy event: %v", err)
+		}
+	}
+
+	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var count, seen int
+	var fingerprint, text string
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), MIN(fingerprint), MIN(text), MIN(seen_count)
+		FROM run_concerns WHERE phase=? AND step_id=?`, ConcernPhasePreValidation, stepID).
+		Scan(&count, &fingerprint, &text, &seen); err != nil {
+		t.Fatalf("read migrated concern: %v", err)
+	}
+	if count != 1 || fingerprint != preValidationConcernFingerprint(stepID) {
+		t.Fatalf("got count=%d fingerprint=%q, want one canonical step finding", count, fingerprint)
+	}
+	if seen != 2 {
+		t.Fatalf("seen_count=%d, want two distinct runs rather than three field rows", seen)
+	}
+	if !strings.Contains(text, "2 legacy field-level finding(s) were consolidated") {
+		t.Fatalf("migration summary lost granularity evidence: %q", text)
+	}
+	var events int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events WHERE fingerprint=?`, fingerprint).Scan(&events); err != nil {
+		t.Fatalf("count migrated events: %v", err)
+	}
+	if events != 3 {
+		t.Fatalf("events=%d, want all three field observations preserved", events)
 	}
 }

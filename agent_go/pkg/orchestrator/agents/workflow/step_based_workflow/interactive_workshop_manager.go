@@ -2274,6 +2274,7 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
+	configureWorkshopToolAgentBridgeSession(sessionID)
 	dbAccess := DBAccessRead
 	if dbWritePathGranted(writePaths, workspacePath) {
 		dbAccess = DBAccessReadWrite
@@ -2293,6 +2294,73 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 		sessionID, agentKind, workspacePath, readPaths, writePaths, blockedWrites,
 	))
 	return sessionID
+}
+
+// configureWorkshopToolAgentBridgeSession makes shell-originated bridge calls
+// use the same child MCP session as direct tool calls. Without this override,
+// execute_shell_command inherits the long-lived workshop client's MCP URL. A
+// nested curl to mutate_workflow_db is then attributed to the parent session,
+// even though the child owns the folder guard and DB capability.
+func configureWorkshopToolAgentBridgeSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	env := map[string]string{"MCP_SESSION_ID": sessionID}
+	if scopedURL := buildSessionScopedMCPAPIURL(sessionID); scopedURL != "" {
+		env["MCP_API_URL"] = scopedURL
+	}
+	common.PopulateMCPBridgeShortEnv(env)
+	common.SetSessionShellEnv(sessionID, env)
+}
+
+func pulseFixerDBCapabilityPreflight(
+	sessionID string,
+	workspacePath string,
+	tools []llmtypes.Tool,
+	executors map[string]interface{},
+) error {
+	sessionID = strings.TrimSpace(sessionID)
+	workspacePath = strings.TrimSpace(workspacePath)
+	if sessionID == "" || workspacePath == "" {
+		return fmt.Errorf("Pulse Fixer DB capability preflight requires a session and workspace")
+	}
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || !cfg.FolderGuardSet {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has no folder guard", sessionID)
+	}
+	if !dbWritePathGranted(cfg.WritePaths, workspacePath) {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q lacks workflow DB write scope", sessionID)
+	}
+	if got := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); got != DBAccessReadWrite {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has db_access=%q, want %q", sessionID, got, DBAccessReadWrite)
+	}
+	if got := strings.TrimSpace(cfg.Env["MCP_SESSION_ID"]); got != sessionID {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge session=%q, want %q", got, sessionID)
+	}
+	if scopedURL := buildSessionScopedMCPAPIURL(sessionID); scopedURL != "" {
+		if got := strings.TrimSpace(cfg.Env["MCP_API_URL"]); got != scopedURL {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge URL=%q, want %q", got, scopedURL)
+		}
+	}
+
+	hasTool := func(name string) bool {
+		for _, tool := range tools {
+			if tool.Function != nil && tool.Function.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
+		if !hasTool(name) {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: required tool %q is not registered", name)
+		}
+		if executor, ok := executors[name]; !ok || executor == nil {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: required executor %q is unavailable", name)
+		}
+	}
+	return nil
 }
 
 // workshopBlockedWritePaths denies writes to canonical files that must only
@@ -10238,6 +10306,13 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 	config.ServerNames = []string{mcpclient.NoServers}
 	toolAgentSessionID, releaseToolAgentSession := iwm.configureWorkshopToolAgentSessionWithID(config, stageAgentIdentity, readPaths, writePaths)
 	defer releaseToolAgentSession()
+	if access == goalAdvisorStagePulseFixer {
+		// Do not rely on the write-path inference used by ordinary workshop
+		// helpers. The Fixer is the single DB writer for this pass, so make its
+		// logical capability explicit and verify the complete tool/session surface
+		// before starting an expensive provider turn.
+		configureWorkflowDBSession(toolAgentSessionID, workspacePath, DBAccessReadWrite, false)
+	}
 
 	// A fixer stage writes Pulse state, and authority is keyed by the session id
 	// its tool calls actually carry — which setupWorkshopToolAgentSession
@@ -10256,6 +10331,11 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 	}
 
 	toolsToRegister, executorsToUse := filterWorkspaceToolsByName(iwm.controller.WorkspaceTools, iwm.controller.WorkspaceToolExecutors, allowedToolNames)
+	if access == goalAdvisorStagePulseFixer {
+		if err := pulseFixerDBCapabilityPreflight(toolAgentSessionID, workspacePath, toolsToRegister, executorsToUse); err != nil {
+			return "", err
+		}
+	}
 	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
 		return newWorkflowBackgroundTaskAgent(cfg, log, tracer, eventBridge)
 	}

@@ -11,6 +11,7 @@ import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { liveWorkflowTerminalSessionForPreset } from './workflowTerminalActivity'
 import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
+import { isVisibleActivitySession } from './activitySessions'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -56,20 +57,6 @@ function isActiveWorkflowSession(session: ActiveSessionInfo): boolean {
 
 function findTabForSession(tabs: Record<string, ChatTab>, sessionId: string): ChatTab | undefined {
   return Object.values(tabs).find(tab => tab.sessionId === sessionId)
-}
-
-function isVisibleActiveSession(session: ActiveSessionInfo): boolean {
-  const status = (session.status || '').toLowerCase()
-  return status === 'running' ||
-    status === 'active' ||
-    status === 'in_progress' ||
-    status === 'paused' ||
-    status === 'waiting' ||
-    status === 'waiting_feedback' ||
-    status === 'idle' ||
-    !!session.needs_user_input ||
-    session.has_running_background_agents === true ||
-    (session.running_background_agent_count ?? 0) > 0
 }
 
 function isWorkflowSession(session: ActiveSessionInfo): boolean {
@@ -120,7 +107,7 @@ export function pickWorkflowActiveSession(
       parentSessionId: session.parent_session_id,
       sessionKind: session.session_kind,
     }))
-    .filter(isVisibleActiveSession)
+    .filter(isVisibleActivitySession)
     .filter(session => workflowSessionMatchesPreset(session, preset, tabs))
     .sort((a, b) => {
       const priorityDelta = workflowSessionPriority(a) - workflowSessionPriority(b)

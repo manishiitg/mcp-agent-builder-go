@@ -397,6 +397,14 @@ type StreamingAPI struct {
 	sessionBusySince map[string]time.Time
 	sessionBusyMu    sync.RWMutex
 
+	// retainedMainTurns tracks direct follow-up turns submitted to a persistent
+	// coding-CLI tmux after the server-managed foreground Go turn has ended.
+	// Their structured terminal events remain available (the same events used by
+	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
+	// instead of guessing activity solely from the latest rendered spinner text.
+	retainedMainTurns   map[string]time.Time
+	retainedMainTurnsMu sync.Mutex
+
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
 	pendingMu          sync.RWMutex
@@ -1349,7 +1357,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverStartedAt,
 	)
 	terminalPipeRecorder := newTerminalPipeRecorder()
-	eventStore.SetEventAddedCallback(func(sessionID string, event events.Event) {
+	terminalEventObserver := func(sessionID string, event events.Event) {
 		if !terminalStore.HandleEventWithChange(sessionID, event) {
 			return
 		}
@@ -1361,7 +1369,8 @@ func runServer(cmd *cobra.Command, args []string) {
 		if terminalPipeRecorder != nil {
 			terminalPipeRecorder.ObserveSnapshots(terminalStore.List(sessionID))
 		}
-	})
+	}
+	eventStore.SetEventAddedCallback(terminalEventObserver)
 	log.Printf("📡 EventStore retention: max %d events per session", maxSessionEvents)
 
 	// Initialize the operator-state store (bot connector configs + user
@@ -1493,6 +1502,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		bgAgentRegistry:                 NewBackgroundAgentRegistry(),
 		sessionBusy:                     make(map[string]bool),
 		sessionBusySince:                make(map[string]time.Time),
+		retainedMainTurns:               make(map[string]time.Time),
 		pendingCompletions:              make(map[string][]string),
 		completionRetryScheduled:        make(map[string]bool),
 		pendingStartNotifications:       make(map[string][]string),
@@ -1507,6 +1517,14 @@ func runServer(cmd *cobra.Command, args []string) {
 		stoppedSessions:                 make(map[string]bool),
 		interruptedTurns:                make(map[string]bool),
 	}
+	// Terminal Center's Formatted view and the runtime coordinator now consume
+	// the same accepted structured events. The terminal observer updates the
+	// durable pane snapshot first; retained-turn reconciliation then uses that
+	// authoritative result to settle only the matching main-agent turn.
+	eventStore.SetEventAddedCallback(func(sessionID string, event events.Event) {
+		terminalEventObserver(sessionID, event)
+		api.observeRetainedMainTurnEvent(sessionID, event)
+	})
 
 	// BG-001: Wire the onDropped callback so a full notification channel re-queues
 	// the completion instead of silently losing it permanently.
@@ -6474,9 +6492,83 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
+		api.retainedMainTurnsMu.Lock()
+		if api.retainedMainTurns == nil {
+			api.retainedMainTurns = make(map[string]time.Time)
+		}
+		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnsMu.Unlock()
+		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
 		return
 	}
+}
+
+func retainedMainTurnCompletionEvent(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "streaming_end", "agent_end", "conversation_end", "unified_completion":
+		return true
+	default:
+		return false
+	}
+}
+
+// observeRetainedMainTurnEvent settles the explicit busy lifecycle opened by
+// markRetainedMainCodingTurnRunning. These are the same structured events that
+// back Terminal Center's Formatted view. A normal foreground turn is unaffected
+// because it never enters retainedMainTurns, and a child completion is ignored
+// because its terminal ownership does not resolve to the main coding agent.
+func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event events.Event) {
+	eventType := strings.ToLower(strings.TrimSpace(event.Type))
+	if api == nil || api.terminalStore == nil || !retainedMainTurnCompletionEvent(eventType) {
+		return
+	}
+
+	api.retainedMainTurnsMu.Lock()
+	startedAt, tracked := api.retainedMainTurns[sessionID]
+	api.retainedMainTurnsMu.Unlock()
+	if !tracked || (!event.Timestamp.IsZero() && event.Timestamp.Before(startedAt)) {
+		return
+	}
+
+	snapshot, ok := api.terminalStore.GetRaw(event.TerminalID)
+	if !ok || !codingAgentSnapshotIsMainAgent(snapshot) {
+		return
+	}
+
+	// streaming_end is first applied by the terminal observer. It can reject an
+	// intermediate provider end while the pane still shows newer active work.
+	// Higher-level completion events are definitive and may settle the retained
+	// logical turn while deliberately keeping the tmux process alive for resume.
+	if eventType != "streaming_end" && snapshot.Active {
+		if completed, changed := api.terminalStore.MarkTurnCompleted(snapshot.TerminalID); changed {
+			snapshot = completed
+		}
+	}
+	if snapshot.Active {
+		return
+	}
+
+	api.retainedMainTurnsMu.Lock()
+	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	if stillTracked && currentStart.Equal(startedAt) {
+		delete(api.retainedMainTurns, sessionID)
+	} else {
+		stillTracked = false
+	}
+	api.retainedMainTurnsMu.Unlock()
+	if !stillTracked {
+		return
+	}
+
+	api.setSessionBusy(sessionID, false)
+	if strings.EqualFold(strings.TrimSpace(snapshot.State), "failed") {
+		api.updateSessionStatus(sessionID, "error")
+	} else {
+		api.updateSessionStatus(sessionID, "completed")
+	}
+	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
+		eventType, sessionID, snapshot.TerminalID, snapshot.State)
 }
 
 // deliverRetainedMainTerminalInput sends directly to a live main coding-agent
@@ -6533,7 +6625,6 @@ func (api *StreamingAPI) deliverRetainedMainTerminalInput(ctx context.Context, s
 func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, provider string) string {
 	messageID := newSteerMessageID()
 	api.recordLiveCodingAgentUserMessage(sessionID, message, provider, messageID, "sent_to_cli")
-	api.setSessionBusy(sessionID, false)
 	api.markRetainedMainCodingTurnRunning(sessionID)
 	return messageID
 }

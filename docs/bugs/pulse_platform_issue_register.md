@@ -54,23 +54,45 @@ directory, tool-registration, or media-tool failure but predates
 | Platform key | Priority | Current workflow evidence | State |
 |---|---:|---|---|
 | PLAT-001 Human-input propagation | P0 | Upwork | **implementation fixed; runtime reverify** |
-| PLAT-002 Tool-failure status precedence | P0 | Upwork, Build-in-public | **canonical CLI/runtime fix implemented; runtime reverify** |
+| PLAT-002 Tool-failure status precedence | P0 | Upwork, Build-in-public, Social Media | **canonical CLI/runtime fix implemented; runtime reverify** |
 | PLAT-003 Workflow DB tool exposure | P0 | Build-in-public, Instagram, RTS Latency | **implemented on current main; runtime reverify** |
 | PLAT-004 Scheduler completion detection | P0 | RTS Latency | **fixed; linked finding needs reverify** |
 | PLAT-005 `get_api_spec` multi-name contract | P1 | RTS Latency | **fixed in mcpagent; runtime reverify** |
 | PLAT-006 Workflow-step shell cwd contract | P1 | RTS Latency | **reverify** implemented fix |
 | PLAT-007 Workflow image verification | P1 | Instagram | implemented; runtime/E2E reverify |
 | PLAT-008 Phase cost pricing | P1 | Build-in-public | **implemented; runtime reverify** |
-| PLAT-009 `get_cost_summary` run resolution | P1 | Build-in-public | **implemented; runtime reverify** |
+| PLAT-009 `get_cost_summary` run resolution | P1 | Build-in-public, Social Media | **implemented; runtime reverify** |
 | PLAT-010 Finding identity split | P1 | RTS Latency | **implemented with migration; runtime reverify** |
 | PLAT-011 LLM role visibility | P2 | Build-in-public | **implemented; runtime reverify** |
 | PLAT-012 Changelog mutation coverage | P2 | LinkedIn | **implemented; runtime reverify** |
 | PLAT-013 Legacy regular-step editing | P1 | RTS Latency | **reverify** implemented fix |
 | PLAT-014 Reviewer reference loading | P1 | RTS Latency, Tectonicus | **reverify** after `read_skill` migration |
+| PLAT-015 Evaluation skipped-sentinel handling | P1 | Social Media | **open; implementation required** |
+| PLAT-016 Evaluation report drops real zero scores | P1 | Social Media | **open; implementation required** |
+| PLAT-017 Scheduler success leaves workflow metadata running | P1 | Social Media | **open; distinct from PLAT-004** |
 
 The two tool-error findings below are one family, not two independent repair
 projects. The database-tool symptoms across three workflows are also one shared
 capability defect until evidence proves otherwise.
+
+### Why fixed platform findings appeared again in Social Media
+
+Social Media run `schedule-cron--4128e261_1785724255412842000` began at
+2026-08-03T02:30:55Z and its Pulse finalizer backed up at
+2026-08-03T07:13:51Z (12:43 IST). The platform-reliability bundle
+`46bf02dff` and canonical mcpagent tool-error change `7820b74` landed at
+18:56 IST. Therefore the Social Media observations for nested tool-error status
+and cost/run-folder attribution occurred before those implementations existed;
+they are verification evidence for PLAT-002 and PLAT-009, not proof that the
+new fixes regressed. This remains true even if the server restarted before the
+Social Media run.
+
+The scheduler evidence is different. PLAT-004 fixed premature success while
+required child work was still in flight. Social Media's discovery children did
+finish, but scheduler success and durable `run_metadata.status=running`
+disagreed afterward. That is a terminal metadata/provenance reconciliation
+defect and is tracked separately as PLAT-017 rather than being treated as a
+PLAT-004 regression.
 
 ## Detailed issues
 
@@ -109,7 +131,9 @@ capability defect until evidence proves otherwise.
 - **Priority:** P0
 - **Owner:** tool bridge, timing telemetry, and terminal status
 - **Source findings:** `HARNESS-NESTED-ERROR-STATUS-PRECEDENCE` (Upwork) and
-  `HARNESS-TOOL-ENVELOPE-ISERROR-2026-08-03` (Build-in-public)
+  `HARNESS-TOOL-ENVELOPE-ISERROR-2026-08-03` (Build-in-public), plus
+  `HARNESS-TIMING-EMBEDDED-TOOL-ERROR` (Social Media, observed before the
+  canonical implementation landed)
 - **Problem:** the outer transport succeeds while the nested tool payload says
   `ERROR`, carries a non-zero nested exit code, or reports an HTTP failure.
   Stored traces still set `IsError=false` and `errored_count=0`.
@@ -145,7 +169,10 @@ capability defect until evidence proves otherwise.
 - **Source finding:** `HARNESS-DBTOOL-NOT-EXPOSED-EXEC-2026-08-03`
 - **Primary source database:** `Workflow/build-in-public/db/db.sqlite`
 - **Related evidence:** Instagram `route-design-plan`; RTS collectors denied
-  direct SQLite and unable to discover the sanctioned DB path.
+  direct SQLite and unable to discover the sanctioned DB path; Social Media
+  standalone Pulse Fixer `manual-fixer--20260803T164745Z-1785775665916620000`
+  spent 27 minutes, then its approved one-row normalization was denied with
+  effective `db_access=""`.
 - **Problem:** steps with `db_access=read-write` cannot resolve
   `query_workflow_db`/`mutate_workflow_db` as callable tools. The same tools may
   exist behind an undocumented raw `$MCP_CUSTOM` curl route.
@@ -163,6 +190,15 @@ capability defect until evidence proves otherwise.
   Focused capability tests pass for read-only/read-write exposure and for
   read-only/no-grant mutation denial. The three source findings should be moved
   to platform reverify rather than prompting another workflow-level repair.
+- **Fixer follow-up (2026-08-03):** isolated workshop stage tools already used
+  the child MCP session directly, but `execute_shell_command` inherited the
+  parent workshop's MCP URL. A Fixer calling the managed DB tool through the
+  shell bridge was therefore authorized as the wrong session. Workshop stage
+  sessions now override the bridge URL/session in their trusted shell env. A
+  Pulse Fixer also receives an explicit read-write DB capability and must pass
+  a pre-provider capability check covering DB write scope, logical grant,
+  child-session bridge routing, and both query/mutation tool executors. Missing
+  capability fails before the expensive LLM run; mutation remains fail-closed.
 - **Current workaround:** raw `$MCP_CUSTOM/query_workflow_db` and
   `$MCP_CUSTOM/mutate_workflow_db` calls when their exact API is known.
 - **Acceptance:** real workflow-step bridge E2E tests for read-only and
@@ -175,6 +211,10 @@ capability defect until evidence proves otherwise.
 - **Owner:** scheduler/background execution completion barrier
 - **Legacy source:** RTS Latency `run_concerns`, `bug_review`,
   `external_action_required`, seen twice
+- **Linked Social Media findings:** `HARNESS-PULSE-RUN-STATUS-MISMATCH` and
+  `HARNESS-SCHEDULER-CHILD-STATUS`. These are two observations of the same
+  scheduler/workflow terminal-state reconciliation boundary, not two repair
+  projects. They were emitted by the pre-rebuild runtime.
 - **Problem:** `schedule-runs.json` recorded a dev run as success after 84.6
   seconds even though the pipeline ended at `step-daily-latency-report` and
   later security, cost, digest, and checkpoint work never completed.
@@ -284,6 +324,8 @@ capability defect until evidence proves otherwise.
 - **Owner:** cost-query projection
 - **Source finding:** `HARNESS-COSTSUMMARY-RUNFOLDER-2026-08-03`
 - **Source database:** `Workflow/build-in-public/db/db.sqlite`
+- **Linked Social Media finding:** `HARNESS-EXEC-COST-RUN-FOLDER`
+  (observed before the current implementation landed)
 - **Problem:** grouped run folders are looked up through a legacy
   `runs/.../token_usage.json` path even when the authoritative execution ledger
   has the data, and an ungrouped query omits spend recorded on another date.
@@ -386,6 +428,71 @@ capability defect until evidence proves otherwise.
   skill/reference in its isolated stage session; no retired
   `get_reference_doc` instruction remains on a live path.
 
+### PLAT-015 — evaluation harness mishandles skipped-result sentinels
+
+- **Priority:** P1
+- **Owner:** evaluation execution/result collection
+- **Source finding:** `HARNESS-EVAL-RESULTS-SKIPPED-SENTINEL`
+- **Source database:** `Workflow/social-media/db/db.sqlite`
+- **Recorded state:** `external_action_required`
+- **Problem:** the evaluation harness's skipped-result sentinel behavior does
+  not preserve the workflow evaluation contract. A workflow evaluation-plan
+  edit cannot repair how the shared harness recognizes and serializes a
+  skipped result.
+- **Impact:** a legitimately unavailable or skipped evaluation can be
+  misclassified, dropped, or made indistinguishable from a malformed result.
+- **Current state:** open. No matching implementation was identified in this
+  register; unlike the linked pre-rebuild findings above, this is not marked
+  reverify merely because it appeared on an old binary.
+- **Acceptance:** explicit completed, skipped, unavailable, and failed fixtures
+  retain distinct terminal states through execution, persistence, report
+  projection, and Pulse review. A skipped sentinel cannot become success or
+  disappear.
+
+### PLAT-016 — evaluation report serialization drops a real zero score
+
+- **Priority:** P1
+- **Owner:** evaluation result/report serializer
+- **Source finding:** `HARNESS-EVAL-REPORT-ZERO-SCORE`
+- **Source database:** `Workflow/social-media/db/db.sqlite`
+- **Recorded state:** `external_action_required`
+- **Problem:** a real numeric score of `0` is treated like an absent value and
+  omitted from `evaluation_report.json`.
+- **Impact:** the worst valid evaluation result can disappear, making reports,
+  trend calculations, and Pulse evidence falsely incomplete or healthier than
+  the producing evaluator actually reported.
+- **Current state:** open. No implementation or post-change verification is
+  recorded here.
+- **Acceptance:** table-driven serialization covers `0`, positive, negative,
+  fractional, `null`, unavailable, and missing values. Numeric zero survives
+  unchanged through persisted result, report JSON, API projection, and UI.
+
+### PLAT-017 — scheduler success leaves durable workflow metadata running
+
+- **Priority:** P1
+- **Owner:** scheduler/workflow terminal-state persistence and reconciliation
+- **Source findings:** `HARNESS-PULSE-RUN-STATUS-MISMATCH` and
+  `HARNESS-SCHEDULER-CHILD-STATUS`
+- **Source database:** `Workflow/social-media/db/db.sqlite`
+- **Recorded state:** `external_action_required`; the two IDs describe one
+  terminal-state boundary and must not become two repair projects
+- **Problem:** the discovery children completed and the scheduler reported
+  success, while `runs/iteration-0/default/run_metadata.json` remained
+  `status=running`.
+- **Distinction from PLAT-004:** PLAT-004 prevented success while required work
+  was still running. PLAT-017 concerns stale durable workflow metadata after
+  genuine completion.
+- **Impact:** Pulse and later consumers cannot choose one authoritative run
+  status; the same completed run can appear successful in schedule history and
+  active/incomplete in workflow evidence.
+- **Current state:** open. Reproduce on the current binary before choosing
+  whether scheduler completion must finalize run metadata directly or a shared
+  reconciler must atomically persist both terminal projections.
+- **Acceptance:** after one completed, failed, canceled, and interrupted
+  scheduled fixture, scheduler history and `run_metadata` agree on terminal
+  state, completion time, and owning execution identity. A partial write is
+  retried or surfaced as failure rather than leaving contradictory success.
+
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
@@ -434,8 +541,9 @@ After a platform fix ships:
 4. PLAT-004 scheduler completion barrier — fixed in `f69de7b6c`; RTS scheduled-run reverify pending.
 5. Add the platform issue/link lifecycle so the backlog stops duplicating them.
 6. Reverify PLAT-006, PLAT-013, and PLAT-014 on the rebuilt runtime.
-7. Repair/query-test the remaining P1 observability and media defects.
-8. Address the P2 configuration and changelog completeness gaps.
+7. Reproduce and repair PLAT-015, PLAT-016, and PLAT-017 on the current binary.
+8. Repair/query-test the remaining P1 observability and media defects.
+9. Address the P2 configuration and changelog completeness gaps.
 
 The first four are ordered ahead of cost and UI completeness because they can
 change what a workflow does while still allowing it to report success.

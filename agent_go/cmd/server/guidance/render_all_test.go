@@ -176,6 +176,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 		},
 		"pulse-fixer": {
 			"STANDALONE PULSE FIXER",
+			"references/pulse-fixer-practices.md",
 			"does not rerun Pulse Gate",
 			"launch review agents",
 			"begin_pulse_fixer_run",
@@ -484,6 +485,30 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	} {
 		if !strings.Contains(fixVerify, want) {
 			t.Fatalf("fix-verification missing %q", want)
+		}
+	}
+
+	fixPractices, err := renderFromRegistry("pulse-fixer-practices", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render pulse-fixer-practices: %v", err)
+	}
+	for _, want := range []string{
+		"Separate symptom from root cause",
+		"Map the contract boundary",
+		"Schema and artifact contract repair",
+		"producer stale",
+		"validator stale",
+		"contract split",
+		"missing semantics",
+		"negative fixture",
+		"Prevalidation is a guard, not the durable repair",
+		"Database repair",
+		"Tool, path, and permission repair",
+		"Scheduler and lifecycle repair",
+		"Evaluation and report repair",
+	} {
+		if !strings.Contains(fixPractices, want) {
+			t.Fatalf("pulse-fixer-practices missing %q", want)
 		}
 	}
 

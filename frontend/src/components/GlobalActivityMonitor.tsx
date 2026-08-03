@@ -8,7 +8,7 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { isScheduledWorkflowSession, openActiveSession } from '../utils/workflowSessionRestore'
 import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
-import { hasIdleAliveCodingAgent, hasLiveBackgroundAgents, nonWorkflowActivityTitle } from '../utils/activitySessions'
+import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { isInternalChildSession } from '../utils/workflowSessionKinds'
@@ -24,33 +24,6 @@ type ActivityMonitorItem =
 
 function isWorkflowSession(session: ActiveSessionInfo): boolean {
   return session.agent_mode?.toLowerCase().includes('workflow') ?? false
-}
-
-function isActiveSession(session: ActiveSessionInfo): boolean {
-  const status = sessionRuntimeStatus(session)
-
-  // Scheduled/cron sessions: show only while actively running (so user can observe),
-  // hide once completed — they don't need user attention after finishing.
-  if (isScheduledWorkflowSession(session)) {
-    return (
-      status === 'busy' ||
-      status === 'idle' ||
-      hasLiveBackgroundAgents(session)
-    )
-  }
-
-  // Idle-but-alive coding-agent CLI: a live tmux pane still holding agent context,
-  // ready to resume the moment the user sends another message. Shown as idle (clock).
-  if (hasIdleAliveCodingAgent(session)) return true
-
-  if (
-    runtimeNeedsUserInput(session) ||
-    hasLiveBackgroundAgents(session) ||
-    status === 'busy' ||
-    status === 'idle'
-  ) return true
-
-  return false
 }
 
 function sessionTitle(session: ActiveSessionInfo, workflow?: RunningWorkflowInfo, fallbackWorkflowName?: string | null): string {
@@ -188,7 +161,7 @@ export const GlobalActivityMonitor: React.FC = () => {
       !isInternalChildSession({
         parentSessionId: session.parent_session_id,
         sessionKind: session.session_kind,
-      }) && isActiveSession(session)
+      }) && isVisibleActivitySession(session)
     )
   }, [activeSessionsCache])
 

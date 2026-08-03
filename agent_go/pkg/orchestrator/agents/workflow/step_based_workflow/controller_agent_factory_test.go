@@ -87,6 +87,72 @@ func TestConfigureWorkflowDBSessionRetainsScriptedCompatibility(t *testing.T) {
 	}
 }
 
+func TestWorkshopToolAgentBridgeSessionOverridesParentRouting(t *testing.T) {
+	t.Setenv("MCP_API_URL", "http://127.0.0.1:7777/s/parent-workshop")
+	sessionID := "workshop-pulse-fixer-child"
+	t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+
+	configureWorkshopToolAgentBridgeSession(sessionID)
+	env := common.GetSessionShellEnv(sessionID)
+	for key, want := range map[string]string{
+		"MCP_SESSION_ID": sessionID,
+		"MCP_API_URL":    "http://127.0.0.1:7777/s/" + sessionID,
+		"MCP_CUSTOM":     "http://127.0.0.1:7777/s/" + sessionID + "/tools/custom",
+	} {
+		if got := env[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestPulseFixerDBCapabilityPreflight(t *testing.T) {
+	t.Setenv("MCP_API_URL", "http://127.0.0.1:7777/s/stale-parent")
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	tools := []llmtypes.Tool{tool("query_workflow_db"), tool("mutate_workflow_db")}
+	executors := map[string]interface{}{
+		"query_workflow_db":  func(context.Context, map[string]interface{}) (string, error) { return "", nil },
+		"mutate_workflow_db": func(context.Context, map[string]interface{}) (string, error) { return "", nil },
+	}
+
+	t.Run("accepts explicit child-scoped read-write capability", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-ok"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
+		if err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors); err != nil {
+			t.Fatalf("preflight rejected valid Fixer capability: %v", err)
+		}
+	})
+
+	t.Run("fails before provider work when mutation grant is absent", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-no-db-write"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, nil)
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessRead, false)
+		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
+		if err == nil || !strings.Contains(err.Error(), "lacks workflow DB write scope") {
+			t.Fatalf("preflight did not fail closed on missing DB write scope: %v", err)
+		}
+	})
+
+	t.Run("fails before provider work when shell routes to parent session", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-stale-route"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
+		common.SetSessionShellEnv(sessionID, map[string]string{"MCP_SESSION_ID": "parent-workshop"})
+		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
+		if err == nil || !strings.Contains(err.Error(), "shell bridge session") {
+			t.Fatalf("preflight did not reject stale parent routing: %v", err)
+		}
+	})
+}
+
 func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,

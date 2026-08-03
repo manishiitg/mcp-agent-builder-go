@@ -288,6 +288,9 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 			return err
 		}
 	}
+	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
+		return err
+	}
 	if err := migrateDuplicatePulseFindingIdentities(ctx, db); err != nil {
 		return err
 	}
@@ -300,6 +303,90 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		`CREATE INDEX IF NOT EXISTS idx_pulse_finding_details_target_key ON pulse_finding_details(target_key) WHERE target_key<>''`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migratePreValidationConcernGranularity folds the legacy one-row-per-failed-
+// field shape into one lifecycle finding per step. Individual field failures
+// remain in pulse_finding_events and the retained per-run pre_validation.json
+// logs; the active issue tracker represents the one output-contract repair.
+func migratePreValidationConcernGranularity(ctx context.Context, db pulseFindingLifecycleDB) error {
+	type legacyRow struct {
+		Fingerprint  string
+		StepID       string
+		FirstSeenRun string
+		LastSeenRun  string
+	}
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, first_seen_run, last_seen_run
+		FROM run_concerns WHERE phase=? ORDER BY step_id, first_seen_at, fingerprint`, ConcernPhasePreValidation)
+	if err != nil {
+		return err
+	}
+	groups := map[string][]legacyRow{}
+	for rows.Next() {
+		var row legacyRow
+		if err := rows.Scan(&row.Fingerprint, &row.StepID, &row.FirstSeenRun, &row.LastSeenRun); err != nil {
+			rows.Close()
+			return err
+		}
+		groups[row.StepID] = append(groups[row.StepID], row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for stepID, legacy := range groups {
+		target := preValidationConcernFingerprint(stepID)
+		if len(legacy) == 1 && legacy[0].Fingerprint == target {
+			continue
+		}
+		identityRows := make([]pulseIdentityRow, 0, len(legacy))
+		runs := map[string]bool{}
+		fingerprints := make([]string, 0, len(legacy))
+		for _, row := range legacy {
+			identityRows = append(identityRows, pulseIdentityRow{Fingerprint: row.Fingerprint, StepID: stepID})
+			fingerprints = append(fingerprints, row.Fingerprint)
+			if strings.TrimSpace(row.FirstSeenRun) != "" {
+				runs[row.FirstSeenRun] = true
+			}
+			if strings.TrimSpace(row.LastSeenRun) != "" {
+				runs[row.LastSeenRun] = true
+			}
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(fingerprints)), ",")
+		args := make([]interface{}, 0, len(fingerprints))
+		for _, fingerprint := range fingerprints {
+			args = append(args, fingerprint)
+		}
+		eventRows, err := db.QueryContext(ctx, `SELECT DISTINCT pulse_run_id FROM pulse_finding_events
+			WHERE fingerprint IN (`+placeholders+`) AND pulse_run_id<>''`, args...)
+		if err != nil {
+			return err
+		}
+		for eventRows.Next() {
+			var runID string
+			if err := eventRows.Scan(&runID); err != nil {
+				eventRows.Close()
+				return err
+			}
+			runs[runID] = true
+		}
+		if err := eventRows.Close(); err != nil {
+			return err
+		}
+		if err := mergePulseIdentityGroup(ctx, db, target, identityRows); err != nil {
+			return err
+		}
+		seenCount := len(runs)
+		if seenCount == 0 {
+			seenCount = 1
+		}
+		text := fmt.Sprintf("prevalidation gate failed for the step output contract; %d legacy field-level finding(s) were consolidated. Inspect the linked event history and per-run pre_validation.json for every failed check", len(legacy))
+		if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET text=?, phase=?, seen_count=? WHERE fingerprint=?`,
+			text, ConcernPhasePreValidation, seenCount, target); err != nil {
 			return err
 		}
 	}

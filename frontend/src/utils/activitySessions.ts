@@ -1,5 +1,5 @@
 import type { ActiveSessionInfo } from '../services/api-types'
-import { runtimeHasBackgroundAgents, sessionRuntimeStatus } from './runtimeActivity'
+import { runtimeHasBackgroundAgents, runtimeNeedsUserInput, sessionRuntimeStatus } from './runtimeActivity'
 import { isScheduledSession } from './workflowSessionKinds'
 
 export function normalizedActivityStatus(status?: string): string {
@@ -79,4 +79,31 @@ export function hasIdleAliveCodingAgent(
   // (the backend reaper still bounds how long the pane itself stays alive).
   if (Number.isNaN(last)) return true
   return now - last < RETAINED_TMUX_ACTIVE_WINDOW_MS
+}
+
+/**
+ * Canonical visibility rule for live activity surfaces such as the global
+ * monitor and Quick Switcher's `@active` scope. Keep this shared so the
+ * monitor's overflow count cannot disagree with the expanded list.
+ */
+export function isVisibleActivitySession(
+  session: ActiveSessionInfo,
+  now: number = Date.now(),
+): boolean {
+  const status = sessionRuntimeStatus(session)
+
+  // Scheduled runs disappear once settled. A retained terminal from an old
+  // schedule is not an interactive session the user can resume.
+  if (isScheduledSession({ sessionId: session.session_id, triggeredBy: session.triggered_by })) {
+    return status === 'busy' || status === 'idle' || hasLiveBackgroundAgents(session)
+  }
+
+  // Interactive coding sessions remain useful after a completed turn while
+  // their retained terminal is alive and ready for a follow-up.
+  if (hasIdleAliveCodingAgent(session, now)) return true
+
+  return runtimeNeedsUserInput(session) ||
+    hasLiveBackgroundAgents(session) ||
+    status === 'busy' ||
+    status === 'idle'
 }

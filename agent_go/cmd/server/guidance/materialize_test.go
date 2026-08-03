@@ -136,6 +136,9 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	if strings.Contains(prompt, "get_reference_doc") {
 		t.Fatalf("pulse-review-fixer still references the removed get_reference_doc tool")
 	}
+	if !strings.Contains(prompt, "references/pulse-fixer-practices.md") {
+		t.Fatal("pulse-review-fixer does not require the canonical Fixer practices reference")
+	}
 
 	// The docs are split across bundles — review-artifact-drift is in
 	// workflow-commands, the rest in builder-reference — so the whole surface
@@ -148,7 +151,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 		t.Fatalf("attach reference surface: %v", err)
 	}
 	for _, kind := range []string{
-		"fix-verification", "strategy-auditor", "pulse-bug-review",
+		"fix-verification", "pulse-fixer-practices", "strategy-auditor", "pulse-bug-review",
 		"llm-selection", "review-artifact-drift",
 	} {
 		want := "references/" + kind + ".md"
@@ -182,6 +185,9 @@ func TestStandalonePulseFixerWorksTheWholeBacklog(t *testing.T) {
 		"query_workflow_db",
 		"seen_count",
 		"answered",
+		"Full-backlog drain contract",
+		"starting manifest",
+		`get_pulse_state(view="backlog")`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("pulse-fixer prompt is missing %q — the Fixer cannot size or prioritize the backlog without it", want)
@@ -189,5 +195,37 @@ func TestStandalonePulseFixerWorksTheWholeBacklog(t *testing.T) {
 	}
 	if strings.Contains(prompt, "for the\n   selected owning modules") {
 		t.Errorf("pulse-fixer still scopes the backlog to selected modules")
+	}
+}
+
+func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
+	raw, err := os.ReadFile("templates/system/pulse-fixer-practices.md")
+	if err != nil {
+		t.Fatalf("read pulse-fixer-practices template: %v", err)
+	}
+	practices := string(raw)
+	for _, want := range []string{
+		"Full-backlog drain contract",
+		"Freeze a starting manifest",
+		"Classify every manifest item",
+		"Maintain an explicit remaining list",
+		"Reconcile before completion",
+		`record_pulse_result`,
+	} {
+		if !strings.Contains(practices, want) {
+			t.Errorf("pulse-fixer practices missing exhaustive-drain rule %q", want)
+		}
+	}
+
+	scheduled := RenderSystemDoc("pulse-review-fixer")
+	for _, want := range []string{
+		"complete active starting manifest",
+		"do not narrow the consolidated Fixer's retained",
+		"Full-backlog drain contract",
+		"must not claim completion",
+	} {
+		if !strings.Contains(scheduled, want) {
+			t.Errorf("scheduled Fixer prompt missing exhaustive-drain rule %q", want)
+		}
 	}
 }

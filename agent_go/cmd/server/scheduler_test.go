@@ -2270,7 +2270,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 		}
 	}
 	fixer := steps[len(steps)-3].query
-	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
+	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, `references/pulse-fixer-practices.md`, `references/fix-verification.md`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
 		if !strings.Contains(fixer, required) {
 			t.Fatalf("consolidated Fixer prompt missing %q: %s", required, fixer)
 		}

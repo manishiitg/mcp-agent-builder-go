@@ -438,10 +438,9 @@ func TestExternalActionRequiredNeedsOwnershipAndReopenBoundary(t *testing.T) {
 // actually reads.
 //
 // get_pulse_state(view="backlog") resolves here, not through LoadOpenRunConcerns.
-// Reordering that other function alone left this one sorting by recency, so
-// social-media's 39 execute-find-opportunities concerns — one schema mismatch
-// filed once per field it named — stayed interleaved with unrelated findings
-// and successive Bug Review passes never reached them.
+// Distinct behavioral findings on one step should remain adjacent so the
+// reviewer can reason about their shared execution boundary. Prevalidation
+// field failures are consolidated earlier into one step-level finding.
 func TestFindingBacklogLeadsWithTheLargestCluster(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
@@ -455,9 +454,9 @@ func TestFindingBacklogLeadsWithTheLargestCluster(t *testing.T) {
 		}
 	}
 	// Filed first, so recency ranks them last.
-	for _, field := range []string{"$.status", "$.targets", "$.synthesis_notes"} {
+	for _, field := range []string{"wrong source", "stale selector", "missing retry"} {
 		file("pulse-1", "execute-find-opportunities",
-			"prevalidation gate failed at opportunities.json "+field)
+			"execution contract failure: "+field)
 	}
 	// Filed last, so recency would put this on top.
 	file("pulse-2", "execute-digest", "digest was not delivered")

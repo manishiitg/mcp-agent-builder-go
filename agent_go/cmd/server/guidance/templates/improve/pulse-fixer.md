@@ -43,8 +43,11 @@ tables do not use the column names an agent would guess.
 
 ## Select work
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
-   `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"},{"name":"builder-reference","path":"references/pulse-fixer-practices.md"},{"name":"builder-reference","path":"references/fix-verification.md"}])`.
+   Use the practices reference to consolidate symptoms and choose a complete
+   repair before applying the lifecycle and verification contracts. Follow its
+   **Full-backlog drain contract** literally: freeze the starting manifest,
+   maintain the remaining finding-ID list, and reconcile it before completion.
 2. Call `get_pulse_state(view="module")`, then `get_pulse_state(view="backlog")` with no module
    filter so it returns the complete active backlog. Treat active concerns, finding lifecycles, attempts,
    verification history, decisions, and saved review identities as the source of
@@ -104,6 +107,13 @@ duplicate-detection evidence. Do not mutate a finding that cannot be linked to
 both values.
 
 ## Close out
+
+Before any final answer, re-read `get_pulse_state(view="backlog")` and reconcile
+every exact pair from the starting manifest. Do not equate "made useful fixes"
+with "drained the backlog." Any starting open/acknowledged item without a
+current-pass disposition means the Fixer is still running; continue. A retained
+waiting/external item is accounted for only when you checked and named its still
+unmet evidence, decision, version, or ownership boundary.
 
 Call `record_pulse_result` exactly once for every selected module, with one
 structured disposition for every selected finding. Use `fixed_verified`, `changed_unverified`, `verified_no_change`,

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -132,6 +133,57 @@ func TestSavePreValidationLogConcernRecursAcrossRuns(t *testing.T) {
 	}
 	if concerns[0].LastSeenRun != "iteration-0/default-2" {
 		t.Errorf("LastSeenRun = %q, want the second run", concerns[0].LastSeenRun)
+	}
+}
+
+func TestSavePreValidationLogCollapsesAllFailedChecksForOneStep(t *testing.T) {
+	hcpo, _ := newPreValidationConcernTestOrchestrator(t)
+	ctx := context.Background()
+	stepID := "execute-find-opportunities"
+	logPath := hcpo.GetWorkspacePath() + "/runs/" + hcpo.selectedRunFolder
+
+	failure := &WorkspaceVerificationResult{
+		OverallPass: false,
+		Summary: ValidationSummary{
+			TotalChecks:  3,
+			FailedChecks: 3,
+			Errors: []ValidationError{
+				{File: "opportunities.json", Path: "$.action_targets", Message: "must exist"},
+				{File: "opportunities.json", Path: "$.coverage_report", Message: "must be an object"},
+				{File: "opportunities.json", Path: "$.targets", Message: "must be an array"},
+			},
+		},
+	}
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, stepID, stepID,
+		failure, nil, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+
+	concerns, err := LoadOpenRunConcerns(ctx, hcpo.GetWorkspacePath(), 25)
+	if err != nil {
+		t.Fatalf("LoadOpenRunConcerns: %v", err)
+	}
+	if len(concerns) != 1 {
+		t.Fatalf("got %d concerns, want one step-level prevalidation bug: %+v", len(concerns), concerns)
+	}
+	for _, path := range []string{"$.action_targets", "$.coverage_report", "$.targets"} {
+		if !strings.Contains(concerns[0].Text, path) {
+			t.Fatalf("one concern must retain field evidence %q: %s", path, concerns[0].Text)
+		}
+	}
+	if concerns[0].SeenCount != 1 {
+		t.Fatalf("SeenCount=%d, want one observation for one run", concerns[0].SeenCount)
+	}
+
+	// A repair retry in the same run updates the one bug's latest evidence but
+	// does not manufacture another recurrence.
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, stepID, stepID,
+		targetingAuditFailure("$.new_field", "still missing"), nil,
+		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+	concerns, err = LoadOpenRunConcerns(ctx, hcpo.GetWorkspacePath(), 25)
+	if err != nil {
+		t.Fatalf("reload concerns: %v", err)
+	}
+	if len(concerns) != 1 || concerns[0].SeenCount != 1 || !strings.Contains(concerns[0].Text, "$.new_field") {
+		t.Fatalf("same-run retry should update one concern without recurrence inflation: %+v", concerns)
 	}
 }
 

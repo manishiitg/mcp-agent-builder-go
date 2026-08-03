@@ -706,6 +706,10 @@ func TestTryDeliverQueryAsLiveInputReactivatesSettledRetainedTmux(t *testing.T) 
 			return nil
 		},
 	}
+	store.SetEventAddedCallback(func(ownerSessionID string, event internalevents.Event) {
+		terminalStore.HandleEventWithChange(ownerSessionID, event)
+		api.observeRetainedMainTurnEvent(ownerSessionID, event)
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/query", nil)
 	rr := httptest.NewRecorder()
@@ -805,6 +809,10 @@ func TestHandleLiveInputMessageDeliversDirectlyToLiveMainTmuxWithoutAgent(t *tes
 			return nil
 		},
 	}
+	store.SetEventAddedCallback(func(ownerSessionID string, event internalevents.Event) {
+		terminalStore.HandleEventWithChange(ownerSessionID, event)
+		api.observeRetainedMainTurnEvent(ownerSessionID, event)
+	})
 
 	body := bytes.NewBufferString(`{"message":"deliver directly to the retained Claude pane"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/live-input", body)
@@ -839,8 +847,68 @@ func TestHandleLiveInputMessageDeliversDirectlyToLiveMainTmuxWithoutAgent(t *tes
 	if got := api.activeSessions[sessionID].Status; got != "running" {
 		t.Fatalf("session status = %q, want running", got)
 	}
+	if !api.isSessionBusy(sessionID) {
+		t.Fatal("confirmed retained-terminal turn must be authoritatively busy while it is running")
+	}
+	if runtime, _ := api.authoritativeRuntimeSnapshot(sessionID); runtime.Phase != runtimePhaseRunning {
+		t.Fatalf("runtime phase = %q (%s), want running", runtime.Phase, runtime.Reason)
+	}
 	if got := len(store.GetAllEventsRaw(sessionID)); got != 1 {
 		t.Fatalf("recorded event count = %d, want 1", got)
+	}
+
+	// A child terminal completion is part of the formatted transcript but must
+	// never settle the retained main-agent turn.
+	childExecutionID := "workflow-step:child-review"
+	store.AddEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, childExecutionID, "mlp-claude-child",
+	))
+	store.AddEvent(sessionID, internalevents.Event{
+		Type:          "streaming_end",
+		Timestamp:     time.Now(),
+		SessionID:     sessionID,
+		ExecutionID:   childExecutionID,
+		ExecutionKind: "workflow_step",
+		Data: &pkgevents.AgentEvent{
+			Type: pkgevents.StreamingEnd,
+			Data: &pkgevents.StreamingEndEvent{BaseEventData: pkgevents.BaseEventData{Metadata: map[string]interface{}{
+				"kind": "terminal", "tmux_session": "mlp-claude-child",
+				"execution_kind": "workflow_step", "scope": "workflow_step",
+			}}},
+		},
+	})
+	if !api.isSessionBusy(sessionID) {
+		t.Fatal("child completion incorrectly settled the retained main-agent turn")
+	}
+
+	// The main terminal's structured end event is the same boundary consumed by
+	// the Formatted view. It settles the logical turn but retains the live tmux.
+	store.AddEvent(sessionID, internalevents.Event{
+		Type:          "streaming_end",
+		Timestamp:     time.Now(),
+		SessionID:     sessionID,
+		ExecutionID:   "main:" + sessionID,
+		ExecutionKind: "main_agent",
+		Data: &pkgevents.AgentEvent{
+			Type: pkgevents.StreamingEnd,
+			Data: &pkgevents.StreamingEndEvent{BaseEventData: pkgevents.BaseEventData{Metadata: map[string]interface{}{
+				"kind": "terminal", "tmux_session": "mlp-claude-retained-direct",
+				"execution_kind": "main_agent", "scope": "main_agent",
+			}}},
+		},
+	})
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("structured main-agent completion did not clear retained-turn busy state")
+	}
+	if got := api.activeSessions[sessionID].Status; got != "completed" {
+		t.Fatalf("session status after structured completion = %q, want completed", got)
+	}
+	if runtime, _ := api.authoritativeRuntimeSnapshot(sessionID); runtime.Phase != runtimePhaseCompleted {
+		t.Fatalf("runtime phase after structured completion = %q (%s), want completed", runtime.Phase, runtime.Reason)
+	}
+	settled, ok := terminalStore.GetRaw(terminalID)
+	if !ok || settled.Active || settled.ProcessState != "live" {
+		t.Fatalf("retained terminal after structured completion = %#v, want inactive with live process", settled)
 	}
 }
 

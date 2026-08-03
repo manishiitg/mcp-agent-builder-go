@@ -56,4 +56,37 @@ describe('workflow session restore classification', () => {
 
     expect(pickWorkflowActiveSession([child, parent], preset, {})?.session_id).toBe(parent.session_id)
   })
+
+  it('can select a completed turn whose retained terminal is still alive', () => {
+    const retained = session({
+      status: 'completed',
+      preset_query_id: 'rtslatency',
+      workspace_path: 'Workflow/rtslatency',
+      has_retained_tmux_session: true,
+      last_activity: new Date().toISOString(),
+    })
+    const preset = {
+      id: 'rtslatency',
+      label: 'RTS latency',
+      selectedFolder: { filepath: 'Workflow/rtslatency' },
+    } as Parameters<typeof pickWorkflowActiveSession>[1]
+
+    expect(pickWorkflowActiveSession([retained], preset, {})?.session_id).toBe(retained.session_id)
+  })
+
+  it('uses authoritative running runtime state even when legacy status says completed', () => {
+    const running = session({
+      status: 'completed',
+      preset_query_id: 'build-in-public',
+      workspace_path: 'Workflow/build-in-public',
+      runtime_state: { phase: 'running' } as ActiveSessionInfo['runtime_state'],
+    })
+    const preset = {
+      id: 'build-in-public',
+      label: 'Build in public',
+      selectedFolder: { filepath: 'Workflow/build-in-public' },
+    } as Parameters<typeof pickWorkflowActiveSession>[1]
+
+    expect(pickWorkflowActiveSession([running], preset, {})?.session_id).toBe(running.session_id)
+  })
 })

@@ -9,7 +9,8 @@ import type { ActiveSessionInfo } from '../services/api-types'
 import { activateTab } from '../utils/activateTab'
 import { openActiveSession, openWorkflowPresetPage, pickWorkflowActiveSession, workflowSessionBotPlatform } from '../utils/workflowSessionRestore'
 import { runtimeHasBackgroundAgents, runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
-import { nonWorkflowActivityTitle } from '../utils/activitySessions'
+import { hasIdleAliveCodingAgent, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
+import { isLocalActivityFallbackTab } from '../utils/activityFallback'
 
 interface QuickSwitcherProps {
   isOpen: boolean
@@ -26,6 +27,7 @@ interface WorkflowItem {
   lastAccessedAt: number
   preset: CustomPreset | PredefinedPreset
   activeSession?: ActiveSessionInfo
+  hasLocalActivity: boolean
 }
 
 interface ChatTabItem {
@@ -37,6 +39,7 @@ interface ChatTabItem {
   lastAccessedAt: number
   tabId: string
   activeSession?: ActiveSessionInfo
+  hasLocalActivity: boolean
 }
 
 interface ActiveWorkItem {
@@ -68,11 +71,6 @@ const isWorkflowSession = (session: ActiveSessionInfo): boolean => {
     !!session.preset_query_id
 }
 
-const isVisibleActiveSession = (session: ActiveSessionInfo): boolean => {
-  const status = sessionRuntimeStatus(session)
-  return status === 'busy' || status === 'idle' || runtimeNeedsUserInput(session) || runtimeHasBackgroundAgents(session)
-}
-
 const activeSessionLabel = (session: ActiveSessionInfo): string => {
   if (isWorkflowSession(session)) {
     return session.workflow_label ||
@@ -90,6 +88,7 @@ const activeSessionStatusLabel = (session: ActiveSessionInfo): string => {
   const bgCount = session.running_background_agent_count ?? 0
   if (bgCount > 0) return `${bgCount} bg agent${bgCount === 1 ? '' : 's'}`
   if (runtimeHasBackgroundAgents(session)) return 'bg agents running'
+  if (hasIdleAliveCodingAgent(session) && sessionRuntimeStatus(session) === 'stopped') return 'idle'
   return sessionRuntimeStatus(session)
 }
 
@@ -126,6 +125,11 @@ const itemTypeRank = (item: QuickSwitcherItem): number => {
 const itemActiveSession = (item: QuickSwitcherItem): ActiveSessionInfo | undefined => {
   if (item.type === 'active') return item.session
   return item.activeSession
+}
+
+const itemHasActiveWork = (item: QuickSwitcherItem): boolean => {
+  if (item.type === 'active') return true
+  return !!item.activeSession || item.hasLocalActivity
 }
 
 const activeSessionSuffix = (session?: ActiveSessionInfo): string => {
@@ -182,10 +186,10 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
 
     const allTabs = Object.values(chatTabs)
     const activeSessionsByID = new Map<string, ActiveSessionInfo>()
-    for (const session of activeSessions.filter(isVisibleActiveSession)) {
+    for (const session of activeSessions.filter(isVisibleActivitySession)) {
       activeSessionsByID.set(session.session_id, session)
     }
-    const visibleActiveSessions = Array.from(activeSessionsByID.values()).filter(isVisibleActiveSession)
+    const visibleActiveSessions = Array.from(activeSessionsByID.values())
 
     const builderStateSuffix = (tab?: ChatTab): string => {
       if (!tab?.hasRunningBgAgents) return ''
@@ -207,6 +211,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
           lastAccessedAt: tab.lastAccessedAt || tab.createdAt || 0,
           tabId: tab.tabId,
           activeSession,
+          hasLocalActivity: isLocalActivityFallbackTab(tab),
         }
       })
 
@@ -229,6 +234,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
           })(),
           preset: p,
           activeSession,
+          hasLocalActivity: !!workflowTab && isLocalActivityFallbackTab(workflowTab),
         }
       })
 
@@ -287,7 +293,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
     const q = scopeMatch ? rawQuery.slice(scopeMatch[0].length).trim() : rawQuery
     const scoped = scope
       ? allItems.filter(item => {
-          if (scope === 'active') return !!itemActiveSession(item)
+          if (scope === 'active') return itemHasActiveWork(item)
           if (scope === 'workflow' || scope === 'workflows') return item.type === 'workflow'
           if (scope === 'chat' || scope === 'chats') return item.type === 'chat'
           return item.type === 'chat' || item.type === 'workflow'
