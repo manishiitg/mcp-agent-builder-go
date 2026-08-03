@@ -1485,6 +1485,12 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"agent_browser",
 		// mcpagent virtual tools (get_api_spec, get_prompt, get_resource)
 		"get_api_spec", "get_prompt", "get_resource",
+		// Read-only LLM capability discovery. The prompts instruct agents to check
+		// capabilities before pinning a provider/model, and llm-selection.md leans on
+		// it, but the allow-list never granted it — so a real, registered tool was
+		// rejected as "not available in the current workshop mode". Registration and
+		// this list live in different files, which is how they drifted.
+		"list_llm_capabilities",
 		// Sub-agent execution tools — used by execution agents running inside steps.
 		// These must always be allowed because SetToolAllowList also gates the code
 		// execution registry (HTTP calls), which blocks execution agents from calling
