@@ -99,6 +99,77 @@ const (
 	VerificationInconclusive = "inconclusive"
 )
 
+// The closed sets below are the single source of truth for both the accept
+// check and the rejection message. A rejection that does not name its members
+// cannot be converged on: the Fixer wrote external_owner "shared workflow
+// runtime" and then "RTS dev voice..." across two live runs, both meaning
+// platform, because nothing in the error said the set was closed or what was
+// in it.
+var (
+	pulseFindingDispositionValues = []string{
+		FindingDispositionFixedVerified,
+		FindingDispositionVerifiedNoChange,
+		FindingDispositionChangedUnverified,
+		FindingDispositionProposalOnly,
+		FindingDispositionAwaitingUser,
+		FindingDispositionAwaitingRun,
+		FindingDispositionBlocked,
+		FindingDispositionExternalAction,
+		FindingDispositionFailed,
+		FindingDispositionRejected,
+	}
+	pulseVerificationVerdictValues = []string{
+		VerificationPassed,
+		VerificationFailed,
+		VerificationInconclusive,
+	}
+	pulseExternalOwnerValues = []string{"platform", "user", "vendor", "workflow_owner"}
+)
+
+func pulseAllowed(values []string) string {
+	return strings.Join(values, ", ")
+}
+
+func pulseValueAllowed(value string, values []string) bool {
+	for _, candidate := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// pulseFieldArrival records what actually reached the validator for one field.
+// Naming only the first missing field forces the caller to rediscover the
+// contract one rejected write at a time, which is exactly how a completed fix
+// ends up unrecorded.
+type pulseFieldArrival struct {
+	Name  string
+	State string
+}
+
+func pulseStringArrival(name, value string) pulseFieldArrival {
+	if strings.TrimSpace(value) == "" {
+		return pulseFieldArrival{Name: name, State: "missing"}
+	}
+	return pulseFieldArrival{Name: name, State: "set"}
+}
+
+func pulseListArrival(name string, values []string) pulseFieldArrival {
+	if len(values) == 0 {
+		return pulseFieldArrival{Name: name, State: "missing"}
+	}
+	return pulseFieldArrival{Name: name, State: fmt.Sprintf("%d items", len(values))}
+}
+
+func pulseArrivalReport(arrivals ...pulseFieldArrival) string {
+	parts := make([]string, 0, len(arrivals))
+	for _, arrival := range arrivals {
+		parts = append(parts, arrival.Name+"="+arrival.State)
+	}
+	return strings.Join(parts, ", ")
+}
+
 type PulseFixFindingRef struct {
 	Fingerprint string `json:"fingerprint"`
 	FindingID   string `json:"finding_id"`
@@ -303,10 +374,11 @@ func StartPulseFixAttempt(
 ) (*PulseFixAttempt, error) {
 	module = pulsemodules.Normalize(module)
 	if strings.TrimSpace(pulseRunID) == "" || strings.TrimSpace(module) == "" {
-		return nil, fmt.Errorf("pulse_run_id and module are required")
+		return nil, fmt.Errorf("start_pulse_fix_attempt requires both pulse_run_id and module (got %s). pulse_run_id is the scheduler id printed in the Pulse prompt; module is the due Pulse module that owns these findings",
+			pulseArrivalReport(pulseStringArrival("pulse_run_id", pulseRunID), pulseStringArrival("module", module)))
 	}
 	if len(findings) == 0 {
-		return nil, fmt.Errorf("at least one finding is required")
+		return nil, fmt.Errorf("start_pulse_fix_attempt requires at least one finding; findings is an array of objects shaped [{\"fingerprint\": \"<backlog fingerprint>\", \"finding_id\": \"<backlog issue.id>\"}], both copied from the same get_pulse_finding_backlog item")
 	}
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil {
@@ -328,16 +400,17 @@ func StartPulseFixAttempt(
 	}
 	defer tx.Rollback()
 
-	for _, finding := range findings {
+	for index, finding := range findings {
 		fingerprint := strings.TrimSpace(finding.Fingerprint)
 		findingID := strings.TrimSpace(finding.FindingID)
 		if fingerprint == "" || findingID == "" {
-			return nil, fmt.Errorf("each finding requires fingerprint and finding_id")
+			return nil, fmt.Errorf("findings[%d] requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_finding_backlog item, where finding_id is that item's issue.id and fingerprint is its internal lifecycle key",
+				index, pulseArrivalReport(pulseStringArrival("fingerprint", finding.Fingerprint), pulseStringArrival("finding_id", finding.FindingID)))
 		}
 		var status string
 		if err := tx.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fingerprint).Scan(&status); err != nil {
 			if err == sql.ErrNoRows {
-				return nil, fmt.Errorf("no concern with fingerprint %q", fingerprint)
+				return nil, fmt.Errorf("no concern with fingerprint %q; fingerprint must be copied verbatim from a get_pulse_finding_backlog item's fingerprint field, not from its issue.id", fingerprint)
 			}
 			return nil, err
 		}
@@ -399,26 +472,22 @@ func StartPulseFixAttempt(
 func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	disposition = NormalizePulseFindingDisposition(disposition)
 	if disposition.Fingerprint == "" || disposition.FindingID == "" {
-		return fmt.Errorf("finding disposition requires fingerprint and finding_id")
+		return fmt.Errorf("finding disposition requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_finding_backlog item, where finding_id is issue.id",
+			pulseArrivalReport(pulseStringArrival("fingerprint", disposition.Fingerprint), pulseStringArrival("finding_id", disposition.FindingID)))
 	}
 	if disposition.Summary == "" {
-		return fmt.Errorf("finding %q disposition requires summary", disposition.FindingID)
+		return fmt.Errorf("finding %q disposition requires summary: one sentence stating what was done and what it means for this finding", disposition.FindingID)
 	}
-	allowed := map[string]bool{
-		FindingDispositionFixedVerified: true, FindingDispositionVerifiedNoChange: true,
-		FindingDispositionChangedUnverified: true, FindingDispositionProposalOnly: true,
-		FindingDispositionAwaitingUser: true, FindingDispositionBlocked: true,
-		FindingDispositionExternalAction: true, FindingDispositionFailed: true,
-		FindingDispositionRejected: true, FindingDispositionAwaitingRun: true,
-	}
-	if !allowed[disposition.Disposition] {
-		return fmt.Errorf("finding %q has invalid disposition %q", disposition.FindingID, disposition.Disposition)
+	if !pulseValueAllowed(disposition.Disposition, pulseFindingDispositionValues) {
+		return fmt.Errorf("finding %q has invalid disposition %q. Must be one of: %s",
+			disposition.FindingID, disposition.Disposition, pulseAllowed(pulseFindingDispositionValues))
 	}
 
 	passed, failed, inconclusive := 0, 0, 0
-	for _, verification := range disposition.Verification {
+	for index, verification := range disposition.Verification {
 		if strings.TrimSpace(verification.Check) == "" {
-			return fmt.Errorf("finding %q verification requires check", disposition.FindingID)
+			return fmt.Errorf("finding %q verification[%d] requires check naming what was run or inspected; each verification entry is {\"check\", \"verdict\", \"expected\", \"observed\", \"evidence\"} where check and verdict are required and verdict is one of: %s",
+				disposition.FindingID, index, pulseAllowed(pulseVerificationVerdictValues))
 		}
 		switch strings.TrimSpace(verification.Verdict) {
 		case VerificationPassed:
@@ -428,26 +497,37 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		case VerificationInconclusive:
 			inconclusive++
 		default:
-			return fmt.Errorf("finding %q verification verdict must be passed, failed, or inconclusive", disposition.FindingID)
+			return fmt.Errorf("finding %q verification[%d] has invalid verdict %q. Must be one of: %s",
+				disposition.FindingID, index, verification.Verdict, pulseAllowed(pulseVerificationVerdictValues))
 		}
 	}
+	verdictCounts := fmt.Sprintf("passed=%d, failed=%d, inconclusive=%d", passed, failed, inconclusive)
 	switch disposition.Disposition {
 	case FindingDispositionFixedVerified:
 		if strings.TrimSpace(disposition.AttemptID) == "" || len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("fixed_verified finding %q requires attempt_id and changed_files", disposition.FindingID)
+			return fmt.Errorf("fixed_verified finding %q requires both attempt_id and changed_files (got %s). attempt_id is the id start_pulse_fix_attempt returned; changed_files lists the workspace-relative files that attempt changed",
+				disposition.FindingID, pulseArrivalReport(
+					pulseStringArrival("attempt_id", disposition.AttemptID),
+					pulseListArrival("changed_files", disposition.ChangedFiles)))
 		}
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
-			return fmt.Errorf("fixed_verified finding %q requires paired before_refs and after_refs", disposition.FindingID)
+			return fmt.Errorf("fixed_verified finding %q requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
+				disposition.FindingID, len(disposition.BeforeRefs), len(disposition.AfterRefs))
 		}
 		if passed == 0 || failed > 0 || inconclusive > 0 {
-			return fmt.Errorf("fixed_verified finding %q requires one or more passed verifications and no failed/inconclusive checks", disposition.FindingID)
+			return fmt.Errorf("fixed_verified finding %q requires at least one passed verification and no failed or inconclusive check (got %s). Use changed_unverified when the proof has not arrived yet, or failed when a check failed",
+				disposition.FindingID, verdictCounts)
 		}
 	case FindingDispositionChangedUnverified:
 		if strings.TrimSpace(disposition.AttemptID) == "" || len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("changed_unverified finding %q requires attempt_id and changed_files", disposition.FindingID)
+			return fmt.Errorf("changed_unverified finding %q requires both attempt_id and changed_files (got %s). attempt_id is the id start_pulse_fix_attempt returned; changed_files lists the workspace-relative files that attempt changed",
+				disposition.FindingID, pulseArrivalReport(
+					pulseStringArrival("attempt_id", disposition.AttemptID),
+					pulseListArrival("changed_files", disposition.ChangedFiles)))
 		}
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
-			return fmt.Errorf("changed_unverified finding %q requires paired before_refs and after_refs", disposition.FindingID)
+			return fmt.Errorf("changed_unverified finding %q requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
+				disposition.FindingID, len(disposition.BeforeRefs), len(disposition.AfterRefs))
 		}
 		// next_check names the evidence that will settle this. Without it the
 		// next reviewer cannot tell whether the producing run has happened, so
@@ -458,15 +538,18 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 			return fmt.Errorf("changed_unverified finding %q requires next_check naming the run, table, or artifact whose arrival proves or disproves this fix", disposition.FindingID)
 		}
 		if inconclusive == 0 || failed > 0 {
-			return fmt.Errorf("changed_unverified finding %q requires an inconclusive verification and no failed check", disposition.FindingID)
+			return fmt.Errorf("changed_unverified finding %q requires at least one inconclusive verification and no failed check (got %s). A passed-only result is fixed_verified and any failed check makes this failed",
+				disposition.FindingID, verdictCounts)
 		}
 	case FindingDispositionVerifiedNoChange:
 		if passed == 0 || failed > 0 || inconclusive > 0 {
-			return fmt.Errorf("verified_no_change finding %q requires passed verification", disposition.FindingID)
+			return fmt.Errorf("verified_no_change finding %q requires at least one passed verification and no failed or inconclusive check (got %s). verified_no_change means a check proved this is not (or is no longer) a problem without changing any file",
+				disposition.FindingID, verdictCounts)
 		}
 	case FindingDispositionFailed:
 		if len(disposition.Verification) > 0 && failed == 0 {
-			return fmt.Errorf("failed finding %q with verification evidence requires a failed check", disposition.FindingID)
+			return fmt.Errorf("failed finding %q supplied %d verification entries but none with verdict %q (got %s); include the check that failed, or omit verification entirely when no check was run",
+				disposition.FindingID, len(disposition.Verification), VerificationFailed, verdictCounts)
 		}
 	case FindingDispositionAwaitingRun:
 		// Naming the evidence boundary is what separates waiting from stalling:
@@ -487,12 +570,16 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		}
 	case FindingDispositionExternalAction:
 		if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
-			return fmt.Errorf("external_action_required finding %q requires external_owner, reason_code, and reopen_condition", disposition.FindingID)
+			return fmt.Errorf("external_action_required finding %q requires all of external_owner, reason_code, and reopen_condition (got %s). external_owner must be one of: %s. reason_code is a stable slug such as missing_platform_tool, permission_boundary, vendor_issue, policy, or accepted_risk, and reopen_condition names the evidence or capability that would make this actionable again",
+				disposition.FindingID, pulseArrivalReport(
+					pulseStringArrival("external_owner", disposition.ExternalOwner),
+					pulseStringArrival("reason_code", disposition.ReasonCode),
+					pulseStringArrival("reopen_condition", disposition.ReopenCondition)),
+				pulseAllowed(pulseExternalOwnerValues))
 		}
-		switch disposition.ExternalOwner {
-		case "platform", "user", "vendor", "workflow_owner":
-		default:
-			return fmt.Errorf("external_action_required finding %q has invalid external_owner %q", disposition.FindingID, disposition.ExternalOwner)
+		if !pulseValueAllowed(disposition.ExternalOwner, pulseExternalOwnerValues) {
+			return fmt.Errorf("external_action_required finding %q has invalid external_owner %q. Must be one of: %s. Use \"platform\" for shared runtime, harness, bridge, or product-side issues; \"user\" for a decision only the operator can make; \"vendor\" for a third-party service; \"workflow_owner\" for another workflow's own configuration",
+				disposition.FindingID, disposition.ExternalOwner, pulseAllowed(pulseExternalOwnerValues))
 		}
 	}
 	return nil
@@ -565,7 +652,7 @@ func RecordPulseFindingDispositionsTx(
 			return err
 		}
 		if concernExists != 1 {
-			return fmt.Errorf("no concern with fingerprint %q", fingerprint)
+			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_finding_backlog item's fingerprint field, not from its issue.id", fingerprint, findingID)
 		}
 		// Prove the decision exists and is still open. A claimed id is not
 		// evidence: an already-answered or invented question would leave the
@@ -589,7 +676,7 @@ func RecordPulseFindingDispositionsTx(
 			var attemptModule, attemptRun string
 			if err := db.QueryRowContext(ctx, `SELECT module, pulse_run_id FROM pulse_fix_attempts WHERE attempt_id=?`, attemptID).Scan(&attemptModule, &attemptRun); err != nil {
 				if err == sql.ErrNoRows {
-					return fmt.Errorf("no fix attempt %q", attemptID)
+					return fmt.Errorf("no fix attempt %q for finding %q; attempt_id must be the value start_pulse_fix_attempt returned, and that call must happen before the mutation it records", attemptID, findingID)
 				}
 				return err
 			}
@@ -617,7 +704,7 @@ func RecordPulseFindingDispositionsTx(
 				return err
 			}
 			if linked != 1 {
-				return fmt.Errorf("fix attempt %q is not linked to concern %q", attemptID, fingerprint)
+				return fmt.Errorf("fix attempt %q is not linked to concern %q (finding %q); an attempt can only close the findings passed in its own start_pulse_fix_attempt.findings array, so start a new attempt covering this finding instead", attemptID, fingerprint, findingID)
 			}
 		}
 

@@ -302,7 +302,8 @@ func TestFixedVerifiedRejectsInconclusiveEvidence(t *testing.T) {
 			Verdict: VerificationInconclusive,
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "no failed/inconclusive") {
+	if err == nil || !strings.Contains(err.Error(), "no failed or inconclusive check") ||
+		!strings.Contains(err.Error(), "inconclusive=1") {
 		t.Fatalf("inconclusive fixed_verified evidence was accepted: %v", err)
 	}
 }
@@ -321,7 +322,8 @@ func TestFixedVerifiedRejectsUnpairedChangeReferences(t *testing.T) {
 			Verdict: VerificationPassed,
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "paired before_refs and after_refs") {
+	if err == nil || !strings.Contains(err.Error(), "before_refs and after_refs as equal-length positional pairs") ||
+		!strings.Contains(err.Error(), "before_refs=1, after_refs=0") {
 		t.Fatalf("unpaired fixed_verified references were accepted: %v", err)
 	}
 }
