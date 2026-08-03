@@ -56,6 +56,7 @@ confirm the failure is actually visible — otherwise a fix cannot be verified.
 
 ## Earlier incidents
 
+- [session_tool_registry_lifecycle_leak.md](session_tool_registry_lifecycle_leak.md)
 - [auto_unlock_loop_orchestration.md](auto_unlock_loop_orchestration.md)
 - [dependency_update_failure.md](dependency_update_failure.md)
 - [parallel_tool_lock_contention.md](parallel_tool_lock_contention.md)

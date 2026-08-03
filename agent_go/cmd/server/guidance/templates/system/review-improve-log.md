@@ -90,7 +90,7 @@ publishing. The Pulse popup does **not** parse these cards; it renders review an
 fix state from SQLite. Keep material issue and Fixer transitions independently
 tagged so the dashboard remains useful on its own.
 
-A day with a workflow run but nothing due for Pulse still gets a `gate`-kind entry saying so (`"0 of 8 checked · all current"`) rather than being omitted — omitting it reads as "did Pulse even run," not "nothing needed attention."
+A day with a workflow run but nothing due for Pulse still gets a `gate`-kind entry saying so (`"0 of 3 checked · all current"`) rather than being omitted — omitting it reads as "did Pulse even run," not "nothing needed attention."
 
 The Pulse log is opened in a narrow right panel by default. Design it **mobile-first**:
 the base CSS must work at 360-480px with stacked rows, no overlapping metadata, no
@@ -148,13 +148,13 @@ Different sections may use different evidence dates. The overall status headline
 
 ### Pulse coverage — proof Pulse is actually checking
 
-Right after `.chips`, one always-visible `.coverage` row shows all 8 canonical
-modules as `.covitem` chips with the stable canonical `data-module` id, a plain
+Right after `.chips`, one always-visible `.coverage` row shows all 3 current
+review agents as `.covitem` chips with the stable canonical `data-module` id, a plain
 display label, real `last_ran_at`, and status dot. Validation keys on
 `data-module`; display copy may change without breaking a Pulse run.
 This separately proves that each module ran and shows its health.
 
-**Always show all 8.** Dot: `ok` clean/current, `warn` open or one cycle overdue,
+**Always show all 3.** Dot: `ok` clean/current, `warn` open or one cycle overdue,
 `bad` critical/badly overdue, `pending` never checked. Carry the last real result
 forward; a skipped module is not newly `ok`.
 
@@ -309,13 +309,12 @@ Update this hidden block in place on each Pulse. Never append historical copies.
 New entries go at the **top** of the timeline, not appended at the bottom. The file carries a stable anchor comment `<!-- LOG ENTRIES: newest first -->` directly below the header/tiles; insert each new entry immediately after it with `diff_patch_workspace_file`. Never reorder or rewrite existing entries except to close out an open finding (below). **Always read the existing file first** so you continue its style and don't duplicate entries. For a new date, insert the whole new `.daygroup` (its `.run` row plus every entry for that date) as one unit right after the anchor; for a date whose `.daygroup` already exists, insert new entries into it instead of creating a second `.daygroup` for the same date.
 
 Every dated `.run`, `.entry`, or `.pulse-record` needs `data-date`,
-`data-pulse-section`, and `data-module`. Allowed module ids are `run_summary`,
-`bug_review`, `artifact_review`, `stores_health`, `eval_health`,
-`report_health`, `llm_ops_review`, `strategy_auditor`,
-`goal_advisor`, and `pulse_fixer`. `stores_health` covers learnings, KB, and DB.
-`llm_ops_review` covers cost, time, tool/runtime operations, model routing,
-setup, and plan-design hygiene; retain old `cost_llm_time` cards as history but
-never write that retired module id for a new result.
+`data-pulse-section`, and `data-module`. New entries use only `run_summary`,
+`workflow_review`, `strategy_auditor`, `goal_advisor`, or `pulse_fixer`.
+Workflow Review covers correctness, artifacts, reports/evals, learnings/KB/DB,
+cost, time, tool/runtime operations, model routing, setup, and plan-design
+hygiene. Retain older focused-module cards as history, but never write a retired
+module id for a new result.
 Use `signals` for material reviewer findings (including Strategy Auditor),
 `reflection` for run/general Pulse records, and `improvements` for Goal Advisor
 and Pulse Fixer decisions. Clean module results stay in coverage and SQLite;
@@ -326,7 +325,7 @@ write a card only for a material lifecycle transition.
 Each entry is a small card: a date, a kind tag, optional classification chips, a one-line title, and the short **What happened / Why it matters / Next** body defined above. The first body line must be a `<p class="takeaway"><b>What happened:</b> ...</p>` that a non-technical operator can understand immediately. Keep raw evidence and changelog references in SQLite-backed reviewer results, not in the card. Use these kinds:
 
 - **Run** — a one-line row, the top of that date's `.daygroup`: date/time, status, key numbers (tests, eval, cost/tokens, wall time), the **backup result** (`backed up`, `unchanged — already backed up`, or `backup failed: <plain-language reason>`), and a short note only when something stands out. The note follows the same Plain-language card contract as any entry card (see below) — no step/route ids or tool names, user-visible behavior only. Routine runs stay terse; flag a run only when it regressed, the backup failed, cost/time evidence is missing, or one step/agent dominates spend/time.
-- **Gate** — the one compact dispatch entry per Pulse pass, `data-module="run_summary"`: which modules ran and the material reason. Do not list every skipped module; coverage already shows freshness. On a pass where nothing was due, still write it ("0 of 8 checked · all current") rather than skip silently.
+- **Gate** — the one compact dispatch entry per Pulse pass, `data-module="run_summary"`: which agents ran and the material reason. Do not list every skipped agent; coverage already shows freshness. On a pass where nothing was due, still write it ("0 of 3 checked · all current") rather than skip silently.
 - **Monitor** — a material post-run observation or issue transition: what changed in the output and the most likely cause, correlated against the plan changelog. Clean reviewer results do not get Monitor cards. Keep exact evidence, classifications, recommendations, cost buckets, and tool output in SQLite or collapsed Technical details; never render `.modfields` field dumps.
 - **Maintenance Radar** — a compact Pulse entry explaining how deep this run's post-run stewardship went (`minimal`, `normal`, or `deep`), which hygiene lanes were checked or intentionally skipped, and what concrete evidence should trigger deeper work next time. For every skipped module, show the planned next check in user language (`tomorrow`, `after the next workflow run`, or `after N workflow runs`). If Gate overrides an earlier plan, name the new evidence that justified checking early. This is for eval health, learnings, KB, DB/report contracts, report dashboard usefulness, publish/backup/notify setup, model/tier hygiene, and human-input questions. It is not a hidden scheduler; it is an explainable watchlist the next Pulse pass reads before deciding whether to act.
 - **Artifact Review** — a report-only Pulse/review entry: changelog range inspected, Artifact Sync Cursor before/after, steps inspected, clean/no-pending result or drift findings, and the recommended next owner. Do not present this entry as a fix that already happened; Artifact Review does not repair artifacts or apply strategy changes itself.

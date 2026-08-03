@@ -19,12 +19,10 @@ smallest useful retained window.{{end}}
    Strategy Auditor results, compact retained run evidence, and bounded
    read-only aggregates/samples from existing workflow tables in
    `db/db.sqlite`.
-3. Enforce the diagnostic order. Inspect the latest relevant Bug Review and
-   current correctness evidence. If a current correctness bug invalidates the
-   strategy window, do not make a strategy claim: classify `execution_bug` or
-   `insufficient_evidence`, identify the affected path, and name the exact
-   post-fix outcome-bearing checkpoint. This command does not run Bug Review or
-   Goal Advisor.
+3. Judge current correctness evidence directly without waiting for or consuming
+   Bug Review, Artifact Review, or Goal Advisor conclusions. If evidence is
+   unreliable, classify `execution_bug` or `insufficient_evidence`, identify the
+   affected path, and name the exact next outcome-bearing checkpoint.
 4. Launch exactly one reviewer with
    `call_generic_agent(todo_id="standalone-strategy-auditor",
    instructions="READ-ONLY REVIEW ...", preferred_tier=3,
@@ -55,6 +53,6 @@ smallest useful retained window.{{end}}
    the plan, configuration, DB, reports/evals, or Pulse module state.
    Do not launch `/goal-advisor` automatically.
 
-Finish with a short executive summary followed by every finding in severity
-order, the evidence boundary, and whether a later `/goal-advisor` run is
-warranted. Do not truncate the result to a Top 3.
+Finish with a short executive summary followed by every finding, bounded
+in-plan recommendation, and evidence boundary in severity order. Do not truncate
+the result to a Top 3.

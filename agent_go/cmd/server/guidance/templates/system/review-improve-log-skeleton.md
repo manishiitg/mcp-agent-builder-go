@@ -211,7 +211,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <span class="chip">Last run <b>—</b></span>
   </div>
 
-  <!-- PULSE COVERAGE — always all 8 modules, always visible, even the clean/boring ones.
+  <!-- PULSE COVERAGE — always all 3 current review agents, always visible, even the clean/boring ones.
        This is the proof-of-life row: it answers "is Pulse actually checking things" (real
        dates from pulse_module_state, never a static claim) separately from "is each area
        healthy" (the dot color, never blended into one score). Never hide a clean module —
@@ -220,12 +220,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
        checked, use --ink-3, say "never checked" not a fabricated date). Update this row
        every Pulse pass, in the same write as Today's outcome. -->
   <div class="coverage" aria-label="Pulse coverage">
-    <div class="covitem ok" data-module="bug_review"><span class="dot"></span><span class="cl">Bug review</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok" data-module="artifact_review"><span class="dot"></span><span class="cl">Plan drift</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok" data-module="stores_health"><span class="dot"></span><span class="cl">Stores health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok" data-module="eval_health"><span class="dot"></span><span class="cl">Eval health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok" data-module="report_health"><span class="dot"></span><span class="cl">Report health</span><span class="cd"><!-- as of — --></span></div>
-    <div class="covitem ok" data-module="llm_ops_review"><span class="dot"></span><span class="cl">Ops review</span><span class="cd"><!-- as of — --></span></div>
+    <div class="covitem ok" data-module="workflow_review"><span class="dot"></span><span class="cl">Workflow review</span><span class="cd"><!-- as of — --></span></div>
     <div class="covitem pending" data-module="strategy_auditor"><span class="dot"></span><span class="cl">Strategy Auditor</span><span class="cd">never checked</span></div>
     <div class="covitem pending" data-module="goal_advisor"><span class="dot"></span><span class="cl">Goal Advisor</span><span class="cd">never checked</span></div>
   </div>
@@ -339,9 +334,9 @@ Use this document only when creating a new `builder/improve.html` or doing the r
     <div class="daydate">YYYY-MM-DD</div>
     <div class="run" data-date="YYYY-MM-DD" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">MM-DD</span><span class="st ok"><span class="d"></span>completed</span><span class="col">…</span><span class="ago">just now</span></div>
 
-    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 8 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> bug_review, llm_ops_review — skipped the other 6 (recent clean reviews, no new evidence).</p><p class="meta"><b>Why bug_review:</b> plain-language trigger reason.</p></div>
+    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">2 of 3 checked</span><span class="when">…</span></div><p class="takeaway"><b>Selected:</b> workflow_review, strategy_auditor — skipped goal_advisor (blank-sheet checkpoint not due).</p><p class="meta"><b>Why workflow_review:</b> plain-language trigger reason.</p></div>
 
-    <div class="entry monitor" data-issue-id="PUL-…" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><p class="meta"><b>Next:</b> plain-language next action.</p></div>
+    <div class="entry monitor" data-issue-id="PUL-…" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="workflow_review"><div class="ehead"><span class="tag monitor">Workflow review</span><span class="kind bug">Needs attention</span><span class="etitle">plain-language finding title</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> plain-language finding.</p><p class="meta"><b>Next:</b> plain-language next action.</p></div>
 
     <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">what was actually applied</span><span class="when">…</span></div><p class="takeaway">What was applied, or what's left open and why.</p></div>
   </div>
@@ -349,13 +344,13 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   <div class="daygroup">
     <div class="daydate">YYYY-MM-DD</div>
     <div class="run" data-date="YYYY-MM-DD" data-kind="run" data-pulse-section="reflection" data-module="run_summary"><span class="id">MM-DD</span><span class="st ok"><span class="d"></span>completed</span><span class="col">…</span><span class="ago">just now</span></div>
-    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">0 of 8 checked</span><span class="when">…</span></div><p class="takeaway">Reviewed evidence, found nothing new — every module still inside its clean-review interval.</p></div>
+    <div class="entry gate" data-date="YYYY-MM-DD" data-kind="gate" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag gate">Gate</span><span class="etitle">0 of 3 checked</span><span class="when">…</span></div><p class="takeaway">Reviewed evidence, found nothing new — every agent remains inside its clean-review interval.</p></div>
   </div>
   -->
   <!-- Insert each new entry card immediately below this anchor. Monitor/Open-finding/Decision/Artifact Review carry a
        <span class="kind bug">Bug</span> or <span class="kind goal">Goal</span> verdict chip when applicable, plus a
        <span class="worklabel bugfix">Bug fix</span>, <span class="worklabel improvement">Improvement</span>, <span class="worklabel advisor">Advisor idea</span>, <span class="worklabel artifact">Artifact drift</span>, <span class="worklabel report">Report fix</span>, <span class="worklabel eval">Eval fix</span>, <span class="worklabel cost">Cost/time</span>, <span class="worklabel maintenance">Maintenance</span>, <span class="worklabel backup">Backup/publish</span>, <span class="worklabel input">Needs input</span>, or <span class="worklabel manual">Manual</span> action chip when work was done/proposed. Card kinds:
-       <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="bug_review"><div class="ehead"><span class="tag monitor">Bug Review</span><span class="kind bug">Needs attention</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> Plain-language outcome.</p><p class="impact"><b>Why it matters:</b> Plain-language user impact.</p><p class="meta"><b>Next:</b> Plain-language next step.</p></div>
+       <div class="entry monitor" data-date="YYYY-MM-DD" data-kind="monitor" data-pulse-section="signals" data-module="workflow_review"><div class="ehead"><span class="tag monitor">Workflow review</span><span class="kind bug">Needs attention</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway"><b>What happened:</b> Plain-language outcome.</p><p class="impact"><b>Why it matters:</b> Plain-language user impact.</p><p class="meta"><b>Next:</b> Plain-language next step.</p></div>
        <div class="entry maintenance" data-date="YYYY-MM-DD" data-kind="maintenance" data-pulse-section="reflection" data-module="run_summary"><div class="ehead"><span class="tag maintenance">Maintenance Radar</span><span class="worklabel maintenance">Maintenance</span><span class="etitle">Pulse depth: minimal|normal|deep</span><span class="when">…</span></div><p class="takeaway">Plain-language reason this run did or skipped optional maintenance.</p><p><b>Radar:</b> learnings · KB · DB/report · publish/notify · model/tier.</p></div>
        <div class="entry agent" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="pulse_fixer"><div class="ehead"><span class="tag agent">Agent · fixed</span><span class="kind bug">Bug</span><span class="worklabel bugfix">Bug fix</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language fix summary first.</p><p class="resolved">Resolved YYYY-MM-DD — how.</p></div>
        <div class="entry decision major" data-date="YYYY-MM-DD" data-kind="decision" data-pulse-section="improvements" data-module="goal_advisor"><div class="ehead"><span class="tag decision">Decision - Goal Advisor - Applied</span><span class="kind goal">Goal</span><span class="worklabel improvement">Improvement</span><span class="etitle">…</span><span class="when">…</span></div><p class="takeaway">Plain-language decision summary first.</p><div class="decisiongrid"><div><b>Why now</b><span>Plain business evidence.</span></div><div><b>Change</b><span>…</span></div><div><b>Expected impact</b><span>…</span></div><div><b>Risk / gap</b><span>…</span></div></div></div>
@@ -373,7 +368,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
   <div id="pulse-agent-handoff" data-pulse-run-id="" data-workflow-version="" hidden>
       <div class="agentrow" data-agent-key="state"><b>Current state</b><code>Latest execution: no result recorded yet</code></div>
       <!-- One compact row per module; use data attributes for scheduler-relevant continuity:
-      <div class="agentrow" data-module="report_health" data-result="skipped" data-next-check-after-run-id="run-43"><b>report_health</b><code>evidence: builder/improve.html#of-report-gap</code></div>
+      <div class="agentrow" data-module="workflow_review" data-result="skipped" data-next-check-after-run-id="run-43"><b>workflow_review</b><code>evidence: latest comparable run remained clean</code></div>
       -->
       <div class="agentrow" data-agent-key="cursors"><b>Cursors and open ids</b><code>artifact=— · findings=— · inputs=— · cos=—</code></div>
   </div>

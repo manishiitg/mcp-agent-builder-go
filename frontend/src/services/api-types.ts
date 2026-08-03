@@ -450,6 +450,74 @@ export interface PulseModuleStateResponse {
   error?: string
 }
 
+export interface PulseInterventionSource {
+  source_type: 'attempt' | 'experiment' | 'finding' | 'review' | string
+  source_id: string
+}
+
+export interface PulseIntervention {
+  intervention_id: string
+  pulse_run_id?: string
+  title: string
+  criterion_id: string
+  impact_type: 'direct_goal' | 'reliability' | 'measurement' | 'presentation_maintenance' | string
+  metric: string
+  expected_direction: 'increase' | 'decrease' | 'maintain' | string
+  scope?: string[]
+  provenance?: string
+  baseline_window?: string
+  checkpoint?: string
+  minimum_evidence_runs: number
+  status: string
+  created_at?: string
+  updated_at?: string
+  sources?: PulseInterventionSource[]
+}
+
+export interface PulseGoalObservation {
+  observation_id: string
+  criterion_id: string
+  metric: string
+  run_id: string
+  route?: string
+  environment?: string
+  value?: number
+  status?: string
+  unit?: string
+  observed_at: string
+  evidence?: string[]
+  recorded_at?: string
+}
+
+export interface PulseImpactAssessment {
+  assessment_id: string
+  intervention_id: string
+  verdict: 'improved' | 'unchanged' | 'regressed' | 'inconclusive' | 'confounded' | string
+  before_window: string
+  after_window: string
+  before_value?: number
+  after_value?: number
+  absolute_change?: number
+  relative_change?: number
+  confidence: string
+  confounders?: string[]
+  evidence?: string[]
+  next_checkpoint?: string
+  assessed_at: string
+}
+
+export interface PulseImpactLedger {
+  interventions: PulseIntervention[]
+  observations: PulseGoalObservation[]
+  assessments: PulseImpactAssessment[]
+}
+
+export interface PulseImpactResponse {
+  success: boolean
+  impact: PulseImpactLedger
+  error?: string
+}
+
 export interface PulseFindingVerification {
   check: string
   verdict: 'passed' | 'failed' | 'inconclusive' | string

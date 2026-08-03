@@ -665,7 +665,10 @@ func buildWorkflowNotificationInstructionsPrompt(runInstructions, pulseInstructi
 
 func notificationDestinationFromQuery(req QueryRequest, userID string) *services.NotificationDestination {
 	platform := strings.ToLower(strings.TrimSpace(req.BotPlatform))
-	dest := &services.NotificationDestination{UserID: userID}
+	dest := &services.NotificationDestination{
+		UserID:       userID,
+		WorkflowName: workflowNameFromWorkspacePath(req.SelectedFolder),
+	}
 	switch platform {
 	case "slack":
 		if req.BotChannelID != "" {
@@ -1808,6 +1811,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-module-state", api.handleGetPulseModuleState).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-findings", api.handleGetPulseFindings).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
 	apiRouter.HandleFunc("/workflow/running", api.handleListRunningWorkflows).Methods("GET")

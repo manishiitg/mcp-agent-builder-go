@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 func TestPulseReviewResultReferenceRequiresDatedRunAndModule(t *testing.T) {
@@ -83,7 +85,7 @@ func TestPulseReviewResultMarkdownCarriesIdentityAndFindings(t *testing.T) {
 }
 
 func TestPulseReviewerSlotsEnforceMaximumTwo(t *testing.T) {
-	slots := make(chan struct{}, pulseReviewerMaxConcurrency)
+	slots := make(chan struct{}, pulsemodules.ReviewerMaxConcurrency)
 	release := make(chan struct{})
 	var active atomic.Int32
 	var peak atomic.Int32
@@ -111,16 +113,16 @@ func TestPulseReviewerSlotsEnforceMaximumTwo(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(time.Second)
-	for peak.Load() < pulseReviewerMaxConcurrency && time.Now().Before(deadline) {
+	for peak.Load() < pulsemodules.ReviewerMaxConcurrency && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if got := peak.Load(); got != pulseReviewerMaxConcurrency {
-		t.Fatalf("peak concurrency = %d, want %d", got, pulseReviewerMaxConcurrency)
+	if got := peak.Load(); got != pulsemodules.ReviewerMaxConcurrency {
+		t.Fatalf("peak concurrency = %d, want %d", got, pulsemodules.ReviewerMaxConcurrency)
 	}
 	close(release)
 	wg.Wait()
-	if got := peak.Load(); got != pulseReviewerMaxConcurrency {
-		t.Fatalf("final peak concurrency = %d, want %d", got, pulseReviewerMaxConcurrency)
+	if got := peak.Load(); got != pulsemodules.ReviewerMaxConcurrency {
+		t.Fatalf("final peak concurrency = %d, want %d", got, pulsemodules.ReviewerMaxConcurrency)
 	}
 }
 

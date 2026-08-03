@@ -23,6 +23,12 @@ package pulsemodules
 
 import "strings"
 
+// ReviewerMaxConcurrency is the shared bound for scheduled reviewer stages and
+// their read-only child agents. Keeping the scheduler and child runtime on the
+// same value prevents queued parent turns from defeating the intended bounded
+// parallel review phase.
+const ReviewerMaxConcurrency = 3
+
 // Module is one scheduled Pulse review module.
 type Module struct {
 	// ID is the canonical identifier used in db state, tool payloads,
@@ -40,6 +46,7 @@ type Module struct {
 // Canonical module IDs. Consumers that need compile-time constants must alias
 // these values rather than restating their string literals.
 const (
+	WorkflowReviewID  = "workflow_review"
 	BugReviewID       = "bug_review"
 	ArtifactReviewID  = "artifact_review"
 	ReportHealthID    = "report_health"
@@ -57,7 +64,7 @@ const (
 	RetiredKnowledgebaseHealthID = "knowledgebase_health"
 	RetiredDBHealthID            = "db_health"
 	// CostLLMTimeID remains readable for historical Pulse state and artifacts.
-	// New runs fold cost, timing, and tool/LLM operations into LLMOpsReviewID.
+	// New runs fold cost, timing, and tool/LLM operations into WorkflowReviewID.
 	CostLLMTimeID = "cost_llm_time"
 )
 
@@ -71,58 +78,31 @@ const (
 // and is part of the contract — the scheduler and UI both rely on it.
 var All = []Module{
 	{
-		ID:        BugReviewID,
-		Label:     "Bug review",
-		StepLabel: "bug-review",
-	},
-	{
-		ID:        ArtifactReviewID,
-		Label:     "Plan drift",
-		StepLabel: "artifact",
-		Aliases:   []string{"artifact", "artifact_drift"},
-	},
-	{
-		ID:        ReportHealthID,
-		Label:     "Report health",
-		StepLabel: "report-health",
-		Aliases:   []string{"report", "reporting", "report_repair"},
-	},
-	{
-		ID:        EvalHealthID,
-		Label:     "Eval health",
-		StepLabel: "eval-health",
-		Aliases:   []string{"eval", "evaluation", "evaluation_health", "eval_repair"},
-	},
-	{
-		// stores_health replaced three separate modules that shared one
-		// due-cadence mechanism, one freshness check, one plan_change_backlog
-		// trigger, and one bounded-fix authority. Only the content domain
-		// differed (learnings HOW / KB facts / DB schema).
-		ID:        StoresHealthID,
-		Label:     "Stores health",
-		StepLabel: "stores-health",
+		// Workflow Review is one read-only agent session with ordered lenses.
+		// It replaces six agents that repeatedly loaded the same plan, run,
+		// backlog, and database evidence and then filed overlapping findings.
+		// Historical module IDs remain readable below and normalize here when a
+		// current command still uses an older focused name.
+		ID:        WorkflowReviewID,
+		Label:     "Workflow review",
+		StepLabel: "workflow-review",
 		Aliases: []string{
+			"workflow", "review", "operational_review",
+			"bug", BugReviewID,
+			"artifact", "artifact_drift", ArtifactReviewID,
+			"report", "reporting", "report_repair", ReportHealthID,
+			"eval", "evaluation", "evaluation_health", "eval_repair", EvalHealthID,
 			"learnings", "learning", "learning_policy", "learning_health",
 			"kb", "knowledgebase", "knowledgebase_health",
-			"db", "database", "db_health",
+			"db", "database", "db_health", StoresHealthID,
+			"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID, LLMOpsReviewID,
 		},
 	},
 	{
-		// Also owns cost/timing/tool-call operations and plan-design hygiene
-		// (step-type fitness, prevalidation fitness, schema/description drift).
-		// It judges operational and engineering quality, not whether the
-		// selected tactic can reach the goal.
-		ID:        LLMOpsReviewID,
-		Label:     "Ops review",
-		StepLabel: "llm-ops-review",
-		Aliases:   []string{"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID},
-	},
-	{
-		// Strategy Auditor is the read-only plan-versus-goal diagnosis layer.
-		// It uses retained cross-run evidence to find strategy ceilings, proxy
-		// optimization, source/target concentration, saturation, and missing
-		// outcome telemetry. Goal Advisor consumes the diagnosis and owns any
-		// proposal, experiment, approval, or plan change.
+		// Strategy Auditor improves the selected strategy by finding missing
+		// causal stages, weak assumptions, concentration, saturation, and other
+		// plan-versus-goal gaps. It is independent from Goal Advisor, which uses
+		// a blank-sheet lens to propose materially different approaches.
 		ID:        StrategyAuditorID,
 		Label:     "Strategy Auditor",
 		StepLabel: "strategy-auditor",
@@ -141,6 +121,12 @@ var All = []Module{
 // builder/improve.html cards still carry them, so read paths must keep
 // accepting them. They must never be written by current runs.
 var RetiredIDs = []string{
+	BugReviewID,
+	ArtifactReviewID,
+	ReportHealthID,
+	EvalHealthID,
+	StoresHealthID,
+	LLMOpsReviewID,
 	RetiredLearningHealthID,
 	RetiredKnowledgebaseHealthID,
 	RetiredDBHealthID,

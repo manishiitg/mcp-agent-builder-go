@@ -79,6 +79,7 @@ import type {
   PulseFindingsResponse,
   PulseReviewResponse,
   PulseReviewsResponse,
+  PulseImpactResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1517,6 +1518,13 @@ export const agentApi = {
       params: { workspace_path: workspacePath, id },
     })
     return response.data as PulseReviewResponse
+  },
+
+  getPulseImpact: async (workspacePath: string) => {
+    const response = await api.get('/api/workflow/pulse-impact', {
+      params: { workspace_path: workspacePath },
+    })
+    return response.data as PulseImpactResponse
   },
 
   answerReportHumanInput: async (

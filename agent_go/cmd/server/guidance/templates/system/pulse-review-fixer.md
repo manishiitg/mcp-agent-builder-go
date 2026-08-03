@@ -1,8 +1,10 @@
-## Pulse independent reviews and one consolidated Fixer
+## Pulse three-agent review and one consolidated Fixer
 
 Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
-dated review run ID. It runs one read-only review stage per selected module,
-then exactly one consolidated Fixer stage for the pass.
+dated review run ID. Current passes have three independent review agents:
+`workflow_review`, `strategy_auditor`, and `goal_advisor`. Workflow Review keeps
+one continuous context while it walks its operational lenses in sequence. After
+the read barrier, exactly one consolidated Fixer runs for the pass.
 
 Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -15,16 +17,18 @@ new finding. Attempt every safe bounded fix in the selected module. Leave a
 finding active only for a concrete blocker, decision, failed check, or future
 evidence checkpoint.
 
-Resolve the off-track diagnostic chain before normal batching. When Bug Review
-and Strategy Auditor are due for the same evidence window, run Bug Review alone first.
-A confirmed correctness bug that invalidates that window defers Auditor:
-record its terminal result as skipped/blocked with the exact post-fix,
-outcome-bearing checkpoint. Otherwise run Auditor. Strategy Auditor runs before Goal Advisor;
-launch Advisor only for an actionable diagnosis or its own
-answered-decision/experiment checkpoint.
+The three current reviewers are independent. Workflow Review, Strategy Auditor,
+and Goal Advisor never wait for, consume, or require one another's conclusions.
+Run selected reviewer stages in one bounded parallel batch.
+An unreliable evidence window is classified inside the affected review as an
+execution problem or insufficient evidence; it does not cancel another review.
+Goal Advisor is selected only for its own blank-sheet opportunity, answered
+decision, healthy-headroom, or experiment-checkpoint trigger—not as a handler
+for a Strategy Auditor result.
 
-The scheduler invokes the reviewer phase once per due module, in module order.
-Each review stage owns only the supplied module. First inspect its current-run result,
+The scheduler invokes at most one agent for each current module while preserving
+canonical module order in the collected results. Each review stage owns only
+the supplied module. First inspect its current-run result,
 active retained backlog, answered decisions, awaiting-verification work, and
 any already-saved reviewer result. Do not launch a reviewer merely because the
 module is due: if saved review and lifecycle evidence already answer the review
@@ -32,9 +36,10 @@ question, stop and leave that evidence for the consolidated Fixer. Reviewer
 stages never mutate, start fix attempts, or mark module state.
 
 When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
-make exactly one `call_generic_agent` call for this module. Never combine
-reviewers in one shell command, run curl in the background, use `&`/`wait`, or
-wait for another module. In coding-agent mode, use the documented API bridge
+make exactly one `call_generic_agent` call for this module. `workflow_review`
+uses that one agent for all ordered operational lenses; it does not spawn one
+child per lens. Never combine the three agents in one shell command, run curl
+in the background, use `&`/`wait`, or wait for another module. In coding-agent mode, use the documented API bridge
 shell transport. The call returns an `execution_id` immediately; record it,
 end the current turn, and resume only from its automatic notification of completion.
 Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
@@ -45,12 +50,16 @@ this module only and cannot block later reviewers. The consolidated Fixer
 records the terminal module result.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response
-contract, loading each named doc with
+contract. Workflow Review loads its focused docs together, then checks
+correctness, artifact drift, report/eval truth, stores, and LLM/tool operations
+in that order. It reuses shared evidence and consolidates the same root cause
+before returning. Strategy and Goal remain fresh independent contexts. Load docs with
 `read_skill(skills=[{"name":"builder-reference","path":"references/<name>.md"}])`:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
 `llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
-DB/run evidence; or the Auditor diagnosis plus goal/experiment evidence for Goal
-Advisor. Strategy Auditor never shares Goal Advisor's parallel batch. It returns
+DB/run evidence; or goal/constraint/outcome and experiment evidence for Goal
+Advisor. Strategy Auditor and Goal Advisor may share a parallel batch and must
+reason independently. Strategy Auditor returns
 one of `strategy_flaw`, `execution_bug`, `measurement_gap`,
 `insufficient_evidence`, or `no_material_problem`, without prescribing a plan
 mutation. Goal Advisor must lead with strategy ceiling, one materially different
@@ -83,7 +92,7 @@ stable ID, target, claim, evidence, bounded fix, verification, and judgment
 reason. Classify retained findings rather than omitting them. Clean means an
 empty finding-ID manifest.
 An Auditor `measurement_gap` names the missing target/source/action/outcome
-linkage and blocked decision. Give Goal Advisor a separate read-only critic.
+linkage and blocked decision. Goal Advisor uses its own separate read-only critic.
 
 A tool refusal is not evidence that a finding is unfixable. Check the target's
 actual type before concluding anything: rtslatency recorded two collectors as
@@ -159,13 +168,25 @@ but never decide semantic sameness. If a finding lacks either value, block it as
 a reviewer-contract failure instead of making an untracked change.
 
 Reconcile every finding ID to one disposition; missing/duplicates block its
-module. Strategy/LLM-Ops changes need exact valid approval.
-Strategy Auditor findings are diagnostic handoffs: `execution_bug` to Bug Review, attribution to
-Eval Health, and `strategy_flaw` or strategy-critical `measurement_gap` to Goal
-Advisor. Give a same-pass Goal Advisor the saved Auditor artifact and require it
-to challenge the causal claim. Advisor operational findings remain handoffs.
+module. Strategy or model-routing changes need exact valid approval. Preserve each
+reviewer's conclusion under its owning module. Strategy Auditor findings contain
+bounded improvements within the current strategic shape; Goal Advisor findings
+contain materially different proposal-only approaches. Operational observations
+may be cross-referenced to the matching module during consolidation, but never
+rewritten as a dependency or used to suppress that module's independent result.
+Advisor operational findings remain out-of-scope observations.
 Only the parent mutates workflow state. Neither reviewer nor Fixer writes Pulse
 HTML; the dedicated Dashboard owns it.
+
+Before finishing, call `record_pulse_impact` once when there is an intervention,
+a matured assessment, or a trustworthy observation Gate did not already store.
+Load the retained impact ledger first; do not duplicate Gate's current-run
+observations. Create or advance one intervention per coherent verified repair
+bundle or approved strategy experiment, and append an assessment only when its
+comparable evidence window matured. Classify operational repairs as `reliability`, instrumentation
+as `measurement`, and dashboard-only work as `presentation_maintenance`; none
+may claim `direct_goal` impact. Use `inconclusive` or `confounded` rather than
+inventing attribution when observations are missing or interventions overlap.
 
 Record `mark_pulse_module_result` exactly once for every due module. For every finding pass a
 structured `finding_dispositions` row with fingerprint, finding id, disposition,

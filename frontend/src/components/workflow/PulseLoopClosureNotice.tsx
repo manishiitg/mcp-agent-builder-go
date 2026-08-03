@@ -9,6 +9,7 @@ import {
   pulseLoopClosureReference,
   visiblePulseLoopClosureFindings,
 } from './pulseLoopClosureNoticeUtils'
+import { pulseLoopClosureHeading, summarizePulseLoopSignals } from './pulseHeaderStatus'
 
 function formatPulseTimestamp(value?: string): string {
   if (!value) return ''
@@ -31,7 +32,7 @@ function pulseLoopClosureKindLabel(kind: string): string {
     case 'concern_keeps_recurring':
       return 'Recurring concern'
     default:
-      return 'Stalled loop'
+      return 'Lifecycle follow-up'
   }
 }
 
@@ -144,6 +145,7 @@ export function PulseLoopClosureNotice({ observation }: { observation: PulseShad
     () => visiblePulseLoopClosureFindings(findings, showAll),
     [findings, showAll],
   )
+  const signalSummary = useMemo(() => summarizePulseLoopSignals(findings), [findings])
 
   if (!observation) return null
   const coverageVerified = observation.coverage_status === 'verified'
@@ -161,7 +163,7 @@ export function PulseLoopClosureNotice({ observation }: { observation: PulseShad
   return (
     <section
       className="mb-4 overflow-hidden rounded-lg border border-amber-500/30 bg-amber-500/[0.07]"
-      aria-label="Stalled Pulse loops"
+      aria-label="Pulse lifecycle follow-up"
     >
       <div className="flex items-start gap-3 px-3 py-3 sm:px-4">
         <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
@@ -169,7 +171,7 @@ export function PulseLoopClosureNotice({ observation }: { observation: PulseShad
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-foreground">
               {findings.length > 0
-                ? `${findings.length} stalled loop${findings.length === 1 ? '' : 's'} need follow-through`
+                ? pulseLoopClosureHeading(signalSummary)
                 : 'Loop-closure evidence is incomplete'}
             </h3>
             <span className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${

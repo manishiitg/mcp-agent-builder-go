@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 
 	_ "modernc.org/sqlite"
 )
@@ -134,6 +135,35 @@ func concernFingerprint(stepID, text string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// existingWorkflowReviewFingerprint preserves the identity of an exact
+// historical operational finding after the six reviewer modules were folded
+// into workflow_review. Without this bridge the same CONCERNS payload would be
+// refiled under a different step-id hash on the first consolidated pass.
+func existingWorkflowReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, text string) string {
+	wanted := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	modules := append([]string{pulsemodules.WorkflowReviewID}, pulsemodules.RetiredIDs...)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(modules)), ",")
+	args := make([]interface{}, 0, len(modules)+1)
+	args = append(args, ConcernPhaseReview)
+	for _, module := range modules {
+		args = append(args, module)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, text FROM run_concerns
+		WHERE phase=? AND step_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fingerprint, existingText string
+		if rows.Scan(&fingerprint, &existingText) == nil &&
+			strings.ToLower(strings.Join(strings.Fields(existingText), " ")) == wanted {
+			return fingerprint
+		}
+	}
+	return ""
+}
+
 func runConcernsDBPath(workspacePath string) string {
 	return filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "db", "db.sqlite")
 }
@@ -207,6 +237,11 @@ func recordRunConcernLinesAt(
 	recorded := 0
 	for _, text := range lines {
 		fp := concernFingerprint(stepID, text)
+		if stepID == pulsemodules.WorkflowReviewID {
+			if historical := existingWorkflowReviewFingerprint(ctx, db, text); historical != "" {
+				fp = historical
+			}
+		}
 		previousStatus := ""
 		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
 			return recorded, err

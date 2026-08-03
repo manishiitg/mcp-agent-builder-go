@@ -17,7 +17,12 @@ Pulse is the recurring maintenance system. After every scheduled run, Pulse Gate
 - Strategy Auditor
 - Goal Advisor
 
-Goal Advisor is not a separate schedule anymore. It is the selective strategy-action module after frequent Bug Review and the more-frequent Strategy Auditor. Gate runs it only for a new actionable Auditor diagnosis, an answered strategy decision, an experiment checkpoint, or a planned healthy-headroom review—not for every repeated goal miss. It asks what materially different response is warranted for `soul.md`.
+Goal Advisor is not a separate schedule anymore. It is an independent,
+selective blank-sheet strategy module that runs less frequently than Strategy
+Auditor. Gate selects it for its own opportunity/headroom cadence, an answered
+strategy decision, or an experiment checkpoint—not as a downstream response to
+another reviewer and not for every repeated goal miss. It asks what materially
+different approach outside the current plan could advance `soul.md`.
 
 ## Goal
 

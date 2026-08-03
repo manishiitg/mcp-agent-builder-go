@@ -685,7 +685,7 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 	}
 
 	// Another module still cannot close it.
-	if err := RecordPulseFindingDispositionsTx(ctx, db, "stores_health", "pulse-2", []PulseFindingDisposition{{
+	if err := RecordPulseFindingDispositionsTx(ctx, db, "strategy_auditor", "pulse-2", []PulseFindingDisposition{{
 		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
 		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
 		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},

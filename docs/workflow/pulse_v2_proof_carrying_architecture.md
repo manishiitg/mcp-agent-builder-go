@@ -2282,6 +2282,246 @@ verification is weak; they were fixes waiting on runs that then completed with
 nobody assigned to check them, so each pass repaired them again. rtslatency
 carried one finding at `seen_count` 4 for exactly this reason.
 
+### Confirmed defect: attemptless verification can discard a complete review (2026-08-03)
+
+**Status: confirmed; design agreed; implementation still required.** The latest
+`build-in-public` Artifact Review demonstrated a contract seam between the
+review instructions and the persistence layer. The reviewer completed 11m40s
+of work, made 46 tool calls, and consumed 3.39M cumulative token operations,
+but its complete review was rejected before `pulse_review_log` persistence.
+
+The first rejected marker was:
+
+```json
+{"finding_id":"PUL-71DC2B32","fingerprint":"71dc2b32264343a2","attempt_id":"","verdict":"failed", ...}
+```
+
+The exact validation failure was:
+
+```text
+verification marker line 15 requires finding_id, fingerprint, attempt_id, expected, and observed
+```
+
+Nine of the ten `PULSE_VERIFICATION_JSON` markers carried an empty
+`attempt_id`. Only `PUL-DB6AC22E` named a real attempt. This was not a malformed
+finding analysis: the later, module-specific reviewer brief asked the reviewer
+to classify all ten retained findings and said to include an attempt ID "when
+one exists." Three retained findings were acknowledged/blocked and seven were
+already rejected or closed with prior verification. None was an active
+`changed_unverified` fix awaiting proof, so the correct verification allowlist
+for this pass was empty.
+
+The Go invariant is intentional. `ExtractPulseReviewVerifications` requires a
+non-empty attempt ID, and the terminal module validator later joins the review
+verdict to the exact finding disposition by finding ID, fingerprint, and
+attempt ID. A `passed` verdict becomes `fixed_verified`; `failed` reopens the
+attempt; `inconclusive` remains `changed_unverified`. Relaxing only the parser
+would therefore move the same failure into the Fixer rather than solve it. See
+[`pulse_review_log.go`](../../agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/pulse_review_log.go)
+and [`pulse_worklist.go`](../../agent_go/cmd/server/pulse_worklist.go).
+
+The correct contract is narrower:
+
+- `PULSE_VERIFICATION_JSON` is proof about a **specific Fixer attempt**, not a
+  generic re-check of any retained finding.
+- Only an owned `changed_unverified` finding with a non-empty `attempt_id` and
+  an arrived `next_check` boundary is eligible.
+- Acknowledged, blocked, rejected, already-closed, suppressed, and legacy
+  attemptless findings are classified in the retained-finding manifest and
+  prose. They emit no verification marker.
+- Evidence contradicting a closed finding is a reopen/rediscovery event. It is
+  not retroactively attached to an absent Fixer attempt.
+
+Eligibility must not be left to caller-authored prose. Before launching a
+reviewer, the backend should query the lifecycle store and build an exact
+verification allowlist containing `finding_id`, `fingerprint`, `attempt_id`,
+and `next_check`. Append this trusted block **after** caller-supplied reviewer
+instructions and state that markers are forbidden for every finding outside
+the allowlist. This prevents a generated module brief from overriding the
+proof-carrying invariant.
+
+Persistence also needs a loss-limiting path. If marker validation still fails,
+store the raw Markdown as a quarantined `contract_failed` review together with
+the validation error. Do not file its findings or expose it to the Fixer until
+valid, but do not erase an expensive completed analysis. The current all-or-
+nothing rejection loses both the human review and the evidence needed to debug
+the contract failure.
+
+Acceptance coverage must include:
+
+1. Ten retained findings and zero eligible `changed_unverified` attempts: the
+   reviewer emits zero markers, classifies all ten, and persists successfully.
+2. One eligible attempt among unrelated retained findings: exactly one marker
+   is accepted and routed by the Fixer.
+3. A marker outside the backend allowlist: the actionable import is rejected,
+   while the raw review is retained as `contract_failed` with the exact error.
+4. A missing or fabricated attempt ID never reaches terminal disposition
+   handling.
+
+### Standing cross-workflow research questions
+
+Preserve these as the four governing questions for continued observation of
+Pulse across workflows and repeated passes. Do not declare them answered from
+one workflow or one review window:
+
+1. **Is there a fundamentally better overall Pulse design?**
+2. **How can reviewer time and token cost be reduced?**
+3. **How do reviews and fixes affect the overall goal?**
+4. **How do we measure that across multiple Pulse passes over time?**
+
+The evidence set should span workflows with different shapes and failure modes,
+including `build-in-public`, `rtslatency`, `instagram`, `upwork`, and the
+existing LinkedIn audit. For each pass retain reviewer selection, relevance and
+duplication, runtime/token/cost, contract failures, findings, attempts,
+verification, finalizer outcome, and later goal observations. Compare like with
+like: reviewer quality, orchestration efficiency, operational reliability, and
+goal movement are separate questions even when one pass supplies evidence for
+all four.
+
+The first two questions govern architecture and efficiency experiments. The
+last two govern the longitudinal impact model below. A proposed Pulse redesign
+should be judged against all four: it is not better merely because it is
+cheaper, and it is not successful merely because it closes more findings if
+the workflow's goal does not improve.
+
+### Longitudinal impact: did repeated Pulse work advance the goal?
+
+**Implementation status (2026-08-03): shipped in the working tree.** Gate now
+records trustworthy comparable success-criterion observations on every producing
+Pulse run, even when no reviewer is due. The single Fixer records coherent
+interventions and matured assessments through `record_pulse_impact`. SQLite
+tables `pulse_interventions`, `pulse_intervention_sources`,
+`pulse_goal_observations`, and `pulse_impact_assessments` are authoritative;
+`GET /api/workflow/pulse-impact` and the Pulse popup's **Goal impact over time**
+section are projections. Historical assessments remain append-only, while the
+popup summarizes only the latest assessment per intervention.
+
+Pulse must measure more than whether one review ran or one fix passed. The
+useful question is whether the accumulated review/fix cycle improves workflow
+reliability and closes the gap to the workflow's durable success criteria over
+many Pulse passes.
+
+The lifecycle currently covers the first four links:
+
+```text
+review -> finding -> fix attempt -> verification
+```
+
+It needs a durable second half:
+
+```text
+verified intervention -> next comparable runs -> criterion observations
+                      -> repeated impact assessments -> trend over time
+```
+
+Do not attribute outcome movement directly to a reviewer module. Two reviewers
+can discover the same defect, one consolidated attempt can fix findings from
+several modules, and a reviewer can correctly report a measurement defect that
+should not itself move a business metric. The durable attribution unit is the
+**intervention**: one coherent fix bundle or one approved strategy experiment,
+linked back to every source finding and review.
+
+Every intervention records:
+
+- a stable `intervention_id` and its source attempt/experiment IDs;
+- the affected `criterion_id` from the workflow's durable success contract;
+- `impact_type`: `direct_goal`, `reliability`, `measurement`, or
+  `presentation_maintenance`;
+- the metric, expected direction, affected route/group/environment, and exact
+  provenance query or artifact;
+- a comparable pre-change baseline window;
+- the first valid post-change checkpoint and the minimum evidence window;
+- known concurrent interventions and other attribution risks.
+
+The impact type prevents category errors. Fixing a timestamp crash is verified
+reliability work; it does not claim that publishing cadence improved. Restoring
+an approval control remains awaiting evidence until someone can use it. A later
+increase in successfully published posts is direct goal evidence. Engagement
+remaining flat after publishing recovers means execution improved while the
+strategy still did not.
+
+Store immutable observations for every eligible workflow run rather than only
+the latest value. Each observation identifies the criterion, metric, run,
+route/group/environment, value, timestamp, and evidence provenance. Then append
+an impact assessment whenever a checkpoint matures:
+
+```text
+improved | unchanged | regressed | inconclusive
+```
+
+An assessment carries the before window, after window, absolute/relative
+change, confidence, confounders, and next checkpoint when inconclusive. Never
+overwrite an earlier assessment: a fix may look positive after one run and
+neutral after ten, and that history is the information Pulse is meant to
+learn from.
+
+The SQLite shape should separate these concerns:
+
+- `pulse_interventions`: stable intervention definition, impact class,
+  criterion/metric hypothesis, scope, baseline, checkpoint, and lifecycle
+  status;
+- `pulse_intervention_attempts`: many-to-many links from interventions to Fixer
+  attempts, experiments, findings, and originating review runs;
+- `pulse_goal_observations`: append-only per-run criterion measurements with
+  route/environment and provenance;
+- `pulse_impact_assessments`: append-only before/after judgments, confidence,
+  confounders, and next check.
+
+At every Pulse pass, the backend should deterministically:
+
+1. record reviewer/fixer time, token, cost, and lifecycle output;
+2. attach new verified attempts or approved experiments to interventions;
+3. append goal observations from newly completed comparable runs;
+4. assess every intervention whose evidence checkpoint has matured;
+5. leave immature or confounded interventions explicitly awaiting evidence;
+6. render current, 7-day, 30-day, and 90-day rollups from the event history.
+
+The rollup has three separate scorecards and must not collapse unlike units
+into one synthetic Pulse score:
+
+**Review efficiency**
+
+- time/tokens/cost per module and per verified intervention;
+- useful, duplicate, rejected, and contract-failed review rates;
+- median time from finding to attempted fix and verified outcome;
+- fixes reopened and reviews that consumed resources but produced no durable
+  record.
+
+**Operational health**
+
+- valid-run rate, tool/persistence failure rate, stale-data rate, recurrence,
+  reopened fixes, and `changed_unverified` age;
+- reliability and measurement interventions verified over the window;
+- evidence-producing runs that arrived versus checkpoints still blocked.
+
+**Goal progress**
+
+- current value, target gap, and trend for each stable success criterion;
+- interventions assessed improved/unchanged/regressed/inconclusive;
+- direct-goal movement separated from enabling reliability/measurement work;
+- confidence and explicit attribution ambiguity when interventions overlap.
+
+For overlapping changes, Pulse must not invent precision. Prefer one active
+strategy experiment per criterion. When several interventions share the same
+before/after window, mark their individual impact `confounded` or attribute the
+result to the group. Operational repairs may continue, but the assessment must
+name them so a strategy gain is not falsely credited to one reviewer.
+
+The Pulse UI and summary email should therefore answer, over the selected time
+window:
+
+```text
+What Pulse spent
+What it found and durably fixed
+What became more reliable or measurable
+Which goal criteria actually improved
+What did not improve, regressed, or still lacks evidence
+```
+
+Until the criterion mapping and observation history exist, Pulse may truthfully
+say "9 fixes verified" or "publishing is reliable again," but it must not claim
+those fixes advanced the overall goal.
+
 ### The case against, and what survives it
 
 **"Zero reopened" may mean "zero re-checked."** This was the serious objection,

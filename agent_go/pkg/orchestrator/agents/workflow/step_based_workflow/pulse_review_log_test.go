@@ -102,15 +102,12 @@ func TestRecordPulseReviewBuildsPerModuleHistory(t *testing.T) {
 	for _, h := range history {
 		byModule[h.Module] = h
 	}
-	kb, ok := byModule["stores_health"]
-	if !ok || kb.RunCount != 2 {
-		t.Fatalf("stores_health should show 2 migrated-alias runs, got %#v", byModule)
+	workflow, ok := byModule["workflow_review"]
+	if !ok || workflow.RunCount != 3 {
+		t.Fatalf("workflow_review should consolidate 3 historical operational runs, got %#v", byModule)
 	}
-	if len(kb.RecentVerdict) != 2 || !strings.Contains(strings.Join(kb.RecentVerdict, " "), "Half-migration") {
-		t.Fatalf("verdicts not retained: %#v", kb.RecentVerdict)
-	}
-	if rh := byModule["report_health"]; rh.RunCount != 1 {
-		t.Fatalf("report_health should show 1 run, got %#v", rh)
+	if len(workflow.RecentVerdict) != 3 || !strings.Contains(strings.Join(workflow.RecentVerdict, " "), "Half-migration") {
+		t.Fatalf("verdicts not retained: %#v", workflow.RecentVerdict)
 	}
 }
 

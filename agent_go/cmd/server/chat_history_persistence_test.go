@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -668,6 +669,199 @@ func TestListChatHistorySessionsFromDiskReadsDateBucketLayout(t *testing.T) {
 	if sessions[0].ConversationPath != "_users/default/chat_history/2026-05-17/session-chat-1-conversation.json" {
 		t.Fatalf("conversation path = %q", sessions[0].ConversationPath)
 	}
+	if _, err := os.Stat(filepath.Join(root, "_users", "default", "chat_history", chatHistoryIndexFileName)); err != nil {
+		t.Fatalf("legacy listing did not backfill chat index: %v", err)
+	}
+}
+
+func TestListChatHistorySessionsFromDiskUsesIndexWithoutParsingConversation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workspaceRoot := "_users/default/chat_history"
+	workspaceConversationPath := workspaceRoot + "/2026-08-03/session-indexed-chat-conversation.json"
+	convDir := filepath.Join(root, filepath.FromSlash(workspaceRoot), "2026-08-03")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	convPath := filepath.Join(convDir, "session-indexed-chat-conversation.json")
+	// Deliberately invalid JSON: a passing list proves it used the metadata
+	// index and did not open+parse the complete conversation.
+	if err := os.WriteFile(convPath, []byte("complete transcript must not be parsed"), 0o600); err != nil {
+		t.Fatalf("write sentinel conversation: %v", err)
+	}
+	info, err := os.Stat(convPath)
+	if err != nil {
+		t.Fatalf("stat sentinel conversation: %v", err)
+	}
+
+	index := newChatHistoryIndex()
+	index.Complete = true
+	putLocalChatHistoryIndexEntry(&index, localChatHistoryFile{
+		sessionID:     "indexed-chat",
+		convPath:      convPath,
+		workspacePath: workspaceConversationPath,
+		modTime:       info.ModTime(),
+		size:          info.Size(),
+	}, ChatHistorySession{
+		SessionID:        "indexed-chat",
+		AgentMode:        "simple",
+		Status:           "completed",
+		Query:            "indexed title",
+		UserID:           "default",
+		ConversationPath: workspaceConversationPath,
+		CreatedAt:        "2026-08-03T10:00:00Z",
+		UpdatedAt:        "2026-08-03T10:00:00Z",
+		MessageCount:     42,
+		PreviewMessages: []ChatHistoryPreviewMessage{{
+			Role: "human",
+			Text: "short indexed preview",
+		}},
+	})
+	if err := writeLocalChatHistoryIndex(filepath.Join(root, filepath.FromSlash(workspaceRoot), chatHistoryIndexFileName), &index); err != nil {
+		t.Fatalf("write chat index: %v", err)
+	}
+
+	sessions, ok, err := listChatHistorySessionsFromDisk("default", workspaceRoot, "", 10, 0)
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	if !ok || len(sessions) != 1 {
+		t.Fatalf("list ok=%v sessions=%#v, want one indexed session", ok, sessions)
+	}
+	if sessions[0].Query != "indexed title" || sessions[0].MessageCount != 42 {
+		t.Fatalf("indexed metadata not returned: %#v", sessions[0])
+	}
+}
+
+func TestListChatHistorySessionsLegacyMigrationIndexesAllFilesBeforePagination(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workspaceRoot := "_users/default/chat_history"
+	convDir := filepath.Join(root, filepath.FromSlash(workspaceRoot), "2026-08-03")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		data := fmt.Sprintf(`{
+  "session_id": "legacy-%d",
+  "agent_mode": "simple",
+  "conversation_history": [{"Role":"human","Parts":[{"Text":"legacy title %d"}]}],
+  "updated_at": "2026-08-03T10:0%d:00Z"
+}`, i, i, i)
+		path := filepath.Join(convDir, fmt.Sprintf("session-legacy-%d-conversation.json", i))
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatalf("write legacy conversation %d: %v", i, err)
+		}
+	}
+
+	sessions, ok, err := listChatHistorySessionsFromDisk("default", workspaceRoot, "", 1, 0)
+	if err != nil || !ok || len(sessions) != 1 {
+		t.Fatalf("first paginated list ok=%v err=%v sessions=%#v", ok, err, sessions)
+	}
+	index, exists := readLocalChatHistoryIndex(filepath.Join(root, filepath.FromSlash(workspaceRoot), chatHistoryIndexFileName))
+	if !exists || !index.Complete || len(index.Entries) != 3 {
+		t.Fatalf("migration index exists=%v complete=%v entries=%d, want true/true/3", exists, index.Complete, len(index.Entries))
+	}
+}
+
+func TestListWorkflowChatHistorySessionsUsesIndexWithoutParsingConversation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workflowPath := "Workflow/indexed-workflow"
+	workspaceConversationPath := workflowPath + "/builder/conversation/2026-08-03/session-workflow-chat-conversation.json"
+	convDir := filepath.Join(root, filepath.FromSlash(workflowPath), "builder", "conversation", "2026-08-03")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	convPath := filepath.Join(convDir, "session-workflow-chat-conversation.json")
+	if err := os.WriteFile(convPath, []byte("complete workflow transcript must not be parsed"), 0o600); err != nil {
+		t.Fatalf("write sentinel conversation: %v", err)
+	}
+	info, err := os.Stat(convPath)
+	if err != nil {
+		t.Fatalf("stat sentinel conversation: %v", err)
+	}
+
+	index := newChatHistoryIndex()
+	index.Complete = true
+	putLocalChatHistoryIndexEntry(&index, localChatHistoryFile{
+		sessionID:     "workflow-chat",
+		convPath:      convPath,
+		workspacePath: workspaceConversationPath,
+		modTime:       info.ModTime(),
+		size:          info.Size(),
+	}, ChatHistorySession{
+		SessionID:        "workflow-chat",
+		AgentMode:        "workflow",
+		Status:           "completed",
+		Query:            "workflow indexed title",
+		UserID:           "default",
+		WorkspacePath:    workflowPath,
+		ConversationPath: workspaceConversationPath,
+		CreatedAt:        "2026-08-03T11:00:00Z",
+		UpdatedAt:        "2026-08-03T11:00:00Z",
+		MessageCount:     73,
+	})
+	indexPath := filepath.Join(root, filepath.FromSlash(workflowPath), "builder", "conversation", chatHistoryIndexFileName)
+	if err := writeLocalChatHistoryIndex(indexPath, &index); err != nil {
+		t.Fatalf("write workflow chat index: %v", err)
+	}
+
+	sessions, err := ListChatHistorySessions("default", 10, 0, workflowPath)
+	if err != nil {
+		t.Fatalf("list workflow sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Query != "workflow indexed title" || sessions[0].MessageCount != 73 {
+		t.Fatalf("workflow indexed metadata not returned: %#v", sessions)
+	}
+}
+
+func TestPersistChatConversationUpdatesMetadataIndex(t *testing.T) {
+	workspace := &mockWorkspaceAPI{files: map[string]string{}}
+	server := httptest.NewServer(workspace)
+	defer server.Close()
+	t.Setenv("WORKSPACE_API_URL", server.URL)
+
+	history := []llmtypes.MessageContent{{
+		Role: llmtypes.ChatMessageTypeHuman,
+		Parts: []llmtypes.ContentPart{
+			llmtypes.TextContent{Text: "the indexed conversation title"},
+		},
+	}}
+	conversationPath := "Workflow/demo/builder/conversation/2026-08-03/session-save-index-conversation.json"
+	api := &StreamingAPI{}
+	api.persistChatConversationToPathWithTerminalSession("save-index", "", "workflow", "default", history, &ChatHistoryAgentRuntime{
+		Kind:         "coding_agent",
+		Provider:     "codex",
+		WorkshopMode: "workshop",
+	}, nil, conversationPath)
+
+	indexPath := "Workflow/demo/builder/conversation/" + chatHistoryIndexFileName
+	workspace.mu.Lock()
+	conversationData, conversationExists := workspace.files[conversationPath]
+	indexData, indexExists := workspace.files[indexPath]
+	workspace.mu.Unlock()
+	if !conversationExists || !indexExists {
+		t.Fatalf("persisted conversation=%v index=%v, want both", conversationExists, indexExists)
+	}
+
+	var index chatHistoryIndex
+	if err := json.Unmarshal([]byte(indexData), &index); err != nil {
+		t.Fatalf("decode persisted index: %v", err)
+	}
+	entry, ok := index.Entries[conversationPath]
+	if !ok {
+		t.Fatalf("missing index entry for %s: %#v", conversationPath, index.Entries)
+	}
+	if entry.Session.Query != "the indexed conversation title" || entry.Session.Status != "completed" || entry.Session.WorkspacePath != "Workflow/demo" {
+		t.Fatalf("unexpected persisted metadata: %#v", entry.Session)
+	}
+	if entry.SourceSize != int64(len(conversationData)) {
+		t.Fatalf("source size = %d, want %d", entry.SourceSize, len(conversationData))
+	}
 }
 
 // Renamed from ...CollapsesMultiAgentScheduleRunsBySchedule, for the same
@@ -845,6 +1039,9 @@ func TestDeleteChatHistorySessionDeletesUserDateBucketAndLegacyFiles(t *testing.
 	if err := os.WriteFile(datePath, []byte(`{"session_id":"chat-1","conversation_history":[]}`), 0o600); err != nil {
 		t.Fatalf("write date bucket: %v", err)
 	}
+	if _, ok, err := listChatHistorySessionsFromDisk("default", "_users/default/chat_history", "", 10, 0); err != nil || !ok {
+		t.Fatalf("build deletion test index ok=%v err=%v", ok, err)
+	}
 
 	result, err := DeleteChatHistorySession("default", "chat-1", "")
 	if err != nil {
@@ -858,6 +1055,10 @@ func TestDeleteChatHistorySessionDeletesUserDateBucketAndLegacyFiles(t *testing.
 	}
 	if _, err := os.Stat(datePath); !os.IsNotExist(err) {
 		t.Fatalf("date conversation still exists or stat failed unexpectedly: %v", err)
+	}
+	index, exists := readLocalChatHistoryIndex(filepath.Join(root, "_users", "default", "chat_history", chatHistoryIndexFileName))
+	if !exists || len(index.Entries) != 0 {
+		t.Fatalf("deleted chat remains in index: exists=%v entries=%#v", exists, index.Entries)
 	}
 }
 

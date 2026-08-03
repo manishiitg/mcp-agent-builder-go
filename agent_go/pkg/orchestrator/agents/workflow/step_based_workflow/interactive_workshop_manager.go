@@ -47,8 +47,6 @@ const workshopFixedIteration = "iteration-0"
 
 const pulseReviewerCompletionPrefix = "PULSE_REVIEW_COMPLETE"
 
-const pulseReviewerMaxConcurrency = 2
-
 const statusPollWindow = 60 * time.Second
 
 const statusPollNextAction = `**NEXT ACTION: End the current agent turn now.**
@@ -164,7 +162,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 
 func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
 	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
-	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, and unfinished attempt before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Use start_pulse_fix_attempt for each actionable bundle before mutation; that attempt is the durable queue record and must link every affected finding. Process verification outcomes first, then repairs, sequentially. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Mark every due module exactly once before finishing.\n\n"
+	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Use start_pulse_fix_attempt for each actionable bundle before mutation; that attempt is the durable queue record and must link every affected finding. Process verification outcomes first, then repairs, sequentially. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
 	footer := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: Only after all due modules have a truthful terminal result, emit this exact final line and nothing after it:\n%s", marker)
 	return scope + queue + strings.TrimSpace(instructions) + footer
 }
@@ -1281,7 +1279,7 @@ func NewInteractiveWorkshopManager(
 		sessionID:          sessionID,
 		workflowID:         workflowID,
 		stepRegistry:       registry,
-		pulseReviewerSlots: make(chan struct{}, pulseReviewerMaxConcurrency),
+		pulseReviewerSlots: make(chan struct{}, pulsemodules.ReviewerMaxConcurrency),
 	}
 }
 
@@ -1439,6 +1437,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"record_pulse_worklist",
 		"start_pulse_fix_attempt",
 		"mark_pulse_module_result",
+		"record_pulse_impact",
 		"resolve_run_concern",
 		"mark_pulse_final_command_result",
 		"mark_changelog_artifact_reviewed",
@@ -1617,7 +1616,7 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		// Durable finding lifecycle: read the backlog, open an attempt before
 		// mutating, then record one honest disposition per finding.
 		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
-		"start_pulse_fix_attempt", "mark_pulse_module_result", "resolve_run_concern",
+		"start_pulse_fix_attempt", "mark_pulse_module_result", "record_pulse_impact", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
 		// Write access to the workflow database. Reading it (query_workflow_db)
 		// and read_skill come from the common list every agent inherits; only the
@@ -3709,7 +3708,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if iwm.pulseReviewerSlots == nil {
 					iwm.toolAgentSetupMu.Lock()
 					if iwm.pulseReviewerSlots == nil {
-						iwm.pulseReviewerSlots = make(chan struct{}, pulseReviewerMaxConcurrency)
+						iwm.pulseReviewerSlots = make(chan struct{}, pulsemodules.ReviewerMaxConcurrency)
 					}
 					iwm.toolAgentSetupMu.Unlock()
 				}

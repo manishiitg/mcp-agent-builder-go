@@ -587,6 +587,74 @@ func TestHandleNotifyUserSuppressesWorkflowSlackWebhookForGmailOnlyPulse(t *test
 	}
 }
 
+func TestHandleNotifyUserAddsWorkflowNameToRichEmail(t *testing.T) {
+	manager := services.GetNotificationManager()
+	ch := make(chan *services.NotificationDestination, 1)
+	manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: ch})
+	t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+	ctx := context.WithValue(context.Background(), BotNotificationDestinationKey, &services.NotificationDestination{
+		UserID:       "user-1",
+		WorkflowName: "rtslatency",
+	})
+	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "Pulse completed",
+		"notification_kind": "pulse_summary",
+		"email_subject":     "Pulse summary",
+		"email_html":        `<div>Three findings remain pending.</div>`,
+	}); err != nil {
+		t.Fatalf("Pulse notification: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.Content == nil || dest.Content.Gmail == nil {
+			t.Fatalf("destination = %#v, want rich Gmail content", dest)
+		}
+		gmail := dest.Content.Gmail
+		if gmail.Subject != "rtslatency · Pulse summary" {
+			t.Fatalf("subject = %q", gmail.Subject)
+		}
+		if !strings.Contains(gmail.HTMLBody, "Workflow: <strong") || !strings.Contains(gmail.HTMLBody, "rtslatency</strong>") {
+			t.Fatalf("email body missing workflow header: %s", gmail.HTMLBody)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Gmail notification")
+	}
+}
+
+func TestHandleNotifyUserPreservesWorkflowNameThroughSessionDestination(t *testing.T) {
+	manager := services.GetNotificationManager()
+	ch := make(chan *services.NotificationDestination, 1)
+	manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: ch})
+	t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+	const sessionID = "pulse-workflow-email-test"
+	RegisterSessionNotificationDestination(sessionID, &services.NotificationDestination{
+		UserID:       "user-1",
+		WorkflowName: "social-media",
+	})
+	t.Cleanup(func() { DeleteSessionNotificationDestination(sessionID) })
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user": "Pulse completed",
+		"email_subject":    "Pulse summary",
+		"email_html":       `<div>Complete.</div>`,
+	}); err != nil {
+		t.Fatalf("Pulse notification: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		gmail := dest.Content.Gmail
+		if gmail.Subject != "social-media · Pulse summary" || !strings.Contains(gmail.HTMLBody, "social-media</strong>") {
+			t.Fatalf("workflow identity was not preserved through session destination: %#v", gmail)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Gmail notification")
+	}
+}
+
 func TestHandleNotifyUserEmailToOverridesDestination(t *testing.T) {
 	manager := services.GetNotificationManager()
 	ch := make(chan *services.NotificationDestination, 1)

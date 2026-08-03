@@ -59,19 +59,12 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	}
 
 	recorded, err := recordPulseWorklist(ctx, workspacePath, "pulse-run-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {
-			Module:       pulseModuleBugReview,
+		pulseModuleWorkflowReview: {
+			Module:       pulseModuleWorkflowReview,
 			Due:          true,
 			Reason:       "Latest run skipped a required step.",
 			Evidence:     []string{"runs/iteration-0/logs/step-a"},
 			CooldownRuns: 0,
-		},
-		pulseModuleStoresHealth: {
-			Module:       pulseModuleStoresHealth,
-			Due:          false,
-			Reason:       "No plan or selector change since the last reviewed run.",
-			Evidence:     []string{"planning/changelog"},
-			CooldownRuns: 2,
 		},
 	}))
 	if err != nil {
@@ -91,11 +84,8 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	if !ok {
 		t.Fatal("get worklist ok=false, want true")
 	}
-	if got := worklist[pulseModuleBugReview].LastDecision; got != "due" {
-		t.Fatalf("bug review decision = %q, want due", got)
-	}
-	if got := worklist[pulseModuleStoresHealth].LastDecision; got != "skipped" {
-		t.Fatalf("stores health decision = %q, want skipped", got)
+	if got := worklist[pulseModuleWorkflowReview].LastDecision; got != "due" {
+		t.Fatalf("workflow review decision = %q, want due", got)
 	}
 
 	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleBugReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
@@ -383,7 +373,7 @@ func TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns(t *testing.T) {
 	// Claim bug_review for another run and leave it unresolved, exactly as a
 	// pass that died mid-flight does: due, with no terminal result.
 	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Due: true, Reason: "Owning pass selected this module."},
+		pulseModuleWorkflowReview: {Due: true, Reason: "Owning pass selected this module."},
 	})
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, "owning-pulse", decisions); err != nil {
 		t.Fatalf("record owning worklist: %v", err)
@@ -394,7 +384,7 @@ func TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns(t *testing.T) {
 	}
 	claimed := false
 	for _, state := range states {
-		if state.Module == pulseModuleBugReview {
+		if state.Module == pulseModuleWorkflowReview {
 			claimed = state.LastDecision == "due" && state.LastResult == "" && state.LastPulseRunID == "owning-pulse"
 		}
 	}
@@ -452,7 +442,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	pulseRunID := "schedule-cron--audit"
 	sessionID := "schedule-cron--audit-session"
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "A verified repair is required."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A verified repair is required."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -541,7 +531,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	err = db.QueryRow(`SELECT result, reason, changed_files_json, verification_json,
 		before_refs_json, after_refs_json, recorded_at
 		FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?`,
-		workspacePath, pulseModuleBugReview, pulseRunID,
+		workspacePath, pulseModuleWorkflowReview, pulseRunID,
 	).Scan(&result, &reason, &changedFilesJSON, &verificationJSON, &beforeRefsJSON, &afterRefsJSON, &recordedAt)
 	if err != nil {
 		t.Fatalf("read audit: %v", err)
@@ -742,8 +732,8 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 	t.Run("rejects duplicate coverage module identity", func(t *testing.T) {
 		duplicate := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "duplicate-module"),
-			`data-module="artifact_review"`,
-			`data-module="bug_review"`,
+			`data-module="strategy_auditor"`,
+			`data-module="workflow_review"`,
 			1,
 		)
 		workspaceState.mu.Lock()
@@ -1024,7 +1014,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 		t.Fatalf("payload = %+v", payload)
 	}
 	finding := payload.Findings[0]
-	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleBugReview {
+	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleWorkflowReview {
 		t.Fatalf("finding identity/status mismatch: %+v", finding)
 	}
 	if finding.Issue.ID == "" || finding.Issue.Title != "selector keeps targeting the same accounts" ||

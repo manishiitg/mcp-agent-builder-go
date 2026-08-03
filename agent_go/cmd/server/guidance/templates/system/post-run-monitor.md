@@ -22,7 +22,7 @@ When updating `builder/improve.html`, keep the first screen short and user-prior
 
 ## Timeout Recovery
 
-The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Strategy Auditor or Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. When a step makes no progress for its full inactivity window, the scheduler records the selected module as `timed_out`, cancels work owned by the old Pulse session, and skips the remaining optional maintenance modules so concurrent repairs cannot race. It then resumes the Dashboard and ordered finalizer in a fresh recovery session. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns read SQLite module results, SQLite-backed reviewer records, and current target state; they do not treat HTML as recovery truth and must not claim that timed-out or skipped work succeeded.
+The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Strategy Auditor or Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. A timed-out reviewer is retained as incomplete evidence but does not cancel independent reviewers or the consolidated Fixer; the Fixer records a truthful terminal result for its module. A failed pre-change backup still blocks mutation, and a failed Fixer still prevents later maintenance writes. Dashboard and ordered finalization run in recovery when safe. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns read SQLite module results, SQLite-backed reviewer records, and current target state; they do not treat HTML as recovery truth and must not claim that timed-out or skipped work succeeded.
 
 ## Gate Contract
 
@@ -84,13 +84,13 @@ For every current concern, preserve the step/item and evidence path, deduplicate
 it against open `builder/improve.html` findings, and make one explicit Gate
 decision:
 
-- operational correctness, runtime, stale-input, or unsupported-success signal:
-  mark `bug_review` due
-- report, evaluation, learning, knowledgebase, DB, artifact, cost, or LLM/ops
-  concern: mark the matching module due
-- strategy or outcome concern: mark `strategy_auditor` due when diagnosis is
-  needed; also mark `goal_advisor` due when the resulting diagnosis or current
-  goal/experiment evidence needs a strategy response
+- operational correctness, runtime, stale-input, unsupported-success, report,
+  evaluation, learning, knowledgebase, DB, artifact, cost, or LLM/ops signal:
+  mark `workflow_review` due
+- strategy or outcome concern: independently mark `strategy_auditor` due when
+  the current plan needs an inside-the-strategy audit; independently mark
+  `goal_advisor` due when its blank-sheet opportunity cadence, current
+  goal/headroom evidence, decision, or experiment checkpoint requires it
 - user judgment is genuinely required: route it to a due module whose Pulse
   Fixer can use `create_human_input_request`; Gate itself does not create the
   question
@@ -104,7 +104,7 @@ handoff. Never silently drop a concern merely because the run status is
 successful. Conversely, the presence of `CONCERNS:` is evidence to classify,
 not an automatic run failure or an automatic Bug verdict.
 
-Do not load full report HTML, full KB/learnings, broad DB rows, every cost file, or long run logs merely to decide cadence. Open large evidence only when a compact signal makes that module plausibly due or one targeted fact is needed to justify a decision. The selected module performs the deep inspection later; Gate only selects the evidence-backed worklist. When Gate sees a plausible bug signal, mark Bug Review due so its read-only reviewer can investigate and the Pulse Fixer can repair and verify it.
+Do not load full report HTML, full KB/learnings, broad DB rows, every cost file, or long run logs merely to decide cadence. Open large evidence only when a compact signal makes that module plausibly due or one targeted fact is needed to justify a decision. The selected module performs the deep inspection later; Gate only selects the evidence-backed worklist. When Gate sees a plausible operational signal, mark Workflow Review due so its single read-only agent can investigate through the relevant ordered lens and the Pulse Fixer can repair and verify it.
 
 Gate writes only the complete SQLite worklist. The dedicated Dashboard stage
 later writes one compact **Pulse Gate / Worklist** timeline entry and refreshes
@@ -132,12 +132,15 @@ Gate does not launch reviewers or call mutation tools, plan modification tools, 
 
 Gate must record exactly one decision for each module. A partial worklist is invalid because omitted modules would otherwise disappear silently.
 
-## Independent Review Stages And One Consolidated Writer
+## Three Independent Review Agents And One Consolidated Writer
 
-The scheduler sends one read-only stage per due module, in module order, with a
-shared dated `review_run_id`. After every selected review stage, it sends one
-consolidated Fixer stage for the pass. Review stages never mutate or mark module
-state. The Fixer is the only writer and records every due module's result.
+The scheduler sends at most three read-only stages—Workflow Review, Strategy
+Auditor, and Goal Advisor—with a shared dated `review_run_id`, runs them in one
+bounded parallel batch, and preserves
+canonical module order in the collected results. Only after every selected
+review stage reaches a terminal stage outcome does it send one consolidated
+Fixer stage for the pass. Review stages never mutate or mark module state. The
+Fixer is the only writer and records every due module's result.
 
 1. Read `get_pulse_module_state`, `get_pulse_finding_backlog`, the durable
    Gate/worklist, current-run module results, and saved SQLite reviewer records. If every due module already has a
@@ -148,19 +151,21 @@ state. The Fixer is the only writer and records every due module's result.
    partial fix. A `changed_unverified` result is resumed only when its named
    next valid evidence boundary has arrived; until
    then preserve it without reapplying the change or claiming it is fixed.
-2. Resolve the off-track dependency chain in module order. When Bug Review
-   and Strategy Auditor are due for the same evidence window, run Bug Review alone first.
-   If a confirmed correctness bug invalidates that window,
-   record Auditor as terminally deferred to the exact post-fix outcome checkpoint;
-   otherwise run Auditor. When Auditor and Goal Advisor are due, run Auditor
-   first and launch Advisor only for an actionable diagnosis or its independent
-   answer/experiment checkpoint.
+2. Run every selected reviewer as an independent read-only agent in one bounded
+   parallel batch. No reviewer waits for or consumes another reviewer's
+   conclusion. A reviewer that cannot trust its evidence returns an execution
+   problem or `insufficient_evidence` with an exact next-check boundary; it does
+   not defer another reviewer. The scheduler waits for every selected review
+   stage before starting the consolidated Fixer.
    Before starting a reviewer, reconcile that module's complete active backlog
    against saved reviewer records and lifecycle events. Classify each candidate
    as existing unchanged, existing with new evidence, reopened, or genuinely
    new. Update the existing fingerprint for the first two; never file duplicate
    prose as another bug. Verify eligible prior changes before new discovery;
-   verification does not consume the discovery cap. Launch exactly one reviewer only when changed
+   verification does not consume the discovery cap. Workflow Review keeps one
+   continuous context and walks correctness, artifacts, report/eval, stores,
+   and LLM/tool operations in sequence, checkpointing and deduplicating as it
+   goes. Launch exactly one reviewer only when changed
    artifacts/current-run evidence or an evidence gap requires it. Never combine
    reviewers in one shell command or use `run_in_background`, background curl,
    `&`, or `wait`.
@@ -169,7 +174,7 @@ state. The Fixer is the only writer and records every due module's result.
    reference guidance, and a compact non-HTML response contract: module,
    verdict, next-check condition, findings, evidence, bounded recommended fix,
    verification, and whether user judgment is required with a reason.
-   For Bug Review, also include the suspect step ids/attempts and tell the
+   For Workflow Review's correctness lens, also include the suspect step ids/attempts and tell the
    reviewer to load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])` for the
    Exploratory QA and observable execution-trace contract whenever Gate evidence
    points to a specific step.
@@ -194,10 +199,11 @@ state. The Fixer is the only writer and records every due module's result.
    `call_generic_agent` appends and enforces its own authoritative final marker.
    The tool rejects a provider pane snapshot that does not contain that marker
    and retries one incomplete result once.
-   Use the existing specialist guidance as the reviewer brief: Bug Review uses
+   Use the existing specialist guidance as Workflow Review's ordered lens briefs: correctness uses
    `pulse-bug-review`; Stores Health applies `improve-learnings`,
    `improve-knowledge`, and `improve-database` as its three sub-checks; Report
-   Health uses `improve-report`; and Eval Health uses `improve-evaluation`.
+   truth uses `improve-report` and `improve-evaluation`; then run stores and
+   LLM/tool operations. Load all required focused docs in one `read_skill` call.
    These reference docs are read-only reviewer briefs in Pulse; they return
    fixer instructions rather than applying them.
    Do not give a reviewer `html-output`, the Pulse skeleton, CSS migration, or
@@ -320,7 +326,7 @@ state. The Fixer is the only writer and records every due module's result.
 Read-only behavior is enforced by reviewer prompts, a read-only tool allowlist,
 and empty reviewer write paths. The one-Fixer-per-pass rule prevents concurrent
 workflow-state writes; the dedicated Dashboard prevents competing
-`improve.html` writers. The backend independently enforces the two-reviewer
+`improve.html` writers. The backend independently enforces the three-reviewer
 concurrency cap and persists one complete SQLite reviewer result per module.
 
 ## Module Decisions
@@ -335,20 +341,19 @@ future. A checkpoint is a planned evidence boundary, not a lock. The agent may
 keep the checkpoint only when current evidence still shows that waiting is the
 most informative and cost-conscious choice.
 
-### Off-track diagnostic escalation
+### Independent off-track lenses
 
-Use `Bug Review -> Strategy Auditor -> Goal Advisor`, not three equal reactions
-to one miss. Bug Review is frequent for most outcome-bearing runs; an off-track
-path needs a clean review after its latest change/miss. Auditor is second and
-more frequent than Advisor, using short cross-run checkpoints once execution is
-clean. A bug defers it until verified repair plus valid outcome evidence.
-Advisor is selective: run only for a new/materially changed actionable
-diagnosis, answered strategy decision, experiment checkpoint, or planned
-healthy-headroom review—not an unchanged repeated miss.
+Workflow Review checks whether execution and its supporting operational system
+are correct. Strategy Auditor checks what is
+missing or weak inside the current strategic shape and normally runs more
+frequently than Goal Advisor. Goal Advisor independently performs a selective
+blank-sheet search for materially different approaches at its own opportunity,
+decision, experiment, or healthy-headroom checkpoint. These are distinct
+questions, not an escalation chain, and they may run in the same parallel batch.
 
-Gate pairs Bug and Auditor only when a recent clean Bug result covers the
-strategy window; review still resolves Bug first and defers Auditor if new
-findings invalidate it. Auditor always precedes a due Advisor.
+Gate evaluates each lens independently. Evidence unreliability changes a
+reviewer's own classification; it never creates a scheduling edge between
+reviewers.
 
 ### Reviewed-baseline rule
 
@@ -400,16 +405,17 @@ complete, describe a deferred module as `baseline pending`, not `healthy` or
 
 Use these module names exactly:
 
-- `bug_review`
-- `artifact_review`
-- `report_health`
-- `eval_health`
-- `stores_health`
-- `llm_ops_review`
+- `workflow_review`
 - `strategy_auditor`
 - `goal_advisor`
 
-### bug_review
+The historical focused operational names below are ordered lenses inside the
+single `workflow_review` agent. They are not worklist modules and never launch
+separate agents.
+
+### workflow_review
+
+#### Correctness lens (formerly bug_review)
 
 Mark due for real Bug findings:
 
@@ -441,7 +447,7 @@ Mark due for real Bug findings:
 - duplicate or shadow control stores for the same logical entity (for example,
   two strategy/arm tables) where writers, readers, or mirroring rules can drift
 
-Also mark Bug Review due for a bounded exploratory QA checkpoint when any of
+Also mark Workflow Review due for a bounded exploratory QA checkpoint when any of
 these conditions holds:
 
 - this workflow has never completed an exploratory QA checkpoint
@@ -452,19 +458,19 @@ these conditions holds:
 - a previously recorded risk checkpoint or business-time checkpoint has arrived
 - new failure, contradiction, `CONCERNS:`, or suspicious-success evidence appears
 
-### Off-track goals tighten Bug Review cadence
+### Off-track goals tighten Workflow Review cadence
 
 When a defined material success criterion is trustworthily below target,
 declining, or stalled, treat that as a direct reason for more frequent bounded
 exploratory QA even when every step completed and no `CONCERNS:` marker exists.
-If no clean Bug Review covers that miss and its relevant control path, mark Bug
-Review due now and defer Strategy Auditor to the next valid checkpoint. Once
-Bug Review is clean and the goal remains off track, mark Strategy Auditor due.
-Mark Goal Advisor only when the resulting diagnosis needs a new proposal,
-experiment, or decision under the escalation rules above.
+If no clean Workflow Review correctness lens covers that miss and its relevant
+control path, mark Workflow Review due now. Independently select Strategy Auditor when the current plan
+needs an in-strategy effectiveness audit, and independently select Goal Advisor
+when its less-frequent blank-sheet checkpoint is due. Never defer one because
+another is dirty, missing, or selected.
 
 If no exploratory QA checkpoint was completed after the latest observed goal
-miss, Bug Review is due now. While the goal remains off track, choose a short
+miss, Workflow Review is due now. While the goal remains off track, choose a short
 next checkpoint based on a small number of meaningful outcome-bearing runs,
 exposures, or elapsed business time. A technically clean run, green eval, or
 absence of explicit concerns does not justify a long calendar cooldown. Re-run
@@ -490,11 +496,12 @@ reachability check (`wrong_store_write`, `shadow_store_drift`,
 `dead_configuration`), the observable execution-trace review, and the finding
 classifications (`correctness_bug`, `efficiency_or_coaching`, `no_issue`,
 `insufficient_evidence`). The Pulse Fixer repairs only confirmed
-`correctness_bug` findings and routes `efficiency_or_coaching` to the
-`llm_ops_review` evidence set. Gate does not load that doc; it decides only
-whether bug_review is due from the triggers above.
+`correctness_bug` findings. Keep `efficiency_or_coaching` as evidence for this
+same agent's LLM and operations lens; it is not a second module or agent. Gate
+does not load that doc; it decides only whether `workflow_review` is due from
+the triggers above.
 
-### artifact_review
+#### Artifact lens (formerly artifact_review)
 
 `get_pulse_module_state` returns `plan_change_backlog`: the exact count of
 changelog entries not yet stamped `artifact_review.done`, newest first, with each
@@ -526,7 +533,7 @@ staleness, rubric gameability, etc.). This removes a duplicate due-decision
 that used to require each module to explicitly defer to this one for the
 same entries.
 
-### report_health
+#### Report lens (formerly report_health)
 
 Mark due when the reporting dashboard is stale, misleading, broken, too text-heavy, not goal-oriented, or not using live persisted evidence correctly.
 Also mark it due when an approved Goal Advisor measurement step produces its
@@ -547,7 +554,7 @@ The read-only reviewer follows `improve-report` as its audit checklist and
 returns exact recommended HTML/report-plan edits. The Pulse Fixer applies and
 verifies bounded report-only fixes and records the module outcome.
 
-### eval_health
+#### Evaluation lens (formerly eval_health)
 
 Mark due when evaluation evidence cannot be trusted or does not measure the workflow's stated success criteria:
 
@@ -563,7 +570,7 @@ checklist. It returns bounded recommendations and verification steps. The Pulse
 Fixer applies safe correctness repairs, validates them, and records changed eval
 artifacts as an `Eval fix` in `builder/improve.html`.
 
-### stores_health
+#### Stores lens (formerly stores_health)
 
 Covers three stores in one pass: learnings (HOW to run the task), the
 knowledgebase (domain facts), and db/db.sqlite (structured run state). All
@@ -597,8 +604,9 @@ Mark due on any of:
   skip with a next-check.
 
 Plan-change-driven drift — a recent edit leaving learnings, KB notes, or DB
-contracts stale — is `artifact_review`'s job exclusively (see its section
-above); this module does not also weigh `plan_change_backlog`.
+contracts stale — is handled once by the artifact lens above. The stores lens
+must reuse that conclusion rather than file a duplicate finding from the same
+`plan_change_backlog` evidence.
 
 The read-only reviewer follows `improve-learnings`, `improve-knowledge`, and
 `improve-database` as its three checklists. `knowledgebase/context` is
@@ -614,7 +622,7 @@ permanent; KB notes must distinguish durable domain evidence from beliefs
 copied out of the current plan; schemas and enums should not unnecessarily
 freeze one source, channel, entity, group, or tactic.
 
-### llm_ops_review
+#### LLM and operations lens (formerly llm_ops_review)
 
 This is the single agentic Ops Review for cost, timing, LLM selection, tool-call
 quality, runtime operations, setup, and plan-design hygiene. It is not Goal
@@ -622,7 +630,7 @@ Advisor and is not automatically due every Pulse. High-frequency workflows
 should normally roll up several runs. Mark it due when it has never completed,
 its planned checkpoint arrives, telemetry is missing or unpriced, cost or
 latency changes materially, model/tier/fallback configuration changes, a prior
-finding needs follow-up, an answered `llm-ops-*` request is waiting, a prior Bug Review recorded `efficiency_or_coaching` trace evidence
+finding needs follow-up, an answered `llm-ops-*` request is waiting, a prior Workflow Review recorded `efficiency_or_coaching` trace evidence
 for follow-up, readiness
 materially changes, or
 enough plan/schema/prevalidation changes have accumulated.
@@ -670,7 +678,7 @@ when recurrence matters. Do not open every trace. Group findings as cost, time,
 tool/runtime reliability, quality, or setup, and preserve the complete evidence
 needed for Bug Review when the Ops pass discovers a correctness defect.
 
-**The plan-design sub-check has its own bootstrap trigger, separate from the module's general cost/tier history.** A workflow may already show a completed `llm_ops_review` entry from before this module owned plan-design hygiene (or from a cost/tier-only pass since). "It has never completed" must be read per checklist, not per module: scan `builder/improve.html` for a prior `data-module="llm_ops_review"` entry that actually applied the `design-plan` structural checklist (step-type fitness, prevalidation fitness, schema/description drift, or one of that doc's PART 2/6 findings) — a cost/tier/fallback-only entry does not count. If no such entry exists, treat the plan-design check as never-completed and mark the module due on the next Gate pass regardless of its general cooldown, so a scope expansion never silently inherits stale "already reviewed" cooldown from a narrower mandate the workflow was actually reviewed under.
+**The plan-design sub-check has its own bootstrap trigger, separate from Workflow Review's general history.** Historical `llm_ops_review` entries count only when they actually applied the `design-plan` structural checklist; a cost/tier-only entry does not. If no such entry exists, mark `workflow_review` due so consolidation does not inherit a stale narrower baseline.
 
 Inspect resolved provider/model/options/fallback configuration and actual step/eval tier use. Inventory every exact model pin in explicit workflow roles and planning/evaluation step config (`execution_llm`, `validation_llm`, and orchestrator overrides). Call `list_provider_models` once for each pinned provider and use its catalog plus `default_tier_models` as the authoritative current comparison. Classify a pin as unavailable/deprecated, still supported but different from the provider-owned role/tier default, or current. Never infer recency by sorting model names. Provider-profile workflows inherit current defaults and must not be reported as stale merely because their resolved model changed after an app update. Check whether high, medium, and low are configured and used sensibly; whether repeated low-risk validation, extraction, formatting, or summarization uses an unnecessarily expensive tier; whether eval/verification would benefit from provider diversity; whether Pulse and Maintenance models are sensible; and whether fallbacks exist. Also check report publishing/password protection, notification instructions/setup, backup status, and workflow-version readiness.
 
@@ -694,9 +702,9 @@ Configuration changes require the existing human-input flow. For a stale exact p
 
 ### strategy_auditor
 
-This is the recurring plan-effectiveness layer, so its checkpoint is normally
-shorter than Goal Advisor's. Mark it due when Bug Review is clean for the
-relevant path and independent plan-versus-goal diagnosis is needed:
+This is the recurring current-strategy improvement layer, so its checkpoint is
+normally shorter than Goal Advisor's. Mark it due when independent
+plan-versus-goal diagnosis is needed:
 
 - it has never completed a cross-run strategy baseline and enough comparable
   outcome-bearing evidence exists to attempt one
@@ -710,9 +718,9 @@ relevant path and independent plan-versus-goal diagnosis is needed:
 - the workflow does not persist the stable target/source/action/outcome linkage
   needed to distinguish strategy hypotheses
 
-Keep the next Auditor checkpoint no later than Advisor's and normally require a
-fresh Auditor result between Advisor runs. A user answer/experiment may override
-that order. After a bug fix, wait for verification plus new valid outcome data.
+Keep the next Auditor checkpoint no later than Advisor's, but never use one
+reviewer's cadence or result as a prerequisite for the other. After a bug fix,
+the Auditor may return insufficient evidence until new valid outcome data exists.
 
 Load `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`. The reviewer reconstructs
 the goal-to-action-to-target/source-to-outcome causal chain and uses bounded
@@ -729,13 +737,13 @@ targets, identify acquisition sources, or join actions to outcomes creates a
 The result names the exact missing field/event and decision it prevents rather
 than asking for a generic metrics subsystem.
 
-Strategy Auditor is strictly diagnostic. It never edits a plan or DB, runs a
-producing action, creates a human-input request, selects a replacement tactic,
-or applies a fix. Route `execution_bug` to Bug Review, operational
-attribution/eval defects to the matching module, and `strategy_flaw` or a
-strategy-critical `measurement_gap` to Goal Advisor. When both Strategy Auditor
-and Goal Advisor are due, run the Auditor first and give its saved artifact to
-Goal Advisor; do not run them in the same parallel reviewer batch.
+Strategy Auditor is read-only. It never edits a plan or DB, runs a producing
+action, creates a human-input request, selects a replacement tactic, or applies
+a fix. It returns bounded recommendations for missing pieces or corrections
+inside the current strategy. Preserve `execution_bug` and attribution/eval
+observations as out-of-scope evidence for consolidation without waiting for or
+invoking another reviewer. Strategy Auditor and Goal Advisor may run in the same
+parallel batch and must reason independently.
 
 When it is skipped, cite its last completed baseline, the current comparable
 outcome/concentration evidence, and a concrete next run/exposure/time or plan
@@ -744,22 +752,23 @@ first Strategy Auditor baseline.
 
 ### goal_advisor
 
-Mark due when strategic judgment is needed:
+Mark due when independent blank-sheet strategic judgment is needed:
 
-- a current Strategy Auditor `strategy_flaw` or strategy-critical
-  `measurement_gap` is new or materially changed and needs an alternative,
-  experiment, or user decision, with no active response already covering it
+- a planned opportunity/headroom checkpoint asks whether a materially different
+  approach could outperform the current strategic shape
+- trustworthy outcomes show a persistent ceiling or changed external opportunity
+  worth challenging independently of the current plan
 - a user answered a strategic question
 - a healthy workflow reaches its previously scheduled headroom checkpoint
 - an active `.advisor-experiment` has an answer, reaches `data-review-after`,
   accumulates enough measurement evidence, becomes blocked/unblocked, or gains
   decisive contradictory evidence
 
-A miss tightens Bug Review and Auditor; it does not alone launch Advisor. Run
-Advisor for a new actionable diagnosis, while an active matching experiment or
-unchanged diagnosis waits for `data-review-after`. Instrumentation-only tracking
-cannot suppress action. For unmeasured criteria, Auditor classifies the gap
-before Advisor proposes the smallest decision-useful measurement contract.
+A miss may independently tighten Bug Review and Auditor cadence; it does not
+alone launch Advisor. Run Advisor at its own blank-sheet opportunity, decision,
+or experiment checkpoint. Instrumentation-only tracking cannot suppress action.
+For unmeasured criteria, Goal Advisor may state the evidence limitation without
+waiting for Auditor and must not substitute instrumentation for a new strategy.
 
 An active strategy experiment earns that deferral only when Gate verifies all of the
 following from current evidence:
@@ -780,10 +789,10 @@ following from current evidence:
 
 When an evidence checkpoint arrives or trustworthy contradictory outcomes
 challenge the thesis, select Goal Advisor to advance, revise, or recommend
-retiring that experiment. When the condition fails only because of an
-operational defect, select Bug Review, Eval Health, Report Health, or the
-matching module first and defer Advisor until the repair is verified unless a
-separate strategy decision is already actionable. When Goal Advisor is skipped, the visible
+retiring that experiment. Independently select Workflow Review for operational
+defects. Goal Advisor may return
+insufficient evidence for the affected claim while still completing any
+trustworthy blank-sheet review. When Goal Advisor is skipped, the visible
 Gate entry must name the experiment id, implementation/control-path evidence,
 valid run or exposure count, latest goal measurement and freshness, why the
 checkpoint is still fair, and the exact evidence that would trigger earlier
@@ -806,9 +815,9 @@ challenged** section when those choices may cap the goal.
 When the current strategy appears capped, or repeated goal misses/bugs/cost
 evidence suggest the plan shape itself is limiting outcomes, Goal Advisor may
 propose `simplify`, `restructure`, or a bounded `experiment` — a materially
-different strategic shape, not a structural-hygiene fix (that is
-`llm_ops_review`'s job; a recurring problem *caused by* mistyped steps or drift
-routes there instead). Compare the current plan with at most two credible
+different strategic shape, not a structural-hygiene fix (that belongs to
+Workflow Review's LLM and operations lens; a recurring problem *caused by*
+mistyped steps or drift stays there instead). Compare the current plan with at most two credible
 alternatives; state expected benefit, affected goal criterion, evidence, risk,
 migration/rollback shape, and how the change would be measured. The separate
 Goal Advisor critic must challenge whether the recommendation is actually
@@ -836,7 +845,7 @@ When no experiment is active, a due healthy-headroom review applies the 10x
 counterfactual and may propose one bounded experiment while preserving the
 successful baseline.
 
-Goal Advisor does not do routine Bug Review, learning cleanup, KB cleanup, DB cleanup, or normal report repair. Those are separate Pulse modules.
+Goal Advisor does not do routine correctness review, learning cleanup, KB cleanup, DB cleanup, or normal report repair. Those are Workflow Review lenses.
 
 ## Human Input
 

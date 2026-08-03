@@ -13,6 +13,7 @@ type NotificationDestination struct {
 	WhatsApp     *WhatsAppDest        // WhatsApp recipient hint
 	Gmail        *GmailDest           // Gmail recipient hint
 	UserID       string               // workspace user ID, used to look up per-user preferences
+	WorkflowName string               // workflow identity added to workflow-scoped rich notifications
 	Content      *NotificationContent // optional typed per-channel content (nil = plain message only)
 
 	// ExcludeChannels lists account-level connector names ("gmail", "slack",

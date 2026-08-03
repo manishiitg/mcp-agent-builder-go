@@ -33,7 +33,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	currentRunID := "pulse-review-verification"
 
 	if _, err := recordPulseWorklist(ctx, workspacePath, priorRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "Repair the filed defect."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Repair the filed defect."},
 	})); err != nil {
 		t.Fatalf("record prior worklist: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	}
 
 	if _, err := recordPulseWorklist(ctx, workspacePath, currentRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "Verify the prior repair."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Verify the prior repair."},
 	})); err != nil {
 		t.Fatalf("record current worklist: %v", err)
 	}

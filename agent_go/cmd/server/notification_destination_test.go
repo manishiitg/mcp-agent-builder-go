@@ -9,6 +9,7 @@ func TestNotificationDestinationFromQueryResolvesWorkflowSlackWebhookSecret(t *t
 	req := QueryRequest{
 		NotificationSlackWebhookSecretName: "SLACK_NOTIFICATION_WEBHOOK_URL",
 		notificationSlackWebhookURL:        "https://hooks.slack.com/services/T123/B456/secret",
+		SelectedFolder:                     "Workflow/rtslatency",
 	}
 	dest := notificationDestinationFromQuery(req, "user-1")
 	if dest == nil || dest.SlackWebhook == nil {
@@ -19,6 +20,9 @@ func TestNotificationDestinationFromQueryResolvesWorkflowSlackWebhookSecret(t *t
 	}
 	if dest.SlackWebhook.URL != "https://hooks.slack.com/services/T123/B456/secret" {
 		t.Fatal("webhook secret was not resolved")
+	}
+	if dest.WorkflowName != "rtslatency" {
+		t.Fatalf("workflow name = %q, want rtslatency", dest.WorkflowName)
 	}
 }
 

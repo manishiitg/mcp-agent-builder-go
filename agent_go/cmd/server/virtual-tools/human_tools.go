@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	htmlstd "html"
 	"os"
 	"strings"
 	"time"
@@ -417,6 +418,7 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		return "", err // e.g. email_html_file not found — feed the problem back to the agent
 	}
 	if gc != nil {
+		addWorkflowIdentityToGmailContent(gc, workflowNameFromNotificationDestination(dest))
 		if dest == nil {
 			dest = &services.NotificationDestination{}
 		}
@@ -707,6 +709,7 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 	}
 	clone := &services.NotificationDestination{
 		UserID:               dest.UserID,
+		WorkflowName:         dest.WorkflowName,
 		ExcludeChannels:      append([]string(nil), dest.ExcludeChannels...),
 		RunSummaryChannels:   append([]string(nil), dest.RunSummaryChannels...),
 		PulseSummaryChannels: append([]string(nil), dest.PulseSummaryChannels...),
@@ -739,6 +742,34 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 	// safe and avoids a deep copy of attachment lists.
 	clone.Content = dest.Content
 	return clone
+}
+
+func workflowNameFromNotificationDestination(dest *services.NotificationDestination) string {
+	if dest == nil {
+		return ""
+	}
+	return strings.TrimSpace(dest.WorkflowName)
+}
+
+// addWorkflowIdentityToGmailContent makes workflow email identity a backend
+// guarantee instead of a formatting instruction the notifying agent can omit.
+// The destination carries only the safe workflow label, never its full path.
+func addWorkflowIdentityToGmailContent(content *services.GmailContent, workflowName string) {
+	if content == nil {
+		return
+	}
+	workflowName = strings.TrimSpace(workflowName)
+	if workflowName == "" {
+		return
+	}
+	if subject := strings.TrimSpace(content.Subject); subject == "" {
+		content.Subject = workflowName
+	} else if !strings.HasPrefix(strings.ToLower(subject), strings.ToLower(workflowName)) {
+		content.Subject = workflowName + " · " + subject
+	}
+	if strings.TrimSpace(content.HTMLBody) != "" {
+		content.HTMLBody = `<div data-workflow-name="true" style="font-family:Arial,sans-serif;font-size:13px;color:#64748b;margin:0 0 14px 0">Workflow: <strong style="color:#0f172a">` + htmlstd.EscapeString(workflowName) + `</strong></div>` + content.HTMLBody
+	}
 }
 
 func notificationDestinationEmpty(dest *services.NotificationDestination) bool {

@@ -15,7 +15,6 @@ import {
   Activity,
   BellRing,
   CalendarClock,
-  CircleAlert,
   RefreshCw,
   Search,
   X,
@@ -107,52 +106,6 @@ function formatPulseTimestamp(value?: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function getPulseModuleStatus(state?: PulseModuleState): { label: string; detail: string; time: string } {
-  if (!state) {
-    return { label: 'NO DATA', detail: 'No Pulse run recorded yet', time: '' }
-  }
-  const result = (state.last_result || '').trim()
-  if (result) {
-    return {
-      label: result === 'timed_out' ? 'TIMED OUT' : result.toUpperCase(),
-      detail: state.last_result_reason || state.last_reason || 'Completed in the latest recorded Pulse run',
-      time: formatPulseTimestamp(state.last_ran_at || state.updated_at),
-    }
-  }
-  const decision = (state.last_gate_decision || state.last_decision || '').trim()
-  if (decision) {
-    return {
-      label: decision.toUpperCase(),
-      detail: state.last_reason || 'Gate decision recorded',
-      time: formatPulseTimestamp(state.last_checked_at || state.updated_at),
-    }
-  }
-  return {
-    label: 'WAITING',
-    detail: 'State exists, but no decision has been recorded yet',
-    time: formatPulseTimestamp(state.updated_at),
-  }
-}
-
-function getPulseFinalCommandStatus(state?: PulseFinalCommandState): { label: string; detail: string; time: string } {
-  if (!state) {
-    return { label: 'NO DATA', detail: 'No Pulse finalizer recorded yet', time: '' }
-  }
-  const status = (state.status || '').trim()
-  const displayStatus = status === 'timed_out' ? 'TIMED OUT' : (status || 'WAITING').toUpperCase()
-  const isHistorical = ['done', 'skipped', 'blocked', 'failed', 'timed_out'].includes(status.toLowerCase())
-  return {
-    label: isHistorical ? `LAST ${displayStatus}` : displayStatus,
-    detail: state.reason || (isHistorical ? 'Latest recorded Pulse outcome' : 'No command outcome recorded'),
-    time: formatPulseTimestamp(state.finished_at || state.started_at || state.updated_at),
-  }
-}
-
-function pulseStatusNeedsAttention(status: string): boolean {
-  const normalized = status.trim().toLowerCase().replace(/^last\s+/, '')
-  return ['failed', 'blocked', 'timed out', 'timed_out', 'changed', 'due'].includes(normalized)
 }
 
 interface WorkflowToolbarProps {
@@ -380,8 +333,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       .filter((state): state is PulseFinalCommandState => !!state)
     return {
       recorded: recordedModuleStates.length + recordedFinalStates.length,
-      attention: recordedModuleStates.filter(state => pulseStatusNeedsAttention(getPulseModuleStatus(state).label)).length
-        + recordedFinalStates.filter(state => pulseStatusNeedsAttention(getPulseFinalCommandStatus(state).label)).length,
       total: PULSE_MODULE_COMMANDS.length + PULSE_FIXED_COMMANDS.length,
       latest: latestTimestamp > 0 ? formatPulseTimestamp(new Date(latestTimestamp).toISOString()) : '',
     }
@@ -939,18 +890,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {pulseOverview.attention > 0 && (
-                  <span className="mr-1 hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-300 sm:inline-flex">
-                    <CircleAlert className="h-3.5 w-3.5" />
-                    {pulseOverview.attention} need attention
-                  </span>
-                )}
-                {(pulseLoopClosureObservation?.signals?.length || 0) > 0 && (
-                  <span className="mr-1 hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300 sm:inline-flex">
-                    <CircleAlert className="h-3.5 w-3.5" />
-                    {pulseLoopClosureObservation?.signals.length} stalled
-                  </span>
-                )}
                 {monitorOn && (
                   <button
                     type="button"

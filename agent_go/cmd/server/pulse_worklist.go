@@ -21,6 +21,9 @@ import (
 )
 
 const (
+	pulseModuleWorkflowReview = pulsemodules.WorkflowReviewID
+	// Historical operational identities remain available to legacy read paths.
+	// Current worklists and writers use workflow_review instead.
 	pulseModuleBugReview      = pulsemodules.BugReviewID
 	pulseModuleArtifactReview = pulsemodules.ArtifactReviewID
 	pulseModuleReportHealth   = pulsemodules.ReportHealthID
@@ -39,9 +42,9 @@ const (
 	// prevalidation fitness, schema/description drift). These checks need one
 	// agentic judgment pass over the same runtime and goal evidence.
 	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
-	// pulseModuleStrategyAuditor owns read-only plan-versus-goal diagnosis
-	// across retained runs. Goal Advisor owns the resulting proposal,
-	// experiment, approval, or plan mutation.
+	// pulseModuleStrategyAuditor owns read-only improvement of the current
+	// strategy across retained runs. Goal Advisor independently explores
+	// materially different approaches outside the current plan.
 	pulseModuleStrategyAuditor = pulsemodules.StrategyAuditorID
 	pulseModuleGoalAdvisor     = pulsemodules.GoalAdvisorID
 )
@@ -1575,6 +1578,25 @@ func (api *StreamingAPI) handleGetPulseReviews(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts, "total": len(artifacts)})
 }
 
+func (api *StreamingAPI) handleGetPulseImpact(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	workspacePath, err := normalizeReportHumanInputWorkspacePath(r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ledger, err := step_based_workflow.LoadPulseImpactLedger(r.Context(), workspacePath, 500)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "impact": ledger})
+}
+
 func getPulseWorklistForRun(ctx context.Context, workspacePath, pulseRunID string) (map[string]PulseModuleState, bool, error) {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
 	if err != nil {
@@ -1670,7 +1692,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. stores_health covers learnings, knowledgebase, and database freshness/quality; llm_ops_review covers cost, timing, tool-call operations, model routing, setup, and plan-design hygiene. Do not pass retired module names. strategy_auditor diagnoses plan-versus-goal from cross-run evidence; goal_advisor owns proposals and experiments. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. workflow_review is one continuous read-only agent covering correctness, artifacts, reports/evals, stores, and LLM/tool operations through ordered lenses. strategy_auditor independently improves the current strategy; goal_advisor independently proposes materially different out-of-plan approaches and experiments. Do not pass retired operational module names and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1842,6 +1864,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			}),
 		},
 	}
+	impactTool, impactExecutor := createRecordPulseImpactTool()
 
 	executors := map[string]interface{}{
 		"begin_pulse_fixer_run": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -1963,6 +1986,10 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			// routing rule. A separate pre-decision snapshot is still retained
 			// when Gate records its worklist so its handling remains auditable.
 			loopClosure := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
+			impactLedger, impactErr := step_based_workflow.LoadPulseImpactLedger(ctx, workspacePath, 100)
+			if impactErr != nil {
+				log.Printf("[PULSE] get_pulse_module_state: impact ledger unavailable for %s: %v", workspacePath, impactErr)
+			}
 			payload, _ := json.Marshal(map[string]interface{}{
 				"modules":                  states,
 				"open_concerns":            concerns,
@@ -1976,6 +2003,8 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				"loop_closure_note":        "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
 				"module_review_history":    reviewHistory,
 				"review_history_note":      "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
+				"impact_ledger":            impactLedger,
+				"impact_ledger_note":       "Durable intervention, per-run success-criterion observation, and append-only before/after assessment history. Reliability or measurement work is not direct goal progress; inconclusive is correct until a comparable evidence window matures.",
 			})
 			return string(payload), nil
 		},
@@ -2080,6 +2109,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{"status": "updated", "command": state})
 			return string(payload), nil
 		},
+		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
 		"begin_pulse_fixer_run":           "workflow",
@@ -2089,6 +2119,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"start_pulse_fix_attempt":         "workflow",
 		"mark_pulse_module_result":        "workflow",
 		"mark_pulse_final_command_result": "workflow",
+		"record_pulse_impact":             "workflow",
 		"resolve_run_concern":             "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
@@ -2122,7 +2153,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Concern %s marked %s.", fingerprint, status), nil
 	}
 
-	return []llmtypes.Tool{beginFixerTool, recordTool, stateTool, findingBacklogTool, startFixTool, resultTool, resolveConcernTool, finalCommandTool}, executors, categories
+	return []llmtypes.Tool{beginFixerTool, recordTool, stateTool, findingBacklogTool, startFixTool, resultTool, impactTool, resolveConcernTool, finalCommandTool}, executors, categories
 }
 
 func pulseFixFindingRefsFromToolArg(raw interface{}) ([]step_based_workflow.PulseFixFindingRef, error) {

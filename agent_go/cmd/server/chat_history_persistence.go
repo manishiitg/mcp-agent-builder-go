@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
@@ -85,7 +86,24 @@ const (
 	maxChatHistoryTerminalSnapshots = 1
 	maxChatHistoryTerminalBytes     = 512 * 1024
 	maxChatHistoryTerminalLines     = 10000
+	chatHistoryIndexVersion         = 1
+	chatHistoryIndexFileName        = "chat-index.json"
 )
+
+type chatHistoryIndex struct {
+	Version   int                              `json:"version"`
+	Complete  bool                             `json:"complete"`
+	UpdatedAt string                           `json:"updated_at"`
+	Entries   map[string]chatHistoryIndexEntry `json:"entries"`
+}
+
+type chatHistoryIndexEntry struct {
+	Session                  ChatHistorySession `json:"session"`
+	SourceSize               int64              `json:"source_size"`
+	SourceModifiedAtUnixNano int64              `json:"source_modified_at_unix_nano,omitempty"`
+}
+
+var chatHistoryIndexLocks [64]sync.Mutex
 
 // chatHistoryRoot returns the workspace-relative path to a user's chat_history root.
 func chatHistoryRoot(userID string) string {
@@ -149,8 +167,118 @@ func (api *StreamingAPI) persistChatConversationToPathWithTerminalSession(sessio
 		logfWithContext(logCtx, "[CHAT_HISTORY] Failed to write %s: %v", convPath, err)
 		return
 	}
+	if err := updatePersistedChatHistoryIndex(userID, sessionID, agentMode, persistedHistory, runtime, convPath, int64(len(convJSON)), now); err != nil {
+		// The transcript remains the source of truth. A missing index entry is
+		// repaired by the compatibility backfill on the next history listing.
+		logfWithContext(logCtx, "[CHAT_HISTORY] Failed to update metadata index for %s: %v", convPath, err)
+	}
 
 	logfWithContext(logCtx, "[CHAT_HISTORY] Saved conversation (%d messages) to %s", len(persistedHistory), convPath)
+}
+
+func updatePersistedChatHistoryIndex(userID, sessionID, agentMode string, history []llmtypes.MessageContent, runtime *ChatHistoryAgentRuntime, conversationPath string, sourceSize int64, now time.Time) error {
+	indexPath := chatHistoryIndexWorkspacePath(userID, conversationPath)
+	if indexPath == "" {
+		return fmt.Errorf("cannot derive chat index path from %q", conversationPath)
+	}
+
+	mutex := chatHistoryIndexMutex(indexPath)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	index := newChatHistoryIndex()
+	if data, exists, err := readFileFromWorkspace(context.Background(), indexPath); err != nil {
+		return err
+	} else if exists {
+		if err := json.Unmarshal([]byte(data), &index); err != nil {
+			return fmt.Errorf("decode %s: %w", indexPath, err)
+		}
+		index.normalize()
+	}
+
+	createdAt := now.Format(time.RFC3339)
+	if existing, ok := index.Entries[conversationPath]; ok && strings.TrimSpace(existing.Session.CreatedAt) != "" {
+		createdAt = existing.Session.CreatedAt
+	}
+	workshopMode := ""
+	if runtime != nil {
+		workshopMode = normalizeChatHistoryWorkshopMode(runtime.WorkshopMode)
+	}
+	query := latestHumanText(history)
+	if len(query) > 200 {
+		query = query[:200] + "..."
+	}
+	index.Entries[conversationPath] = chatHistoryIndexEntry{
+		Session: ChatHistorySession{
+			SessionID:        sessionID,
+			AgentMode:        agentMode,
+			Runtime:          runtime,
+			WorkshopMode:     workshopMode,
+			Status:           "completed",
+			Query:            query,
+			UserID:           userID,
+			WorkspacePath:    chatHistoryWorkspacePathFromConversation(conversationPath),
+			ConversationPath: conversationPath,
+			CreatedAt:        createdAt,
+			UpdatedAt:        now.Format(time.RFC3339),
+			MessageCount:     len(history),
+			PreviewMessages:  chatHistoryPreviewMessages(history),
+		},
+		SourceSize: sourceSize,
+	}
+	index.Version = chatHistoryIndexVersion
+	index.UpdatedAt = now.Format(time.RFC3339)
+
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", indexPath, err)
+	}
+	return writeRawFileToWorkspace(context.Background(), indexPath, string(data))
+}
+
+func newChatHistoryIndex() chatHistoryIndex {
+	return chatHistoryIndex{
+		Version: chatHistoryIndexVersion,
+		Entries: make(map[string]chatHistoryIndexEntry),
+	}
+}
+
+func (index *chatHistoryIndex) normalize() {
+	if index.Version == 0 {
+		index.Version = chatHistoryIndexVersion
+	}
+	if index.Entries == nil {
+		index.Entries = make(map[string]chatHistoryIndexEntry)
+	}
+}
+
+func chatHistoryIndexMutex(indexPath string) *sync.Mutex {
+	var hash uint64 = 1469598103934665603
+	for i := 0; i < len(indexPath); i++ {
+		hash ^= uint64(indexPath[i])
+		hash *= 1099511628211
+	}
+	return &chatHistoryIndexLocks[hash%uint64(len(chatHistoryIndexLocks))]
+}
+
+func chatHistoryIndexWorkspacePath(userID, conversationPath string) string {
+	conversationPath = strings.Trim(pathpkg.Clean(filepath.ToSlash(conversationPath)), "/")
+	if marker := strings.Index(conversationPath, "/builder/"); marker > 0 {
+		return pathpkg.Join(conversationPath[:marker], "builder", "conversation", chatHistoryIndexFileName)
+	}
+	root := chatHistoryRoot(userID)
+	if conversationPath == root || strings.HasPrefix(conversationPath, root+"/") {
+		return pathpkg.Join(root, chatHistoryIndexFileName)
+	}
+	return ""
+}
+
+func chatHistoryWorkspacePathFromConversation(conversationPath string) string {
+	conversationPath = strings.Trim(pathpkg.Clean(filepath.ToSlash(conversationPath)), "/")
+	if marker := strings.Index(conversationPath, "/builder/"); marker > 0 {
+		return conversationPath[:marker]
+	}
+	return ""
 }
 
 var captureChatHistoryTerminalPaneLines = captureTerminalPaneLines
@@ -620,6 +748,9 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 	if sessions, ok, err := listChatHistorySessionsFromDisk(userID, root, "", limit, offset); ok || err != nil {
 		return sessions, err
 	}
+	if sessions, ok, err := listChatHistorySessionsFromWorkspaceIndex(userID, workspacePath, limit, offset); ok || err != nil {
+		return sessions, err
+	}
 
 	filePaths, err := listWorkspaceFilesRecursive(context.Background(), root)
 	if err != nil {
@@ -675,12 +806,34 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 	return sessions, nil
 }
 
+func listChatHistorySessionsFromWorkspaceIndex(userID, workflowPath string, limit, offset int) ([]ChatHistorySession, bool, error) {
+	indexPath := pathpkg.Join(chatHistoryRoot(userID), chatHistoryIndexFileName)
+	if workflowPath != "" {
+		indexPath = pathpkg.Join(workflowPath, "builder", "conversation", chatHistoryIndexFileName)
+	}
+	data, exists, err := readFileFromWorkspace(context.Background(), indexPath)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	var index chatHistoryIndex
+	if err := json.Unmarshal([]byte(data), &index); err != nil {
+		return nil, false, nil
+	}
+	index.normalize()
+	if !index.Complete {
+		return nil, false, nil
+	}
+	sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
+	return paginateChatHistorySessions(sessions, limit, offset), true, nil
+}
+
 type localChatHistoryFile struct {
 	sessionID     string
 	dedupeKey     string
 	convPath      string
 	workspacePath string
 	modTime       time.Time
+	size          int64
 }
 
 // listChatHistorySessionsFromDisk avoids hundreds of workspace-API reads when
@@ -691,6 +844,16 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 	if !ok {
 		return nil, false, nil
 	}
+	indexWorkspacePath := pathpkg.Join(workspaceRoot, chatHistoryIndexFileName)
+	indexLocalPath := filepath.Join(baseDir, chatHistoryIndexFileName)
+	mutex := chatHistoryIndexMutex(indexWorkspacePath)
+	mutex.Lock()
+	if index, exists := readLocalChatHistoryIndex(indexLocalPath); exists && index.Complete {
+		sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
+		mutex.Unlock()
+		return paginateChatHistorySessions(sessions, limit, offset), true, nil
+	}
+	mutex.Unlock()
 
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
@@ -717,6 +880,7 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 				convPath:      legacyConvPath,
 				workspacePath: pathpkg.Join(workspaceRoot, entryName, "conversation.json"),
 				modTime:       info.ModTime(),
+				size:          info.Size(),
 			})
 		}
 
@@ -741,6 +905,7 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 				convPath:      convPath,
 				workspacePath: pathpkg.Join(workspaceRoot, entryName, filepath.Base(convPath)),
 				modTime:       info.ModTime(),
+				size:          info.Size(),
 			})
 		}
 	}
@@ -754,26 +919,26 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 		return files[i].modTime.After(files[j].modTime)
 	})
 
-	if offset >= len(files) {
-		return []ChatHistorySession{}, true, nil
-	}
-	files = files[offset:]
-	if limit > 0 && limit < len(files) {
-		files = files[:limit]
-	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	index := loadLocalChatHistoryIndex(indexLocalPath)
 
 	sessions := make([]ChatHistorySession, 0, len(files))
 	for _, file := range files {
-		session, ok := readLocalChatHistorySession(userID, workspaceRoot, workflowPath, file)
+		session, ok := indexedLocalChatHistorySession(index, file)
+		if !ok {
+			session, ok = readLocalChatHistorySession(userID, workspaceRoot, workflowPath, file)
+			if ok {
+				putLocalChatHistoryIndexEntry(&index, file, session)
+			}
+		}
 		if ok {
 			sessions = append(sessions, session)
 		}
 	}
-
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
-	})
-	return sessions, true, nil
+	index.Complete = true
+	_ = writeLocalChatHistoryIndex(indexLocalPath, &index)
+	return paginateChatHistorySessions(sessions, limit, offset), true, nil
 }
 
 func addLocalChatHistoryFile(filesBySession map[string]localChatHistoryFile, file localChatHistoryFile) {
@@ -845,6 +1010,20 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 	if !ok {
 		return nil, false
 	}
+	indexWorkspacePath := pathpkg.Join(workflowPath, "builder", "conversation", chatHistoryIndexFileName)
+	indexLocalPath := filepath.Join(workflowDir, "builder", "conversation", chatHistoryIndexFileName)
+	mutex := chatHistoryIndexMutex(indexWorkspacePath)
+	mutex.Lock()
+	if index, exists := readLocalChatHistoryIndex(indexLocalPath); exists && index.Complete {
+		sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
+		mutex.Unlock()
+		if readBudget > 0 {
+			return paginateChatHistorySessions(sessions, readBudget, 0), true
+		}
+		return sessions, true
+	}
+	mutex.Unlock()
+
 	matches, err := workflowBuilderConversationFiles(workflowDir)
 	if err != nil {
 		return nil, false
@@ -857,12 +1036,7 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 	// Schedule chats keep one row per schedule because repeated runs already
 	// have detailed history in schedule-runs.json and may resume the same CLI
 	// thread underneath.
-	type fileRef struct {
-		sessionID string
-		convPath  string
-		mtime     time.Time
-	}
-	latest := make(map[string]fileRef)
+	latest := make(map[string]localChatHistoryFile)
 	for _, convPath := range matches {
 		info, err := os.Stat(convPath)
 		if err != nil {
@@ -870,40 +1044,199 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 		}
 		sessionID := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(convPath), "session-"), "-conversation.json")
 		dedupeKey := workflowBuilderHistoryDisplayKey(sessionID, scheduleIDBySessionID)
-		if cur, ok := latest[dedupeKey]; !ok || info.ModTime().After(cur.mtime) {
-			latest[dedupeKey] = fileRef{sessionID: sessionID, convPath: convPath, mtime: info.ModTime()}
+		workspaceConversationPath := workflowRelativeConversationPath(workflowPath, workflowDir, convPath)
+		if cur, ok := latest[dedupeKey]; !ok || info.ModTime().After(cur.modTime) {
+			latest[dedupeKey] = localChatHistoryFile{
+				sessionID:     sessionID,
+				dedupeKey:     dedupeKey,
+				convPath:      convPath,
+				workspacePath: workspaceConversationPath,
+				modTime:       info.ModTime(),
+				size:          info.Size(),
+			}
 		}
 	}
 
 	type sessionRef struct {
 		id  string
-		ref fileRef
+		ref localChatHistoryFile
 	}
 	refs := make([]sessionRef, 0, len(latest))
 	for _, r := range latest {
 		refs = append(refs, sessionRef{id: r.sessionID, ref: r})
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].ref.mtime.After(refs[j].ref.mtime) })
-	if readBudget > 0 && readBudget < len(refs) {
-		refs = refs[:readBudget]
-	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].ref.modTime.After(refs[j].ref.modTime) })
+	mutex.Lock()
+	defer mutex.Unlock()
+	index := loadLocalChatHistoryIndex(indexLocalPath)
 
-	// Read+parse only the page.
+	// The index is the normal path. Full transcript reads below are only the
+	// one-time compatibility migration for conversations saved before the
+	// index existed (or for an externally modified transcript).
 	sessions := make([]ChatHistorySession, 0, len(refs))
 	for _, sr := range refs {
-		data, err := os.ReadFile(sr.ref.convPath)
-		if err != nil {
-			continue
-		}
-		session, ok := parseLocalChatHistorySession(userID, workflowPath, workflowPath, sr.id, string(data), sr.ref.mtime)
+		session, ok := indexedLocalChatHistorySession(index, sr.ref)
 		if !ok {
-			continue
+			data, err := os.ReadFile(sr.ref.convPath)
+			if err != nil {
+				continue
+			}
+			session, ok = parseLocalChatHistorySession(userID, workflowPath, workflowPath, sr.id, string(data), sr.ref.modTime)
+			if !ok {
+				continue
+			}
+			session.ConversationPath = sr.ref.workspacePath
+			putLocalChatHistoryIndexEntry(&index, sr.ref, session)
 		}
 		session.AgentMode = "workflow"
-		session.ConversationPath = workflowRelativeConversationPath(workflowPath, workflowDir, sr.ref.convPath)
 		sessions = append(sessions, session)
 	}
+	index.Complete = true
+	_ = writeLocalChatHistoryIndex(indexLocalPath, &index)
+	if readBudget > 0 {
+		return paginateChatHistorySessions(sessions, readBudget, 0), true
+	}
 	return sessions, true
+}
+
+func readLocalChatHistoryIndex(indexPath string) (chatHistoryIndex, bool) {
+	index := newChatHistoryIndex()
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return index, false
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		return newChatHistoryIndex(), false
+	}
+	index.normalize()
+	return index, true
+}
+
+func loadLocalChatHistoryIndex(indexPath string) chatHistoryIndex {
+	if index, ok := readLocalChatHistoryIndex(indexPath); ok {
+		return index
+	}
+	return newChatHistoryIndex()
+}
+
+func chatHistorySessionsFromIndex(index chatHistoryIndex, userID, workflowPath string) []ChatHistorySession {
+	bySessionID := make(map[string]ChatHistorySession)
+	for conversationPath, entry := range index.Entries {
+		session := entry.Session
+		sessionID := sanitizeChatHistorySessionID(session.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		session.SessionID = sessionID
+		session.ConversationPath = conversationPath
+		if session.UserID == "" {
+			session.UserID = userID
+		}
+		if workflowPath != "" {
+			session.WorkspacePath = workflowPath
+			session.AgentMode = "workflow"
+		}
+		if existing, ok := bySessionID[sessionID]; !ok || session.UpdatedAt > existing.UpdatedAt || (session.UpdatedAt == existing.UpdatedAt && session.ConversationPath > existing.ConversationPath) {
+			bySessionID[sessionID] = session
+		}
+	}
+	sessions := make([]ChatHistorySession, 0, len(bySessionID))
+	for _, session := range bySessionID {
+		sessions = append(sessions, session)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
+	return sessions
+}
+
+func indexedLocalChatHistorySession(index chatHistoryIndex, file localChatHistoryFile) (ChatHistorySession, bool) {
+	entry, ok := index.Entries[file.workspacePath]
+	if !ok || entry.SourceSize != file.size || entry.Session.SessionID != file.sessionID {
+		return ChatHistorySession{}, false
+	}
+	if entry.SourceModifiedAtUnixNano != 0 && entry.SourceModifiedAtUnixNano != file.modTime.UnixNano() {
+		return ChatHistorySession{}, false
+	}
+	session := entry.Session
+	session.ConversationPath = file.workspacePath
+	return session, true
+}
+
+func putLocalChatHistoryIndexEntry(index *chatHistoryIndex, file localChatHistoryFile, session ChatHistorySession) {
+	index.normalize()
+	session.ConversationPath = file.workspacePath
+	index.Entries[file.workspacePath] = chatHistoryIndexEntry{
+		Session:                  session,
+		SourceSize:               file.size,
+		SourceModifiedAtUnixNano: file.modTime.UnixNano(),
+	}
+	index.Version = chatHistoryIndexVersion
+	index.UpdatedAt = time.Now().Format(time.RFC3339)
+}
+
+func writeLocalChatHistoryIndex(indexPath string, index *chatHistoryIndex) error {
+	if index == nil {
+		return nil
+	}
+	index.normalize()
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(indexPath), ".chat-index-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, indexPath)
+}
+
+func removeLocalChatHistoryIndexEntries(indexWorkspacePath, indexLocalPath, sessionID string, deletedPaths []string) error {
+	mutex := chatHistoryIndexMutex(indexWorkspacePath)
+	mutex.Lock()
+	defer mutex.Unlock()
+	index, exists := readLocalChatHistoryIndex(indexLocalPath)
+	if !exists {
+		return nil
+	}
+	removed := false
+	for conversationPath, entry := range index.Entries {
+		matches := sessionID != "" && entry.Session.SessionID == sessionID
+		if !matches {
+			for _, deletedPath := range deletedPaths {
+				deletedPath = strings.Trim(pathpkg.Clean(filepath.ToSlash(deletedPath)), "/")
+				if conversationPath == deletedPath || strings.HasPrefix(conversationPath, deletedPath+"/") {
+					matches = true
+					break
+				}
+			}
+		}
+		if matches {
+			delete(index.Entries, conversationPath)
+			removed = true
+		}
+	}
+	if !removed {
+		return nil
+	}
+	index.UpdatedAt = time.Now().Format(time.RFC3339)
+	return writeLocalChatHistoryIndex(indexLocalPath, &index)
 }
 
 func workflowScheduleIDBySessionID(workflowPath string) map[string]string {
@@ -1069,6 +1402,7 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 	var raw struct {
 		SessionID string                    `json:"session_id"`
 		AgentMode string                    `json:"agent_mode"`
+		Status    string                    `json:"status,omitempty"`
 		Runtime   *ChatHistoryAgentRuntime  `json:"runtime,omitempty"`
 		Mode      string                    `json:"workshop_mode,omitempty"`
 		History   []llmtypes.MessageContent `json:"conversation_history"`
@@ -1090,6 +1424,9 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 	if raw.CreatedAt == "" {
 		raw.CreatedAt = raw.UpdatedAt
 	}
+	if raw.Status == "" {
+		raw.Status = "completed"
+	}
 	raw.Mode = normalizeChatHistoryWorkshopMode(raw.Mode)
 	if raw.Runtime != nil && raw.Runtime.WorkshopMode == "" {
 		raw.Runtime.WorkshopMode = raw.Mode
@@ -1106,6 +1443,7 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 		AgentMode:        raw.AgentMode,
 		Runtime:          raw.Runtime,
 		WorkshopMode:     raw.Mode,
+		Status:           raw.Status,
 		Query:            query,
 		UserID:           userID,
 		WorkspacePath:    workflowPath,
@@ -2172,6 +2510,13 @@ func deleteWorkflowChatHistorySession(result ChatHistoryCleanupResult, sessionID
 			}
 		}
 	}
+	if result.DeletedCount > 0 {
+		indexWorkspacePath := pathpkg.Join(workspacePath, "builder", "conversation", chatHistoryIndexFileName)
+		indexLocalPath := filepath.Join(workflowDir, "builder", "conversation", chatHistoryIndexFileName)
+		if err := removeLocalChatHistoryIndexEntries(indexWorkspacePath, indexLocalPath, sessionID, nil); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -2219,6 +2564,11 @@ func deleteUserChatHistorySession(result ChatHistoryCleanupResult, userID, sessi
 			_ = os.Remove(parentDir)
 		}
 	}
+	if result.DeletedCount > 0 {
+		if err := removeLocalChatHistoryIndexEntries(pathpkg.Join(root, chatHistoryIndexFileName), filepath.Join(baseDir, chatHistoryIndexFileName), sessionID, nil); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -2244,6 +2594,15 @@ func DeleteChatHistoryOlderThan(userID string, olderThanDays int, workspacePath 
 	if workspacePath != "" {
 		if err := deleteOldWorkflowBuilderConversations(&result, workspacePath, cutoff); err != nil {
 			return result, err
+		}
+		if result.DeletedCount > 0 {
+			if workflowDir, ok := resolveLocalWorkflowDir(workspacePath); ok {
+				indexWorkspacePath := pathpkg.Join(workspacePath, "builder", "conversation", chatHistoryIndexFileName)
+				indexLocalPath := filepath.Join(workflowDir, "builder", "conversation", chatHistoryIndexFileName)
+				if err := removeLocalChatHistoryIndexEntries(indexWorkspacePath, indexLocalPath, "", result.DeletedPaths); err != nil {
+					return result, err
+				}
+			}
 		}
 		return result, nil
 	}
@@ -2299,6 +2658,11 @@ func DeleteChatHistoryOlderThan(userID string, olderThanDays int, workspacePath 
 			result.DeletedPaths = append(result.DeletedPaths, pathpkg.Join(root, entryName, filepath.Base(convPath)))
 		}
 		_ = os.Remove(entryDir)
+	}
+	if result.DeletedCount > 0 {
+		if err := removeLocalChatHistoryIndexEntries(pathpkg.Join(root, chatHistoryIndexFileName), filepath.Join(baseDir, chatHistoryIndexFileName), "", result.DeletedPaths); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

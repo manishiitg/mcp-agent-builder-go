@@ -290,6 +290,7 @@ func StartPulseFixAttempt(
 	findings []PulseFixFindingRef,
 	intendedFiles, beforeRefs []string,
 ) (*PulseFixAttempt, error) {
+	module = pulsemodules.Normalize(module)
 	if strings.TrimSpace(pulseRunID) == "" || strings.TrimSpace(module) == "" {
 		return nil, fmt.Errorf("pulse_run_id and module are required")
 	}
@@ -521,6 +522,7 @@ func RecordPulseFindingDispositionsTx(
 	dispositions []PulseFindingDisposition,
 	recordedAt string,
 ) error {
+	module = pulsemodules.Normalize(module)
 	if len(dispositions) == 0 {
 		return nil
 	}
@@ -595,7 +597,7 @@ func RecordPulseFindingDispositionsTx(
 			// this on 2026-08-01 and correctly preserved the unresolved state
 			// rather than forcing a second lifecycle write, which would have
 			// invented a fresh attempt for work already done.
-			if attemptModule != strings.TrimSpace(module) {
+			if pulsemodules.Normalize(attemptModule) != module {
 				return fmt.Errorf("fix attempt %q belongs to module %q, not %q", attemptID, attemptModule, module)
 			}
 			var linked int
@@ -734,6 +736,10 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	if module == pulsemodules.PseudoPulseFixerID {
 		module = ""
 	}
+	workflowReviewFilter := 0
+	if module == pulsemodules.WorkflowReviewID {
+		workflowReviewFilter = 1
+	}
 	// Lead with the step carrying the most unresolved work, and keep its rows
 	// together.
 	//
@@ -760,14 +766,21 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			WHERE status NOT IN ('resolved', 'rejected', 'external_action_required')
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE ?='' OR c.step_id=? OR EXISTS (
+		WHERE ?='' OR c.step_id=? OR (?=1 AND c.phase='review' AND c.step_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)) OR EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
-			WHERE af.fingerprint=c.fingerprint AND a.module=?
+			WHERE af.fingerprint=c.fingerprint AND (a.module=? OR (?=1 AND a.module IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)))
 		)
 		ORDER BY COALESCE(cluster.active_count, 0) DESC, COALESCE(cluster.peak_seen, 0) DESC,
 			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`
-	args := []interface{}{module, module, module}
+	legacyWorkflowReviewModules := make([]interface{}, 0, len(pulsemodules.RetiredIDs))
+	for _, retired := range pulsemodules.RetiredIDs {
+		legacyWorkflowReviewModules = append(legacyWorkflowReviewModules, retired)
+	}
+	args := []interface{}{module, module, workflowReviewFilter}
+	args = append(args, legacyWorkflowReviewModules...)
+	args = append(args, module, workflowReviewFilter)
+	args = append(args, legacyWorkflowReviewModules...)
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)
@@ -803,7 +816,7 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			}
 		}
 		if finding.Phase == ConcernPhaseReview {
-			finding.Module = finding.StepID
+			finding.Module = pulsemodules.Normalize(finding.StepID)
 		}
 		finding.Attempts = []PulseFixAttempt{}
 		finding.Verification = []PulseFindingVerification{}

@@ -57,12 +57,12 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 		}
 	}
 
-	reviews, err := LoadPulseReviewArtifacts(context.Background(), workspacePath, "stores_health", true, 10)
+	reviews, err := LoadPulseReviewArtifacts(context.Background(), workspacePath, "workflow_review", true, 10)
 	if err != nil {
 		t.Fatalf("load imported review: %v", err)
 	}
 	if len(reviews) != 2 {
-		t.Fatalf("imported reviews = %+v, want both canonical stores_health reviews", reviews)
+		t.Fatalf("imported reviews = %+v, want both historical reviews consolidated under workflow_review", reviews)
 	}
 	reviewBySource := map[string]PulseReviewArtifactRecord{}
 	for _, review := range reviews {
@@ -70,14 +70,14 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 	}
 	importedKnowledge := reviewBySource["pulse/reviews/legacy-run/knowledgebase_health.md"]
 	importedLearning := reviewBySource["pulse/reviews/legacy-run/learning_health.md"]
-	if importedKnowledge.Module != "stores_health" || importedKnowledge.Markdown != reviewMarkdown {
+	if importedKnowledge.Module != "workflow_review" || importedKnowledge.Markdown != reviewMarkdown {
 		t.Fatalf("knowledge import did not preserve canonical module and exact Markdown: %+v", importedKnowledge)
 	}
-	if importedLearning.Module != "stores_health" || importedLearning.Markdown != learningMarkdown {
+	if importedLearning.Module != "workflow_review" || importedLearning.Markdown != learningMarkdown {
 		t.Fatalf("learning import was overwritten during module consolidation: %+v", importedLearning)
 	}
 
-	findings, err := LoadPulseFindingLifecycles(context.Background(), workspacePath, "stores_health", 10)
+	findings, err := LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
 	if err != nil {
 		t.Fatalf("load imported finding: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 		second.ReviewArtifacts != 0 || second.AuxiliaryArtifacts != 0 || second.ConcernOccurrences != 0 {
 		t.Fatalf("second import result = %+v", second)
 	}
-	findings, err = LoadPulseFindingLifecycles(context.Background(), workspacePath, "stores_health", 10)
+	findings, err = LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
 	if err != nil {
 		t.Fatalf("reload imported finding: %v", err)
 	}

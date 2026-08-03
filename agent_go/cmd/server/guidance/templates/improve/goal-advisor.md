@@ -1,4 +1,4 @@
-Run the Goal Advisor module for this workflow using actual retained run evidence. This is not routine Pulse maintenance. Pulse Gate selects this module when strategic judgment is due; a user can also invoke it manually. Routine Pulse modules own per-run QA, bounded reliability fixes, artifact review, cost/time reporting, backup, publish, notify, and normal report/eval repairs. Strategy Auditor owns the independent cross-run diagnosis of whether the current tactic is capped, proxy-optimized, saturated, or missing decision-useful telemetry. Goal Advisor is intentionally less frequent: it owns the response only when that diagnosis is new or materially changed and actionable, an experiment reaches its checkpoint, or a strategy decision is answered. It challenges the diagnosis, identifies the important lever the current plan misses, and decides whether a structural plan change, bounded experiment, or proposal is warranted. When a current `strategy_auditor` reviewer artifact exists, consume it instead of repeating the longitudinal audit.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
+Run the Goal Advisor module for this workflow using actual retained run evidence. This is not routine Pulse maintenance. Pulse Gate selects this module when its less-frequent blank-sheet opportunity, decision, headroom, or experiment checkpoint is due; a user can also invoke it manually. Routine Pulse modules own per-run QA, bounded reliability fixes, artifact review, cost/time reporting, backup, publish, notify, and normal report/eval repairs. Strategy Auditor independently improves the current strategy. Goal Advisor starts again from the goal and searches for a materially different approach the current plan has not considered. Generate alternatives before comparing them with the current plan, and never wait for or consume another reviewer's conclusion.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])` and apply it as the strategy lens. Repeated agent-written restrictions are not user constraints; challenge architecture, tactics, channels, sources, thresholds, and proxies that may cap the goal, while preserving explicit user-approved boundaries and verified external facts.
 
@@ -41,12 +41,10 @@ ROLE SEPARATION
 - The active Workshop turn or Pulse Fixer is the parent coordinator and the only
   writer. It obtains one read-only strategy review, then sends that draft and its
   evidence to a separate read-only critic before choosing an outcome.
-- In scheduled Pulse, `strategy_auditor` diagnoses plan versus goal and returns
-  `strategy_flaw`, `execution_bug`, `measurement_gap`,
-  `insufficient_evidence`, or `no_material_problem`. Goal Advisor must inspect
-  and challenge that causal diagnosis, but it owns the alternative, experiment,
-  approval, and plan-change decision. Never relabel an Auditor
-  `measurement_gap` as a proven strategy flaw.
+- In scheduled Pulse, Goal Advisor is independent from `strategy_auditor`, Bug
+  Review, and Artifact Review. It reads the goal, constraints, trustworthy
+  outcomes, and experiment state directly. Other reviewer conclusions are not
+  required input and must not anchor its blank-sheet search.
 - When the instruction begins `READ-ONLY REVIEW`, perform only the evidence and
   strategy work in Phases 1, 1A, 1B, and 2. Do not edit files, update
   `builder/improve.html`, create or consume questions, call plan/config/report/
@@ -134,14 +132,11 @@ For each configured group with evidence:
    changed positioning or offer, and a bounded experiment that can disprove the
    current strategy. Never recommend violating an explicit user exclusion merely
    to manufacture output.
-8. Require a clean Bug Review for the runtime path supporting the diagnosis.
-   If a current correctness bug invalidates that evidence, route it to Bug
-   Review and wait for verified repair plus a valid outcome-bearing boundary.
-   If an earlier clean window still provides trustworthy business-outcome
-   evidence, Strategy Auditor may diagnose it and Goal Advisor may follow in the
-   same Pulse, but only after Auditor and never in parallel. Repeated operational
-   fragility may itself support an Auditor strategy diagnosis; it is not a
-   shortcut around the ordered escalation.
+8. Judge evidence reliability directly. If a current correctness problem makes
+   a claim untestable, mark that claim `insufficient_evidence` and name the exact
+   next boundary. Preserve any operational observation for consolidation, but
+   do not wait for Bug Review or Strategy Auditor and do not abandon trustworthy
+   goal evidence that still supports an independent opportunity review.
 9. Check optimization headroom even when every success criterion is currently
    Met. Treat a numeric target as a floor unless the user explicitly defined it
    as a cap. Compare the current result rate, quality, cost, time, and risk with

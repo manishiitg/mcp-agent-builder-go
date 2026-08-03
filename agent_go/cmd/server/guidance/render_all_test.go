@@ -372,7 +372,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one ordered finalizer turn",
 		"mark_pulse_final_command_result",
 		"not automatically due every Pulse",
-		"Independent Review Stages And One Consolidated Writer",
+		"Three Independent Review Agents And One Consolidated Writer",
 		"existing unchanged, existing with new evidence, reopened, or genuinely",
 		"every evidence-backed severity-ordered finding row",
 		"structured Fix queue",
@@ -410,7 +410,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"runs/<run_folder>/logs/<step>/execution/execution-attempt-*.json",
 		"runs/<run_folder>/execution/<step>/session.json",
 		"Never silently drop a concern",
-		"Off-track goals tighten Bug Review cadence",
+		"Off-track goals tighten Workflow Review cadence",
 		"below target",
 		"declining, or stalled",
 		"no exploratory QA checkpoint was completed after the latest observed goal",
@@ -420,7 +420,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"`efficiency_or_coaching`",
 		"`insufficient_evidence`",
 		"successful step may have chosen the wrong",
-		"prior Bug Review recorded `efficiency_or_coaching` trace evidence",
+		"prior Workflow Review recorded `efficiency_or_coaching` trace evidence",
 		"Backup risk: local only",
 		"no verified destination is off-device",
 		"Never describe this state as healthy",
@@ -556,7 +556,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if !strings.Contains(skeleton, `class="asof"`) || !strings.Contains(skeleton, ".tile .asof") {
 		t.Fatal("review-improve-log-skeleton missing visible tile freshness markup")
 	}
-	for _, want := range []string{`data-pulse-schema="3"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `data-queue="verification"`, `class="technical"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="bug_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Today's outcome`} {
+	for _, want := range []string{`data-pulse-schema="3"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `data-queue="verification"`, `class="technical"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Today's outcome`} {
 		if !strings.Contains(skeleton, want) {
 			t.Fatalf("review-improve-log-skeleton missing stable verdict markup %q", want)
 		}
@@ -616,7 +616,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render strategy-auditor: %v", err)
 	}
 	for _, want := range []string{
-		"plan can plausibly achieve the objective",
+		"current plan's strategy",
 		"goal -> plan version -> run/group -> action -> target/cohort -> source/channel",
 		"stable target",
 		"new from repeated targets",
@@ -630,11 +630,11 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"insufficient_evidence",
 		"no_material_problem",
 		"Missing target/source/outcome linkage",
-		"Goal Advisor",
+		"in_plan_recommendation",
 		"Never edit files or databases",
-		"Bug Review first",
-		"normally runs more frequently than Goal Advisor",
-		"correctness bug invalidates the evidence window",
+		"does not wait for Bug Review",
+		"normally runs more frequently than",
+		"bounded in-plan recommendation",
 	} {
 		if !strings.Contains(auditor, want) {
 			t.Fatalf("strategy-auditor guidance missing %q:\n%s", want, auditor)
@@ -647,14 +647,13 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 	}
 	for _, want := range []string{
 		"`strategy_auditor`",
-		"activity and actual outcomes diverge",
+		"activity and outcomes diverge",
 		"Missing telemetry is",
-		"Mark Bug Review and Strategy Auditor together",
-		"Goal Advisor consumes the Auditor result",
-		"Bug Review first and frequently",
-		"Strategy Auditor second and more frequently than Goal Advisor",
-		"Goal Advisor last and selectively",
-		"A goal miss alone does not launch it",
+		"Never make one reviewer due, skipped, or delayed because another reviewer",
+		"Strategy Auditor and Goal Advisor must not consume each",
+		"Strategy Auditor more frequently than Goal Advisor",
+		"Goal Advisor selectively",
+		"independent blank-sheet",
 	} {
 		if !strings.Contains(gate, want) {
 			t.Fatalf("pulse-gate missing Strategy Auditor routing %q:\n%s", want, gate)
@@ -666,12 +665,11 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render pulse-review-fixer: %v", err)
 	}
 	for _, want := range []string{
-		"Strategy Auditor runs before Goal Advisor",
-		"Strategy Auditor findings are diagnostic handoffs",
-		"challenge the causal claim",
-		"run Bug Review alone first",
-		"A confirmed correctness bug that invalidates that window defers Auditor",
-		"launch Advisor only for an actionable diagnosis",
+		"The three current reviewers are independent",
+		"one bounded parallel batch",
+		"Strategy Auditor and Goal Advisor may share a parallel batch",
+		"bounded improvements within the current strategic shape",
+		"blank-sheet opportunity",
 	} {
 		if !strings.Contains(reviewer, want) {
 			t.Fatalf("pulse-review-fixer missing Strategy Auditor boundary %q:\n%s", want, reviewer)
@@ -808,9 +806,9 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		t.Fatalf("render post-run-monitor: %v", err)
 	}
 	for _, want := range []string{
-		`run Bug Review alone first`,
-		`record Auditor as terminally deferred`,
-		`one read-only stage per due module`,
+		`independent read-only agent`,
+		`bounded parallel batch`,
+		`at most three read-only stages`,
 		`Review stages never mutate or mark module`,
 		`one honest terminal result for every due module`,
 		`later Dashboard stage`,
@@ -1126,9 +1124,9 @@ func TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence(t *testing.T) {
 		"broader criteria within explicit user boundaries",
 		"Never recommend violating an explicit user exclusion",
 		"opportunity supply or conversion",
-		"Goal Advisor is intentionally less frequent",
-		"Require a clean Bug Review",
-		"only after Auditor and never in parallel",
+		"less-frequent blank-sheet opportunity",
+		"Judge evidence reliability directly",
+		"never wait for or consume another reviewer's conclusion",
 		"include an alternative growth path",
 		"Check optimization headroom even when every success criterion is currently",
 		"Treat a numeric target as a floor",

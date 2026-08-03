@@ -5,12 +5,7 @@ describe('Pulse workspace registry', () => {
   it('exposes the complete database-native review module set once', () => {
     const moduleIds = PULSE_MODULE_COMMANDS.map(module => module.id)
     expect(moduleIds).toEqual([
-      'bug_review',
-      'artifact_review',
-      'report_health',
-      'eval_health',
-      'stores_health',
-      'llm_ops_review',
+      'workflow_review',
       'strategy_auditor',
       'goal_advisor',
     ])

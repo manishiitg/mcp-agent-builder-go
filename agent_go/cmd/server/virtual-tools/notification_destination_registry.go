@@ -30,6 +30,9 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	if incoming.UserID != "" {
 		current.UserID = incoming.UserID
 	}
+	if incoming.WorkflowName != "" {
+		current.WorkflowName = incoming.WorkflowName
+	}
 	if incoming.Slack != nil {
 		current.Slack = incoming.Slack
 	}

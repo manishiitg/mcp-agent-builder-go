@@ -8,7 +8,7 @@
 > (`agent_go/cmd/server/guidance/templates/system/post-run-monitor.md`); this
 > file only explains the shape and why it got here.
 
-## Current architecture (2026-07)
+## Current architecture (2026-08)
 
 Pulse is a **dynamic post-run steward**, not a fixed checklist. After each
 scheduled run it runs a small sequence with one mandatory intelligence turn:
@@ -17,25 +17,21 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    markers, changelog, eval/report/DB/KB/learnings state, human inputs, Chief of
    Staff recommendations, cost/tier signals, and the store freshness ledgers) and
    calls `record_pulse_worklist` exactly once with one `due|skipped` decision for
-   each of the eight modules (`bug_review`, `artifact_review`, `report_health`,
-   `eval_health`, `stores_health`, `llm_ops_review`, `strategy_auditor`,
-   `goal_advisor`). `stores_health` replaced the former separate
-   `learning_health` / `knowledgebase_health` / `db_health` modules, which
-   shared one due-cadence mechanism and one bounded-fix authority. Every skip
-   carries a next-check condition, and Gate applies a per-pass cap of three
-   due modules — anything beyond it is deferred with `next_check_after_run_id`
-   so it is guaranteed due on the next pass rather than dropped. Go enforces
-   the complete-worklist rule so a module can't silently disappear. Gate
-   mutates nothing.
-   `llm_ops_review` now combines the former cost/time pass with model routing,
-   tool/runtime operations, setup, and plan-design hygiene in one agentic
-   review.
-2. **Parallel read-only reviewers.** The scheduler dispatches only the `due`
-   modules. Each is reviewed by an independent `call_generic_agent` reviewer
-   (batches of ≤2) that **only inspects and advises** — read-only tool allowlist,
-   empty write paths, no `builder/improve.html` writes. Each reviewer loads its
-   own deep brief on demand (`pulse-bug-review`, `improve-*`, etc.), which keeps
-   the frequent Gate turn lean.
+   each of three agents: `workflow_review`, `strategy_auditor`, and
+   `goal_advisor`. Go enforces the complete-worklist rule, every skip carries a
+   next-check condition, and Gate mutates nothing. Historical operational IDs
+   remain accepted as aliases and are projected into `workflow_review`; current
+   passes never schedule them separately.
+2. **Three independent read-only agents.** `workflow_review` is one continuous
+   agent context with ordered checkpoints for correctness/QA, plan and artifact
+   drift, reports/evals, stores, and cost/model/tool/runtime operations. It loads
+   shared plan, run, goal, lifecycle, and cost evidence once and semantically
+   deduplicates findings across those lenses. `strategy_auditor` separately asks
+   what is missing or ineffective inside the selected strategy.
+   `goal_advisor` separately performs the less-frequent blank-sheet search for a
+   materially different approach. None consumes another reviewer's conclusion.
+   All due agents may run concurrently (maximum three), and the scheduler waits
+   at one barrier before starting the Fixer.
 3. **Single Pulse Fixer.** The parent turn is the **only writer**. It consolidates
    findings, resolves conflicts by a fixed precedence, applies bounded safe fixes
    sequentially, and verifies each against the single `fix-verification` contract
@@ -54,7 +50,13 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    reviews, fix/verification detail, and finalization status. Raw Markdown is a
    secondary evidence view. The popup does not extract or display fragments from
    `builder/improve.html`.
-4. **One ordered finalizer.** dashboard → backup → publish → notify, each recording
+4. **Longitudinal impact ledger.** The Fixer records interventions, immutable
+   per-run success-criterion observations, and append-only before/after impact
+   assessments in SQLite. Reliability, measurement, and presentation work are
+   explicitly separated from direct goal impact. The Pulse popup projects the
+   latest criterion values and improved/regressed/inconclusive/awaiting counts;
+   later passes add evidence instead of overwriting earlier conclusions.
+5. **One ordered finalizer.** dashboard → backup → publish → notify, each recording
    its own live/final status. The scheduler marks anything left running as failed.
 
 The dedicated Dashboard stage still owns `builder/improve.html`. That file remains
