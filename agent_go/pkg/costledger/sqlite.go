@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,10 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// scopeUnknown is the last-resort scope for an entry whose writer did not name
+// one. It matches the column default and pkg/costobserver.ScopeUnknown.
+const scopeUnknown = "unknown"
 
 const sqliteSchema = `
 CREATE TABLE IF NOT EXISTS cost_events (
@@ -104,6 +109,14 @@ func NewSQLiteLedger(dbPath string) (*Ledger, error) {
 }
 
 func (s *sqliteLedger) append(e Entry) error {
+	// normalizeEntry backfills a blank scope with "unknown" so the NOT NULL
+	// column and the legacy import both stay valid. For a live write that
+	// backfill is a defect being swallowed, so name the writer before it
+	// happens — an unattributable row is nearly worthless once it lands.
+	if strings.TrimSpace(e.Scope) == "" {
+		log.Printf("[COST_LEDGER] cost event named no scope (component=%q tool=%q session=%q execution=%q); recording as %q",
+			e.Component, e.ToolName, e.SessionID, e.ExecutionID, scopeUnknown)
+	}
 	normalizeEntry(&e)
 	metadata, err := json.Marshal(e.OperationMetadata)
 	if err != nil {
@@ -344,7 +357,7 @@ func normalizeEntry(e *Entry) {
 		e.Currency = "USD"
 	}
 	if e.Scope == "" {
-		e.Scope = "unknown"
+		e.Scope = scopeUnknown
 	}
 	if e.BillingBasis == "" {
 		switch e.CostUSDSource {

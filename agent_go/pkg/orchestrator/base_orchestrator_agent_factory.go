@@ -259,6 +259,12 @@ func (bo *BaseOrchestrator) setupStandardAgent(
 		bo.GetLogger().Info(fmt.Sprintf("ℹ️ Skipping StartAgentSession for %s - handled at orchestrator level", phase))
 	}
 
+	// 💵 Record this agent's token spend against its own identity. Observers are
+	// construction inputs, so this must stay before the agent is finalized.
+	if err := bo.attachCostObserver(ctx, baseAgent, config, agentName, phase, stepID); err != nil {
+		return err
+	}
+
 	return nil
 }
 
