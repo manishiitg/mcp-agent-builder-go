@@ -20,6 +20,27 @@ const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
 
 var safeWorkflowDBTableName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
+// workflowDBDescribeAllSQL lists every user table and view. It is the schema
+// source for action=describe and for the schema hint attached to a failed query,
+// so both answer from the same statement.
+const workflowDBDescribeAllSQL = "SELECT name, type, sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
+
+// workflowDBDescribeRows bounds the follow-up describe. Schema rows are one per
+// column or one per table, so this is far above any real workflow database.
+const workflowDBDescribeRows = 500
+
+// workflowDBSchemaHintBudget caps the schema text appended to a failed query, in
+// bytes, so a wide table cannot bury the SQLite error that the caller has to
+// read. Names past the budget are replaced by a "(+N more)" count, and the
+// caller can still get the full list with action=describe.
+const workflowDBSchemaHintBudget = 1000
+
+// workflowDBDescribeTableSQL renders the column-listing PRAGMA. Callers must
+// have checked the name against safeWorkflowDBTableName first.
+func workflowDBDescribeTableSQL(table string) string {
+	return `PRAGMA table_info("` + strings.ReplaceAll(table, `"`, `""`) + `")`
+}
+
 type WorkflowDBToolRegistry struct {
 	Tools      []llmtypes.Tool
 	Executors  map[string]func(context.Context, map[string]any) (string, error)
@@ -114,12 +135,12 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 			table, _ := args["table"].(string)
 			table = strings.TrimSpace(table)
 			if table == "" {
-				sqlText = "SELECT name, type, sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
+				sqlText = workflowDBDescribeAllSQL
 			} else {
 				if !safeWorkflowDBTableName.MatchString(table) {
 					return "", fmt.Errorf("table must contain only letters, digits, underscore, dot, or hyphen")
 				}
-				sqlText = `PRAGMA table_info("` + strings.ReplaceAll(table, `"`, `""`) + `")`
+				sqlText = workflowDBDescribeTableSQL(table)
 			}
 		case "query":
 			sqlText, _ = args["sql"].(string)
@@ -134,7 +155,13 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		}
 		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, MaxRows: maxRows})
 		if err != nil {
-			return "", err
+			// A bare "no such column: input_id" tells the caller only that its guess
+			// was wrong, so it guesses again — one overnight run spent 18 tool calls
+			// inventing column names and finished on `x`. Answer with the real
+			// schema, read back over this same query_only(true) path.
+			return "", workflowDBSchemaHintError(ctx, err, sqlText, func(hintCtx context.Context, hintSQL string) (workspace.QueryWorkflowDBResult, error) {
+				return client.QueryAuthorizedWorkflowDB(hintCtx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: hintSQL, MaxRows: workflowDBDescribeRows})
+			})
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil {
@@ -282,6 +309,263 @@ func workflowDBPathFromCandidate(candidate string) string {
 		}
 	}
 	return ""
+}
+
+// workflowDBSchemaDescriber runs one read-only statement against the database
+// the failed query already resolved to.
+type workflowDBSchemaDescriber func(ctx context.Context, sqlText string) (workspace.QueryWorkflowDBResult, error)
+
+// workflowDBSchemaHintError appends the real schema to a "no such column" or
+// "no such table" failure so the caller can correct itself instead of guessing.
+// The original error is always preserved and wrapped; if the follow-up describe
+// itself fails, or the database has nothing to report, the original error is
+// returned unchanged. Diagnostics must never turn one failure into two.
+func workflowDBSchemaHintError(ctx context.Context, queryErr error, sqlText string, describe workflowDBSchemaDescriber) error {
+	kind := workflowDBMissingSchemaKind(queryErr)
+	if kind == "" || describe == nil {
+		return queryErr
+	}
+	if kind == "column" {
+		// Only name a table the SQL actually names. A guessed table presented as
+		// fact would be a second wrong answer on top of the first.
+		if table := workflowDBTableFromSQL(sqlText); table != "" {
+			described, err := describe(ctx, workflowDBDescribeTableSQL(table))
+			if err == nil {
+				if columns := workflowDBNamedValues(described.Rows); len(columns) > 0 {
+					return fmt.Errorf("%w. Table `%s` has columns: %s. Use these exact names", queryErr, table, workflowDBJoinWithinBudget(columns))
+				}
+			}
+		}
+	}
+	described, err := describe(ctx, workflowDBDescribeAllSQL)
+	if err != nil {
+		return queryErr
+	}
+	names := workflowDBNamedValues(described.Rows)
+	if len(names) == 0 {
+		return queryErr
+	}
+	const nextStep = `Call query_workflow_db with action="describe" and table="<name>" to list its columns`
+	if kind == "column" {
+		return fmt.Errorf("%w. The table that column belongs to could not be identified from this SQL. Tables and views in this database: %s. %s", queryErr, workflowDBJoinWithinBudget(names), nextStep)
+	}
+	return fmt.Errorf("%w. Tables and views in this database: %s. %s", queryErr, workflowDBJoinWithinBudget(names), nextStep)
+}
+
+// workflowDBMissingSchemaKind classifies a failed query as naming a column that
+// does not exist, a table that does not exist, or neither. The workspace service
+// returns SQLite's message inside its JSON envelope, so this matches on the
+// SQLite text wherever it sits in the error.
+func workflowDBMissingSchemaKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	lowered := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lowered, "no such column"):
+		return "column"
+	case strings.Contains(lowered, "no such table"):
+		return "table"
+	default:
+		return ""
+	}
+}
+
+var workflowDBTableReferencePattern = regexp.MustCompile("(?is)\\b(?:from|join)\\s+([A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\])")
+
+// workflowDBTableFromSQL returns the single table a statement reads from, or ""
+// when the statement names none, names several, or names one this code cannot
+// read confidently. Confidence is the point: the caller is told the columns of a
+// named table, so naming the wrong table would be worse than naming none.
+func workflowDBTableFromSQL(sqlText string) string {
+	stripped := workflowDBStripSQLNoise(sqlText)
+	matches := workflowDBTableReferencePattern.FindAllStringSubmatchIndex(stripped, -1)
+	seen := map[string]bool{}
+	found := ""
+	for _, match := range matches {
+		name := workflowDBUnquoteIdentifier(stripped[match[2]:match[3]])
+		// A name this code cannot quote safely is not a name it may report.
+		if name == "" || !safeWorkflowDBTableName.MatchString(name) {
+			return ""
+		}
+		// `FROM a, b` puts two tables in scope without a second FROM/JOIN keyword.
+		if strings.EqualFold(stripped[match[0]:match[0]+4], "from") && workflowDBFromListContinues(stripped, match[3]) {
+			return ""
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if found != "" {
+			return ""
+		}
+		found = name
+	}
+	return found
+}
+
+// workflowDBFromClauseBoundary marks the words that end a FROM item list, so a
+// comma found after one of them belongs to some later clause rather than to the
+// table list.
+var workflowDBFromClauseBoundary = map[string]bool{
+	"WHERE": true, "GROUP": true, "ORDER": true, "HAVING": true, "LIMIT": true,
+	"OFFSET": true, "WINDOW": true, "UNION": true, "INTERSECT": true, "EXCEPT": true,
+	"JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true, "FULL": true,
+	"CROSS": true, "NATURAL": true, "ON": true, "USING": true, "RETURNING": true,
+	"SELECT": true, "VALUES": true,
+}
+
+// workflowDBFromListContinues reports whether the FROM item that ends at offset
+// is followed by another comma-separated table in the same clause.
+func workflowDBFromListContinues(stripped string, offset int) bool {
+	depth := 0
+	for i := offset; i < len(stripped); {
+		ch := stripped[i]
+		switch {
+		case ch == '(':
+			depth++
+			i++
+		case ch == ')':
+			if depth == 0 {
+				return false
+			}
+			depth--
+			i++
+		case ch == ',':
+			if depth == 0 {
+				return true
+			}
+			i++
+		case ch == '"' || ch == '`' || ch == '[':
+			closing := ch
+			if ch == '[' {
+				closing = ']'
+			}
+			i++
+			for i < len(stripped) && stripped[i] != closing {
+				i++
+			}
+			i++
+		case ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z':
+			start := i
+			for i < len(stripped) {
+				current := stripped[i]
+				if current == '_' || current == '$' || current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' || current >= '0' && current <= '9' {
+					i++
+					continue
+				}
+				break
+			}
+			if depth == 0 && workflowDBFromClauseBoundary[strings.ToUpper(stripped[start:i])] {
+				return false
+			}
+		default:
+			i++
+		}
+	}
+	return false
+}
+
+// workflowDBStripSQLNoise blanks string literals and comments so a table scan
+// cannot be fooled by the word "from" inside quoted text.
+func workflowDBStripSQLNoise(input string) string {
+	var out strings.Builder
+	for i := 0; i < len(input); {
+		switch {
+		case input[i] == '\'':
+			i++
+			for i < len(input) {
+				if input[i] != '\'' {
+					i++
+					continue
+				}
+				if i+1 < len(input) && input[i+1] == '\'' {
+					i += 2
+					continue
+				}
+				i++
+				break
+			}
+			out.WriteByte(' ')
+		case input[i] == '-' && i+1 < len(input) && input[i+1] == '-':
+			for i < len(input) && input[i] != '\n' {
+				i++
+			}
+			out.WriteByte(' ')
+		case input[i] == '/' && i+1 < len(input) && input[i+1] == '*':
+			i += 2
+			for i+1 < len(input) && !(input[i] == '*' && input[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(input) {
+				i += 2
+			} else {
+				i = len(input)
+			}
+			out.WriteByte(' ')
+		default:
+			out.WriteByte(input[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+// workflowDBUnquoteIdentifier removes SQLite identifier quoting.
+func workflowDBUnquoteIdentifier(identifier string) string {
+	identifier = strings.TrimSpace(identifier)
+	if len(identifier) < 2 {
+		return identifier
+	}
+	first, last := identifier[0], identifier[len(identifier)-1]
+	switch {
+	case first == '"' && last == '"':
+		return strings.ReplaceAll(identifier[1:len(identifier)-1], `""`, `"`)
+	case first == '`' && last == '`':
+		return strings.ReplaceAll(identifier[1:len(identifier)-1], "``", "`")
+	case first == '[' && last == ']':
+		return identifier[1 : len(identifier)-1]
+	}
+	return identifier
+}
+
+// workflowDBNamedValues pulls the name column out of PRAGMA table_info or
+// sqlite_master rows.
+func workflowDBNamedValues(rows []map[string]interface{}) []string {
+	values := make([]string, 0, len(rows))
+	for _, row := range rows {
+		raw, ok := row["name"]
+		if !ok || raw == nil {
+			continue
+		}
+		if name := strings.TrimSpace(fmt.Sprint(raw)); name != "" {
+			values = append(values, name)
+		}
+	}
+	return values
+}
+
+// workflowDBJoinWithinBudget joins names until workflowDBSchemaHintBudget bytes
+// are used, then reports how many were left out rather than cutting a name in
+// half.
+func workflowDBJoinWithinBudget(values []string) string {
+	var joined strings.Builder
+	for index, value := range values {
+		addition := len(value)
+		if index > 0 {
+			addition += len(", ")
+		}
+		if joined.Len()+addition > workflowDBSchemaHintBudget {
+			fmt.Fprintf(&joined, " ... (+%d more)", len(values)-index)
+			break
+		}
+		if index > 0 {
+			joined.WriteString(", ")
+		}
+		joined.WriteString(value)
+	}
+	return joined.String()
 }
 
 // sortedArgumentKeys lists the top-level argument names a caller supplied, so a
