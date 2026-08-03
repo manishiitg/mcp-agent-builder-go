@@ -7390,6 +7390,10 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 		}
 		writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, retainedProvider, api)
 		log.Printf("[LIVE INPUT] Delivered user message directly to retained terminal for session %s provider=%s: %.80s", sessionID, retainedProvider, req.Message)
+		// Steering never completes a query turn, so without this the transcript
+		// stays frozen at the last real turn and a restart resumes from there.
+		// Runs after the response is written; it must not be on the send path.
+		api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
 		return
 	}
 

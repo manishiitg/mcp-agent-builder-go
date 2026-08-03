@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -2746,4 +2747,86 @@ func parseChatHistoryCleanupTime(value string) (time.Time, bool) {
 		return parsed, true
 	}
 	return time.Time{}, false
+}
+
+// appendLiveInputToPersistedChatHistory records a live-steered user message in
+// the session's on-disk transcript.
+//
+// Live input never completes a query turn, so the sole writer of chat history —
+// the tail of handleQuery — never runs for these messages. A tmux session driven
+// entirely by steering therefore leaves its transcript frozen at the last real
+// turn, and a crash or restart resumes showing that stale point. What this
+// repairs is the UI record: the coding agent's own conversation is not at risk,
+// because the CLI persists it independently and reloads it with --resume.
+//
+// It patches conversation_history in the existing file rather than rebuilding it
+// through persistChatConversationToPathWithTerminalSession, which writes a whole
+// new record from its arguments. Rebuilding from a live-input handler would drop
+// the fields that handler has no way to supply — above all runtime, which holds
+// the ExternalSessionID that --resume needs. Losing that would turn a stale
+// transcript into an unresumable session, which is strictly worse than the bug.
+//
+// A session with no transcript yet is left alone: the first completed turn is
+// what establishes the record, and inventing a runtime-less one here would poison
+// the resume path the same way.
+func (api *StreamingAPI) appendLiveInputToPersistedChatHistory(userID, sessionID, message string) {
+	message = strings.TrimSpace(message)
+	if api == nil || sessionID == "" || message == "" {
+		return
+	}
+	if userID == "" {
+		userID = "default"
+	}
+	logCtx := newServerLogContext("", "", "", userID, "", sessionID)
+
+	raw, err := ReadChatHistoryConversation(userID, sessionID, "")
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		// No transcript for this session yet, or it is unreadable. Either way there
+		// is nothing to safely append to.
+		return
+	}
+	conversationPath, ok, err := FindChatHistoryConversationPathForSession(userID, sessionID, "")
+	if err != nil || !ok || strings.TrimSpace(conversationPath) == "" {
+		return
+	}
+
+	// Decode into a generic map so every field this function does not understand —
+	// agent_mode, runtime, ui_events, terminal_snapshots — survives the rewrite
+	// byte-for-byte.
+	var record map[string]interface{}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot decode %s: %v", conversationPath, err)
+		return
+	}
+
+	var history []llmtypes.MessageContent
+	if existing, present := record["conversation_history"]; present {
+		encoded, err := json.Marshal(existing)
+		if err != nil {
+			logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot re-encode history for %s: %v", conversationPath, err)
+			return
+		}
+		if err := json.Unmarshal(encoded, &history); err != nil {
+			logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot decode history for %s: %v", conversationPath, err)
+			return
+		}
+	}
+	history = append(history, llmtypes.MessageContent{
+		Role:  llmtypes.ChatMessageTypeHuman,
+		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: message}},
+	})
+
+	record["conversation_history"] = history
+	record["updated_at"] = time.Now().Format(time.RFC3339)
+
+	encoded, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot marshal %s: %v", conversationPath, err)
+		return
+	}
+	if err := writeRawFileToWorkspace(context.Background(), conversationPath, string(encoded)); err != nil {
+		logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot write %s: %v", conversationPath, err)
+		return
+	}
+	logfWithContext(logCtx, "[CHAT_HISTORY] Recorded live-input message (%d messages) in %s", len(history), conversationPath)
 }
