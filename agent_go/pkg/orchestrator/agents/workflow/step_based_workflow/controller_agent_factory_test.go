@@ -125,6 +125,66 @@ func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	}
 }
 
+func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
+	base.WorkspaceTools = []llmtypes.Tool{
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"),
+	}
+	base.WorkspaceToolExecutors = map[string]interface{}{
+		"execute_shell_command": noop,
+		"query_workflow_db":     noop,
+		"mutate_workflow_db":    noop,
+	}
+	base.ToolCategories = map[string]string{
+		"execute_shell_command": "workspace_advanced",
+		"query_workflow_db":     "workflow_db",
+		"mutate_workflow_db":    "workflow_db",
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+
+	tests := []struct {
+		name         string
+		access       string
+		wantMutation bool
+	}{
+		{name: "read only", access: DBAccessRead, wantMutation: false},
+		{name: "read write", access: DBAccessReadWrite, wantMutation: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A deliberately narrow explicit list must not remove capability-
+			// derived DB tools.
+			tools, executors := hcpo.prepareCustomTools(&AgentConfigs{
+				DBAccess:           tt.access,
+				EnabledCustomTools: []string{"workspace_advanced:execute_shell_command"},
+			})
+			names := make([]string, 0, len(tools))
+			for _, definition := range tools {
+				if definition.Function != nil {
+					names = append(names, definition.Function.Name)
+				}
+			}
+			if !slices.Contains(names, "query_workflow_db") || executors["query_workflow_db"] == nil {
+				t.Fatalf("db_access=%q missing query tool: tools=%v executors=%v", tt.access, names, executors)
+			}
+			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
+			if gotMutation != tt.wantMutation {
+				t.Fatalf("db_access=%q mutation materialized=%v, want %v (tools=%v)", tt.access, gotMutation, tt.wantMutation, names)
+			}
+		})
+	}
+}
+
 func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,

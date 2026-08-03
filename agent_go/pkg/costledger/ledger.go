@@ -169,7 +169,7 @@ func DefaultLedger() *Ledger {
 
 type sqliteStore interface {
 	append(Entry) error
-	summarize(from, to string) (*Summary, error)
+	summarize(from, to, executionID string) (*Summary, error)
 	migrateLegacyJSONL(path string) (MigrationReport, error)
 	close() error
 }
@@ -299,8 +299,30 @@ func (l *Ledger) Summarize(from, to string) (*Summary, error) {
 		return nil, fmt.Errorf("costledger: nil ledger")
 	}
 	if l.db != nil {
-		return l.db.summarize(from, to)
+		return l.db.summarize(from, to, "")
 	}
+	return l.summarizeLegacy(from, to, "")
+}
+
+// SummarizeExecution returns the exact cost and token rows attributed to one
+// runtime execution. Pulse reviewers and fixers use this to snapshot their
+// own usage into the workflow-local Pulse database instead of sharing a broad
+// phase or todo-task bucket.
+func (l *Ledger) SummarizeExecution(executionID string) (*Summary, error) {
+	if l == nil {
+		return nil, fmt.Errorf("costledger: nil ledger")
+	}
+	executionID = strings.TrimSpace(executionID)
+	if executionID == "" {
+		return nil, fmt.Errorf("costledger: execution id is required")
+	}
+	if l.db != nil {
+		return l.db.summarize("", "", executionID)
+	}
+	return l.summarizeLegacy("", "", executionID)
+}
+
+func (l *Ledger) summarizeLegacy(from, to, executionID string) (*Summary, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -338,6 +360,9 @@ func (l *Ledger) Summarize(from, to string) (*Summary, error) {
 			continue
 		}
 		if to != "" && date > to {
+			continue
+		}
+		if executionID != "" && e.ExecutionID != executionID {
 			continue
 		}
 		addEntryToSummary(summary, date, e)

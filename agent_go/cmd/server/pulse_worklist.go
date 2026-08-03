@@ -62,6 +62,28 @@ var validPulseModules = func() map[string]bool {
 	return m
 }()
 
+// pulseModuleList renders the closed module set for rejection messages. A
+// rejection that names the bad value but not the set it had to come from
+// leaves the caller guessing, which is how the same invalid value gets retried.
+func pulseModuleList() string {
+	return strings.Join(pulseModuleOrder, ", ")
+}
+
+func pulseModuleExample() string {
+	if len(pulseModuleOrder) > 0 {
+		return pulseModuleOrder[0]
+	}
+	return "bug_review"
+}
+
+// pulseModuleResultValues is the module-audit result set shared by the accept
+// check and its rejection message.
+var pulseModuleResultValues = []string{"done", "changed", "blocked", "failed", "skipped"}
+
+// pulseSchedulerModuleResultValues additionally accepts the scheduler-only
+// timed_out result, which agents cannot report for themselves.
+var pulseSchedulerModuleResultValues = append(append([]string(nil), pulseModuleResultValues...), "timed_out")
+
 const pulseModuleStateSchema = `CREATE TABLE IF NOT EXISTS pulse_module_state (
 	workspace_path TEXT NOT NULL,
 	module TEXT NOT NULL,
@@ -325,7 +347,7 @@ func openPulseModuleStateDB(ctx context.Context, workspacePath string, create bo
 func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if pulseRunID == "" {
-		return nil, fmt.Errorf("pulse_run_id is required")
+		return nil, fmt.Errorf("pulse_run_id is required: pass the scheduler-provided Pulse run id exactly as it appears in the prompt")
 	}
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
 		return nil, err
@@ -346,7 +368,7 @@ func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, 
 	for _, decision := range decisions {
 		module := normalizePulseModule(decision.Module)
 		if !validPulseModules[module] {
-			return nil, fmt.Errorf("module %q is not valid", decision.Module)
+			return nil, fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", decision.Module, pulseModuleList())
 		}
 		reason := strings.TrimSpace(decision.Reason)
 		if reason == "" {
@@ -416,10 +438,10 @@ func recordStandalonePulseFixerModules(ctx context.Context, workspacePath, pulse
 
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if pulseRunID == "" {
-		return nil, fmt.Errorf("pulse_run_id is required")
+		return nil, fmt.Errorf("pulse_run_id is required: pass the scheduler-provided Pulse run id exactly as it appears in the prompt")
 	}
 	if len(modules) == 0 {
-		return nil, fmt.Errorf("modules must not be empty")
+		return nil, fmt.Errorf("modules must not be empty; pass at least one module from: %s", pulseModuleList())
 	}
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
@@ -432,7 +454,7 @@ func recordStandalonePulseFixerModules(ctx context.Context, workspacePath, pulse
 	for _, raw := range modules {
 		module := normalizePulseModule(raw)
 		if !validPulseModules[module] {
-			return nil, fmt.Errorf("module %q is not valid", raw)
+			return nil, fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", raw, pulseModuleList())
 		}
 		if seen[module] {
 			return nil, fmt.Errorf("module %q appears more than once", module)
@@ -554,16 +576,17 @@ func recordTrustedPulseWorklistOnceAfter(ctx context.Context, workspacePath, pul
 
 func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
 	if len(decisions) == 0 {
-		return fmt.Errorf("decisions are required")
+		return fmt.Errorf("decisions are required: exactly one entry for each Pulse module (%s), each with module, due, and reason", pulseModuleList())
 	}
 	if len(decisions) != len(pulseModuleOrder) {
-		return fmt.Errorf("decisions must include exactly one entry for each Pulse module; got %d want %d", len(decisions), len(pulseModuleOrder))
+		return fmt.Errorf("decisions must include exactly one entry for each Pulse module; got %d, want %d covering: %s",
+			len(decisions), len(pulseModuleOrder), pulseModuleList())
 	}
 	seen := map[string]bool{}
 	for _, decision := range decisions {
 		module := normalizePulseModule(decision.Module)
 		if !validPulseModules[module] {
-			return fmt.Errorf("module %q is not valid", decision.Module)
+			return fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", decision.Module, pulseModuleList())
 		}
 		if seen[module] {
 			return fmt.Errorf("module %q appears more than once", module)
@@ -587,10 +610,15 @@ func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
 			return fmt.Errorf("skipped module %q must include next_check_at, next_check_after_run_id, or cooldown_runs", module)
 		}
 	}
+	missing := []string{}
 	for _, module := range pulseModuleOrder {
 		if !seen[module] {
-			return fmt.Errorf("decisions missing required module %q", module)
+			missing = append(missing, module)
 		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("decisions is missing required module(s) %s; every Pulse module needs its own entry and the complete set is: %s",
+			strings.Join(missing, ", "), pulseModuleList())
 	}
 	return nil
 }
@@ -1153,24 +1181,24 @@ func normalizePulseHTMLText(value string) string {
 func markPulseModuleResult(ctx context.Context, workspacePath, module, pulseRunID, result, reason string, evidence []string) (*PulseModuleState, error) {
 	module = normalizePulseModule(module)
 	if !validPulseModules[module] {
-		return nil, fmt.Errorf("module %q is not valid", module)
+		return nil, fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", module, pulseModuleList())
 	}
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if pulseRunID == "" {
-		return nil, fmt.Errorf("pulse_run_id is required")
+		return nil, fmt.Errorf("pulse_run_id is required: pass the scheduler-provided Pulse run id exactly as it appears in the prompt")
 	}
 	result = strings.TrimSpace(strings.ToLower(result))
 	if result == "" {
-		return nil, fmt.Errorf("result is required")
+		return nil, fmt.Errorf("result is required. Must be one of: %s", strings.Join(pulseSchedulerModuleResultValues, ", "))
 	}
 	switch result {
 	case "done", "changed", "blocked", "failed", "skipped", "timed_out":
 	default:
-		return nil, fmt.Errorf("result must be one of done, changed, blocked, failed, skipped, timed_out")
+		return nil, fmt.Errorf("result %q is not valid. Must be one of: %s", result, strings.Join(pulseSchedulerModuleResultValues, ", "))
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return nil, fmt.Errorf("reason is required")
+		return nil, fmt.Errorf("reason is required: one sentence stating the module's outcome")
 	}
 
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
@@ -1235,18 +1263,19 @@ func markPulseModuleResultFromAgentWithAuditAndFindings(
 ) (*PulseModuleState, error) {
 	module = normalizePulseModule(module)
 	if !validPulseModules[module] {
-		return nil, fmt.Errorf("module %q is not valid", module)
+		return nil, fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", module, pulseModuleList())
 	}
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	result = strings.TrimSpace(strings.ToLower(result))
 	switch result {
 	case "done", "changed", "blocked", "failed", "skipped":
 	default:
-		return nil, fmt.Errorf("result must be one of done, changed, blocked, failed, skipped")
+		return nil, fmt.Errorf("result %q is not valid. Must be one of: %s. Use changed only when files were modified, and pair it with changed_files, verification, and finding_dispositions",
+			result, strings.Join(pulseModuleResultValues, ", "))
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return nil, fmt.Errorf("reason is required")
+		return nil, fmt.Errorf("reason is required: one sentence stating the module's outcome, including the exact technical failure when result is blocked or failed")
 	}
 
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
@@ -1346,7 +1375,7 @@ const pulseShadowDetectorLoopClosure = "loop_closure"
 func recordPulseShadowSignalObservation(ctx context.Context, workspacePath, pulseRunID string, result loopclosure.Result, decisions []PulseWorklistDecision) error {
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	if pulseRunID == "" {
-		return fmt.Errorf("pulse_run_id is required")
+		return fmt.Errorf("pulse_run_id is required: pass the scheduler-provided Pulse run id exactly as it appears in the prompt")
 	}
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
@@ -1576,6 +1605,44 @@ func (api *StreamingAPI) handleGetPulseReviews(w http.ResponseWriter, r *http.Re
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts, "total": len(artifacts)})
+}
+
+func (api *StreamingAPI) handleGetPulseAgentMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	workspacePath, err := normalizeReportHumanInputWorkspacePath(r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	module := strings.TrimSpace(r.URL.Query().Get("module"))
+	if module != "" && module != "pulse_fixer" {
+		module = normalizePulseModule(module)
+		if !validPulseModules[module] {
+			http.Error(w, fmt.Sprintf("module %q is not valid", module), http.StatusBadRequest)
+			return
+		}
+	}
+	role := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role")))
+	if role != "" && role != "reviewer" && role != "fixer" {
+		http.Error(w, "role must be reviewer or fixer", http.StatusBadRequest)
+		return
+	}
+	metrics, err := step_based_workflow.LoadPulseAgentMetrics(
+		r.Context(), workspacePath, r.URL.Query().Get("pulse_run_id"), module, role, -1,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"metrics": metrics,
+		"total":   len(metrics),
+	})
 }
 
 func (api *StreamingAPI) handleGetPulseImpact(w http.ResponseWriter, r *http.Request) {
@@ -1924,7 +1991,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			}
 			module = normalizePulseModule(module)
 			if !validPulseModules[module] {
-				return "", fmt.Errorf("module %q is not valid", module)
+				return "", fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", module, pulseModuleList())
 			}
 			worklist, ok, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
 			if err != nil {
@@ -2013,7 +2080,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			module, _ := args["module"].(string)
 			module = normalizePulseModule(module)
 			if module != "" && !validPulseModules[module] {
-				return "", fmt.Errorf("module %q is not valid", module)
+				return "", fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s", module, pulseModuleList())
 			}
 			findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
 			if err != nil {
@@ -2042,7 +2109,8 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				AfterRefs:    stringSliceFromToolArg(args["after_refs"]),
 			}
 			if len(audit.BeforeRefs) != len(audit.AfterRefs) {
-				return "", fmt.Errorf("before_refs and after_refs must be supplied as equal-length audit pairs")
+				return "", fmt.Errorf("before_refs and after_refs must be equal-length positional audit pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
+					len(audit.BeforeRefs), len(audit.AfterRefs))
 			}
 			dispositions, err := pulseFindingDispositionsFromToolArg(args["finding_dispositions"])
 			if err != nil {
@@ -2058,14 +2126,19 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				return "", err
 			}
 			if strings.EqualFold(strings.TrimSpace(result), "changed") {
+				// One rejection per missing array taught the caller the contract one
+				// failed write at a time. Name the whole required set and what
+				// actually arrived, so a single retry can satisfy all three.
+				changedRequirement := fmt.Sprintf("result=changed requires changed_files, verification, and finding_dispositions together (got changed_files=%d items, verification=%d items, finding_dispositions=%d items)",
+					len(audit.ChangedFiles), len(audit.Verification), len(dispositions))
 				if len(audit.ChangedFiles) == 0 {
-					return "", fmt.Errorf("changed_files is required when result=changed")
+					return "", fmt.Errorf("changed_files is required when result=changed; %s. changed_files lists the exact workspace-relative files this module changed", changedRequirement)
 				}
 				if len(audit.Verification) == 0 {
-					return "", fmt.Errorf("verification is required when result=changed")
+					return "", fmt.Errorf("verification is required when result=changed; %s. verification lists the checks performed and their observed outcomes", changedRequirement)
 				}
 				if len(dispositions) == 0 {
-					return "", fmt.Errorf("finding_dispositions is required when result=changed")
+					return "", fmt.Errorf("finding_dispositions is required when result=changed; %s. %s", changedRequirement, pulseFindingDispositionsShape)
 				}
 			}
 			state, err := markPulseModuleResultFromAgentWithAuditAndFindings(
@@ -2156,20 +2229,31 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	return []llmtypes.Tool{beginFixerTool, recordTool, stateTool, findingBacklogTool, startFixTool, resultTool, impactTool, resolveConcernTool, finalCommandTool}, executors, categories
 }
 
+// pulseFixFindingsShape and pulseFindingDispositionsShape are appended to decode
+// failures. A raw json.Unmarshal message names a Go struct field the agent has
+// never seen and says nothing about the shape that would have worked, so a
+// mistyped payload cannot be corrected from the rejection alone.
+const pulseFixFindingsShape = `findings takes an array of objects: [{"fingerprint": "<backlog fingerprint>", "finding_id": "<backlog issue.id>"}]`
+
+const pulseFindingDispositionsShape = `finding_dispositions takes an array of disposition objects, not an object or a string: ` +
+	`[{"fingerprint": "<backlog fingerprint>", "finding_id": "<backlog issue.id>", "disposition": "fixed_verified", "summary": "<one sentence>", ` +
+	`"attempt_id": "<id from start_pulse_fix_attempt>", "changed_files": ["path/to/file"], ` +
+	`"verification": [{"check": "<what was run>", "verdict": "passed", "expected": "<expected>", "observed": "<observed>"}]}]`
+
 func pulseFixFindingRefsFromToolArg(raw interface{}) ([]step_based_workflow.PulseFixFindingRef, error) {
 	if raw == nil {
-		return nil, fmt.Errorf("findings is required")
+		return nil, fmt.Errorf("findings is required: %s", pulseFixFindingsShape)
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("encode findings: %w", err)
+		return nil, fmt.Errorf("encode findings (%s): %w", pulseFixFindingsShape, err)
 	}
 	var findings []step_based_workflow.PulseFixFindingRef
 	if err := json.Unmarshal(encoded, &findings); err != nil {
-		return nil, fmt.Errorf("decode findings: %w", err)
+		return nil, fmt.Errorf("decode findings (%s): %w", pulseFixFindingsShape, err)
 	}
 	if len(findings) == 0 {
-		return nil, fmt.Errorf("findings must not be empty")
+		return nil, fmt.Errorf("findings must not be empty: %s", pulseFixFindingsShape)
 	}
 	return findings, nil
 }
@@ -2180,11 +2264,11 @@ func pulseFindingDispositionsFromToolArg(raw interface{}) ([]step_based_workflow
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("encode finding_dispositions: %w", err)
+		return nil, fmt.Errorf("encode finding_dispositions (%s): %w", pulseFindingDispositionsShape, err)
 	}
 	var dispositions []step_based_workflow.PulseFindingDisposition
 	if err := json.Unmarshal(encoded, &dispositions); err != nil {
-		return nil, fmt.Errorf("decode finding_dispositions: %w", err)
+		return nil, fmt.Errorf("decode finding_dispositions (%s): %w", pulseFindingDispositionsShape, err)
 	}
 	for index := range dispositions {
 		dispositions[index] = step_based_workflow.NormalizePulseFindingDisposition(dispositions[index])
@@ -2233,24 +2317,70 @@ func validateReviewerVerificationDispositions(
 	return nil
 }
 
+// pulseDecisionFields is the complete decision contract in schema order. It
+// backs both the unknown-field check and the message that reports it, so a
+// field can never be silently accepted without appearing in the list an agent
+// is shown.
+var pulseDecisionFields = []string{
+	"module", "due", "reason", "evidence",
+	"next_check_at", "next_check_after_run_id", "cooldown_runs",
+}
+
+// pulseDecisionFieldAliases maps the wrong names agents actually reach for onto
+// the field they meant. "decision" carrying the due/skip verdict is the observed
+// case; without the pointer the rejection only says a field is unknown, which
+// does not tell the caller which of the seven it should have used.
+var pulseDecisionFieldAliases = map[string]string{
+	"decision": "due", "decisions": "due", "is_due": "due", "status": "due",
+	"verdict": "due", "state": "due", "rationale": "reason", "justification": "reason",
+	"why": "reason", "notes": "reason", "note": "reason", "proof": "evidence",
+	"cooldown": "cooldown_runs", "next_check": "next_check_at",
+}
+
+func pulseDecisionFieldSuggestion(key string) string {
+	if suggestion, ok := pulseDecisionFieldAliases[strings.ToLower(strings.TrimSpace(key))]; ok {
+		return suggestion
+	}
+	// A near-miss spelling of a real field is still recoverable, but only if the
+	// rejection says which field it was close to.
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	for _, field := range pulseDecisionFields {
+		if normalized == field || strings.HasPrefix(field, normalized) || strings.HasPrefix(normalized, field) {
+			return field
+		}
+	}
+	return ""
+}
+
 func pulseWorklistDecisionsFromArgs(raw interface{}) ([]PulseWorklistDecision, error) {
 	arr, ok := raw.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("decisions must be an array")
+		return nil, fmt.Errorf("decisions must be an array with one object per Pulse module: [{\"module\": %q, \"due\": true, \"reason\": \"<why>\"}]; module, due (boolean), and reason are required on every entry",
+			pulseModuleExample())
 	}
 	out := make([]PulseWorklistDecision, 0, len(arr))
-	allowed := map[string]bool{
-		"module": true, "due": true, "reason": true, "evidence": true,
-		"next_check_at": true, "next_check_after_run_id": true, "cooldown_runs": true,
+	allowed := map[string]bool{}
+	for _, field := range pulseDecisionFields {
+		allowed[field] = true
 	}
 	for index, item := range arr {
 		m, ok := item.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("decisions[%d] must be an object", index)
+			return nil, fmt.Errorf("decisions[%d] must be an object shaped {\"module\": %q, \"due\": true, \"reason\": \"<why>\"}, got %T",
+				index, pulseModuleExample(), item)
 		}
 		for key := range m {
 			if !allowed[key] {
-				return nil, fmt.Errorf("decisions[%d] contains unknown field %q; use the required boolean field due", index, key)
+				message := fmt.Sprintf("decisions[%d] contains unknown field %q. Allowed fields: %s; module, due, and reason are required",
+					index, key, strings.Join(pulseDecisionFields, ", "))
+				if suggestion := pulseDecisionFieldSuggestion(key); suggestion != "" {
+					if suggestion == "due" {
+						message += fmt.Sprintf("; use the required boolean field %s", suggestion)
+					} else {
+						message += fmt.Sprintf("; did you mean %q?", suggestion)
+					}
+				}
+				return nil, fmt.Errorf("%s", message)
 			}
 		}
 		decision := PulseWorklistDecision{}
@@ -2288,7 +2418,8 @@ func pulseWorklistDecisionsFromArgs(raw interface{}) ([]PulseWorklistDecision, e
 func requiredStringToolArg(m map[string]interface{}, key string, index int) (string, error) {
 	value, ok := m[key].(string)
 	if !ok || strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("decisions[%d].%s is required and must be a non-empty string", index, key)
+		return "", fmt.Errorf("decisions[%d].%s is required and must be a non-empty string (got %s); every decision entry needs module, due, and reason",
+			index, key, pulseArgTypeName(m[key]))
 	}
 	return value, nil
 }
@@ -2300,21 +2431,46 @@ func optionalStringToolArg(m map[string]interface{}, key string, index int) (str
 	}
 	value, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("decisions[%d].%s must be a string", index, key)
+		return "", fmt.Errorf("decisions[%d].%s must be a string (got %s)", index, key, pulseArgTypeName(raw))
 	}
 	return value, nil
+}
+
+// pulseArgTypeName describes what actually arrived for a tool argument. "must
+// be a string" alone does not say whether the caller sent a number, an object,
+// or nothing at all.
+func pulseArgTypeName(raw interface{}) string {
+	switch value := raw.(type) {
+	case nil:
+		return "nothing"
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return "an empty string"
+		}
+		return "a string"
+	case bool:
+		return "a boolean"
+	case float64, int, int64:
+		return "a number"
+	case []interface{}:
+		return "an array"
+	case map[string]interface{}:
+		return "an object"
+	default:
+		return fmt.Sprintf("%T", raw)
+	}
 }
 
 func strictStringSliceToolArg(raw interface{}) ([]string, error) {
 	arr, ok := raw.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("must be an array of strings")
+		return nil, fmt.Errorf("must be an array of strings, got %s", pulseArgTypeName(raw))
 	}
 	out := make([]string, 0, len(arr))
 	for index, item := range arr {
 		value, ok := item.(string)
 		if !ok {
-			return nil, fmt.Errorf("item %d must be a string", index)
+			return nil, fmt.Errorf("item %d must be a string, got %s", index, pulseArgTypeName(item))
 		}
 		if value = strings.TrimSpace(value); value != "" {
 			out = append(out, value)
@@ -2332,11 +2488,11 @@ func strictIntToolArg(raw interface{}) (int, error) {
 	case float64:
 		integer := int(value)
 		if float64(integer) != value {
-			return 0, fmt.Errorf("must be an integer")
+			return 0, fmt.Errorf("must be a whole number of runs, got the fractional value %v", value)
 		}
 		return integer, nil
 	default:
-		return 0, fmt.Errorf("must be an integer")
+		return 0, fmt.Errorf("must be a non-negative integer number of runs, got %s", pulseArgTypeName(raw))
 	}
 }
 

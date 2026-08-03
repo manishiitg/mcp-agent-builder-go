@@ -14,7 +14,7 @@ import { useAppStore } from '../../stores/useAppStore'
 import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
-import { isExternalReadOnlyWorkflowSession } from '../../utils/workflowSessionKinds'
+import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -1387,7 +1387,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       // Without this, chatTabs is empty and dedup fails → duplicate tabs.
       await waitForChatStoreHydration()
       try {
-        const { createChatTab, switchTab, getTabEvents, setTabStreaming } = useChatStore.getState()
+        const { closeTab, createChatTab, switchTab, getTabEvents, setTabStreaming } = useChatStore.getState()
         const { getPhaseById } = useWorkflowStore.getState()
         const getExistingWorkflowTabsForPreset = () =>
           Object.values(useChatStore.getState().chatTabs)
@@ -1400,8 +1400,25 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         // 1. Get active (running) sessions from in-memory cache
         //    Include both 'workflow' (execution) and 'workflow_phase' (workflow builder, plan-improvement)
         const activeSessions = await useChatStore.getState().getActiveSessions()
+        const internalChildSessionIds = new Set(activeSessions
+          .filter(session => isInternalChildSession({
+            parentSessionId: session.parent_session_id,
+            sessionKind: session.session_kind,
+          }))
+          .map(session => session.session_id))
+
+        // A previous frontend may already have persisted an internal reviewer as
+        // a top-level tab. Remove that UI projection without stopping the child;
+        // the backend runtime and its explicit parent link remain intact.
+        for (const tab of Object.values(useChatStore.getState().chatTabs)) {
+          if (tab.metadata?.mode === 'workflow' && tab.sessionId && internalChildSessionIds.has(tab.sessionId)) {
+            await closeTab(tab.tabId, false)
+          }
+        }
+
         const activeWorkflowSessions = activeSessions.filter(s =>
-          s.agent_mode === 'workflow' || s.agent_mode === 'workflow_phase'
+          !internalChildSessionIds.has(s.session_id) &&
+          (s.agent_mode === 'workflow' || s.agent_mode === 'workflow_phase')
         )
 
         // 2. Skip DB session restore — only active (running) sessions should auto-create tabs.

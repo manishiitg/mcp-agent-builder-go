@@ -169,6 +169,42 @@ func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
 	}
 }
 
+func TestGetPulseAgentMetricsAPIExposesReviewersAndFixer(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	ctx := context.Background()
+	for _, metric := range []step_based_workflow.PulseAgentMetricRecord{
+		{ExecutionID: "review-1-exec", PulseRunID: "pulse-1", ReviewRunID: "review-1", Module: "strategy_auditor", Role: "reviewer", Status: "completed", DurationMS: 1200},
+		{ExecutionID: "fixer-1-exec", PulseRunID: "pulse-1", ReviewRunID: "review-1", Module: "pulse_fixer", Role: "fixer", Status: "completed", DurationMS: 2400},
+	} {
+		if err := step_based_workflow.RecordPulseAgentMetric(ctx, workspacePath, metric); err != nil {
+			t.Fatalf("record metric: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/workflow/pulse-agent-metrics?workspace_path=Workflow%2Fexample&pulse_run_id=pulse-1", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetPulseAgentMetrics(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Success bool                                         `json:"success"`
+		Metrics []step_based_workflow.PulseAgentMetricRecord `json:"metrics"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.Success || len(body.Metrics) != 2 {
+		t.Fatalf("response = %#v", body)
+	}
+	if body.Metrics[0].Role != "fixer" || body.Metrics[1].Role != "reviewer" {
+		t.Fatalf("newest metrics order/content = %#v", body.Metrics)
+	}
+}
+
 func TestPulseWorklistRequiresCompleteModuleSet(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

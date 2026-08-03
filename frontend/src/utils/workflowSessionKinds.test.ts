@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isExternalReadOnlyWorkflowSession, isScheduledSession } from './workflowSessionKinds'
+import { isExternalReadOnlyWorkflowSession, isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 
 describe('isExternalReadOnlyWorkflowSession', () => {
   it.each([
@@ -26,5 +26,18 @@ describe('isExternalReadOnlyWorkflowSession', () => {
     expect(isScheduledSession({ sessionId: 'schedule-cron--abc_123' })).toBe(true)
     expect(isScheduledSession({ sessionId: 'session-123', triggeredBy: 'cron' })).toBe(true)
     expect(isScheduledSession({ sessionId: 'bot-slack-123', botPlatform: 'slack' })).toBe(false)
+  })
+})
+
+describe('isInternalChildSession', () => {
+  it('recognizes an explicitly parented Pulse reviewer', () => {
+    expect(isInternalChildSession({
+      parentSessionId: 'pulse-root-1',
+      sessionKind: 'pulse_reviewer',
+    })).toBe(true)
+  })
+
+  it('does not hide a top-level Pulse or workflow session', () => {
+    expect(isInternalChildSession({ sessionKind: 'pulse' })).toBe(false)
   })
 })

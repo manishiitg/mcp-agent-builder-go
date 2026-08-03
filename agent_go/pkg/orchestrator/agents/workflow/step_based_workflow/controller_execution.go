@@ -2489,12 +2489,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 
 									learningsGlobalFileMutex.Lock()
 									defer learningsGlobalFileMutex.Unlock()
+									learningBeforeRef := hcpo.snapshotCanonicalArtifactRef(ctx, globalLearningsPath)
 									hcpo.GetLogger().Info(fmt.Sprintf("🧠 Direct-learnings: firing one-shot continuation for step %d (objective length=%d)", stepIndex+1, len(learnObjective)))
 									hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusRunning, "", executionAgent)
 									if ba := executionAgent.GetBaseAgent(); ba != nil {
 										learnResult, learnHistory, learnErr := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "learnings", executionAgent, func() (string, []llmtypes.MessageContent, error) {
 											return ba.Execute(ctx, learningsTurnMsg, executionConversationHistory, "", false)
 										})
+										learningAfterRef := hcpo.snapshotCanonicalArtifactRef(context.Background(), globalLearningsPath)
+										if learningAfterRef != learningBeforeRef {
+											LogCanonicalArtifactChange(context.Background(), hcpo.GetWorkspacePath(), "runtime_learning_update",
+												"Step post-completion turn changed reusable runtime guidance.",
+												[]PlanFieldChange{{StepID: step.GetID(), Field: "artifact_tree", OldValue: learningBeforeRef, NewValue: learningAfterRef}},
+												hcpo.ReadWorkspaceFile, hcpo.WriteWorkspaceFile, hcpo.GetLogger())
+										}
 										if learnErr != nil {
 											hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Direct-learnings continuation failed for step %d: %v (accepting step anyway)", stepIndex+1, learnErr))
 											directLearningsSummary = fmt.Sprintf("CONCERNS: learnings contribution failed for this run: %v\nSTATUS: COMPLETED", learnErr)
@@ -3132,6 +3140,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		if stepID == "" {
 			stepID = fmt.Sprintf("step-%d", i+1) // Fallback to step index if no ID
 		}
+		stepExecCtx := executionContextForStep(execCtx, stepID)
 		if bridge := hcpo.GetContextAwareBridge(); bridge != nil {
 			if stepBridge, ok := bridge.(interface {
 				SetCurrentStepContext(stepID, stepType string)
@@ -3171,7 +3180,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		// Check if this is a routing step
 		if isRoutingStep(step) {
 			hcpo.GetLogger().Info(fmt.Sprintf("🔀 Starting routing step execution: %s", step.GetTitle()))
-			selectedRouteID, _, err := hcpo.executeRoutingStep(ctx, step, i, progress, previousContextFiles, iteration, execCtx, breakdownSteps, previousExecutionResults)
+			selectedRouteID, _, err := hcpo.executeRoutingStep(ctx, step, i, progress, previousContextFiles, iteration, stepExecCtx, breakdownSteps, previousExecutionResults)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Routing step %d canceled", i+1))
@@ -3258,7 +3267,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			// Generate step path for todo task step
 			todoTaskStepPath := fmt.Sprintf("step-%d", i+1)
 
-			successCriteriaMet, nextStepID, err := hcpo.executeTodoTaskStep(ctx, step, i, progress, previousContextFiles, previousExecutionResults, iteration, execCtx, breakdownSteps, todoTaskStepPath)
+			successCriteriaMet, nextStepID, err := hcpo.executeTodoTaskStep(ctx, step, i, progress, previousContextFiles, previousExecutionResults, iteration, stepExecCtx, breakdownSteps, todoTaskStepPath)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Todo task step %d canceled", i+1))
@@ -3313,11 +3322,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			callOptions := messageSequenceCallOptions{
 				Source: "configured_queue",
 			}
-			if execCtx != nil {
-				callOptions.Restart = execCtx.MessageSequenceRestart
-				if strings.TrimSpace(execCtx.WorkshopHumanInput) != "" {
+			if stepExecCtx != nil {
+				callOptions.Restart = stepExecCtx.MessageSequenceRestart
+				if strings.TrimSpace(stepExecCtx.WorkshopHumanInput) != "" {
 					callOptions.Source = "builder_resume"
-					callOptions.ReentryMessage = execCtx.WorkshopHumanInput
+					callOptions.ReentryMessage = stepExecCtx.WorkshopHumanInput
 				}
 			}
 			// A standalone execute_step already owns an exec-<step>-<timestamp>
@@ -3329,7 +3338,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 			stepScopedCtx := virtualtools.WithBackgroundAgentID(ctx, stepExecID)
 			stepScopedCtx = context.WithValue(stepScopedCtx, orchestrator_events.ParentExecutionIDKey, stepExecID)
-			executionResult, _, err := hcpo.executeMessageSequenceStep(stepScopedCtx, sequenceExecutionStep, i, stepPath, progress, execCtx, breakdownSteps, callOptions)
+			executionResult, _, err := hcpo.executeMessageSequenceStep(stepScopedCtx, sequenceExecutionStep, i, stepPath, progress, stepExecCtx, breakdownSteps, callOptions)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Message sequence step %d canceled", i+1))
@@ -3390,7 +3399,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 				}
 			}
 
-			_, err := hcpo.executeHumanInputStep(ctx, step, i, progress, previousContextFiles, execCtx, breakdownSteps)
+			_, err := hcpo.executeHumanInputStep(ctx, step, i, progress, previousContextFiles, stepExecCtx, breakdownSteps)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Human input step %d canceled", i+1))
@@ -3517,7 +3526,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			previousContextFiles,
 			progress,
 			false, // isNestedExecution = false
-			execCtx,
+			stepExecCtx,
 			breakdownSteps,           // allSteps
 			false,                    // isSubAgent = false (regular step)
 			previousExecutionResults, // Execution outputs from previous steps

@@ -10,7 +10,7 @@ import { useRunningWorkflowsStore } from '../stores/useRunningWorkflowsStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { liveWorkflowTerminalSessionForPreset } from './workflowTerminalActivity'
-import { isScheduledSession } from './workflowSessionKinds'
+import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -116,6 +116,10 @@ export function pickWorkflowActiveSession(
   tabs: Record<string, ChatTab>,
 ): ActiveSessionInfo | undefined {
   return sessions
+    .filter(session => !isInternalChildSession({
+      parentSessionId: session.parent_session_id,
+      sessionKind: session.session_kind,
+    }))
     .filter(isVisibleActiveSession)
     .filter(session => workflowSessionMatchesPreset(session, preset, tabs))
     .sort((a, b) => {

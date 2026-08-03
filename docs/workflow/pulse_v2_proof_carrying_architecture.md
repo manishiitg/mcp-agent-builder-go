@@ -2456,6 +2456,15 @@ tables `pulse_interventions`, `pulse_intervention_sources`,
 section are projections. Historical assessments remain append-only, while the
 popup summarizes only the latest assessment per intervention.
 
+Reviewer/Fixer resource measurement is also implemented. Each Pulse child is
+joined to the central cost ledger by its exact execution ID and persisted in
+workflow-local `pulse_agent_metrics`, including queue time, run time, calls,
+input/output/reasoning/cache tokens, model breakdown, cost, and explicit
+coverage status. The Pulse API and popup expose per-agent and latest-pass
+rollups. This closes the earlier `todo_task:0` attribution gap and supplies the
+review-efficiency half of the longitudinal scorecard; goal impact remains a
+separate intervention-level question below.
+
 Pulse must measure more than whether one review ran or one fix passed. The
 useful question is whether the accumulated review/fix cycle improves workflow
 reliability and closes the gap to the workflow's durable success criteria over

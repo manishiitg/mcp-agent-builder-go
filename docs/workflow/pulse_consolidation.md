@@ -69,6 +69,12 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    reviews, fix/verification detail, and finalization status. Raw Markdown is a
    secondary evidence view. The popup does not extract or display fragments from
    `builder/improve.html`.
+   Every reviewer and consolidated Fixer also gets one automatic
+   `pulse_agent_metrics` row keyed by its runtime execution ID. It separates
+   queue delay from agent duration and snapshots exact LLM calls, input/output,
+   cache read/write, reasoning tokens, model breakdown, cost, and measurement
+   coverage from the central cost ledger. Review agents do not self-report this
+   data.
 4. **Longitudinal impact ledger.** The Fixer records interventions, immutable
    per-run success-criterion observations, and append-only before/after impact
    assessments in SQLite. Reliability, measurement, and presentation work are
@@ -133,6 +139,14 @@ their shared barrier. Background agents now support native ordered message
 sequences, so Workflow Review keeps one conversation, MCP session, folder guard,
 and isolated working directory across its seven turns.
 
+The six follow-up messages are backend-owned defaults for
+`role=reviewer, module=workflow_review`; the scheduler no longer pastes their
+JSON into the launcher user's message. Pulse reviewer launcher sessions carry
+an explicit `parent_session_id` and `session_kind=pulse_reviewer`. Refresh
+recovery and the global activity monitor keep those internal children out of
+the top-level chat list, remove child tabs persisted by older frontends without
+stopping their runtimes, and retain the Pulse parent as the selected session.
+
 ### One writer and one finding lifecycle (2026-08-01 to 2026-08-03)
 
 There is one consolidated Fixer, not one Fixer per reviewer. Reviewers are
@@ -152,6 +166,17 @@ producer remains `changed_unverified` until a later workflow run exercises it.
 On later passes, the relevant review lens checks eligible pending attempts; it
 does not create generic verification markers for unrelated retained findings.
 
+### One backup at finalization (2026-08-03)
+
+The separate agent-driven pre-backup stage was removed. It duplicated the
+ordered finalizer backup, spent an additional agent turn whenever any review was
+due, and could prevent read-only reviews from running when the preliminary
+backup failed. Pulse now performs backup once, in the finalizer after reviews,
+fixes, and dashboard projection, so the durable backup captures the completed
+post-Pulse state. The legacy five-step schedule detector still recognizes old
+`pre backup` message queues only so they can be migrated; it does not schedule
+or execute a preliminary backup.
+
 ### Measure interventions across later runs (2026-08-03)
 
 Pulse impact is measured at the intervention level, not attributed directly to
@@ -161,6 +186,23 @@ later runs, and appends improved/regressed/inconclusive/awaiting assessments.
 Reliability, measurement quality, presentation maintenance, and direct goal
 impact remain separate categories so closing many bugs cannot masquerade as
 goal progress.
+
+### Measure every Pulse agent by execution identity (2026-08-03)
+
+Reviewer and Fixer efficiency is now durable rather than reconstructed from
+scheduler logs. The backend assigns each child one execution ID, the central
+cost observer attributes immutable LLM events to that ID, and completion
+snapshots the matching rows into workflow-local `pulse_agent_metrics`. Parallel
+reviewers therefore cannot be combined under `todo_task:0`, and a Fixer cannot
+be mistaken for a reviewer. A missing ledger or missing attribution is stored
+as `usage_status=unavailable` with a reason; it is never rendered as zero usage.
+
+`GET /api/workflow/pulse-agent-metrics` supports run, module, and role filters.
+`GET /api/workflow/pulse-reviews` joins the matching reviewer measurement. The
+Pulse popup shows the latest pass wall time, summed agent time, calls, tokens,
+cache, and cost, and each reviewer evidence view shows its own numbers. Wall
+time and summed agent time are deliberately separate because concurrent agents
+can make the sum larger than elapsed clock time.
 
 ### Rejected completed reviews are preserved (2026-08-03)
 

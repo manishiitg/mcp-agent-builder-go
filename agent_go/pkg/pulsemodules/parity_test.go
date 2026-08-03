@@ -95,7 +95,7 @@ func TestNormalizeAndStepLabelRoundTrip(t *testing.T) {
 		}
 	}
 	// Non-module stages must not resolve to a module.
-	for _, notAModule := range []string{"gate", "finalize", "pre-backup", ""} {
+	for _, notAModule := range []string{"gate", "finalize", ""} {
 		if got := ForStepLabel(notAModule); got != "" {
 			t.Fatalf("ForStepLabel(%q) = %q, want \"\"", notAModule, got)
 		}

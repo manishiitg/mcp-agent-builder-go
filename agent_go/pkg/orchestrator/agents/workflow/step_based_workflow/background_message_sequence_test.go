@@ -56,6 +56,24 @@ func TestParseBackgroundMessageSequence(t *testing.T) {
 	}
 }
 
+func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing.T) {
+	items, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"role":   "reviewer",
+		"module": "workflow_review",
+	})
+	if err != nil {
+		t.Fatalf("parse default workflow review sequence: %v", err)
+	}
+	wantIDs := []string{"correctness", "artifact-drift", "report-eval", "stores", "llm-ops", "consolidate"}
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("default workflow review IDs = %#v, want %#v", gotIDs, wantIDs)
+	}
+}
+
 func TestParseBackgroundMessageSequenceRejectsDuplicateIDs(t *testing.T) {
 	_, err := parseBackgroundMessageSequence(map[string]interface{}{
 		"message_sequence": []interface{}{
@@ -89,6 +107,29 @@ func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T)
 	}
 	if template["Instruction"] != "stale" {
 		t.Fatalf("caller template was mutated: %#v", template)
+	}
+}
+
+func TestExecuteDefaultWorkflowReviewerSequenceUsesSevenOrderedTurns(t *testing.T) {
+	items, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"role":   "reviewer",
+		"module": "workflow_review",
+	})
+	if err != nil {
+		t.Fatalf("parse default workflow reviewer sequence: %v", err)
+	}
+	agent := &recordingBackgroundSequenceAgent{}
+	if _, err := executeBackgroundMessageSequence(context.Background(), agent, nil, "opening evidence map", items); err != nil {
+		t.Fatalf("execute default workflow reviewer sequence: %v", err)
+	}
+	if len(agent.instructions) != 7 {
+		t.Fatalf("reviewer turns = %d, want opening + 6 follow-ups", len(agent.instructions))
+	}
+	if agent.instructions[0] != "opening evidence map" || !strings.HasPrefix(agent.instructions[6], "Now reconcile every lens checkpoint") {
+		t.Fatalf("reviewer turn order was not preserved: %#v", agent.instructions)
+	}
+	if want := []int{0, 1, 2, 3, 4, 5, 6}; !reflect.DeepEqual(agent.historyLens, want) {
+		t.Fatalf("reviewer history lengths = %#v, want %#v", agent.historyLens, want)
 	}
 }
 

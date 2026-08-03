@@ -11,6 +11,7 @@ import { isLocalActivityFallbackTab } from '../utils/activityFallback'
 import { hasIdleAliveCodingAgent, hasLiveBackgroundAgents, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
+import { isInternalChildSession } from '../utils/workflowSessionKinds'
 
 // This matches useChatStore's active-session cache TTL. A longer store TTL also
 // increases the monitor's effective freshness window and should be changed here.
@@ -183,7 +184,12 @@ export const GlobalActivityMonitor: React.FC = () => {
   }, [getActiveSessions])
 
   const activeSessions = useMemo(() => {
-    return activeSessionsCache.filter(isActiveSession)
+    return activeSessionsCache.filter(session =>
+      !isInternalChildSession({
+        parentSessionId: session.parent_session_id,
+        sessionKind: session.session_kind,
+      }) && isActiveSession(session)
+    )
   }, [activeSessionsCache])
 
   const currentSessionId = useMemo(() => {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,79 @@ import (
 )
 
 var workflowExecutionIDCounter atomic.Uint64
+
+// parseWorkflowStepStringMap validates a JSON object whose keys are workflow
+// step IDs and whose values are strings. MCP argument decoding normally yields
+// map[string]interface{}, while direct/internal callers may supply
+// map[string]string; both are valid and neither may be silently discarded.
+func parseWorkflowStepStringMap(args map[string]interface{}, name string) (map[string]string, error) {
+	raw, exists := args[name]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+
+	values := make(map[string]string)
+	add := func(rawKey string, rawValue interface{}) error {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			return fmt.Errorf("%s entries must have non-empty step IDs", name)
+		}
+		value, ok := rawValue.(string)
+		if !ok {
+			return fmt.Errorf("%s[%q] must be a string", name, rawKey)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("%s[%q] must be a non-empty string", name, rawKey)
+		}
+		if _, duplicate := values[key]; duplicate {
+			return fmt.Errorf("%s contains duplicate step ID %q after trimming whitespace", name, key)
+		}
+		values[key] = value
+		return nil
+	}
+
+	switch decoded := raw.(type) {
+	case map[string]interface{}:
+		for key, value := range decoded {
+			if err := add(key, value); err != nil {
+				return nil, err
+			}
+		}
+	case map[string]string:
+		for key, value := range decoded {
+			if err := add(key, value); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, fmt.Errorf("%s must be an object keyed by step ID", name)
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	return values, nil
+}
+
+func unknownWorkflowStepInputIDs(steps []PlanStepInterface, inputs map[string]string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		if step != nil {
+			known[strings.TrimSpace(step.GetID())] = struct{}{}
+		}
+	}
+	unknown := make([]string, 0)
+	for stepID := range inputs {
+		if _, ok := known[stepID]; !ok {
+			unknown = append(unknown, stepID)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
 
 // ---------------------------------------------------------------------------
 // Chat-mode system prompt templates for debugger phases
@@ -1655,7 +1729,7 @@ func RegisterRunFullWorkflowTool(
 ) {
 	if err := mcpAgent.RegisterCustomTool(
 		"run_full_workflow",
-		"Execute the complete workflow: load the plan, resolve variables, and run all steps for a single variable group. Always uses iteration-0 and starts from the beginning. Runs in background - you will be notified when complete. Use send_step_message with the returned execution_id to steer whichever workflow child-agent turn is currently active. If the plan contains human_input steps on the selected path, you MUST provide human_inputs with a response for each one. If the plan contains deterministic routing steps and the user's request already selected a branch, pass route_selections keyed by routing step ID. Pass disable_eval=true to skip the automatic evaluation pass after the workflow completes.",
+		"Execute the complete workflow: load the plan, resolve variables, and run all steps for a single variable group. Always uses iteration-0 and starts from the beginning. Runs in background - you will be notified when complete. Use send_step_message with the returned execution_id to steer whichever workflow child-agent turn is currently active. Use human_inputs for run-specific instructions or responses, keyed by the exact target step ID; each value is visible only to that step. If the plan contains human_input steps on the selected path, you MUST provide a response for each one. If the plan contains deterministic routing steps and the user's request already selected a branch, pass route_selections keyed by routing step ID. Pass disable_eval=true to skip the automatic evaluation pass after the workflow completes.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -1665,7 +1739,7 @@ func RegisterRunFullWorkflowTool(
 				},
 				"human_inputs": map[string]interface{}{
 					"type":        "object",
-					"description": "Responses for human_input steps, keyed by step ID. Required for human_input steps on the selected route. Example: {\"ask-target\": \"Mar26\"}. Do not use this for routing steps; use route_selections instead.",
+					"description": "Per-step run instructions or human_input responses, keyed by exact step ID. Each value is delivered only to that step. Required for human_input steps on the selected route. Example: {\"search-jobs\": \"Use only Best Matches and My Feed\", \"ask-target\": \"Mar26\"}. Do not use this for routing choices; use route_selections instead.",
 					"additionalProperties": map[string]interface{}{
 						"type": "string",
 					},
@@ -1704,17 +1778,12 @@ func RegisterRunFullWorkflowTool(
 			enabledGroupNames := []string{groupName}
 			disableEval, _ := args["disable_eval"].(bool)
 
-			// Parse human_inputs (optional map of step_id → response)
-			var humanInputs map[string]string
-			if hi, ok := args["human_inputs"]; ok && hi != nil {
-				if hiMap, ok := hi.(map[string]interface{}); ok {
-					humanInputs = make(map[string]string, len(hiMap))
-					for k, v := range hiMap {
-						if s, ok := v.(string); ok {
-							humanInputs[k] = s
-						}
-					}
-				}
+			// Parse human_inputs strictly. The old assertion silently discarded
+			// alternate decoded map shapes and non-string values, allowing a run
+			// to continue without the operator's safety constraint.
+			humanInputs, parseErr := parseWorkflowStepStringMap(args, "human_inputs")
+			if parseErr != nil {
+				return parseErr.Error(), nil
 			}
 			// Parse route_selections (optional map of routing_step_id -> route_id or next_step_id)
 			var routeSelections map[string]string
@@ -1759,6 +1828,9 @@ func RegisterRunFullWorkflowTool(
 				return formatMissingDependencies(workflowLabel, missing, cfg.MCPConfigPath), nil
 			}
 			if session.controller.approvedPlan != nil {
+				if unknown := unknownWorkflowStepInputIDs(session.controller.approvedPlan.Steps, humanInputs); len(unknown) > 0 {
+					return fmt.Sprintf("human_inputs contains unknown step ID(s): %s. Read the current plan and key each value by an exact step ID.", strings.Join(unknown, ", ")), nil
+				}
 				var missingSteps []string
 				var legacyRoutingSteps []string
 				validationSteps := session.controller.approvedPlan.Steps

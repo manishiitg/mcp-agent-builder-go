@@ -152,7 +152,7 @@ INSERT OR IGNORE INTO cost_events (
 	}
 }
 
-func (s *sqliteLedger) summarize(from, to string) (*Summary, error) {
+func (s *sqliteLedger) summarize(from, to, executionID string) (*Summary, error) {
 	fromInclusive, toExclusive, err := costDateBounds(from, to)
 	if err != nil {
 		return nil, err
@@ -170,8 +170,8 @@ SELECT event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
        cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
        pricing_source, pricing_version, tool_name, operation_metadata_json
 FROM cost_events`
-	where := make([]string, 0, 2)
-	args := make([]interface{}, 0, 2)
+	where := make([]string, 0, 3)
+	args := make([]interface{}, 0, 3)
 	if fromInclusive != "" {
 		where = append(where, "occurred_at >= ?")
 		args = append(args, fromInclusive)
@@ -179,6 +179,10 @@ FROM cost_events`
 	if toExclusive != "" {
 		where = append(where, "occurred_at < ?")
 		args = append(args, toExclusive)
+	}
+	if executionID = strings.TrimSpace(executionID); executionID != "" {
+		where = append(where, "execution_id = ?")
+		args = append(args, executionID)
 	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")

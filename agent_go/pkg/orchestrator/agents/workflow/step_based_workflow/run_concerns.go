@@ -209,15 +209,16 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 		return 0, err
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	recorded, err := recordRunConcernLinesAt(
+	fingerprints := pulseFindingFingerprintsByConcern(summary, stepID)
+	recorded, err := recordRunConcernLinesAtWithFingerprints(
 		ctx, db, runFolder, groupName, stepID, phase, lines,
-		observedAt,
+		observedAt, fingerprints,
 	)
 	if err != nil {
 		return recorded, err
 	}
 	if err := recordPulseFindingDetailsAt(
-		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines,
+		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines, fingerprints,
 	); err != nil {
 		return recorded, err
 	}
@@ -231,12 +232,27 @@ func recordRunConcernLinesAt(
 	lines []string,
 	observedAt string,
 ) (int, error) {
+	return recordRunConcernLinesAtWithFingerprints(ctx, db, runFolder, groupName, stepID, phase, lines, observedAt, nil)
+}
+
+func recordRunConcernLinesAtWithFingerprints(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	runFolder, groupName, stepID, phase string,
+	lines []string,
+	observedAt string,
+	fingerprints map[string]string,
+) (int, error) {
 	if strings.TrimSpace(observedAt) == "" {
 		observedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	recorded := 0
 	for _, text := range lines {
-		fp := concernFingerprint(stepID, text)
+		normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
+		fp := fingerprints[normalizedText]
+		if fp == "" {
+			fp = concernFingerprint(stepID, text)
+		}
 		if stepID == pulsemodules.WorkflowReviewID {
 			if historical := existingWorkflowReviewFingerprint(ctx, db, text); historical != "" {
 				fp = historical

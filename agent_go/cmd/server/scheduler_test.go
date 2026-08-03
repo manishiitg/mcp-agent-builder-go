@@ -2251,12 +2251,12 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("selected labels = %#v, want %#v", got, want)
 	}
 	for index, module := range []string{pulseModuleWorkflowReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
-		query := steps[index+1].query
+		query := steps[index].query
 		for _, required := range []string{
 			`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`,
 			`module="` + module + `"`,
@@ -2402,11 +2402,11 @@ func TestGateDurableWorklistRoutesModulesWithoutHTML(t *testing.T) {
 
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	if got, want := strings.Join(postRunStepLabels(steps), ","), "pre-backup,workflow-review,pulse-fixer,dashboard,finalize"; got != want {
+	if got, want := strings.Join(postRunStepLabels(steps), ","), "workflow-review,pulse-fixer,dashboard,finalize"; got != want {
 		t.Fatalf("selected labels = %q, want %q", got, want)
 	}
-	if !strings.Contains(steps[1].query, `module="workflow_review"`) {
-		t.Fatalf("durable due module was not routed: %s", steps[1].query)
+	if !strings.Contains(steps[0].query, `module="workflow_review"`) {
+		t.Fatalf("durable due module was not routed: %s", steps[0].query)
 	}
 }
 
@@ -2430,15 +2430,16 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 			t.Fatalf("independent prompt missing %q:\n%s", required, step.query)
 		}
 	}
-	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — WORKFLOW REVIEW", "one continuous context"} {
+	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — WORKFLOW REVIEW", "backend attaches the canonical", "one agent, one MCP session"} {
 		if !strings.Contains(step.query, required) {
 			t.Fatalf("independent prompt missing module brief %q", required)
 		}
 	}
-	for _, required := range []string{`message_sequence=[`, `"id":"correctness"`, `"id":"artifact-drift"`, `"id":"report-eval"`, `"id":"stores"`, `"id":"llm-ops"`, `"id":"consolidate"`, "one agent, one MCP session"} {
-		if !strings.Contains(step.query, required) {
-			t.Fatalf("independent workflow review prompt missing sequence contract %q", required)
-		}
+	if strings.Contains(step.query, `message_sequence=[`) {
+		t.Fatalf("scheduler duplicated the backend-owned sequence in its user message:\n%s", step.query)
+	}
+	if len(step.query) > 3000 {
+		t.Fatalf("workflow reviewer launcher prompt is %d bytes, want <= 3000", len(step.query))
 	}
 	for _, forbidden := range []string{"PULSE CONSOLIDATED REVIEW", "batches of at most two"} {
 		if strings.Contains(step.query, forbidden) {
@@ -2447,11 +2448,22 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 	}
 }
 
+func TestApplyPulseReviewerChildSessionPinsParentAndKind(t *testing.T) {
+	req := map[string]interface{}{"query": "review"}
+	applyPulseReviewerChildSession(req, " pulse-root-1 ")
+
+	if got := req["parent_session_id"]; got != "pulse-root-1" {
+		t.Fatalf("parent_session_id = %#v, want pulse-root-1", got)
+	}
+	if got := req["session_kind"]; got != "pulse_reviewer" {
+		t.Fatalf("session_kind = %#v, want pulse_reviewer", got)
+	}
+}
+
 func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	intro := postRunMonitorIntro("trigger=manual", "Workflow/demo", "pulse-run-1", "completed", "runs/iteration-0")
 	archive := postRunMonitorArchiveStep(pulseImproveArchiveAssessment{Due: true, TimelineEntries: 24, RecentRunRows: 7}).query
 	gate := postRunMonitorGateStep("pulse-run-1", "runs/iteration-0", "completed").query
-	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
 	moduleStep, ok := postRunMonitorIndependentModuleStep("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", pulseModuleWorkflowReview)
 	if !ok {
 		t.Fatal("workflow review module step was not found")
@@ -2460,8 +2472,7 @@ func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	dashboard := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "dashboard")
 
 	for name, prompt := range map[string]string{
-		"intro":      intro,
-		"pre-backup": preBackup,
+		"intro": intro,
 	} {
 		if strings.TrimSpace(prompt) == "" {
 			t.Fatalf("%s scheduler prompt is empty", name)
@@ -2518,14 +2529,8 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 	}
 }
 
-func TestPulseBackupRunsOnlyInParentTurn(t *testing.T) {
-	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
+func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
 	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
-	for _, required := range []string{"directly in this parent turn", "never delegate Git/backup work", `read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}])`} {
-		if !strings.Contains(preBackup, required) {
-			t.Fatalf("pre-backup message missing parent-only backup guard %q", required)
-		}
-	}
 	if !strings.Contains(finalizer, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-finalizer.md"}])`) {
 		t.Fatalf("finalizer does not load its focused contract: %s", finalizer)
 	}
@@ -2614,7 +2619,7 @@ func TestSelectedPostRunMonitorModuleStepsFallsBackForPartialWorklist(t *testing
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "workflow-review", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"workflow-review", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}
@@ -2646,7 +2651,7 @@ func TestSelectedPostRunMonitorModuleStepsPartialWorklistKeepsDueGoalAdvisor(t *
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"goal-advisor", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}

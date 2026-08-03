@@ -46,8 +46,10 @@ type ExecutionOptions struct {
 	// Variable group execution options (for batch execution with multiple groups)
 	EnabledGroupNames []string `json:"enabled_group_names,omitempty"` // Group names to execute (if empty, uses groups' enabled flags)
 
-	// Human input overrides: per-step responses for human_input steps (keyed by step ID).
-	// When SkipHumanInput is true, these take priority over variableValues fallback.
+	// Human input overrides, keyed by step ID. Human-input steps consume the
+	// value as their response; executable steps receive it as run-scoped prompt
+	// context. When SkipHumanInput is true, human-input responses take priority
+	// over the variableValues fallback.
 	HumanInputs map[string]string `json:"human_inputs,omitempty"`
 
 	// RouteSelections overrides routing steps deterministically by step ID.
@@ -84,8 +86,9 @@ type ExecutionContext struct {
 	// learnings, and metadata is unchanged.
 	ArtifactFolderNameOverride string
 
-	// Human input overrides: per-step responses for human_input steps (keyed by step ID).
-	// Propagated from ExecutionOptions.HumanInputs to controller.humanInputOverrides.
+	// Human input overrides, keyed by step ID. Propagated from
+	// ExecutionOptions.HumanInputs and scoped to the matching step before it is
+	// dispatched. This must never be applied to the shared context directly.
 	HumanInputs map[string]string
 
 	// WorkshopHumanInput is the single-step response the builder agent supplies via

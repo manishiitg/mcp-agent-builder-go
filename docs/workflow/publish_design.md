@@ -182,7 +182,7 @@ manually before anything runs unattended**:
 Publish rides the **same cron-driven post-run Pulse pass as Backup** — it's one more step in
 the post-run steward, not a separate hook:
 
-> back up → triage → fix → **publish** → notify
+> triage → fix → back up → **publish** → notify
 
 - **Auto (cron):** on a scheduled run, if publish is **on** (and verified, and artifacts
   changed), the Pulse pass publishes — so the public dashboard/Pulse log stay current with no
@@ -232,7 +232,7 @@ with their own artifact + config.
    API methods + types. tsc clean.
 4. **Auto-republish via Pulse** — ✅ Done (2026-06-24). Added **step 4 PUBLISH** to the
    post-run Pulse pass (`scheduler.go` `runPostRunMonitor` is now 5 steps:
-   back up → triage → fix → **publish** → notify) and a matching **4b** section in
+   triage → fix → back up → **publish** → notify) and a matching **4b** section in
    `post-run-monitor.md`: re-publish only an already-**verified** destination, only when
    artifacts changed; never the first unattended publish.
 5. **Org publish** — ✅ Done (2026-06-24). Added **step 6** to `org-pulse.md`: publish
@@ -246,7 +246,7 @@ with their own artifact + config.
 - **Provider model:** provider-agnostic + agentic — no per-provider Go; `publish-strategy.md`
   holds the 3 universal deploy paths.
 - **Trigger:** **manual + auto-republish**, both from v1. Auto-republish is a **step in the
-  cron-driven Pulse post-run pass** (back up → triage → fix → publish → notify), gated on
+  cron-driven Pulse post-run pass** (triage → fix → back up → publish → notify), gated on
   publish-on + verified + source-hash-changed. Off → manual via the builder, like Backup.
 - **Setup/verify:** configure → `configured_not_verified` → manual test publish → `published`;
   auto only after verified (same as Backup).

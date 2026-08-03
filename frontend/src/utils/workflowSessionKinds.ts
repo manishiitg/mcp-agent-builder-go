@@ -2,6 +2,15 @@ export interface WorkflowSessionIdentity {
   sessionId?: string | null
   triggeredBy?: string | null
   botPlatform?: string | null
+  parentSessionId?: string | null
+  sessionKind?: string | null
+}
+
+/** Internal child sessions remain observable under their owning execution tree,
+ * but must never restore or compete as independent top-level chats. */
+export function isInternalChildSession(identity: WorkflowSessionIdentity): boolean {
+  return Boolean((identity.parentSessionId || '').trim()) ||
+    (identity.sessionKind || '').toLowerCase().trim() === 'pulse_reviewer'
 }
 
 /**

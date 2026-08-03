@@ -3,6 +3,10 @@
 Each file is one investigated defect: symptom, evidence, root cause, and what was
 changed. They are written to be re-read by someone who was not there.
 
+Cross-workflow Pulse findings that require shared runtime work are consolidated
+in [pulse_platform_issue_register.md](pulse_platform_issue_register.md). It is a
+triage register, not a replacement for the individual incident reports below.
+
 ## The agent-facing contract (2026-08-01 → 02)
 
 Nine of these were written in two days and describe one subsystem: **what an

@@ -426,6 +426,12 @@ func (bo *BaseOrchestrator) GetCurrentRunTokenUsageFile() *TokenUsageFile {
 	return newBaseOrchestratorTokenUsageStore(bo).readRun(context.Background(), bo.iterationFolder)
 }
 
+// GetRunTokenUsageFile returns the complete authoritative ledger projection
+// for a run, including every date shard the run spans.
+func (bo *BaseOrchestrator) GetRunTokenUsageFile(ctx context.Context, runFolder string) *TokenUsageFile {
+	return newBaseOrchestratorTokenUsageStore(bo).readRunAcrossDates(ctx, runFolder)
+}
+
 // GetStepModelTokenUsage reads token usage from file for a specific step and model
 func (bo *BaseOrchestrator) GetStepModelTokenUsage(phase string, step int, stepID string, modelID string) *ModelTokenUsage {
 	if bo.iterationFolder == "" {

@@ -37,6 +37,15 @@ function legacyReviewLabel(review: PulseReviewArtifact): string {
     : review.reviewRunId
 }
 
+const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+
+function formatMetricDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 1) return '0s'
+  const seconds = Math.round(milliseconds / 1000)
+  const minutes = Math.floor(seconds / 60)
+  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
+}
+
 export function PulseReviewArtifacts({
   workspacePath,
   module,
@@ -265,9 +274,28 @@ export function PulseReviewArtifacts({
       </div>
 
       {selectedReview && (
-        <div className="truncate border-b px-4 py-2 font-mono text-[10px] text-muted-foreground">
-          {selectedReview.review_run_id} · {selectedReview.artifact_bytes.toLocaleString()} bytes
-        </div>
+		<div className="border-b px-4 py-2 text-[10px] text-muted-foreground">
+		  <div className="truncate font-mono">
+		    {selectedReview.review_run_id} · {selectedReview.artifact_bytes.toLocaleString()} bytes
+		  </div>
+		  {selectedReview.metrics?.usage_status === 'captured' ? (
+		    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-sans">
+		      <span>{formatMetricDuration(selectedReview.metrics.duration_ms)}</span>
+		      {selectedReview.metrics.queue_duration_ms > 1000 && (
+		        <span>{formatMetricDuration(selectedReview.metrics.queue_duration_ms)} queued</span>
+		      )}
+		      <span>{selectedReview.metrics.llm_call_count} LLM call{selectedReview.metrics.llm_call_count === 1 ? '' : 's'}</span>
+		      <span>{compactNumber.format(selectedReview.metrics.prompt_tokens)} input</span>
+		      <span>{compactNumber.format(selectedReview.metrics.cache_read_tokens)} cached</span>
+		      <span>{compactNumber.format(selectedReview.metrics.completion_tokens)} output</span>
+		      <span>${selectedReview.metrics.total_cost_usd.toFixed(2)}</span>
+		    </div>
+		  ) : selectedReview.metrics ? (
+		    <div className="mt-1 font-sans text-amber-700 dark:text-amber-300" title={selectedReview.metrics.usage_error}>
+		      Runtime measured; token and cost usage unavailable
+		    </div>
+		  ) : null}
+		</div>
       )}
       {selectedLegacyReview && (
         <div className="truncate border-b px-4 py-2 font-mono text-[10px] text-muted-foreground">

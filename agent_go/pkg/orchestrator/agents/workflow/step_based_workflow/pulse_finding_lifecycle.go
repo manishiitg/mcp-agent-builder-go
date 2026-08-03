@@ -283,13 +283,153 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		pulseFixVerificationsSchema,
 		pulseFindingEventsSchema,
 		pulseFindingDetailsSchema,
+	} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			return err
+		}
+	}
+	if err := migrateDuplicatePulseFindingIdentities(ctx, db); err != nil {
+		return err
+	}
+	for _, ddl := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_attempts_module_run ON pulse_fix_attempts(module, pulse_run_id, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_findings_fingerprint ON pulse_fix_attempt_findings(fingerprint, attempt_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_verifications_fingerprint ON pulse_fix_verifications(fingerprint, verified_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_finding_events_fingerprint ON pulse_finding_events(fingerprint, recorded_at DESC)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pulse_finding_details_finding_id ON pulse_finding_details(lower(finding_id)) WHERE finding_id<>''`,
+		`CREATE INDEX IF NOT EXISTS idx_pulse_finding_details_target_key ON pulse_finding_details(target_key) WHERE target_key<>''`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+type pulseIdentityRow struct {
+	Fingerprint string
+	FindingID   string
+	TargetKey   string
+	StepID      string
+}
+
+func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFindingLifecycleDB) error {
+	rows, err := db.QueryContext(ctx, `SELECT d.fingerprint, d.finding_id, d.target_key, COALESCE(c.step_id, '')
+		FROM pulse_finding_details d LEFT JOIN run_concerns c USING (fingerprint)
+		ORDER BY d.fingerprint`)
+	if err != nil {
+		return err
+	}
+	var identities []pulseIdentityRow
+	for rows.Next() {
+		var row pulseIdentityRow
+		if err := rows.Scan(&row.Fingerprint, &row.FindingID, &row.TargetKey, &row.StepID); err != nil {
+			rows.Close()
+			return err
+		}
+		identities = append(identities, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, field := range []string{"finding_id"} {
+		groups := map[string][]pulseIdentityRow{}
+		for _, row := range identities {
+			value := row.FindingID
+			if field == "target_key" {
+				value = row.TargetKey
+			}
+			value = strings.TrimSpace(value)
+			if value != "" {
+				groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
+			}
+		}
+		for _, group := range groups {
+			marker := pulseFindingDetailMarker{PulseFindingDetails: PulseFindingDetails{FindingID: group[0].FindingID, TargetKey: group[0].TargetKey}}
+			target := pulseFindingCanonicalFingerprint(group[0].StepID, marker)
+			if len(group) == 1 && group[0].Fingerprint == target {
+				continue
+			}
+			if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mergePulseIdentityGroup(ctx context.Context, db pulseFindingLifecycleDB, target string, group []pulseIdentityRow) error {
+	initialized := false
+	for _, row := range group {
+		if row.Fingerprint == target {
+			initialized = true
+			break
+		}
+	}
+	for _, row := range group {
+		old := row.Fingerprint
+		if old == target {
+			continue
+		}
+		if !initialized {
+			if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO run_concerns
+				SELECT ?, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note
+				FROM run_concerns WHERE fingerprint=?`, target, old); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO pulse_finding_details
+				SELECT ?, finding_id, issue_kind, target_key, detail_json, source_run_id, updated_at
+				FROM pulse_finding_details WHERE fingerprint=?`, target, old); err != nil {
+				return err
+			}
+			initialized = true
+		} else {
+			if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+				seen_count=seen_count+COALESCE((SELECT seen_count FROM run_concerns WHERE fingerprint=?),0),
+				first_seen_at=MIN(first_seen_at, COALESCE((SELECT first_seen_at FROM run_concerns WHERE fingerprint=?),first_seen_at)),
+				last_seen_at=MAX(last_seen_at, COALESCE((SELECT last_seen_at FROM run_concerns WHERE fingerprint=?),last_seen_at)),
+				last_seen_run=COALESCE((SELECT last_seen_run FROM run_concerns WHERE fingerprint=?),last_seen_run),
+				text=COALESCE((SELECT text FROM run_concerns WHERE fingerprint=?),text),
+				status=CASE WHEN (SELECT status FROM run_concerns WHERE fingerprint=?) IN ('open','fixing','awaiting_verification','awaiting_run','external_action_required') THEN (SELECT status FROM run_concerns WHERE fingerprint=?) ELSE status END
+				WHERE fingerprint=?`, old, old, old, old, old, old, old, target); err != nil {
+				return err
+			}
+		}
+		for _, stmt := range []string{
+			`INSERT OR IGNORE INTO pulse_fix_attempt_findings SELECT attempt_id, ?, finding_id, disposition, summary FROM pulse_fix_attempt_findings WHERE fingerprint=?`,
+			`INSERT OR IGNORE INTO pulse_fix_verifications (attempt_id,fingerprint,check_text,verdict,expected,observed,evidence_json,verified_at) SELECT attempt_id,?,check_text,verdict,expected,observed,evidence_json,verified_at FROM pulse_fix_verifications WHERE fingerprint=?`,
+		} {
+			if _, err := db.ExecContext(ctx, stmt, target, old); err != nil {
+				return err
+			}
+		}
+		// Preserve every historical event. If the canonical row already has the
+		// same unique event tuple, retain the twin as an explicit migration event
+		// instead of silently dropping it through INSERT OR IGNORE.
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_finding_events
+			(fingerprint,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at)
+			SELECT ?,e.finding_id,e.pulse_run_id,e.attempt_id,e.event_type||':identity_merge:'||substr(e.fingerprint,1,8),e.summary,e.metadata_json,e.recorded_at
+			FROM pulse_finding_events e WHERE e.fingerprint=? AND EXISTS (
+				SELECT 1 FROM pulse_finding_events t WHERE t.fingerprint=? AND t.pulse_run_id=e.pulse_run_id AND t.attempt_id=e.attempt_id AND t.event_type=e.event_type
+			)`, target, old, target); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_finding_events
+			(fingerprint,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at)
+			SELECT ?,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at FROM pulse_finding_events WHERE fingerprint=?`, target, old); err != nil {
+			return err
+		}
+		for _, stmt := range []string{
+			`DELETE FROM pulse_fix_attempt_findings WHERE fingerprint=?`,
+			`DELETE FROM pulse_fix_verifications WHERE fingerprint=?`,
+			`DELETE FROM pulse_finding_events WHERE fingerprint=?`,
+			`DELETE FROM pulse_finding_details WHERE fingerprint=?`,
+			`DELETE FROM run_concerns WHERE fingerprint=?`,
+		} {
+			if _, err := db.ExecContext(ctx, stmt, old); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

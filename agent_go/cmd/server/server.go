@@ -211,6 +211,8 @@ type ServerConfig struct {
 // ActiveSessionInfo represents an active session for page refresh recovery
 type ActiveSessionInfo struct {
 	SessionID                   string           `json:"session_id"`
+	ParentSessionID             string           `json:"parent_session_id,omitempty"`
+	SessionKind                 string           `json:"session_kind,omitempty"`
 	AgentMode                   string           `json:"agent_mode"`
 	Status                      string           `json:"status"` // "running", "paused", "completed"
 	LastActivity                time.Time        `json:"last_activity"`
@@ -531,8 +533,10 @@ func spaStaticFileHandler(root string) http.Handler {
 // QueryRequest represents an agent query request
 type QueryRequest struct {
 	Query           string                  `json:"query"`
-	Message         string                  `json:"message,omitempty"`       // Alias for Query (used by frontend)
-	SessionTitle    string                  `json:"session_title,omitempty"` // Short UI label for backend-started sessions; never use the full prompt here.
+	Message         string                  `json:"message,omitempty"`           // Alias for Query (used by frontend)
+	SessionTitle    string                  `json:"session_title,omitempty"`     // Short UI label for backend-started sessions; never use the full prompt here.
+	ParentSessionID string                  `json:"parent_session_id,omitempty"` // Internal child-session ownership used by refresh recovery.
+	SessionKind     string                  `json:"session_kind,omitempty"`      // Stable runtime kind such as pulse_reviewer; never infer this from titles.
 	Servers         []string                `json:"servers,omitempty"`
 	EnabledServers  []string                `json:"enabled_servers,omitempty"`
 	SelectedTools   []string                `json:"selected_tools,omitempty"` // Array of "server:tool" strings
@@ -1811,6 +1815,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-module-state", api.handleGetPulseModuleState).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-findings", api.handleGetPulseFindings).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
@@ -2962,7 +2967,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Track active session for page refresh recovery (no observer needed)
 	if !claimedChiefOfStaffChat {
-		api.trackActiveSession(sessionID, req.AgentMode, req.Query, currentUserID, req.BotPlatform, req.TriggeredBy, req.SessionTitle)
+		api.trackActiveSession(sessionID, req.AgentMode, req.Query, currentUserID, req.BotPlatform, req.TriggeredBy, req.SessionTitle, req.ParentSessionID, req.SessionKind)
 	}
 	api.activeSessionsMux.Lock()
 	if sess, ok := api.activeSessions[sessionID]; ok {
@@ -5962,21 +5967,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 				phaseKey := workflowPhaseID
 				modelUsage := &orchestrator.ModelTokenUsage{
-					Provider:         finalProvider,
-					InputTokens:      promptTokens,
-					OutputTokens:     completionTokens,
-					InputTokensM:     fmtM(promptTokens),
-					OutputTokensM:    fmtM(completionTokens),
-					CacheTokens:      cacheTokens,
-					CacheTokensM:     fmtM(cacheTokens),
-					ReasoningTokens:  reasoningTokens,
-					ReasoningTokensM: fmtM(reasoningTokens),
-					LLMCallCount:     llmCallCount,
-					InputCost:        inputCost,
-					OutputCost:       outputCost,
-					ReasoningCost:    reasoningCost,
-					CacheCost:        cacheCost,
-					TotalCost:        totalCost,
+					Provider:          finalProvider,
+					InputTokens:       promptTokens,
+					OutputTokens:      completionTokens,
+					InputTokensM:      fmtM(promptTokens),
+					OutputTokensM:     fmtM(completionTokens),
+					CacheTokens:       cacheTokens,
+					CacheTokensM:      fmtM(cacheTokens),
+					CacheReadTokens:   usage.CacheReadTokens,
+					CacheReadTokensM:  fmtM(usage.CacheReadTokens),
+					CacheWriteTokens:  usage.CacheWriteTokens,
+					CacheWriteTokensM: fmtM(usage.CacheWriteTokens),
+					ReasoningTokens:   reasoningTokens,
+					ReasoningTokensM:  fmtM(reasoningTokens),
+					LLMCallCount:      llmCallCount,
+					InputCost:         inputCost,
+					OutputCost:        outputCost,
+					ReasoningCost:     reasoningCost,
+					CacheCost:         cacheCost,
+					TotalCost:         totalCost,
 				}
 
 				workflowRoot := workflowPhaseFolder
@@ -5998,7 +6007,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					legacyTokenFileExists = true
 				}
 				now := time.Now()
-				modelID := mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig.ModelID
+				runtimeInfo := mcpagent.ReadAgentRuntimeInfo(underlying)
+				modelID := strings.TrimSpace(runtimeInfo.EffectiveModelID)
+				if modelID == "" {
+					modelID = runtimeInfo.LLMConfig.ModelID
+				}
+				orchestrator.EnsureModelTokenUsagePricing(modelID, modelUsage)
 				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
@@ -6209,7 +6223,7 @@ func (api *StreamingAPI) claimChiefOfStaffChatSession(sessionID, userID, query, 
 }
 
 // trackActiveSession tracks a new active session
-func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID, botPlatform, triggeredBy, sessionTitle string) {
+func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID, botPlatform, triggeredBy, sessionTitle, parentSessionID, sessionKind string) {
 	if api.eventStore != nil {
 		api.eventStore.SetSessionOwner(sessionID, userID)
 	}
@@ -6227,19 +6241,27 @@ func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID,
 		if strings.TrimSpace(sessionTitle) == "" {
 			sessionTitle = existing.Title
 		}
+		if strings.TrimSpace(parentSessionID) == "" {
+			parentSessionID = existing.ParentSessionID
+		}
+		if strings.TrimSpace(sessionKind) == "" {
+			sessionKind = existing.SessionKind
+		}
 	}
 
 	api.activeSessions[sessionID] = &ActiveSessionInfo{
-		SessionID:    sessionID,
-		AgentMode:    agentMode,
-		Status:       "running",
-		LastActivity: time.Now(),
-		CreatedAt:    time.Now(),
-		Query:        query,
-		Title:        strings.TrimSpace(sessionTitle),
-		UserID:       userID,
-		BotPlatform:  botPlatform,
-		TriggeredBy:  triggeredBy,
+		SessionID:       sessionID,
+		ParentSessionID: strings.TrimSpace(parentSessionID),
+		SessionKind:     strings.TrimSpace(sessionKind),
+		AgentMode:       agentMode,
+		Status:          "running",
+		LastActivity:    time.Now(),
+		CreatedAt:       time.Now(),
+		Query:           query,
+		Title:           strings.TrimSpace(sessionTitle),
+		UserID:          userID,
+		BotPlatform:     botPlatform,
+		TriggeredBy:     triggeredBy,
 	}
 
 	logfWithContext(

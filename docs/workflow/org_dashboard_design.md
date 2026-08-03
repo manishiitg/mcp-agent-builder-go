@@ -27,7 +27,7 @@ parts of a card:
 
 | Loop | Cadence | Job | Axis | Statuses |
 |---|---|---|---|---|
-| **Pulse** | per run | **fix** — keep it working (backup → triage → low-risk fix → notify) | 🩺 Operational ("is it working?") | healthy / bug / critical |
+| **Pulse** | per run | **fix** — keep it working (triage → low-risk fix → backup → notify) | 🩺 Operational ("is it working?") | healthy / bug / critical |
 | **Pulse report step** | per run | **report** — surface spend and elapsed-time telemetry without optimizing | 💵 Cost/time ("is it spending sanely?") | normal / elevated / missing |
 | **Auto-improve** | scheduled | **improve** — move it toward its goal long-term (experiments, replan, harden, db/KB/learnings) | 🎯 Goal progress ("is it winning?") | on-track / at-risk / off-goal |
 

@@ -2188,6 +2188,7 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 
 		reqMap := cloneStringInterfaceMap(baseReqMap)
 		s.applyPulseLLMToReqMap(reqMap, sctx, reviewerSessionID)
+		applyPulseReviewerChildSession(reqMap, pulseRunID)
 		reqMap["session_title"] = "Pulse review · " + stage.step.label
 		reqMap["query"] = intro + "\n\nPULSE PARALLEL REVIEW STAGE. This reviewer is independent from every other reviewer. Do not wait for, consume, or require another reviewer's conclusion.\n\n" + stage.step.query
 		if err := s.api.startSessionInternal(reviewerCtx, reqMap, reviewerSessionID, "", nil); err != nil {
@@ -2339,7 +2340,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		steps = postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	}
 
-	skipMaintenanceReason := ""
 	for i := 0; i < len(steps); {
 		st := steps[i]
 		if pulseModuleForPostRunMonitorStep(st.label) != "" {
@@ -2348,18 +2348,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 				end++
 			}
 			reviewerSteps := steps[i:end]
-			if skipMaintenanceReason != "" {
-				for _, reviewerStep := range reviewerSteps {
-					module := pulseModuleForPostRunMonitorStep(reviewerStep.label)
-					reason := "Not run because earlier Pulse maintenance did not finish safely: " + skipMaintenanceReason
-					if _, err := markPulseModuleResult(ctx, sctx.WorkspacePath, module, pulseRunID, "skipped", reason, []string{"scheduler timeout/failure handling"}); err != nil {
-						s.sessionLogf(sctx, sessionID, "[PULSE] failed to record skipped result for module %s: %v", module, err)
-					}
-				}
-				i = end
-				continue
-			}
-
 			stages := make([]postRunMonitorReviewerStage, 0, len(reviewerSteps))
 			for _, reviewerStep := range reviewerSteps {
 				stages = append(stages, postRunMonitorReviewerStage{
@@ -2403,16 +2391,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 			i = end
 			continue
 		}
-		if skipMaintenanceReason != "" && !isPostRunMonitorFinalStep(st.label) {
-			if module := pulseModuleForPostRunMonitorStep(st.label); module != "" {
-				reason := "Not run because earlier Pulse maintenance did not finish safely: " + skipMaintenanceReason
-				if _, err := markPulseModuleResult(ctx, sctx.WorkspacePath, module, pulseRunID, "skipped", reason, []string{"scheduler timeout/failure handling"}); err != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] failed to record skipped result for module %s: %v", module, err)
-				}
-			}
-			i++
-			continue
-		}
 		attempts := 1
 		var result postRunMonitorStepRunResult
 		for attempt := 1; attempt <= attempts; attempt++ {
@@ -2431,13 +2409,7 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 			}
 		}
 		if result.outcome != postRunMonitorStepCompleted {
-			reason := handleStepFailure(st, result, i < len(steps)-1)
-			// A failed safety checkpoint blocks mutation. A failed reviewer is
-			// retained as evidence but does not close its module; later reviewers
-			// still run and the one consolidated Fixer records terminal outcomes.
-			if st.label == "pre-backup" {
-				skipMaintenanceReason = reason
-			}
+			handleStepFailure(st, result, i < len(steps)-1)
 		}
 		i++
 	}
@@ -2534,6 +2506,14 @@ func runPostRunMonitorReviewerStages(
 func postRunMonitorIntro(contextSummary, workspacePath, pulseRunID, runStatus, runFolder string) string {
 	return fmt.Sprintf("PULSE RUN CONTEXT. %s. workspace_path=%q, pulse_run_id=%q, evidence_status=%q, run_folder=%q. The scheduler sends one stage per session; independent reviewer sessions may overlap before the Fixer barrier. Execute only the current stage, load only the focused reference named by that stage, use durable workflow state for human answers, keep user-facing output concise, then stop.",
 		contextSummary, workspacePath, pulseRunID, runStatus, runFolder)
+}
+
+func applyPulseReviewerChildSession(reqMap map[string]interface{}, pulseRunID string) {
+	if reqMap == nil {
+		return
+	}
+	reqMap["parent_session_id"] = strings.TrimSpace(pulseRunID)
+	reqMap["session_kind"] = "pulse_reviewer"
 }
 
 // Derived from the canonical registry — see pkg/pulsemodules. Returns "" for
@@ -2699,10 +2679,6 @@ func legacyPostRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleSt
 	return ordered
 }
 
-func postRunMonitorPreBackupStep(pulseRunID string) postRunMonitorStep {
-	return postRunMonitorStep{"pre-backup", fmt.Sprintf("PULSE PRE-CHANGE BACKUP. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}]). Create or verify the required checkpoint directly in this parent turn before review fixes; never delegate Git/backup work. Use the zero-config local-git default when needed, skip only when the exact source hash is already backed up, keep backup/status.json truthful, then stop.", pulseRunID)}
-}
-
 type workflowNotificationContentInstructions struct {
 	runSummary           string
 	pulseSummary         string
@@ -2795,26 +2771,14 @@ func postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module string)
 	if label == "" {
 		return postRunMonitorStep{}, false
 	}
-	sequenceContract := ""
 	if module == pulseModuleWorkflowReview {
-		sequenceContract = `
-
-For workflow_review, the call_generic_agent request MUST include this message_sequence (these are ordered follow-up turns after the opening instructions turn):
-message_sequence=[
-  {"id":"correctness","title":"Correctness and verification","message":"Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
-  {"id":"artifact-drift","title":"Plan and artifact drift","message":"Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
-  {"id":"report-eval","title":"Report and eval truthfulness","message":"Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-  {"id":"stores","title":"Stores contracts","message":"Continue in the same context. Review learnings, knowledgebase, and database contracts, freshness, consumers, and integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-  {"id":"llm-ops","title":"LLM and tool operations","message":"Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
-  {"id":"consolidate","title":"Consolidate review","message":"Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."}
-]
-Do not replace this with multiple call_generic_agent calls: the backend sequence deliberately preserves one agent, one MCP session, one isolated workspace, and one conversation history.`
+		moduleBrief = `PULSE MODULE — WORKFLOW REVIEW. In the call_generic_agent instructions, tell the reviewer to load the focused pulse-review-fixer reference, collect goal, plan, latest-run, worklist, lifecycle, and cost evidence once, reconcile the complete active and suppressed backlog, and produce a compact shared evidence map in its opening turn. Do not include message_sequence in the tool call: the backend attaches the canonical correctness, artifact-drift, report/eval, stores, LLM/ops, and consolidation follow-ups for module="workflow_review". Those ordered turns reuse one agent, one MCP session, one isolated workspace, and one conversation history. The reviewer is read-only, keeps strategy completeness out of scope, persists one deduplicated priority-ordered review with a separate verification section, and never edits, publishes, notifies, asks the user, starts fixes, or marks module state.`
 	}
 	return postRunMonitorStep{
 		label: label,
 		query: fmt.Sprintf("PULSE INDEPENDENT READ-ONLY REVIEW. pulse_run_id=%q, review_run_id=%q, module=%q. "+
 			"Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"}]) and follow its reviewer phase for this module only. Reconcile the complete active retained backlog, awaiting-verification work, and any already-saved SQLite result before discovery. If the evidence is already sufficient, do not launch a duplicate reviewer. Otherwise make exactly one call_generic_agent call asynchronously with role=\"reviewer\", module=%q, and these exact run identities; never combine reviewers in one shell command or use background curl, & or wait. Record its execution_id, end the current turn, and resume only from the automatic completion notification. Then confirm the SQLite result can be loaded with get_pulse_review_result and stop without editing, starting a fix attempt, or marking module state. The single consolidated Fixer stage after all selected reviews owns every mutation and terminal module result.",
-			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief + sequenceContract,
+			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief,
 	}, true
 }
 
@@ -2907,10 +2871,9 @@ func (s *SchedulerService) selectedPostRunMonitorModuleSteps(ctx context.Context
 			selectedModules = append(selectedModules, module)
 		}
 	}
-	selected := make([]postRunMonitorStep, 0, len(selectedModules)+4)
+	selected := make([]postRunMonitorStep, 0, len(selectedModules)+3)
 	if len(selectedModules) > 0 {
 		reviewRunID := pulseReviewRunID(pulseRunID, time.Now())
-		selected = append(selected, postRunMonitorPreBackupStep(pulseRunID))
 		for _, module := range selectedModules {
 			if step, exists := postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module); exists {
 				selected = append(selected, step)

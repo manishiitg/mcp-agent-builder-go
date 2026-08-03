@@ -197,10 +197,30 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
+func canonicalWorkflowReviewMessageSequence() []backgroundMessageSequenceItem {
+	return []backgroundMessageSequenceItem{
+		{ID: "correctness", Title: "Correctness and verification", Message: "Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
+		{ID: "artifact-drift", Title: "Plan and artifact drift", Message: "Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
+		{ID: "report-eval", Title: "Report and eval truthfulness", Message: "Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+		{ID: "stores", Title: "Stores contracts", Message: "Continue in the same context. Review learnings, knowledgebase, and database contracts, freshness, consumers, and integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+		{ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
+		{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."},
+	}
+}
+
+func defaultBackgroundMessageSequence(args map[string]interface{}) []backgroundMessageSequenceItem {
+	role, _ := args["role"].(string)
+	module, _ := args["module"].(string)
+	if strings.EqualFold(strings.TrimSpace(role), "reviewer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
+		return canonicalWorkflowReviewMessageSequence()
+	}
+	return nil
+}
+
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
-		return nil, nil
+		return defaultBackgroundMessageSequence(args), nil
 	}
 	items, ok := raw.([]interface{})
 	if !ok {
@@ -249,7 +269,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    maxBackgroundMessageSequenceItems,
-		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Use this when later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for role=reviewer, module=workflow_review: the backend supplies that module's canonical six follow-ups. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
 		"items": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -2999,24 +3019,8 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent Defini
 				return "no run folder selected; pass run_folder like 'iteration-0/group-1'", nil
 			}
 
-			var tokenFile *orchestrator.TokenUsageFile
+			tokenFile := iwm.controller.GetRunTokenUsageFile(ctx, runFolder)
 			runMissingReason := ""
-			if strings.TrimSpace(runFolder) == strings.TrimSpace(iwm.controller.selectedRunFolder) {
-				tokenFile = iwm.controller.GetCurrentRunTokenUsageFile()
-			} else {
-				tokenPath := filepath.ToSlash(filepath.Join("runs", runFolder, "token_usage.json"))
-				tokenContent, err := iwm.controller.ReadWorkspaceFile(ctx, tokenPath)
-				if err != nil {
-					runMissingReason = fmt.Sprintf("missing evidence: no run token usage data found at %s", tokenPath)
-				} else {
-					var parsed orchestrator.TokenUsageFile
-					if err := json.Unmarshal([]byte(tokenContent), &parsed); err != nil {
-						runMissingReason = fmt.Sprintf("missing evidence: failed to parse %s: %v", tokenPath, err)
-					} else {
-						tokenFile = &parsed
-					}
-				}
-			}
 			if tokenFile == nil || len(tokenFile.ByModel) == 0 && len(tokenFile.ByStepAndModel) == 0 {
 				if runMissingReason == "" {
 					runMissingReason = fmt.Sprintf("missing evidence: no run token usage data found for %s", runFolder)
@@ -3870,6 +3874,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			reviewExecID := fmt.Sprintf("%s-%s-%d", executionPrefix, sanitizeWorkshopAgentIdentityPart(todoID), time.Now().UnixNano())
 			agentSessionID := fmt.Sprintf("workshop-review-%d", time.Now().UnixNano())
+			queuedAt := time.Now().UTC()
 			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
 			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
 			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
@@ -3977,6 +3982,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			go func() {
 				var toolResult string
 				var toolErr error
+				var stageStartedAt time.Time
 				// Finalize and notify before releasing the execution context. Calling
 				// cancel first would misclassify a successful completion as cancelled.
 				defer cancel()
@@ -3994,6 +4000,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						}
 						defer func() { <-iwm.pulseReviewerSlots }()
 					}
+					stageStartedAt = time.Now().UTC()
 
 					var incompleteErr error
 					for attempt := 1; attempt <= 2; attempt++ {
@@ -4056,6 +4063,40 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 					return "", finalErr
 				}()
+				if isPulseStage {
+					completedAt := time.Now().UTC()
+					status := "completed"
+					if toolErr != nil {
+						status = "failed"
+					}
+					queueDuration := completedAt.Sub(queuedAt)
+					duration := time.Duration(0)
+					startedAtText := ""
+					if !stageStartedAt.IsZero() {
+						queueDuration = stageStartedAt.Sub(queuedAt)
+						duration = completedAt.Sub(stageStartedAt)
+						startedAtText = stageStartedAt.Format(time.RFC3339Nano)
+					}
+					metricCtx, metricCancel := pulseReviewerPersistenceContext(execCtx)
+					metricErr := RecordPulseAgentMetric(metricCtx, workspacePath, PulseAgentMetricRecord{
+						ExecutionID:     reviewExecID,
+						AgentSessionID:  agentSessionID,
+						PulseRunID:      pulseRunID,
+						ReviewRunID:     reviewRunID,
+						Module:          module,
+						Role:            role,
+						Status:          status,
+						QueuedAt:        queuedAt.Format(time.RFC3339Nano),
+						StartedAt:       startedAtText,
+						CompletedAt:     completedAt.Format(time.RFC3339Nano),
+						QueueDurationMS: queueDuration.Milliseconds(),
+						DurationMS:      duration.Milliseconds(),
+					})
+					metricCancel()
+					if metricErr != nil {
+						logger.Warn(fmt.Sprintf("⚠️ Failed to persist Pulse agent metrics for %s: %v", reviewExecID, metricErr))
+					}
+				}
 			}()
 
 			logger.Info(fmt.Sprintf("🚀 Workshop: %s started asynchronously, execution_id=%q", strings.ToLower(reviewName), reviewExecID))
@@ -6281,37 +6322,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_llm_config",
-		"Show the current LLM configuration for the workflow: tiered config (tier 1/2/3 with fallbacks), phase LLM, and any per-step LLM overrides from step_config.json.",
+		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			var sb strings.Builder
-			sb.WriteString("## LLM Configuration\n\n")
-
-			// Show tiered config if enabled
-			if iwm.controller.tierResolver != nil && iwm.controller.tierResolver.config != nil {
-				tc := iwm.controller.tierResolver.config
-				sb.WriteString("\n### Tiered LLM Config (active)\n")
-				writeTierWithFallbacks := func(label string, cfg *AgentLLMConfig) {
-					if cfg == nil {
-						return
-					}
-					sb.WriteString(fmt.Sprintf("- **%s**: %s/%s", label, cfg.Provider, cfg.ModelID))
-					if len(cfg.Fallbacks) > 0 {
-						fallbackStrs := make([]string, len(cfg.Fallbacks))
-						for i, fb := range cfg.Fallbacks {
-							fallbackStrs[i] = fmt.Sprintf("%s/%s", fb.Provider, fb.ModelID)
-						}
-						sb.WriteString(fmt.Sprintf(" → fallbacks: %s", strings.Join(fallbackStrs, ", ")))
-					}
-					sb.WriteString("\n")
-				}
-				writeTierWithFallbacks("Tier 1 (high)", tc.Tier1)
-				writeTierWithFallbacks("Tier 2 (medium)", tc.Tier2)
-				writeTierWithFallbacks("Tier 3 (low)", tc.Tier3)
+			manifest, manifestErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+			if manifestErr != nil {
+				return "", fmt.Errorf("read workflow LLM configuration: %w", manifestErr)
 			}
+			resolved, resolveErr := renderResolvedWorkflowLLMRoles(manifest)
+			if resolveErr != nil {
+				return "", fmt.Errorf("resolve workflow LLM configuration: %w", resolveErr)
+			}
+			var sb strings.Builder
+			sb.WriteString(resolved)
 
 			// Show per-step overrides from step_config.json
 			stepConfigs, err := iwm.controller.ReadStepConfigs(ctx)
