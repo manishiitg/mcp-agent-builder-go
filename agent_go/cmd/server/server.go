@@ -5951,6 +5951,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[BUILDER LOG] Failed to write conversation log: %v", err)
 				} else {
 					log.Printf("[BUILDER LOG] Saved conversation log (%d messages) to %s", len(finalHistory), logPath)
+					// The workflow history list is served from chat-index.json. Writing
+					// the transcript without this leaves the chat on disk but absent
+					// from /resume, so the user is offered an older conversation and the
+					// agent legitimately has no memory of the one they were just in.
+					if err := updatePersistedChatHistoryIndex(currentUserID, persistSessionID, req.AgentMode, persistedHistoryForDisk, chatRuntime, logPath, int64(len(convJSON)), time.Now()); err != nil {
+						log.Printf("[BUILDER LOG] Failed to update chat index for %s: %v", logPath, err)
+					}
 				}
 			}
 

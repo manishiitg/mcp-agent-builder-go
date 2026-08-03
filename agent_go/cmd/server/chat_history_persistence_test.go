@@ -819,6 +819,47 @@ func TestListWorkflowChatHistorySessionsUsesIndexWithoutParsingConversation(t *t
 	}
 }
 
+// A transcript on disk that the index does not know about must still be listed.
+// It was not: the workflow lister returned a complete index verbatim, so a chat
+// whose write did not also update the index stayed out of /resume permanently —
+// the user was offered an older conversation and resumed that instead.
+func TestListWorkflowChatHistoryFindsConversationMissingFromCompleteIndex(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workflowPath := "Workflow/unindexed-workflow"
+	convDir := filepath.Join(root, filepath.FromSlash(workflowPath), "builder", "conversation", "2026-08-03")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	conversation := `{"session_id":"unindexed-chat","conversation_history":[{"role":"human","parts":[{"type":"text","text":"the chat that vanished"}]}],"updated_at":"2026-08-03T19:09:19+05:30"}`
+	if err := os.WriteFile(filepath.Join(convDir, "session-unindexed-chat-conversation.json"), []byte(conversation), 0o600); err != nil {
+		t.Fatalf("write conversation: %v", err)
+	}
+
+	// An index that claims to be complete and has never heard of the file above.
+	index := newChatHistoryIndex()
+	index.Complete = true
+	indexPath := filepath.Join(root, filepath.FromSlash(workflowPath), "builder", "conversation", chatHistoryIndexFileName)
+	if err := writeLocalChatHistoryIndex(indexPath, &index); err != nil {
+		t.Fatalf("write workflow chat index: %v", err)
+	}
+
+	sessions, err := ListChatHistorySessions("default", 10, 0, workflowPath)
+	if err != nil {
+		t.Fatalf("list workflow sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "unindexed-chat" {
+		t.Fatalf("conversation missing from listing: %#v", sessions)
+	}
+
+	// And the listing repairs the index, so the next read is served from cache.
+	repaired, exists := readLocalChatHistoryIndex(indexPath)
+	if !exists || len(repaired.Entries) != 1 {
+		t.Fatalf("index not backfilled: exists=%v entries=%d", exists, len(repaired.Entries))
+	}
+}
+
 func TestPersistChatConversationUpdatesMetadataIndex(t *testing.T) {
 	workspace := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(workspace)

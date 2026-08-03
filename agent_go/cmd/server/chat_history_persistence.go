@@ -848,14 +848,9 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 	indexWorkspacePath := pathpkg.Join(workspaceRoot, chatHistoryIndexFileName)
 	indexLocalPath := filepath.Join(baseDir, chatHistoryIndexFileName)
 	mutex := chatHistoryIndexMutex(indexWorkspacePath)
-	mutex.Lock()
-	if index, exists := readLocalChatHistoryIndex(indexLocalPath); exists && index.Complete {
-		sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
-		mutex.Unlock()
-		return paginateChatHistorySessions(sessions, limit, offset), true, nil
-	}
-	mutex.Unlock()
 
+	// See listWorkflowBuilderHistoryFromDisk: the index caches per-file previews,
+	// it does not stand in for the directory.
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1014,17 +1009,12 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 	indexWorkspacePath := pathpkg.Join(workflowPath, "builder", "conversation", chatHistoryIndexFileName)
 	indexLocalPath := filepath.Join(workflowDir, "builder", "conversation", chatHistoryIndexFileName)
 	mutex := chatHistoryIndexMutex(indexWorkspacePath)
-	mutex.Lock()
-	if index, exists := readLocalChatHistoryIndex(indexLocalPath); exists && index.Complete {
-		sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
-		mutex.Unlock()
-		if readBudget > 0 {
-			return paginateChatHistorySessions(sessions, readBudget, 0), true
-		}
-		return sessions, true
-	}
-	mutex.Unlock()
 
+	// The directory is always consulted, never index.Complete alone. The index is
+	// a cache of the expensive part (reading and previewing each transcript),
+	// keyed per file on size+mtime below; the stat pass that validates it is
+	// cheap. Serving the index blind made any transcript written without a
+	// matching index update permanently unreachable from /resume.
 	matches, err := workflowBuilderConversationFiles(workflowDir)
 	if err != nil {
 		return nil, false
@@ -2828,5 +2818,44 @@ func (api *StreamingAPI) appendLiveInputToPersistedChatHistory(userID, sessionID
 		logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot write %s: %v", conversationPath, err)
 		return
 	}
+	// Keep the history index in step with the transcript, so a session steered
+	// only by live input still shows its latest message — and stays listed at all
+	// for callers that read the index without a local directory to fall back on.
+	if err := updatePersistedChatHistoryIndex(
+		userID,
+		sessionID,
+		stringFromRecord(record, "agent_mode"),
+		history,
+		runtimeFromRecord(record),
+		conversationPath,
+		int64(len(encoded)),
+		time.Now(),
+	); err != nil {
+		logfWithContext(logCtx, "[CHAT_HISTORY] Live-input append: cannot update index for %s: %v", conversationPath, err)
+	}
 	logfWithContext(logCtx, "[CHAT_HISTORY] Recorded live-input message (%d messages) in %s", len(history), conversationPath)
+}
+
+func stringFromRecord(record map[string]interface{}, key string) string {
+	value, _ := record[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// runtimeFromRecord re-decodes the runtime block the caller deliberately left as
+// opaque JSON. Returning nil on any problem is safe: updatePersistedChatHistoryIndex
+// only reads WorkshopMode off it, and the transcript keeps the authoritative copy.
+func runtimeFromRecord(record map[string]interface{}) *ChatHistoryAgentRuntime {
+	value, ok := record["runtime"]
+	if !ok || value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var runtime ChatHistoryAgentRuntime
+	if err := json.Unmarshal(encoded, &runtime); err != nil {
+		return nil
+	}
+	return &runtime
 }
