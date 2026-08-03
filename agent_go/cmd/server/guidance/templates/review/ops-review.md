@@ -84,7 +84,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
-8. Read the persisted result with `get_pulse_review_result` using the exact
+8. Read the persisted result with `get_pulse_state(view="review")` using the exact
    `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that result against `builder/improve.html`. As the parent, make
    one bounded update that refreshes one compact LLM & operations review area

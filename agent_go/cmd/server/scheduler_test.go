@@ -962,7 +962,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PULSE GATE / WORKLIST",
-		"get_pulse_module_state",
+		`get_pulse_state(view="module")`,
 		"record_pulse_worklist exactly once",
 		"Gate owns the durable worklist and the cheap per-run goal observation checkpoint",
 		"record_pulse_impact",
@@ -1009,7 +1009,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"applies safe fixes sequentially",
 		"Bug fix",
 		`module="bug_review"`,
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(bugReview, want) {
 			t.Fatalf("bug-review step missing %q:\n%s", want, bugReview)
@@ -1024,7 +1024,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"read-only review separate from Bug Review",
 		"mark_changelog_artifact_reviewed",
 		"artifact drift",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(artifact, want) {
 			t.Fatalf("artifact step missing %q:\n%s", want, artifact)
@@ -1037,7 +1037,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"must not edit files",
 		"parent Pulse Fixer applies and verifies",
 		"Report fix",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(reportHealth, want) {
 			t.Fatalf("report health step missing %q:\n%s", want, reportHealth)
@@ -1053,7 +1053,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"stale-evidence rejection",
 		"existing human-input flow before changing goal meaning",
 		"Eval fix",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(evalHealth, want) {
 			t.Fatalf("eval health step missing %q:\n%s", want, evalHealth)
@@ -1069,7 +1069,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"never rewrite knowledgebase/context",
 		"db/README.md",
 		"parent Pulse Fixer",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 		`module="stores_health"`,
 	} {
 		if !strings.Contains(storesHealth, want) {
@@ -1126,7 +1126,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"bounded missing pieces or corrections within the current strategy",
 		"Do not wait for or consume Bug Review, Artifact Review, or Goal Advisor conclusions",
 		`module="strategy_auditor"`,
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(strategyAuditor, want) {
 			t.Fatalf("strategy auditor step missing %q:\n%s", want, strategyAuditor)
@@ -1155,7 +1155,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		// that used to rewrite this into per-module language is gone, so the
 		// prompt the reviewer receives is the one written in the source.
 		"The parent Pulse Fixer consolidates advisor and critic results",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(goalAdvisor, want) {
 			t.Fatalf("goal advisor step missing %q:\n%s", want, goalAdvisor)
@@ -1165,7 +1165,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"PULSE DASHBOARD",
 		"This stage alone owns Pulse render",
 		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"get_pulse_finding_backlog without a module filter",
+		`get_pulse_state(view="backlog") without a module filter`,
 		"builder/improve.html",
 		"builder/card.health.html",
 		"8 unique canonical coverage data-module ids",
@@ -1185,7 +1185,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"confirm every due module",
 		"never treat missing as success",
 		"in that order in this one turn",
-		"mark_pulse_final_command_result",
+		"record_pulse_result(command=...)",
 		"dedicated Dashboard stage",
 		"do not rewrite them",
 		"Backup",
@@ -2150,7 +2150,7 @@ func TestPostRunMonitorPrependsCompactPulseReportUpgradeForVersion117Manifest(t 
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18",
 		`data-pulse-schema="3"`,
-		"get_pulse_finding_backlog without a module filter",
+		`get_pulse_state(view="backlog") without a module filter`,
 		`data-source="sqlite" Current work`,
 		"Important now",
 		"Needs verification",
@@ -2270,7 +2270,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 		}
 	}
 	fixer := steps[len(steps)-3].query
-	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, "short priority-ordered repair list", "mark_pulse_module_result exactly once for every due module"} {
+	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
 		if !strings.Contains(fixer, required) {
 			t.Fatalf("consolidated Fixer prompt missing %q: %s", required, fixer)
 		}

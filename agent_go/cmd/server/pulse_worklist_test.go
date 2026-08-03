@@ -382,7 +382,7 @@ func TestBeginPulseFixerRunSeedsOnlySelectedModules(t *testing.T) {
 			}
 		}
 	}
-	mark := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	mark := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	if _, err := mark(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   payload.PulseRunID,
@@ -502,29 +502,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	if selected.FindingID == "" || selected.FindingID != selected.Issue.ID || !strings.HasPrefix(selected.FindingID, "PUL-") {
 		t.Fatalf("legacy finding did not receive compact issue identity: %+v", selected)
 	}
-	startFix := executors["start_pulse_fix_attempt"].(func(context.Context, map[string]interface{}) (string, error))
-	startedJSON, err := startFix(ctx, map[string]interface{}{
-		"workspace_path": workspacePath,
-		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleBugReview,
-		"summary":        "Repair the stale run binding.",
-		"findings": []map[string]interface{}{{
-			"fingerprint": selected.Fingerprint,
-			"finding_id":  selected.Issue.ID,
-		}},
-		"intended_files": []string{"planning/step_config.json"},
-		"before_refs":    []string{"step_config:sha256:before"},
-	})
-	if err != nil {
-		t.Fatalf("start fix attempt: %v", err)
-	}
-	var started struct {
-		Attempt step_based_workflow.PulseFixAttempt `json:"attempt"`
-	}
-	if err := json.Unmarshal([]byte(startedJSON), &started); err != nil || started.Attempt.AttemptID == "" {
-		t.Fatalf("decode fix attempt: payload=%s err=%v", startedJSON, err)
-	}
-	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
@@ -539,7 +517,6 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"finding_dispositions": []map[string]interface{}{{
 			"fingerprint":   selected.Fingerprint,
 			"finding_id":    selected.Issue.ID,
-			"attempt_id":    started.Attempt.AttemptID,
 			"disposition":   "fixed_verified",
 			"summary":       "The stale run binding was corrected and the targeted test passed.",
 			"changed_files": []string{"planning/step_config.json"},
@@ -621,7 +598,7 @@ func TestMarkPulseModuleChangedRequiresAuditProof(t *testing.T) {
 	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
-	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	_, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
@@ -1286,11 +1263,11 @@ func TestResolveRunConcernToolCannotCloseWithoutVerification(t *testing.T) {
 func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	_, executors, _ := createPulseWorklistTools()
-	execute := executors["get_pulse_module_state"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["get_pulse_state"].(func(context.Context, map[string]interface{}) (string, error))
 
-	raw, err := execute(context.Background(), map[string]interface{}{"workspace_path": "Workflow/example"})
+	raw, err := execute(context.Background(), map[string]interface{}{"workspace_path": "Workflow/example", "view": "module"})
 	if err != nil {
-		t.Fatalf("get_pulse_module_state: %v", err)
+		t.Fatalf("get_pulse_state(view=module): %v", err)
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {

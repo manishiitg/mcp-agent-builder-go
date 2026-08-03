@@ -66,7 +66,7 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
    deliverable really is a file and whose gate already checks meaningful proof is
    correct — not every step has a db; recommend the check that fits the step's
    real output. Record `no_issue` when the gate already proves the effect.
-8. Check `get_pulse_module_state`'s `open_concerns` for `phase="prevalidation"`
+8. Check `get_pulse_state(view="module")`'s `open_concerns` for `phase="prevalidation"`
    entries — these are filed by Go itself the moment a step's `validation_schema`
    check fails, so they exist even for a step that eventually passed after
    repair and left no other trace. A `seen_count` > 1 means the same field keeps

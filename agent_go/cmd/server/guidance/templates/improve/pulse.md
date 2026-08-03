@@ -21,9 +21,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 2. Select the latest meaningful retained run when no run folder was supplied.
    State the selected run before reviewing it. Do not generate fresh workflow
    evidence merely to make Pulse run.
-	3. Read `get_pulse_module_state` as historical context. Decide which modules
+	3. Read `get_pulse_state(view="module")` as historical context. Decide which modules
 	   are useful for this standalone review. Do not call `record_pulse_worklist`
-	   or `mark_pulse_final_command_result`. If fixes are warranted, call
+	   or `record_pulse_result` with a `command`. If fixes are warranted, call
 	   `begin_pulse_fixer_run` exactly once for the selected modules; its trusted
 	   run owns the lifecycle and module-result writes.
 4. Run every module this standalone review selects. Process modules independently
@@ -39,7 +39,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 	   `role="fixer"`, `module="pulse_fixer"`, the trusted manual `pulse_run_id`,
 	   and the full selected module list. It builds one short ordered queue of
 	   compatible repair bundles, applies them sequentially, verifies them, and
-	   calls `mark_pulse_module_result` once per selected module. After launch,
+	   calls `record_pulse_result` once per selected module. After launch,
 	   end the current turn and wait for its automatic completion notification
 	   before producing the final summary. Do not fix inline.
 	6. Keep review, finding, attempt, verification, and module outcomes in SQLite.

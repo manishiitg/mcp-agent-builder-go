@@ -45,7 +45,7 @@ smallest useful retained window.{{end}}
    claim/mechanism, exact evidence, confidence, `recommended_fix` limited to an
    evidence or module handoff rather than a plan mutation, verification, and
    `user_judgment_required` with reason.
-6. Read the persisted result with `get_pulse_review_result` using the exact
+6. Read the persisted result with `get_pulse_state(view="review")` using the exact
    `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that complete result against `builder/improve.html`. As the
    parent, append one compact newest-first diagnostic entry with

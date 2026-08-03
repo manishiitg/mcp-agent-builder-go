@@ -1,0 +1,383 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	mcpexecutor "github.com/manishiitg/mcpagent/executor"
+)
+
+// pulseConsolidatedToolNames is the complete agent-facing Pulse surface.
+//
+// Eight tools became four. The naming rule is derivable and exhaustive: a Pulse
+// tool is `get_pulse_*` when it reads and `record_pulse_*` when it writes, and
+// there is no third verb. The eight-tool surface had `get_`, `start_`, `mark_`,
+// and `record_` for four concepts, and the agent guessed across it — inventing
+// close_pulse_fix_attempt, complete_pulse_fix_attempt, consume_human_input,
+// resolve_human_input, and update_human_input, none of which ever existed.
+//
+// begin_pulse_fixer_run and resolve_run_concern are outside the consolidation
+// (they were never part of the eight) and are asserted separately.
+var pulseConsolidatedToolNames = []string{
+	"get_pulse_state",
+	"record_pulse_worklist",
+	"record_pulse_result",
+	"record_pulse_impact",
+}
+
+// pulseRemovedToolNames must never reappear. Each was folded into one of the
+// four above; a stale registration would give the agent two ways to say the
+// same thing, which is the condition this consolidation removed.
+var pulseRemovedToolNames = []string{
+	"get_pulse_module_state",
+	"get_pulse_finding_backlog",
+	"get_pulse_review_result",
+	"start_pulse_fix_attempt",
+	"mark_pulse_module_result",
+	"mark_pulse_final_command_result",
+}
+
+func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
+	tools, executors, categories := createPulseWorklistTools()
+	registered := map[string]bool{}
+	for _, tool := range tools {
+		if tool.Function == nil {
+			t.Fatalf("tool with nil Function: %+v", tool)
+		}
+		registered[tool.Function.Name] = true
+	}
+
+	for _, name := range pulseConsolidatedToolNames {
+		if !registered[name] {
+			t.Errorf("consolidated Pulse tool %q is not registered", name)
+		}
+		if _, ok := executors[name]; !ok {
+			t.Errorf("consolidated Pulse tool %q has no executor", name)
+		}
+		if categories[name] != "workflow" {
+			t.Errorf("consolidated Pulse tool %q has category %q, want workflow", name, categories[name])
+		}
+	}
+	for _, name := range pulseRemovedToolNames {
+		if registered[name] {
+			t.Errorf("removed Pulse tool %q is still registered", name)
+		}
+		if _, ok := executors[name]; ok {
+			t.Errorf("removed Pulse tool %q still has an executor", name)
+		}
+		if _, ok := categories[name]; ok {
+			t.Errorf("removed Pulse tool %q still has a category entry", name)
+		}
+	}
+
+	// The surface is the four plus the two tools that were never part of the
+	// consolidation. Anything else is a tool nobody accounted for.
+	expected := map[string]bool{"begin_pulse_fixer_run": true, "resolve_run_concern": true}
+	for _, name := range pulseConsolidatedToolNames {
+		expected[name] = true
+	}
+	for name := range registered {
+		if !expected[name] {
+			t.Errorf("unexpected Pulse tool %q; the surface is %v plus begin_pulse_fixer_run and resolve_run_concern",
+				name, pulseConsolidatedToolNames)
+		}
+	}
+	if len(registered) != len(expected) {
+		t.Errorf("registered %d Pulse tools, want %d", len(registered), len(expected))
+	}
+
+	// Every Pulse tool name follows the one rule, so the agent can derive a name
+	// instead of guessing one.
+	for name := range registered {
+		if name == "begin_pulse_fixer_run" || name == "resolve_run_concern" {
+			continue
+		}
+		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
+			t.Errorf("Pulse tool %q breaks the verb rule: reads are get_pulse_*, writes are record_pulse_*", name)
+		}
+	}
+}
+
+func pulseStateExecutor(t *testing.T) func(context.Context, map[string]interface{}) (string, error) {
+	t.Helper()
+	_, executors, _ := createPulseWorklistTools()
+	execute, ok := executors["get_pulse_state"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("get_pulse_state executor has unexpected type")
+	}
+	return execute
+}
+
+// TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned pins the merge. Each
+// view must still answer the exact question its own tool used to answer.
+func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	ctx := context.Background()
+	workspacePath := "Workflow/example"
+	execute := pulseStateExecutor(t)
+
+	// view="module" — what get_pulse_module_state returned.
+	raw, err := execute(ctx, map[string]interface{}{"workspace_path": workspacePath, "view": "module"})
+	if err != nil {
+		t.Fatalf(`get_pulse_state(view="module"): %v`, err)
+	}
+	var moduleView map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &moduleView); err != nil {
+		t.Fatalf("decode module view: %v", err)
+	}
+	for _, key := range []string{
+		"modules", "open_concerns", "open_concern_count", "concerns_note",
+		"suppressed_concerns", "suppressed_concern_count", "plan_change_backlog",
+		"loop_closure", "loop_closure_note", "module_review_history",
+		"review_history_note", "impact_ledger", "impact_ledger_note",
+	} {
+		if _, exists := moduleView[key]; !exists {
+			t.Errorf(`view="module" dropped %q, which get_pulse_module_state returned: %s`, key, raw)
+		}
+	}
+
+	// view="backlog" — what get_pulse_finding_backlog returned.
+	if _, err := step_based_workflow.RecordRunConcerns(
+		ctx, workspacePath, "pulse-view", "", pulseModuleBugReview,
+		step_based_workflow.ConcernPhaseReview, "CONCERNS: the collector writes a null column",
+	); err != nil {
+		t.Fatalf("file concern: %v", err)
+	}
+	raw, err = execute(ctx, map[string]interface{}{"workspace_path": workspacePath, "view": "backlog"})
+	if err != nil {
+		t.Fatalf(`get_pulse_state(view="backlog"): %v`, err)
+	}
+	var backlogView struct {
+		Findings []step_based_workflow.PulseFindingLifecycle `json:"findings"`
+		Total    int                                         `json:"total"`
+		Note     string                                      `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(raw), &backlogView); err != nil {
+		t.Fatalf("decode backlog view: %v", err)
+	}
+	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" {
+		t.Fatalf(`view="backlog" did not return the durable issue backlog: %s`, raw)
+	}
+	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint == "" {
+		t.Fatalf(`view="backlog" lost the issue.id/fingerprint pair a fixer must carry: %+v`, backlogView.Findings[0])
+	}
+	// The optional module filter still filters, and still names the closed set.
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "view": "backlog", "module": "bugs",
+	}); err == nil || !strings.Contains(err.Error(), "is not a valid Pulse module") ||
+		!strings.Contains(err.Error(), pulseModuleWorkflowReview) {
+		t.Fatalf(`view="backlog" module rejection must name the closed set: %v`, err)
+	}
+
+	// view="review" — what get_pulse_review_result returned.
+	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
+	if err := step_based_workflow.RecordPulseReview(
+		ctx, workspacePath, pulseModuleBugReview, reviewRunID, "pulse-view", "", "## Verdict\nClean.",
+	); err != nil {
+		t.Fatalf("record review: %v", err)
+	}
+	raw, err = execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "view": "review",
+		"review_run_id": reviewRunID, "module": pulseModuleBugReview,
+	})
+	if err != nil {
+		t.Fatalf(`get_pulse_state(view="review"): %v`, err)
+	}
+	var reviewView map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &reviewView); err != nil {
+		t.Fatalf("decode review view: %v", err)
+	}
+	for _, key := range []string{"module", "review_run_id", "pulse_run_id", "status", "verifications", "markdown"} {
+		if _, exists := reviewView[key]; !exists {
+			t.Errorf(`view="review" dropped %q, which get_pulse_review_result returned: %s`, key, raw)
+		}
+	}
+	if markdown, _ := reviewView["markdown"].(string); !strings.Contains(markdown, "Clean.") {
+		t.Errorf(`view="review" did not return the saved reviewer Markdown: %s`, raw)
+	}
+
+	// A not-yet-saved review is still an ordinary state with an actionable message.
+	_, err = execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "view": "review",
+		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleBugReview,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no saved Pulse review yet") ||
+		!strings.Contains(err.Error(), "still running") {
+		t.Errorf("missing review rejection lost its explanation: %v", err)
+	}
+}
+
+// Every rejection on the merged read must name the value set it enforces.
+func TestGetPulseStateRejectionsNameTheirClosedSets(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	execute := pulseStateExecutor(t)
+	ctx := context.Background()
+
+	_, err := execute(ctx, map[string]interface{}{"workspace_path": "Workflow/example", "view": "backlogs"})
+	assertRejectionContains(t, err, `view "backlogs" is not a valid Pulse state view`, "backlog", "module", "review")
+
+	_, err = execute(ctx, map[string]interface{}{"workspace_path": "Workflow/example"})
+	assertRejectionContains(t, err, "not a valid Pulse state view", "backlog", "module", "review")
+
+	_, err = execute(ctx, map[string]interface{}{"workspace_path": "Workflow/example", "view": "review"})
+	assertRejectionContains(t, err, "review_run_id", "module",
+		"review_run_id=missing", "module=missing", "completion notification")
+}
+
+// TestRecordPulseResultCoversBothFormerResultTypes pins the write merge: one
+// tool, two durable records, selected by which of module or command arrives.
+func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--merged-result"
+	sessionID := pulseRunID + "-session"
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID,
+		completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+			pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A review is required."},
+		})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+	if err := initializePulseFinalCommandStates(context.Background(), workspacePath, pulseRunID); err != nil {
+		t.Fatalf("initialize final commands: %v", err)
+	}
+	release := registerTrustedPulseSession(sessionID, pulseRunID)
+	defer release()
+
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+
+	// Module form — what mark_pulse_module_result recorded.
+	raw, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleWorkflowReview, "result": "done",
+		"reason": "No finding required a change.",
+	})
+	if err != nil {
+		t.Fatalf("record module result: %v", err)
+	}
+	if !strings.Contains(raw, `"module"`) || !strings.Contains(raw, `"status":"updated"`) {
+		t.Fatalf("module result payload = %s", raw)
+	}
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get module states: %v", err)
+	}
+	recorded := false
+	for _, state := range states {
+		if state.Module == pulseModuleWorkflowReview {
+			recorded = state.LastResult == "done"
+		}
+	}
+	if !recorded {
+		t.Fatalf("module result was not persisted: %+v", states)
+	}
+
+	// Final-command form — what mark_pulse_final_command_result recorded, with
+	// the same running-before-terminal ordering rule.
+	commandArgs := func(status string) map[string]interface{} {
+		return map[string]interface{}{
+			"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+			"command": pulseFinalCommandDashboard, "result": status,
+			"reason": "Dashboard " + status,
+		}
+	}
+	if _, err := execute(ctx, commandArgs("done")); err == nil || !strings.Contains(err.Error(), "marked running before done") {
+		t.Fatalf("final command ordering rule was lost: %v", err)
+	}
+	if _, err := execute(ctx, commandArgs("running")); err != nil {
+		t.Fatalf("record running command: %v", err)
+	}
+	raw, err = execute(ctx, commandArgs("done"))
+	if err != nil {
+		t.Fatalf("record terminal command: %v", err)
+	}
+	if !strings.Contains(raw, `"command"`) || !strings.Contains(raw, `"status":"updated"`) {
+		t.Fatalf("command result payload = %s", raw)
+	}
+	commands, err := getPulseFinalCommandStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get final command states: %v", err)
+	}
+	for _, state := range commands {
+		if state.Command == pulseFinalCommandDashboard && state.Status != "done" {
+			t.Fatalf("final command result was not persisted: %+v", state)
+		}
+	}
+}
+
+// The discriminator is the one thing an agent can get wrong on the merged
+// writer, so its rejection names both alternatives and both closed sets.
+func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+	sessionID := "merged-reject-session"
+	pulseRunID := "schedule-cron--merged-reject"
+	release := registerTrustedPulseSession(sessionID, pulseRunID)
+	defer release()
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+
+	base := map[string]interface{}{
+		"workspace_path": "Workflow/example", "pulse_run_id": pulseRunID,
+		"result": "done", "reason": "Nothing to do.",
+	}
+	clone := func(extra map[string]interface{}) map[string]interface{} {
+		args := map[string]interface{}{}
+		for key, value := range base {
+			args[key] = value
+		}
+		for key, value := range extra {
+			args[key] = value
+		}
+		return args
+	}
+
+	_, err := execute(ctx, clone(nil))
+	assertRejectionContains(t, err, "exactly one of module or command",
+		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandDashboard)
+
+	_, err = execute(ctx, clone(map[string]interface{}{
+		"module": pulseModuleWorkflowReview, "command": pulseFinalCommandBackup,
+	}))
+	assertRejectionContains(t, err, "exactly one of module or command", "module=set", "command=set")
+
+	// Each target still enforces its own result set, and says which one applies.
+	_, err = execute(ctx, clone(map[string]interface{}{"module": pulseModuleWorkflowReview, "result": "running"}))
+	assertRejectionContains(t, err, `result "running" is not valid`, "changed", "skipped")
+
+	_, err = execute(ctx, clone(map[string]interface{}{"command": pulseFinalCommandBackup, "result": "changed"}))
+	assertRejectionContains(t, err, `result "changed" is not valid`, "running", "skipped")
+}
+
+// TestSchedulerPulsePromptsNameNoRemovedTool is the invariant that failed the
+// last time a tool signature moved here: a read_skill change landed while 36
+// templates still emitted the old form, so every call was schema-rejected until
+// the templates caught up. The template side is covered in the guidance package;
+// this covers the prompts the scheduler builds in Go.
+func TestSchedulerPulsePromptsNameNoRemovedTool(t *testing.T) {
+	prompts := map[string]string{}
+	for _, step := range postRunMonitorSteps() {
+		prompts[step.label] = step.query
+	}
+	for _, moduleStep := range postRunMonitorModuleSteps("pulse-test") {
+		prompts[moduleStep.module+"-module"] = moduleStep.step.query
+	}
+	for _, step := range postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"}) {
+		prompts[step.label+"-upgrade"] = step.query
+	}
+	if len(prompts) == 0 {
+		t.Fatal("no scheduler Pulse prompts were collected")
+	}
+	for label, prompt := range prompts {
+		for _, removed := range pulseRemovedToolNames {
+			if strings.Contains(prompt, removed) {
+				t.Errorf("scheduler prompt %q still instructs agents to call removed tool %q", label, removed)
+			}
+		}
+	}
+}

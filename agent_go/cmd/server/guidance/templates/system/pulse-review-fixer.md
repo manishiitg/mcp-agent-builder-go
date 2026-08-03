@@ -6,7 +6,7 @@ dated review run ID. Current passes have three independent review agents:
 one continuous context while it walks its operational lenses in sequence. After
 the read barrier, exactly one consolidated Fixer runs for the pass.
 
-Read module/worklist state, `get_pulse_finding_backlog`, and saved SQLite reviewer results. On recovery inspect
+Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
 reapply partial work. Preserve `changed_unverified` until its evidence boundary.
 For the due module, load and revalidate the complete active retained backlog;
@@ -44,7 +44,7 @@ shell transport. The call returns an `execution_id` immediately; record it,
 end the current turn, and resume only from its automatic notification of completion.
 Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
 its complete Markdown and structured verification results directly in SQLite;
-call `get_pulse_review_result` with that review run and module before the review
+call `get_pulse_state(view="review")` with that review run and module before the review
 stage ends. Reviewer failure is retained as `Review incomplete` evidence for
 this module only and cannot block later reviewers. The consolidated Fixer
 records the terminal module result.
@@ -158,19 +158,18 @@ they share the same root cause, require compatible changes to the same target,
 and have one verification condition. Cross-reviewer grouping is allowed;
 conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
 externally owned findings stay visible but do not enter the actionable queue.
-There is no arbitrary queue cap and no finding may disappear. For each
-actionable bundle, `start_pulse_fix_attempt` is the durable queue record: link
-every affected finding before mutation, process bundles sequentially, and
-checkpoint/disposition one bundle before beginning the next.
+There is no arbitrary queue cap and no finding may disappear. Process bundles
+sequentially and checkpoint/disposition one bundle before beginning the next; the
+backend opens the durable fix-attempt record from the disposition you write, so
+there is nothing to declare before mutating.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`;
 old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
-Re-read `get_pulse_module_state`, map each actionable finding to the fingerprint
-created from its `CONCERNS:` line, and call `start_pulse_fix_attempt` before
-mutation. From `get_pulse_finding_backlog`, pass `issue.id` as `finding_id` and
-the fingerprint from that same item; keep its `attempt_id`. IDs address records
-but never decide semantic sameness. If a finding lacks either value, block it as
+Re-read `get_pulse_state(view="module")` and map each actionable finding to the
+fingerprint created from its `CONCERNS:` line. From `get_pulse_state(view="backlog")`,
+pass `issue.id` as `finding_id` and the fingerprint from that same item. IDs
+address records but never decide semantic sameness. If a finding lacks either value, block it as
 a reviewer-contract failure instead of making an untracked change.
 
 Reconcile every finding ID to one disposition; missing/duplicates block its
@@ -194,9 +193,9 @@ as `measurement`, and dashboard-only work as `presentation_maintenance`; none
 may claim `direct_goal` impact. Use `inconclusive` or `confounded` rather than
 inventing attribution when observations are missing or interventions overlap.
 
-Record `mark_pulse_module_result` exactly once for every due module. For every finding pass a
+Record `record_pulse_result` exactly once for every due module. For every finding pass a
 structured `finding_dispositions` row with fingerprint, finding id, disposition,
-summary, attempt id when changed, changed files, and exact verification objects.
+summary, changed files, and exact verification objects.
 Verification verdict is exactly `passed`, `failed`, or `inconclusive`.
 `fixed_verified` closes only with passed post-change proof;
 `changed_unverified` remains awaiting verification; failed proof reopens it.

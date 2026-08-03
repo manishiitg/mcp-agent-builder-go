@@ -96,8 +96,8 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 		"store in SQLite",
 		"do not write a file",
 		"BACKLOG RECONCILIATION",
-		"get_pulse_module_state",
-		"get_pulse_finding_backlog",
+		`get_pulse_state(view="module")`,
+		`get_pulse_state(view="backlog")`,
 		"existing_unchanged",
 		"expected outcome",
 		"observed failure",
@@ -119,7 +119,7 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 func TestBuildPulseFixerInstructionDoesNotInheritReadOnlyReviewerContract(t *testing.T) {
 	marker := pulseReviewerCompletionMarker("all-modules-fixer")
 	instruction := buildPulseFixerInstruction("Workflow/example", "Drain bug_review and eval_health.", marker)
-	for _, want := range []string{"PULSE FIXER WRITE SCOPE", "single writer", "CONSOLIDATED FIX QUEUE", "start_pulse_fix_attempt", "repair bundles"} {
+	for _, want := range []string{"PULSE FIXER WRITE SCOPE", "single writer", "CONSOLIDATED FIX QUEUE", "no attempt_id to carry", "repair bundles"} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("Fixer instruction missing %q:\n%s", want, instruction)
 		}
@@ -149,7 +149,7 @@ func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing
 			t.Fatalf("%s builder allowlist should not own mcpagent's intrinsic read_skill tool", name)
 		}
 	}
-	for _, tool := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
+	for _, tool := range []string{"get_pulse_state"} {
 		assertToolListContains(t, readOnly, tool)
 	}
 
@@ -165,7 +165,7 @@ func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing
 		assertToolListContains(t, approved, tool)
 	}
 
-	for _, tool := range []string{"harden_workflow", "mark_pulse_module_result", "notify_user"} {
+	for _, tool := range []string{"harden_workflow", "record_pulse_result", "notify_user"} {
 		assertToolListDoesNotContain(t, readOnly, tool)
 		assertToolListDoesNotContain(t, proposal, tool)
 		assertToolListDoesNotContain(t, approved, tool)
@@ -228,7 +228,7 @@ func TestGoalAdvisorFinalizerInstructionOwnsDurableActions(t *testing.T) {
 		"create_human_input_request",
 		"mark_human_input_consumed: DISABLED",
 		"Do not launch nested maintenance reviewers",
-		"Do not call mark_pulse_module_result",
+		"Do not call record_pulse_result",
 		"Advisor proposal/takeaway",
 		"Critic verdict/objections",
 		"Never leave more than one active .advisor-experiment",

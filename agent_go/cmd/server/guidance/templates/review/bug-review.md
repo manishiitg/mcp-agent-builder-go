@@ -49,7 +49,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    reproduction when possible; otherwise identify the precise reproduction
    limitation. Harness correctness fixes are platform-owned and do not require
    a user decision unless a genuine product-policy choice remains.
-5. Read the persisted result with `get_pulse_review_result` using the exact
+5. Read the persisted result with `get_pulse_state(view="review")` using the exact
    `review_run_id` and `module` supplied by the completion notification. Validate and
    deduplicate that complete result against `builder/improve.html`. As the
    parent, make one bounded update that appends one compact newest-first Bug

@@ -503,116 +503,130 @@ func lifecycleAttemptID(pulseRunID, module string, findings []PulseFixFindingRef
 	return "fix-" + hex.EncodeToString(sum[:])[:16]
 }
 
-// StartPulseFixAttempt durably moves one or more filed concerns into fixing
-// before any mutation occurs. Its deterministic ID makes agent/tool retries
-// idempotent for the same Pulse run, module, and concern set.
-func StartPulseFixAttempt(
+// pulseDispositionOpensAttempt reports whether a disposition asserts that files
+// were changed, which is the only case that needs a fix-attempt record created
+// for it when none already exists.
+func pulseDispositionOpensAttempt(disposition string) bool {
+	switch strings.TrimSpace(disposition) {
+	case FindingDispositionFixedVerified, FindingDispositionChangedUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+// pulseDispositionSettlesAttempt reports whether a disposition is a verdict on
+// an attempt already in flight. These reuse the module's open attempt instead of
+// opening a second one, so a later run verifying an earlier changed_unverified
+// fix closes the attempt that made the change rather than inventing a fresh
+// record for work already done.
+func pulseDispositionSettlesAttempt(disposition string) bool {
+	switch strings.TrimSpace(disposition) {
+	case FindingDispositionFixedVerified, FindingDispositionChangedUnverified,
+		FindingDispositionVerifiedNoChange, FindingDispositionFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// resolvePulseFixAttemptTx returns the attempt a disposition is recorded
+// against, creating one when the disposition claims changed files and the module
+// has no open attempt for this finding.
+//
+// The agent used to declare this itself through a start_pulse_fix_attempt tool
+// call before mutating. That write-ahead bought one narrow property — the
+// declaration preceded the mutation — and cost a whole error class: an attempt
+// id the agent had to carry across turns, and two rejections ("requires
+// attempt_id and changed_files", "no fix attempt %q for finding %q") that fired
+// after the repair had already been made and could not then be recorded. Nothing
+// reads an orphaned attempt: there is no reaper, no incomplete-attempt query, and
+// no crash-recovery path, so the ordering guarantee was never load-bearing. The
+// record is now created here, at the same moment the disposition that describes
+// it is written.
+func resolvePulseFixAttemptTx(
 	ctx context.Context,
-	workspacePath, pulseRunID, module, summary string,
-	findings []PulseFixFindingRef,
-	intendedFiles, beforeRefs []string,
-) (*PulseFixAttempt, error) {
-	module = pulsemodules.Normalize(module)
-	if strings.TrimSpace(pulseRunID) == "" || strings.TrimSpace(module) == "" {
-		return nil, fmt.Errorf("start_pulse_fix_attempt requires both pulse_run_id and module (got %s). pulse_run_id is the scheduler id printed in the Pulse prompt; module is the due Pulse module that owns these findings",
-			pulseArrivalReport(pulseStringArrival("pulse_run_id", pulseRunID), pulseStringArrival("module", module)))
+	db pulseFindingLifecycleDB,
+	module, pulseRunID, concernStatus string,
+	disposition PulseFindingDisposition,
+	recordedAt string,
+) (string, error) {
+	if !pulseDispositionSettlesAttempt(disposition.Disposition) {
+		return "", nil
 	}
-	if len(findings) == 0 {
-		return nil, fmt.Errorf("start_pulse_fix_attempt requires at least one finding; findings is an array of objects shaped [{\"fingerprint\": \"<backlog fingerprint>\", \"finding_id\": \"<backlog issue.id>\"}], both copied from the same get_pulse_finding_backlog item")
-	}
-	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	rows, err := db.QueryContext(ctx, `SELECT a.attempt_id, a.module
+		FROM pulse_fix_attempt_findings af
+		JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+		WHERE af.fingerprint=? AND a.status IN (?, ?)
+		ORDER BY a.started_at DESC`,
+		disposition.Fingerprint, ConcernStatusFixing, ConcernStatusAwaitingVerification)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if db == nil {
-		return nil, fmt.Errorf("no workflow database at %s", runConcernsDBPath(workspacePath))
-	}
-	defer db.Close()
-	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
-		return nil, err
-	}
-
-	attemptID := lifecycleAttemptID(pulseRunID, module, findings, intendedFiles, beforeRefs)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	for index, finding := range findings {
-		fingerprint := strings.TrimSpace(finding.Fingerprint)
-		findingID := strings.TrimSpace(finding.FindingID)
-		if fingerprint == "" || findingID == "" {
-			return nil, fmt.Errorf("findings[%d] requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_finding_backlog item, where finding_id is that item's issue.id and fingerprint is its internal lifecycle key",
-				index, pulseArrivalReport(pulseStringArrival("fingerprint", finding.Fingerprint), pulseStringArrival("finding_id", finding.FindingID)))
+	existing := ""
+	for rows.Next() {
+		var attemptID, attemptModule string
+		if err := rows.Scan(&attemptID, &attemptModule); err != nil {
+			rows.Close()
+			return "", err
 		}
-		var status string
-		if err := tx.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fingerprint).Scan(&status); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, fmt.Errorf("no concern with fingerprint %q; fingerprint must be copied verbatim from a get_pulse_finding_backlog item's fingerprint field, not from its issue.id", fingerprint)
-			}
-			return nil, err
-		}
-		if status == ConcernStatusRejected {
-			return nil, fmt.Errorf("concern %q was rejected and cannot enter fixing without new adjudication", fingerprint)
+		// An attempt belongs to the module that made it; letting another module
+		// settle it would let one module take credit for work it did not do.
+		if existing == "" && pulsemodules.Normalize(attemptModule) == module {
+			existing = attemptID
 		}
 	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if existing != "" {
+		return existing, nil
+	}
+	if !pulseDispositionOpensAttempt(disposition.Disposition) {
+		return "", nil
+	}
+	if concernStatus == ConcernStatusRejected {
+		return "", fmt.Errorf("concern %q was rejected and cannot enter fixing without new adjudication; re-file it with new evidence before recording a fix for finding %q",
+			disposition.Fingerprint, disposition.FindingID)
+	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_fix_attempts
+	findings := []PulseFixFindingRef{{Fingerprint: disposition.Fingerprint, FindingID: disposition.FindingID}}
+	attemptID := lifecycleAttemptID(pulseRunID, module, findings, disposition.ChangedFiles, disposition.BeforeRefs)
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_fix_attempts
 		(attempt_id, module, pulse_run_id, summary, status, intended_files_json, before_refs_json, started_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(attempt_id) DO NOTHING`,
-		attemptID, strings.TrimSpace(module), strings.TrimSpace(pulseRunID), strings.TrimSpace(summary),
-		ConcernStatusFixing, lifecycleJSON(intendedFiles), lifecycleJSON(beforeRefs), now); err != nil {
-		return nil, err
+		attemptID, module, strings.TrimSpace(pulseRunID), disposition.Summary,
+		ConcernStatusFixing, lifecycleJSON(disposition.ChangedFiles),
+		lifecycleJSON(disposition.BeforeRefs), recordedAt); err != nil {
+		return "", err
 	}
-	for _, finding := range findings {
-		fingerprint := strings.TrimSpace(finding.Fingerprint)
-		findingID := strings.TrimSpace(finding.FindingID)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_fix_attempt_findings
-			(attempt_id, fingerprint, finding_id) VALUES (?, ?, ?)
-			ON CONFLICT(attempt_id, fingerprint) DO UPDATE SET finding_id=excluded.finding_id`,
-			attemptID, fingerprint, findingID); err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE run_concerns SET
-			status=?, resolved_at='', resolved_by='', resolution_note=''
-			WHERE fingerprint=?`, ConcernStatusFixing, fingerprint); err != nil {
-			return nil, err
-		}
-		metadata, _ := json.Marshal(map[string]interface{}{
-			"intended_files": normalizedLifecycleStrings(intendedFiles),
-			"before_refs":    normalizedLifecycleStrings(beforeRefs),
-		})
-		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_finding_events
-			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
-			VALUES (?, ?, ?, ?, 'fix_started', ?, ?, ?)
-			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
-			fingerprint, findingID, pulseRunID, attemptID, strings.TrimSpace(summary), string(metadata), now); err != nil {
-			return nil, err
-		}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_fix_attempt_findings
+		(attempt_id, fingerprint, finding_id) VALUES (?, ?, ?)
+		ON CONFLICT(attempt_id, fingerprint) DO UPDATE SET finding_id=excluded.finding_id`,
+		attemptID, disposition.Fingerprint, disposition.FindingID); err != nil {
+		return "", err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+	metadata, _ := json.Marshal(map[string]interface{}{
+		"intended_files": normalizedLifecycleStrings(disposition.ChangedFiles),
+		"before_refs":    normalizedLifecycleStrings(disposition.BeforeRefs),
+	})
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
+		VALUES (?, ?, ?, ?, 'fix_started', ?, ?, ?)
+		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+		disposition.Fingerprint, disposition.FindingID, pulseRunID, attemptID,
+		disposition.Summary, string(metadata), recordedAt); err != nil {
+		return "", err
 	}
-	return &PulseFixAttempt{
-		AttemptID:     attemptID,
-		Module:        strings.TrimSpace(module),
-		PulseRunID:    strings.TrimSpace(pulseRunID),
-		Summary:       strings.TrimSpace(summary),
-		Status:        ConcernStatusFixing,
-		IntendedFiles: normalizedLifecycleStrings(intendedFiles),
-		BeforeRefs:    normalizedLifecycleStrings(beforeRefs),
-		StartedAt:     now,
-		Findings:      findings,
-	}, nil
+	return attemptID, nil
 }
 
 func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	disposition = NormalizePulseFindingDisposition(disposition)
 	if disposition.Fingerprint == "" || disposition.FindingID == "" {
-		return fmt.Errorf("finding disposition requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_finding_backlog item, where finding_id is issue.id",
+		return fmt.Errorf("finding disposition requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_state(view=\"backlog\") item, where finding_id is issue.id",
 			pulseArrivalReport(pulseStringArrival("fingerprint", disposition.Fingerprint), pulseStringArrival("finding_id", disposition.FindingID)))
 	}
 	if disposition.Summary == "" {
@@ -644,10 +658,9 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	verdictCounts := fmt.Sprintf("passed=%d, failed=%d, inconclusive=%d", passed, failed, inconclusive)
 	switch disposition.Disposition {
 	case FindingDispositionFixedVerified:
-		if strings.TrimSpace(disposition.AttemptID) == "" || len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("fixed_verified finding %q requires both attempt_id and changed_files (got %s). attempt_id is the id start_pulse_fix_attempt returned; changed_files lists the workspace-relative files that attempt changed",
+		if len(disposition.ChangedFiles) == 0 {
+			return fmt.Errorf("fixed_verified finding %q requires changed_files (got %s): the exact workspace-relative files this fix changed. Use verified_no_change when a check proved the problem is absent without changing any file",
 				disposition.FindingID, pulseArrivalReport(
-					pulseStringArrival("attempt_id", disposition.AttemptID),
 					pulseListArrival("changed_files", disposition.ChangedFiles)))
 		}
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
@@ -659,10 +672,9 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 				disposition.FindingID, verdictCounts)
 		}
 	case FindingDispositionChangedUnverified:
-		if strings.TrimSpace(disposition.AttemptID) == "" || len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("changed_unverified finding %q requires both attempt_id and changed_files (got %s). attempt_id is the id start_pulse_fix_attempt returned; changed_files lists the workspace-relative files that attempt changed",
+		if len(disposition.ChangedFiles) == 0 {
+			return fmt.Errorf("changed_unverified finding %q requires changed_files (got %s): the exact workspace-relative files this fix changed. Use awaiting_run when nothing was changed and only a scheduled run can produce the evidence",
 				disposition.FindingID, pulseArrivalReport(
-					pulseStringArrival("attempt_id", disposition.AttemptID),
 					pulseListArrival("changed_files", disposition.ChangedFiles)))
 		}
 		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
@@ -788,11 +800,13 @@ func RecordPulseFindingDispositionsTx(
 		findingID := disposition.FindingID
 		attemptID := disposition.AttemptID
 		var concernExists int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns WHERE fingerprint=?`, fingerprint).Scan(&concernExists); err != nil {
+		var concernStatus string
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MAX(status), '') FROM run_concerns WHERE fingerprint=?`,
+			fingerprint).Scan(&concernExists, &concernStatus); err != nil {
 			return err
 		}
 		if concernExists != 1 {
-			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_finding_backlog item's fingerprint field, not from its issue.id", fingerprint, findingID)
+			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_state(view=\"backlog\") item's fingerprint field, not from its issue.id", fingerprint, findingID)
 		}
 		// Prove the decision exists and is still open. A claimed id is not
 		// evidence: an already-answered or invented question would leave the
@@ -816,7 +830,7 @@ func RecordPulseFindingDispositionsTx(
 			var attemptModule, attemptRun string
 			if err := db.QueryRowContext(ctx, `SELECT module, pulse_run_id FROM pulse_fix_attempts WHERE attempt_id=?`, attemptID).Scan(&attemptModule, &attemptRun); err != nil {
 				if err == sql.ErrNoRows {
-					return fmt.Errorf("no fix attempt %q for finding %q; attempt_id must be the value start_pulse_fix_attempt returned, and that call must happen before the mutation it records", attemptID, findingID)
+					return fmt.Errorf("no fix attempt %q for finding %q; omit attempt_id and the backend opens or reuses the right attempt for this module and finding", attemptID, findingID)
 				}
 				return err
 			}
@@ -844,8 +858,14 @@ func RecordPulseFindingDispositionsTx(
 				return err
 			}
 			if linked != 1 {
-				return fmt.Errorf("fix attempt %q is not linked to concern %q (finding %q); an attempt can only close the findings passed in its own start_pulse_fix_attempt.findings array, so start a new attempt covering this finding instead", attemptID, fingerprint, findingID)
+				return fmt.Errorf("fix attempt %q is not linked to concern %q (finding %q); an attempt can only settle the findings it was opened for, so omit attempt_id and let the backend open one for this finding", attemptID, fingerprint, findingID)
 			}
+		} else {
+			resolved, resolveErr := resolvePulseFixAttemptTx(ctx, db, module, pulseRunID, concernStatus, disposition, recordedAt)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			attemptID = resolved
 		}
 
 		verificationAttemptID := attemptID
@@ -1061,8 +1081,8 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	// left all 39 untouched.
 	//
 	// Clustering only helped where it was applied. LoadOpenRunConcerns was
-	// reordered first, but that backs get_pulse_module_state while the Fixer
-	// reads this query through get_pulse_finding_backlog — so the fix landed on
+	// reordered first, but that backs get_pulse_state(view="module") while the
+	// Fixer reads this query through view="backlog" — so the fix landed on
 	// a path the Fixer never reads and the backlog did not move.
 	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count,

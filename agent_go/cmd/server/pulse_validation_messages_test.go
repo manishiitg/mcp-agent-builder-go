@@ -36,14 +36,6 @@ func TestPulseToolDecodeFailuresPublishTheExpectedShape(t *testing.T) {
 	_, err = pulseFindingDispositionsFromToolArg("fixed_verified")
 	assertRejectionContains(t, err, "array of disposition objects", "not an object or a string")
 
-	_, err = pulseFixFindingRefsFromToolArg("PUL-1")
-	assertRejectionContains(t, err, "findings", "array of objects", `"fingerprint"`, `"finding_id"`)
-
-	_, err = pulseFixFindingRefsFromToolArg(nil)
-	assertRejectionContains(t, err, "findings is required", `"fingerprint"`, `"finding_id"`)
-
-	_, err = pulseFixFindingRefsFromToolArg([]interface{}{})
-	assertRejectionContains(t, err, "must not be empty", `"fingerprint"`, `"finding_id"`)
 }
 
 func TestRecordPulseImpactDecodeFailurePublishesTheExpectedShape(t *testing.T) {
@@ -164,7 +156,7 @@ func TestPulseWorklistClosedSetRejectionsPrintTheirMembers(t *testing.T) {
 // result=changed used to teach its contract one rejected write at a time.
 func TestMarkPulseModuleResultChangedNamesTheWholeRequiredSet(t *testing.T) {
 	_, executors, _ := createPulseWorklistTools()
-	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	release := registerTrustedPulseSession("changed-set-session", "changed-set-run")
 	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), "changed-set-session")

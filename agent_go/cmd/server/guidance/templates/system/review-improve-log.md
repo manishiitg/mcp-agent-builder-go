@@ -102,7 +102,7 @@ mobile as an afterthought.
 
 Immediately after Today's outcome, render exactly one `.worksummary` section
 with `data-source="sqlite"`. Before writing it, call
-`get_pulse_finding_backlog` without a module filter and derive everything from
+`get_pulse_state(view="backlog")` without a module filter and derive everything from
 the returned `issue` projections:
 
 - three `.workstat` counts keyed by `data-status="open|in_progress|in_review"`;
@@ -206,7 +206,7 @@ The user reads this page to understand what happened without opening raw logs. E
   signed in", not "step-0-cdp-test hard-fails to browser_failed"). Exact audit
   evidence stays in SQLite-backed reviewer results and structured Pulse state. Completed
   fixer changes, verification, and
-  before/after references are stored by `mark_pulse_module_result` in the
+  before/after references are stored by `record_pulse_result` in the
   workflow-local `pulse_module_audit` table; do not create another audit file.
   The hidden `#pulse-agent-handoff` marker is only for minimal in-progress
   cross-module recovery state. Cards may carry stable invisible

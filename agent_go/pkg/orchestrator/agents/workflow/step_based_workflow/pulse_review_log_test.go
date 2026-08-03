@@ -100,18 +100,9 @@ func TestPulseReviewVerificationAllowlistComesFromChangedUnverifiedAttempts(t *t
 	ws := concernsWorkspace(t)
 	ctx := context.Background()
 	concern := filedReviewConcern(t, ws, "pulse-fix", "eval_health", "score scale is not pinned")
-	attempt, err := StartPulseFixAttempt(
-		ctx, ws, "pulse-fix", "eval_health", "Pin the score scale.",
-		[]PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "EVAL-1"}},
-		[]string{"evaluation/evaluation_plan.json"}, []string{"scale:before"},
-	)
-	if err != nil {
-		t.Fatalf("start attempt: %v", err)
-	}
 	recordFindingDispositions(t, ws, "eval_health", "pulse-fix", []PulseFindingDisposition{{
 		Fingerprint:  concern.Fingerprint,
 		FindingID:    "EVAL-1",
-		AttemptID:    attempt.AttemptID,
 		Disposition:  FindingDispositionChangedUnverified,
 		Summary:      "Scale pinned; next evaluator run must prove it.",
 		ChangedFiles: []string{"evaluation/evaluation_plan.json"},
@@ -130,7 +121,7 @@ func TestPulseReviewVerificationAllowlistComesFromChangedUnverifiedAttempts(t *t
 	if err != nil {
 		t.Fatalf("load candidates: %v", err)
 	}
-	if len(candidates) != 1 || candidates[0].AttemptID != attempt.AttemptID ||
+	if len(candidates) != 1 || strings.TrimSpace(candidates[0].AttemptID) == "" ||
 		candidates[0].FindingID != "EVAL-1" || !strings.Contains(candidates[0].NextCheck, "next evaluator") {
 		t.Fatalf("unexpected allowlist: %#v", candidates)
 	}
@@ -138,7 +129,7 @@ func TestPulseReviewVerificationAllowlistComesFromChangedUnverifiedAttempts(t *t
 	valid := fmt.Sprintf(`## Verdict
 The producing run proved the scale.
 PULSE_VERIFICATION_JSON: {"finding_id":"EVAL-1","fingerprint":%q,"attempt_id":%q,"verdict":"passed","expected":"pinned max_score","observed":"pinned max_score","evidence":["evaluation row"]}`,
-		concern.Fingerprint, attempt.AttemptID)
+		concern.Fingerprint, candidates[0].AttemptID)
 	if err := RecordPulseReview(ctx, ws, "workflow_review", "review-allowed", "pulse-review", "", valid); err != nil {
 		t.Fatalf("allowlisted marker rejected: %v", err)
 	}

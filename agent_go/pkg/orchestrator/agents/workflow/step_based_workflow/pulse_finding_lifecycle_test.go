@@ -53,29 +53,9 @@ func TestPulseFindingLifecycleClosesOnlyWithVerifiedFixAndReopensOnRecurrence(t 
 	concernText := "stale selector repeats the same accounts"
 	concern := filedReviewConcern(t, workspacePath, pulseRunID, module, concernText)
 
-	findings := []PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "BUG-1"}}
-	attempt, err := StartPulseFixAttempt(
-		ctx, workspacePath, pulseRunID, module, "Diversify selector candidates.",
-		findings, []string{"planning/step_config.json"}, []string{"selector:before"},
-	)
-	if err != nil {
-		t.Fatalf("start attempt: %v", err)
-	}
-	retried, err := StartPulseFixAttempt(
-		ctx, workspacePath, pulseRunID, module, "Retry after tool response loss.",
-		findings, []string{"planning/step_config.json"}, []string{"selector:before"},
-	)
-	if err != nil {
-		t.Fatalf("retry attempt: %v", err)
-	}
-	if retried.AttemptID != attempt.AttemptID {
-		t.Fatalf("retry created a different attempt: %q != %q", retried.AttemptID, attempt.AttemptID)
-	}
-
 	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
 		Fingerprint:  concern.Fingerprint,
 		FindingID:    "BUG-1",
-		AttemptID:    attempt.AttemptID,
 		Disposition:  FindingDispositionFixedVerified,
 		Summary:      "Selector now includes an exploration pool.",
 		ChangedFiles: []string{"planning/step_config.json"},
@@ -131,19 +111,10 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 	module := "eval_health"
 	pulseRunID := "pulse-1"
 	concern := filedReviewConcern(t, workspacePath, pulseRunID, module, "evaluation uses a stale outcome")
-	attempt, err := StartPulseFixAttempt(
-		ctx, workspacePath, pulseRunID, module, "Update the evaluation query.",
-		[]PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "EVAL-1"}},
-		[]string{"evaluation/plan.json"}, nil,
-	)
-	if err != nil {
-		t.Fatalf("start attempt: %v", err)
-	}
 
 	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
 		Fingerprint:  concern.Fingerprint,
 		FindingID:    "EVAL-1",
-		AttemptID:    attempt.AttemptID,
 		Disposition:  FindingDispositionChangedUnverified,
 		Summary:      "Query changed; the next producing run is required for proof.",
 		ChangedFiles: []string{"evaluation/plan.json"},
@@ -164,7 +135,6 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
 		Fingerprint: concern.Fingerprint,
 		FindingID:   "EVAL-1",
-		AttemptID:   attempt.AttemptID,
 		Disposition: FindingDispositionFailed,
 		Summary:     "The next producing run still returned the stale outcome.",
 		Verification: []PulseFindingVerification{{
@@ -293,7 +263,6 @@ func TestFixedVerifiedRejectsInconclusiveEvidence(t *testing.T) {
 	err := validateFindingDisposition(PulseFindingDisposition{
 		Fingerprint:  "fp",
 		FindingID:    "BUG-1",
-		AttemptID:    "attempt",
 		Disposition:  FindingDispositionFixedVerified,
 		Summary:      "Claimed fixed.",
 		ChangedFiles: []string{"workflow.json"},
@@ -312,7 +281,6 @@ func TestFixedVerifiedRejectsUnpairedChangeReferences(t *testing.T) {
 	err := validateFindingDisposition(PulseFindingDisposition{
 		Fingerprint:  "fp",
 		FindingID:    "BUG-REFS",
-		AttemptID:    "attempt",
 		Disposition:  FindingDispositionFixedVerified,
 		Summary:      "Claimed fixed.",
 		ChangedFiles: []string{"workflow.json"},
@@ -334,19 +302,10 @@ func TestFixedVerifiedDispositionWhitespaceStillClosesFinding(t *testing.T) {
 	module := "bug_review"
 	pulseRunID := "pulse-whitespace"
 	concern := filedReviewConcern(t, workspacePath, pulseRunID, module, "whitespace routing regression")
-	attempt, err := StartPulseFixAttempt(
-		ctx, workspacePath, pulseRunID, module, "Fix lifecycle routing.",
-		[]PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "BUG-SPACE"}},
-		[]string{"pulse_finding_lifecycle.go"}, nil,
-	)
-	if err != nil {
-		t.Fatalf("start fix attempt: %v", err)
-	}
 
 	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
 		Fingerprint:  " " + concern.Fingerprint + " ",
 		FindingID:    " BUG-SPACE ",
-		AttemptID:    " " + attempt.AttemptID + " ",
 		Disposition:  FindingDispositionFixedVerified + " ",
 		Summary:      " Lifecycle routing now uses canonical input. ",
 		ChangedFiles: []string{" pulse_finding_lifecycle.go "},
@@ -478,7 +437,7 @@ func TestExternalActionRequiredNeedsOwnershipAndReopenBoundary(t *testing.T) {
 // TestFindingBacklogLeadsWithTheLargestCluster covers the query the Fixer
 // actually reads.
 //
-// get_pulse_finding_backlog resolves here, not through LoadOpenRunConcerns.
+// get_pulse_state(view="backlog") resolves here, not through LoadOpenRunConcerns.
 // Reordering that other function alone left this one sorting by recency, so
 // social-media's 39 execute-find-opportunities concerns — one schema mismatch
 // filed once per field it named — stayed interleaved with unrelated findings
@@ -656,39 +615,45 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 	module := "bug_review"
 	concern := filedReviewConcern(t, workspacePath, "pulse-1", module, "collector writes a null column")
 
-	// Run 1 applies the fix; proof needs the next producing run.
-	attempt, err := StartPulseFixAttempt(ctx, workspacePath, "pulse-1", module,
-		"Repair the writer.", []PulseFixFindingRef{{Fingerprint: concern.Fingerprint, FindingID: "BUG-1"}},
-		[]string{"planning/plan.json"}, []string{"before"})
-	if err != nil {
-		t.Fatalf("start attempt: %v", err)
-	}
+	// Run 1 applies the fix; proof needs the next producing run. The backend
+	// opens the attempt from this disposition.
 	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
 		Disposition: FindingDispositionChangedUnverified, Summary: "Applied; awaiting next valid run.",
 		NextCheck:    "next scheduled dev collection run writes latency_daily_metrics",
 		ChangedFiles: []string{"planning/plan.json"},
+		BeforeRefs:   []string{"before"}, AfterRefs: []string{"after"},
 		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
 	}})
+	opened, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
+	if err != nil || len(opened) != 1 || len(opened[0].Attempts) != 1 {
+		t.Fatalf("changed_unverified did not open exactly one attempt: %+v err=%v", opened, err)
+	}
+	attemptID := opened[0].Attempts[0].AttemptID
 
-	// Run 2 has the evidence and closes the same attempt.
+	// Run 2 has the evidence and closes the same attempt, without naming it.
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
 	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
 		Disposition: FindingDispositionFixedVerified, Summary: "Next run produced a non-null column.",
 		ChangedFiles: []string{"planning/plan.json"},
 		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationPassed}},
 	}}, ""); err != nil {
 		t.Fatalf("a later run could not verify its own module's earlier attempt: %v", err)
 	}
+	closed, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
+	if err != nil || len(closed) != 1 || len(closed[0].Attempts) != 1 ||
+		closed[0].Attempts[0].AttemptID != attemptID {
+		t.Fatalf("the later run invented a second attempt instead of settling %q: %+v err=%v", attemptID, closed, err)
+	}
 
-	// Another module still cannot close it.
+	// Another module still cannot close it, even naming the attempt directly.
 	if err := RecordPulseFindingDispositionsTx(ctx, db, "strategy_auditor", "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attempt.AttemptID,
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attemptID,
 		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
 		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
 	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
@@ -706,7 +671,7 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 // checked the run that had since produced its evidence.
 func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 	base := PulseFindingDisposition{
-		Fingerprint: "fp", FindingID: "BUG-1", AttemptID: "fix-1",
+		Fingerprint: "fp", FindingID: "BUG-1",
 		Disposition:  FindingDispositionChangedUnverified,
 		Summary:      "Collector now writes the column.",
 		ChangedFiles: []string{"planning/plan.json"},
@@ -727,7 +692,7 @@ func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 
 // The consolidated Fixer is instructed to pass module="pulse_fixer", meaning
 // every due module. This read path treats module as a plain step_id filter, so
-// the sentinel matched nothing: get_pulse_finding_backlog returned 0 rows for
+// the sentinel matched nothing: the backlog view returned 0 rows for
 // the one value the Fixer's own contract tells it to send, against 149 for an
 // omitted filter on social-media. It only did any work by falling back to
 // omitting the module.

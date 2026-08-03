@@ -15,7 +15,7 @@ it does not narrow the pass.{{end}}
 
 ## Size the work before choosing an order
 
-`get_pulse_finding_backlog` returns a flat list, which hides shape. Before
+`get_pulse_state(view="backlog")` returns a flat list, which hides shape. Before
 selecting anything, query the backlog with `query_workflow_db` and decide how to
 work from what you find:
 
@@ -45,7 +45,7 @@ tables do not use the column names an agent would guess.
 
 1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
    `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`.
-2. Call `get_pulse_module_state`, then `get_pulse_finding_backlog` with no module
+2. Call `get_pulse_state(view="module")`, then `get_pulse_state(view="backlog")` with no module
    filter so it returns the complete active backlog. Treat active concerns, finding lifecycles, attempts,
    verification history, decisions, and saved review identities as the source of
    truth. The Dashboard is a projection, never the backlog. Select only existing
@@ -96,17 +96,17 @@ pre-change run/artifact ids. Old artifacts are baseline only, never proof.
   `changed_unverified` with reason `awaiting_next_valid_run`, the exact next
   evidence boundary, and do not claim the finding is fixed.
 
-Before each mutation call `start_pulse_fix_attempt` with the exact existing
-pair from `get_pulse_finding_backlog`: pass `issue.id` as `finding_id` and the
-`fingerprint` from that same item, plus intended files and before references.
-The issue ID is an address, not duplicate-detection evidence. Do not mutate a
-finding that cannot be linked to both values.
+Every disposition carries the exact existing pair from
+`get_pulse_state(view="backlog")`: pass `issue.id` as `finding_id` and the
+`fingerprint` from that same item, plus the files it changed. The backend opens
+the fix-attempt record from that disposition. The issue ID is an address, not
+duplicate-detection evidence. Do not mutate a finding that cannot be linked to
+both values.
 
 ## Close out
 
-Call `mark_pulse_module_result` exactly once for every selected module, with one
-structured disposition for every selected finding and the returned attempt ID
-where required. Use `fixed_verified`, `changed_unverified`, `verified_no_change`,
+Call `record_pulse_result` exactly once for every selected module, with one
+structured disposition for every selected finding. Use `fixed_verified`, `changed_unverified`, `verified_no_change`,
 `blocked`, `awaiting_user`, `proposal_only`, `external_action_required`,
 `failed`, or `rejected` honestly under the shared lifecycle contract.
 

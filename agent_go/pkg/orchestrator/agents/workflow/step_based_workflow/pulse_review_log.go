@@ -27,7 +27,7 @@ import (
 // reviewer caught a half-finished migration where two live consumers were reading
 // a deleted path and silently getting nothing. Every one of those seven left
 // `last_result` empty in pulse_module_state, because recording the outcome depends
-// on the Pulse Fixer calling mark_pulse_module_result, and it did not. A cycle
+// on the Pulse Fixer calling record_pulse_result, and it did not. A cycle
 // that found a live breakage left no trace for the next cycle to learn from.
 //
 // So this is written by Go at the moment the backend persists a reviewer artifact

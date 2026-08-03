@@ -3,7 +3,7 @@
 Use only for the scheduler's Gate stage — a progressive evidence scan, not a
 full audit or fixer.
 
-Read `soul/soul.md`, `builder/improve.html`, `get_pulse_module_state`, latest run
+Read `soul/soul.md`, `builder/improve.html`, `get_pulse_state(view="module")`, latest run
 summary, compact freshness/LLM/readiness state, and human inputs. Weigh returned
 `open_concerns`, `plan_change_backlog`, `loop_closure`, and
 `module_review_history`; justify every skip. `loop_closure` is read-only

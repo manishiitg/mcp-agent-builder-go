@@ -358,7 +358,7 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 			return nil, err
 		}
 		if interventionExists != 1 {
-			return nil, fmt.Errorf("assessments[%d] references unknown intervention_id %q; an assessment can only be appended to an intervention that already exists, so include it in this call's interventions array or use the intervention_id shown in get_pulse_module_state.impact_ledger",
+			return nil, fmt.Errorf("assessments[%d] references unknown intervention_id %q; an assessment can only be appended to an intervention that already exists, so include it in this call's interventions array or use the intervention_id shown in get_pulse_state(view=\"module\").impact_ledger",
 				index, assessment.InterventionID)
 		}
 		assessment.AssessmentID = strings.TrimSpace(assessment.AssessmentID)

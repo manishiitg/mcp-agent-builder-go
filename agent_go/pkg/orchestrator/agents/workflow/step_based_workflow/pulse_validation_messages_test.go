@@ -84,30 +84,21 @@ func TestFindingDispositionRejectionsNameTheContractTheyEnforce(t *testing.T) {
 			}, allExternalOwners...),
 		},
 		{
-			name: "fixed_verified reports which of attempt_id and changed_files arrived",
-			disposition: PulseFindingDisposition{
-				Fingerprint: "fp-1", FindingID: "EH-2026-07-30-01",
-				Disposition: FindingDispositionFixedVerified, Summary: "Fixed.",
-				AttemptID: "fix-abc",
-			},
-			want: []string{"attempt_id", "changed_files", "attempt_id=set", "changed_files=missing"},
-		},
-		{
-			name: "fixed_verified reports both missing when neither arrived",
+			name: "fixed_verified names changed_files and the disposition to use instead",
 			disposition: PulseFindingDisposition{
 				Fingerprint: "fp-1", FindingID: "EH-2026-07-30-01",
 				Disposition: FindingDispositionFixedVerified, Summary: "Fixed.",
 			},
-			want: []string{"attempt_id=missing", "changed_files=missing"},
+			want: []string{"changed_files", "changed_files=missing", "verified_no_change"},
 		},
 		{
-			name: "changed_unverified reports which of attempt_id and changed_files arrived",
+			name: "changed_unverified names changed_files and the disposition to use instead",
 			disposition: PulseFindingDisposition{
 				Fingerprint: "fp-1", FindingID: "PUL-E3D98FEF",
 				Disposition: FindingDispositionChangedUnverified, Summary: "Applied, unproven.",
-				ChangedFiles: []string{"planning/step_config.json"},
+				NextCheck: "the next producing run",
 			},
-			want: []string{"attempt_id", "changed_files", "attempt_id=missing", "changed_files=1 items"},
+			want: []string{"changed_files", "changed_files=missing", "awaiting_run"},
 		},
 		{
 			name: "invalid disposition names every accepted value",
@@ -156,7 +147,7 @@ func TestFindingDispositionRejectionsNameTheContractTheyEnforce(t *testing.T) {
 		{
 			name: "changed_unverified verdict shortfall reports the observed counts",
 			disposition: PulseFindingDisposition{
-				Fingerprint: "fp-1", FindingID: "PUL-1", AttemptID: "fix-abc",
+				Fingerprint: "fp-1", FindingID: "PUL-1",
 				Disposition: FindingDispositionChangedUnverified, Summary: "Applied.",
 				ChangedFiles: []string{"a.json"}, NextCheck: "next scheduled run",
 				Verification: []PulseFindingVerification{{Check: "ran", Verdict: VerificationPassed}},
@@ -262,29 +253,57 @@ func TestFindingDispositionAcceptanceIsUnchangedByMessageDetail(t *testing.T) {
 	}
 }
 
-func TestStartPulseFixAttemptRejectionsNameTheContract(t *testing.T) {
+// TestBackendOpenedFixAttemptRejectionsNameTheContract covers the path that
+// replaced the start_pulse_fix_attempt tool. The attempt record is now created
+// from the disposition itself, so its rejections are the only place left that
+// can teach the caller the contract.
+func TestBackendOpenedFixAttemptRejectionsNameTheContract(t *testing.T) {
 	ctx := context.Background()
 	workspace := concernsWorkspace(t)
+	module := "bug_review"
+	concern := filedReviewConcern(t, workspace, "pulse-1", module, "stale selector repeats accounts")
 
-	_, err := StartPulseFixAttempt(ctx, workspace, "", "bug_review", "s",
-		[]PulseFixFindingRef{{Fingerprint: "fp", FindingID: "id"}}, nil, nil)
-	assertContainsAll(t, err, []string{"pulse_run_id", "module", "pulse_run_id=missing", "module=set"})
+	err := validateFindingDisposition(PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
+		Disposition: FindingDispositionFixedVerified, Summary: "Claimed fixed.",
+		Verification: []PulseFindingVerification{{Check: "c", Verdict: VerificationPassed}},
+	})
+	assertContainsAll(t, err, []string{"requires changed_files", "changed_files=missing", "verified_no_change"})
 
-	_, err = StartPulseFixAttempt(ctx, workspace, "pulse-1", "bug_review", "s", nil, nil, nil)
-	assertContainsAll(t, err, []string{"at least one finding", "fingerprint", "finding_id"})
+	err = validateFindingDisposition(PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
+		Disposition: FindingDispositionChangedUnverified, Summary: "Applied.",
+		NextCheck:    "next run",
+		Verification: []PulseFindingVerification{{Check: "c", Verdict: VerificationInconclusive}},
+	})
+	assertContainsAll(t, err, []string{"requires changed_files", "changed_files=missing", "awaiting_run"})
 
-	// The per-finding check runs against an open lifecycle database, so the
-	// workspace needs a filed concern before it is reachable.
-	filedReviewConcern(t, workspace, "pulse-1", "bug_review", "stale selector repeats accounts")
+	db, dbErr := openRunConcernsDB(ctx, workspace, false)
+	if dbErr != nil || db == nil {
+		t.Fatalf("open lifecycle db: db=%v err=%v", db, dbErr)
+	}
+	defer db.Close()
 
-	_, err = StartPulseFixAttempt(ctx, workspace, "pulse-1", "bug_review", "s",
-		[]PulseFixFindingRef{{FindingID: "PUL-1"}}, nil, nil)
-	assertContainsAll(t, err, []string{"findings[0]", "fingerprint", "finding_id",
-		"fingerprint=missing", "finding_id=set"})
+	// A fingerprint that was never filed cannot be addressed at all.
+	err = RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: "PUL-1", FindingID: "PUL-1",
+		Disposition: FindingDispositionFixedVerified, Summary: "Claimed fixed.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "c", Verdict: VerificationPassed}},
+	}}, "")
+	assertContainsAll(t, err, []string{"no concern with fingerprint", "get_pulse_state(view=\"backlog\")", "issue.id"})
 
-	_, err = StartPulseFixAttempt(ctx, workspace, "pulse-1", "bug_review", "s",
-		[]PulseFixFindingRef{{Fingerprint: "PUL-1", FindingID: "PUL-1"}}, nil, nil)
-	assertContainsAll(t, err, []string{"no concern with fingerprint", "get_pulse_finding_backlog", "issue.id"})
+	// A rejected concern still cannot re-enter fixing without adjudication.
+	if err := ResolveRunConcern(ctx, workspace, concern.Fingerprint, ConcernStatusRejected, "pulse", "not a problem"); err != nil {
+		t.Fatalf("reject concern: %v", err)
+	}
+	err = RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
+		Disposition: FindingDispositionFixedVerified, Summary: "Claimed fixed.",
+		ChangedFiles: []string{"planning/plan.json"},
+		Verification: []PulseFindingVerification{{Check: "c", Verdict: VerificationPassed}},
+	}}, "")
+	assertContainsAll(t, err, []string{"was rejected", "new adjudication", "BUG-1"})
 }
 
 func TestPulseImpactRejectionsNameTheContractTheyEnforce(t *testing.T) {

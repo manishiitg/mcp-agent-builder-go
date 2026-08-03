@@ -1,6 +1,7 @@
 package guidance
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -109,14 +110,14 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-review-fixer": {
 			wants: []string{
-				"exactly one", "saved review and lifecycle evidence", "automatic notification", "get_pulse_review_result",
+				"exactly one", "saved review and lifecycle evidence", "automatic notification", `get_pulse_state(view="review")`,
 				"one consolidated Fixer", "terminal current-run result", "cannot block later reviewers", "compact, priority-ordered Fix queue",
 			},
 		},
 		"pulse-finalizer": {
 			wants: []string{
 				"Never treat missing as skipped/successful", "dedicated Dashboard stage", "do not rewrite them",
-				"directly in this parent", "Publish", "Notify", "mark_pulse_final_command_result",
+				"directly in this parent", "Publish", "Notify", "record_pulse_result",
 			},
 		},
 	}
@@ -178,10 +179,10 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"does not rerun Pulse Gate",
 			"launch review agents",
 			"begin_pulse_fixer_run",
-			"get_pulse_module_state",
-			"get_pulse_finding_backlog",
+			`get_pulse_state(view="module")`,
+			`get_pulse_state(view="backlog")`,
 			"`issue.id` as `finding_id`",
-			"mark_pulse_module_result",
+			"record_pulse_result",
 			"post-change evidence boundary",
 			"changed_unverified",
 			"awaiting_next_valid_run",
@@ -370,7 +371,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"what new evidence caused the override",
 		"progressive evidence scan",
 		"one ordered finalizer turn",
-		"mark_pulse_final_command_result",
+		"record_pulse_result(command=...)",
 		"not automatically due every Pulse",
 		"Three Independent Review Agents And One Consolidated Writer",
 		"existing unchanged, existing with new evidence, reopened, or genuinely",
@@ -524,7 +525,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Assumptions challenged",
 		"Today's outcome",
 		"Current work: a projection, not another backlog",
-		`get_pulse_finding_backlog`,
+		`get_pulse_state(view="backlog")`,
 		"Needs verification",
 		"at most three",
 		`<details class="technical">`,
@@ -828,7 +829,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 			t.Fatalf("manual pulse missing complete reviewer contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"record_pulse_worklist", "mark_pulse_module_result", "mark_pulse_final_command_result"} {
+	for _, forbidden := range []string{"record_pulse_worklist", "record_pulse_result"} {
 		if !strings.Contains(pulse, "do not call\n   `"+forbidden+"`") && !strings.Contains(pulse, "`"+forbidden+"`") {
 			t.Fatalf("manual pulse does not explicitly fence scheduler-only tool %q", forbidden)
 		}
@@ -1025,7 +1026,7 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 			"Do not pass `pulse_run_id` or `review_run_id`",
 			"SQLite",
 			"structured finding lifecycle",
-			"get_pulse_review_result",
+			`get_pulse_state(view="review")`,
 		} {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("%s missing persisted standalone-review contract %q", kind, want)
@@ -1470,5 +1471,55 @@ func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {
 		if !strings.Contains(kb, want) {
 			t.Fatalf("improve-knowledge missing freshness pass %q", want)
 		}
+	}
+}
+
+// TestNoTemplateNamesARemovedPulseTool is the invariant that failed the last
+// time a tool contract moved: a read_skill signature change landed while 36
+// templates still emitted the old form, so every call was schema-rejected until
+// the templates caught up.
+//
+// The eight-tool Pulse surface was consolidated to four
+// (get_pulse_state / record_pulse_worklist / record_pulse_result /
+// record_pulse_impact). A template naming a removed tool instructs an agent to
+// call something that no longer exists, and the failure surfaces as a broken
+// tool rather than a stale prompt. This walks every embedded template, not only
+// the registered kinds, so a template added outside a registry is covered too.
+func TestNoTemplateNamesARemovedPulseTool(t *testing.T) {
+	removed := []string{
+		"get_pulse_module_state",
+		"get_pulse_finding_backlog",
+		"get_pulse_review_result",
+		"start_pulse_fix_attempt",
+		"mark_pulse_module_result",
+		"mark_pulse_final_command_result",
+	}
+	visited := 0
+	err := fs.WalkDir(templatesFS, "templates", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		body, readErr := templatesFS.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		visited++
+		for _, name := range removed {
+			if strings.Contains(string(body), name) {
+				t.Errorf("%s still instructs agents to call removed Pulse tool %q; "+
+					"the surface is get_pulse_state(view=...), record_pulse_worklist, record_pulse_result, record_pulse_impact",
+					path, name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embedded templates: %v", err)
+	}
+	if visited == 0 {
+		t.Fatal("no templates were walked; the embed pattern or path changed")
 	}
 }
