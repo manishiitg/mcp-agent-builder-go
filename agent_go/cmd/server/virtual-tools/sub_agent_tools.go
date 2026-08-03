@@ -39,6 +39,9 @@ const (
 	SubAgentIsolatedSessionIDKey subAgentContextKey = "isolated_session_id"
 	// SubAgentMessageSequenceRestartKey is the context key for forcing a message_sequence route to start fresh.
 	SubAgentMessageSequenceRestartKey subAgentContextKey = "message_sequence_restart"
+	// GenericAgentMessageSequenceKey carries optional ordered follow-up turns for
+	// call_generic_agent. The runtime reuses one agent/session for every turn.
+	GenericAgentMessageSequenceKey subAgentContextKey = "generic_agent_message_sequence"
 	// GetSubAgentConversationKey is the context key for the get_sub_agent_conversation function
 	GetSubAgentConversationKey subAgentContextKey = "get_sub_agent_conversation"
 	// QuerySubAgentKey is the context key for querying one parent-owned sub-agent execution.
@@ -84,6 +87,21 @@ type ExecutePredefinedSubAgentFunc func(ctx context.Context, routeID, todoID, in
 // ExecuteGenericAgentFunc is the function signature for executing generic agents
 // Injected via context by the controller
 type ExecuteGenericAgentFunc func(ctx context.Context, todoID, instructions string) (string, error)
+
+// GenericAgentMessage is one follow-up user turn after call_generic_agent's
+// opening instructions. ID is required for event/log diagnostics.
+type GenericAgentMessage struct {
+	ID      string
+	Title   string
+	Message string
+}
+
+// GenericAgentMessageSequenceFromContext returns a defensive copy of the
+// ordered follow-up messages attached by handleCallGenericAgent.
+func GenericAgentMessageSequenceFromContext(ctx context.Context) []GenericAgentMessage {
+	items, _ := ctx.Value(GenericAgentMessageSequenceKey).([]GenericAgentMessage)
+	return append([]GenericAgentMessage(nil), items...)
+}
 
 // CreateSubAgentTools creates the sub-agent calling virtual tools.
 // preferred_tier is always a REQUIRED parameter on both sub-agent tools — the
@@ -146,6 +164,21 @@ func CreateSubAgentTools() []llmtypes.Tool {
 		"instructions": map[string]interface{}{
 			"type":        "string",
 			"description": "Detailed instructions for what the agent should accomplish. Be very specific since there's no predefined context.",
+		},
+		"message_sequence": map[string]interface{}{
+			"type":        "array",
+			"minItems":    1,
+			"maxItems":    12,
+			"description": "Optional ordered follow-up turns sent to the same generic agent after the opening instructions turn. One conversation, MCP session, folder guard, and isolated workspace are preserved.",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id":      map[string]interface{}{"type": "string"},
+					"title":   map[string]interface{}{"type": "string"},
+					"message": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"id", "message"},
+			},
 		},
 		"share_browser": map[string]interface{}{
 			"type":        "boolean",
@@ -395,6 +428,13 @@ func handleCallGenericAgent(ctx context.Context, args map[string]interface{}) (s
 	if !ok || instructions == "" {
 		return "", fmt.Errorf("instructions are required")
 	}
+	messageSequence, err := parseGenericAgentMessageSequence(args["message_sequence"])
+	if err != nil {
+		return "", err
+	}
+	if len(messageSequence) > 0 {
+		ctx = context.WithValue(ctx, GenericAgentMessageSequenceKey, messageSequence)
+	}
 
 	tierRequired, _ := ctx.Value(TierSelectionRequiredKey).(bool)
 	preferredTierF, hasTier := args["preferred_tier"].(float64)
@@ -453,6 +493,47 @@ func handleCallGenericAgent(ctx context.Context, args map[string]interface{}) (s
 
 	resultJSON, _ := json.MarshalIndent(subAgentResult, "", "  ")
 	return string(resultJSON), nil
+}
+
+func parseGenericAgentMessageSequence(raw interface{}) ([]GenericAgentMessage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("message_sequence must be an array")
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("message_sequence must contain at least one follow-up turn when supplied")
+	}
+	if len(items) > 12 {
+		return nil, fmt.Errorf("message_sequence has %d items; maximum is 12", len(items))
+	}
+	seen := make(map[string]struct{}, len(items))
+	parsed := make([]GenericAgentMessage, 0, len(items))
+	for index, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("message_sequence[%d] must be an object", index)
+		}
+		id, _ := item["id"].(string)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("message_sequence[%d].id is required", index)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("message_sequence item id %q is duplicated", id)
+		}
+		seen[id] = struct{}{}
+		message, _ := item["message"].(string)
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return nil, fmt.Errorf("message_sequence[%d].message is required", index)
+		}
+		title, _ := item["title"].(string)
+		parsed = append(parsed, GenericAgentMessage{ID: id, Title: strings.TrimSpace(title), Message: message})
+	}
+	return parsed, nil
 }
 
 func isAsyncSubAgentStart(result string) bool {

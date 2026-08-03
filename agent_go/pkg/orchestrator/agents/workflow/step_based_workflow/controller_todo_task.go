@@ -1220,23 +1220,66 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeGenericAgent(
 		},
 	)
 
-	// Execute using executeSingleStep (reuses standard execution infrastructure)
-	executionResult, _, err := hcpo.executeSingleStep(
-		subAgentCtx,
-		genericStep,
-		stepIndex,       // Use parent step index for context
-		genericStepPath, // stepPath
-		1,               // totalSteps = 1 for single generic task
-		0,               // iteration
-		[]string{},      // previousContextFiles - empty for generic tasks
-		progress,        // progress
-		true,            // nested execution: parent todo_task owns top-level progress
-		execCtx,         // execCtx
-		allSteps,        // allSteps
-		true,            // isSubAgent = true (sub-agents never request human feedback)
-		[]string{response.InstructionsToSubAgent}, // previousExecutionResults - pass instructions
-		nil, // orchestrationRoutes - none for generic agent
-	)
+	var executionResult string
+	var err error
+	messageSequence := virtualtools.GenericAgentMessageSequenceFromContext(subAgentCtx)
+	if len(messageSequence) > 0 {
+		items := make([]MessageSequenceItem, 0, 1+len(messageSequence))
+		items = append(items, MessageSequenceItem{
+			ID:      "opening",
+			Type:    "user_message",
+			Title:   "Opening",
+			Message: response.InstructionsToSubAgent,
+		})
+		for _, message := range messageSequence {
+			items = append(items, MessageSequenceItem{
+				ID:      message.ID,
+				Type:    "user_message",
+				Title:   message.Title,
+				Message: message.Message,
+			})
+		}
+		sequenceStep := &MessageSequencePlanStep{
+			Type: StepTypeMessageSeq,
+			CommonStepFields: CommonStepFields{
+				ID:            genericStepID,
+				Title:         taskTitle,
+				ContextOutput: FlexibleContextOutput(fmt.Sprintf("%s-result.json", todoIDPart)),
+			},
+			Items:        items,
+			AgentConfigs: genericStep.AgentConfigs,
+		}
+		var history []llmtypes.MessageContent
+		executionResult, history, err = hcpo.executeMessageSequenceStep(
+			subAgentCtx,
+			sequenceStep,
+			stepIndex,
+			genericStepPath,
+			progress,
+			execCtx,
+			allSteps,
+			messageSequenceCallOptions{Source: "generic_agent_sequence"},
+		)
+		capturedHistory = append([]llmtypes.MessageContent(nil), history...)
+	} else {
+		// Execute using executeSingleStep (reuses standard execution infrastructure)
+		executionResult, _, err = hcpo.executeSingleStep(
+			subAgentCtx,
+			genericStep,
+			stepIndex,       // Use parent step index for context
+			genericStepPath, // stepPath
+			1,               // totalSteps = 1 for single generic task
+			0,               // iteration
+			[]string{},      // previousContextFiles - empty for generic tasks
+			progress,        // progress
+			true,            // nested execution: parent todo_task owns top-level progress
+			execCtx,         // execCtx
+			allSteps,        // allSteps
+			true,            // isSubAgent = true (sub-agents never request human feedback)
+			[]string{response.InstructionsToSubAgent}, // previousExecutionResults - pass instructions
+			nil, // orchestrationRoutes - none for generic agent
+		)
+	}
 
 	// Notify sub-agent completion
 	if hcpo.subAgentNotifier != nil {

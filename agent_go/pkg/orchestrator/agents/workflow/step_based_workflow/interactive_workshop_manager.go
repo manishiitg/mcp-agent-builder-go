@@ -156,15 +156,21 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_finding_backlog for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_module_state for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
 		artifactContract += "LIFECYCLE HISTORY: call get_pulse_finding_backlog for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
-	completionFooter := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker in the review brief. Only after the complete review is written, emit this exact final line and nothing after it:\n%s", marker)
-	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + completionFooter
+	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
 }
 
 func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
 	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
 	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Use start_pulse_fix_attempt for each actionable bundle before mutation; that attempt is the durable queue record and must link every affected finding. Process verification outcomes first, then repairs, sequentially. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
-	footer := fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: Only after all due modules have a truthful terminal result, emit this exact final line and nothing after it:\n%s", marker)
-	return scope + queue + strings.TrimSpace(instructions) + footer
+	return scope + queue + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
+}
+
+func pulseReviewerCompletionContract(marker string) string {
+	marker = strings.TrimSpace(marker)
+	if marker == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker. Only after the complete review or fix pass is written, emit this exact final line and nothing after it:\n%s", marker)
 }
 
 func completedPulseReviewerResult(result, marker string) (string, error) {
@@ -175,6 +181,124 @@ func completedPulseReviewerResult(result, marker string) (string, error) {
 	result = strings.TrimSpace(strings.TrimSuffix(result, marker))
 	if result == "" {
 		return "", fmt.Errorf("reviewer output was empty before %q", marker)
+	}
+	return result, nil
+}
+
+const maxBackgroundMessageSequenceItems = 12
+
+// backgroundMessageSequenceItem is one follow-up turn sent to an already
+// running background agent. The opening turn remains the tool's instructions
+// field for backward compatibility. Every item below reuses the same agent,
+// MCP session, isolated coding workspace, and conversation history.
+type backgroundMessageSequenceItem struct {
+	ID      string
+	Title   string
+	Message string
+}
+
+func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
+	raw, exists := args["message_sequence"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("message_sequence must be an array")
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("message_sequence must contain at least one follow-up turn when supplied")
+	}
+	if len(items) > maxBackgroundMessageSequenceItems {
+		return nil, fmt.Errorf("message_sequence has %d items; maximum is %d", len(items), maxBackgroundMessageSequenceItems)
+	}
+
+	seen := make(map[string]struct{}, len(items))
+	parsed := make([]backgroundMessageSequenceItem, 0, len(items))
+	for index, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("message_sequence[%d] must be an object", index)
+		}
+		id, _ := item["id"].(string)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("message_sequence[%d].id is required", index)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("message_sequence item id %q is duplicated", id)
+		}
+		seen[id] = struct{}{}
+		message, _ := item["message"].(string)
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return nil, fmt.Errorf("message_sequence[%d].message is required", index)
+		}
+		title, _ := item["title"].(string)
+		parsed = append(parsed, backgroundMessageSequenceItem{
+			ID:      id,
+			Title:   strings.TrimSpace(title),
+			Message: message,
+		})
+	}
+	return parsed, nil
+}
+
+func backgroundMessageSequenceSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "array",
+		"minItems":    1,
+		"maxItems":    maxBackgroundMessageSequenceItems,
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Use this when later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"items": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "string",
+					"description": "Stable unique turn ID for logs and diagnostics.",
+				},
+				"title": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional short human-readable turn title.",
+				},
+				"message": map[string]interface{}{
+					"type":        "string",
+					"description": "The next user message sent after the preceding turn completes.",
+				},
+			},
+			"required": []string{"id", "message"},
+		},
+	}
+}
+
+func executeBackgroundMessageSequence(
+	ctx context.Context,
+	agent agents.OrchestratorAgent,
+	templateVars map[string]string,
+	opening string,
+	messageSequence []backgroundMessageSequenceItem,
+) (string, error) {
+	if agent == nil {
+		return "", fmt.Errorf("background sequence agent is nil")
+	}
+	turns := make([]backgroundMessageSequenceItem, 0, 1+len(messageSequence))
+	turns = append(turns, backgroundMessageSequenceItem{ID: "opening", Title: "Opening", Message: opening})
+	turns = append(turns, messageSequence...)
+	var (
+		result  string
+		history []llmtypes.MessageContent
+		err     error
+	)
+	for turnIndex, turn := range turns {
+		turnVars := make(map[string]string, len(templateVars))
+		for key, value := range templateVars {
+			turnVars[key] = value
+		}
+		turnVars["Instruction"] = turn.Message
+		result, history, err = agent.Execute(ctx, turnVars, history)
+		if err != nil {
+			return "", fmt.Errorf("sequence turn %d (%s) failed: %w", turnIndex+1, turn.ID, err)
+		}
 	}
 	return result, nil
 }
@@ -3425,8 +3549,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"instruction": map[string]interface{}{
 					"type":        "string",
-					"description": "Comprehensive instructions for the background agent. This is the agent's task — be specific about what it should do, inputs, expected outputs.",
+					"description": "Opening-turn instructions for the background agent. This is the agent's task — be specific about what it should do, inputs, expected outputs.",
 				},
+				"message_sequence": backgroundMessageSequenceSchema(),
 				"agent_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"executor", "orchestrator"},
@@ -3453,10 +3578,17 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if !ok || instruction == "" {
 				return "instruction must be a non-empty string", nil
 			}
+			messageSequence, err := parseBackgroundMessageSequence(args)
+			if err != nil {
+				return "", err
+			}
 
 			agentType := "executor"
 			if v, ok := args["agent_type"].(string); ok && v != "" {
 				agentType = v
+			}
+			if agentType == "orchestrator" && len(messageSequence) > 0 {
+				return "", fmt.Errorf("message_sequence is supported by executor background agents; orchestrator agents already manage their own dynamic multi-turn task flow")
 			}
 
 			// Create slug from name for execution ID
@@ -3558,7 +3690,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if agentType == "orchestrator" {
 					result, execErr = iwm.runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)
 				} else {
-					result, execErr = iwm.runBackgroundTaskAgent(execCtx, name, instruction, inheritedSkills)
+					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills)
 				}
 			}()
 
@@ -3588,8 +3720,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"instructions": map[string]interface{}{
 					"type":        "string",
-					"description": "Complete read-only review instructions, including workflow path, Pulse run id, module, evidence, and response contract. Do not add a final completion marker; the tool appends its own authoritative marker.",
+					"description": "Opening-turn instructions, including workflow path, Pulse run id, module, evidence, and response contract. Do not add a final completion marker; the tool appends its authoritative marker to the last turn.",
 				},
+				"message_sequence": backgroundMessageSequenceSchema(),
 				"preferred_tier": map[string]interface{}{
 					"type":        "integer",
 					"enum":        []int{1, 2, 3},
@@ -3631,6 +3764,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			instructions = strings.TrimSpace(instructions)
 			if instructions == "" {
 				return "", fmt.Errorf("instructions are required")
+			}
+			messageSequence, err := parseBackgroundMessageSequence(args)
+			if err != nil {
+				return "", err
 			}
 			preferredTier, ok := args["preferred_tier"].(float64)
 			if !ok || preferredTier < 1 || preferredTier > 3 {
@@ -3675,6 +3812,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			isPulseStage := pulseMetadataCount == 3
 			isPulseReviewer := isPulseStage && !isFixer
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(messageSequence) == 0 {
+				return "", fmt.Errorf("workflow_review requires message_sequence so its ordered lenses run as separate turns in one agent session")
+			}
 			if isFixer && !isPulseStage {
 				return "", fmt.Errorf("role=fixer requires pulse_run_id, review_run_id, and module together")
 			}
@@ -3799,6 +3939,18 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if isFixer {
 				stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, marker)
 			}
+			stageSequence := append([]backgroundMessageSequenceItem(nil), messageSequence...)
+			if len(stageSequence) > 0 {
+				// The completion marker belongs only to the last response. Keeping it
+				// out of the opening and intermediate turns prevents an early lens
+				// from looking terminal to the trusted persistence boundary.
+				stageInstruction = buildPulseReviewerInstruction(workspacePath, resultPath, instructions, "")
+				if isFixer {
+					stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, "")
+				}
+				last := len(stageSequence) - 1
+				stageSequence[last].Message = strings.TrimSpace(stageSequence[last].Message) + pulseReviewerCompletionContract(marker)
+			}
 			persistFailure := func(message string) error {
 				if !isPulseReviewer {
 					return nil
@@ -3842,7 +3994,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						if attempt > 1 {
 							stageName += " - completion retry"
 						}
-						result, runErr := iwm.runGoalAdvisorStageAgent(execCtx, stageName, stageInstruction, stageAccess, stagePulseRunID, parentMCPSessionID)
+						result, runErr := iwm.runGoalAdvisorStageAgentSequence(execCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID)
 						if runErr != nil {
 							if writeErr := persistFailure(runErr.Error()); writeErr != nil {
 								return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
@@ -10019,6 +10171,14 @@ func (iwm *InteractiveWorkshopManager) createUnattendedWorkshopAgentConfig(agent
 }
 
 func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
+	return iwm.runGoalAdvisorStageAgentSequence(ctx, name, instruction, nil, access, pulseRunID, parentSessionID)
+}
+
+// runGoalAdvisorStageAgentSequence creates one background agent and sends an
+// opening instruction followed by ordered user messages. This is deliberately
+// not implemented as multiple runGoalAdvisorStageAgent calls: doing that would
+// create separate agents, sessions, coding workspaces, and context windows.
+func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
 	logger := iwm.controller.GetLogger()
 	workspacePath := iwm.controller.GetWorkspacePath()
 	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
@@ -10085,6 +10245,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	config.IsolateCodingAgentWorkspace = true
 	config.UseCodeExecutionMode = false
 	config.EnableParallelToolExecution = true
+	config.CodingAgentKeepAlive = len(messageSequence) > 0
 	config.ServerNames = []string{mcpclient.NoServers}
 	toolAgentSessionID, releaseToolAgentSession := iwm.configureWorkshopToolAgentSessionWithID(config, stageAgentIdentity, readPaths, writePaths)
 	defer releaseToolAgentSession()
@@ -10129,6 +10290,9 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to create %s agent: %w", name, err)
+	}
+	if len(messageSequence) > 0 {
+		defer closeBackgroundMessageSequenceAgent(agent, config, name)
 	}
 
 	iwm.registerWorkshopMutationToolsForToolAgent(agent, workspacePath, stageAgentIdentity, allowedToolNames, logger)
@@ -10175,8 +10339,8 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 		"BrowserPrompt":    "",
 	}
 
-	logger.Info(fmt.Sprintf("✨ Running Goal Advisor stage agent: %q (access=%d)", name, access))
-	result, _, err := agent.Execute(ctx, templateVars, nil)
+	logger.Info(fmt.Sprintf("✨ Running Goal Advisor stage agent: %q (access=%d, turns=%d)", name, access, 1+len(messageSequence)))
+	result, err := executeBackgroundMessageSequence(ctx, agent, templateVars, instruction, messageSequence)
 	if err != nil {
 		return "", fmt.Errorf("%s agent failed: %w", name, err)
 	}
@@ -10386,8 +10550,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Co
 	return fmt.Sprintf("Background todo task %q completed.", name), nil
 }
 
-// runBackgroundTaskAgent creates and runs a standalone background agent
-func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Context, name string, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
+// runBackgroundTaskAgentSequence creates and runs one standalone background
+// agent, optionally preserving it across ordered follow-up turns.
+func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, inheritedSkills []*llmtypes.Skill) (string, error) {
 	logger := iwm.controller.GetLogger()
 
 	// --- Folder guard: same as workshop agent ---
@@ -10433,6 +10598,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	// tools, which take absolute workspace paths and do not depend on
 	// CLI CWD.
 	config.IsolateCodingAgentWorkspace = true
+	config.CodingAgentKeepAlive = len(messageSequence) > 0
 	defer iwm.configureWorkshopToolAgentSession(config, "background-task", readPaths, writePaths)()
 
 	// --- Tools: same as default execution agent (all workspace tools) ---
@@ -10469,6 +10635,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 
 	if err != nil {
 		return "", fmt.Errorf("failed to create background task agent: %w", err)
+	}
+	if len(messageSequence) > 0 {
+		defer closeBackgroundMessageSequenceAgent(agent, config, name)
 	}
 
 	// --- Post-setup: add skill/secret/browser prompts ---
@@ -10540,13 +10709,23 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgent(ctx context.Contex
 	}
 
 	// --- Execute ---
-	logger.Info(fmt.Sprintf("🚀 Running background task agent: %q", name))
-	result, _, err := agent.Execute(ctx, templateVars, nil)
+	logger.Info(fmt.Sprintf("🚀 Running background task agent: %q (turns=%d)", name, 1+len(messageSequence)))
+	result, err := executeBackgroundMessageSequence(ctx, agent, templateVars, instruction, messageSequence)
 	if err != nil {
 		return "", fmt.Errorf("background task agent failed: %w", err)
 	}
-
 	return result, nil
+}
+
+func closeBackgroundMessageSequenceAgent(agent agents.OrchestratorAgent, config *agents.OrchestratorAgentConfig, name string) {
+	if agent != nil {
+		_ = agent.Close()
+	}
+	if config == nil {
+		return
+	}
+	closeMessageSequenceCodingSession(config.LLMConfig.Primary.Provider, config.MCPSessionID, "background message sequence completed: "+name)
+	mcpagent.RemoveIsolatedSessionWorkspace(config.MCPSessionID)
 }
 
 // stepLLMConfigForValidation flattens a primary override and its fallbacks so both

@@ -8,8 +8,21 @@ import (
 	"testing"
 	"time"
 
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 )
+
+func TestAsyncGenericAgentPreservesMessageSequenceContext(t *testing.T) {
+	want := []virtualtools.GenericAgentMessage{{ID: "lens", Message: "inspect"}}
+	toolCtx := context.WithValue(context.Background(), virtualtools.GenericAgentMessageSequenceKey, want)
+	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
+	childCtx, call := execCtx.registerAsyncCall(toolCtx, "child-sequence", "review", "", "generic")
+	defer execCtx.completeAsyncCall(call, "done", nil)
+	got := virtualtools.GenericAgentMessageSequenceFromContext(childCtx)
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("async child sequence = %#v, want %#v", got, want)
+	}
+}
 
 func TestWaitForUnreconciledWaitsForEveryOwnedChild(t *testing.T) {
 	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}

@@ -2435,6 +2435,11 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 			t.Fatalf("independent prompt missing module brief %q", required)
 		}
 	}
+	for _, required := range []string{`message_sequence=[`, `"id":"correctness"`, `"id":"artifact-drift"`, `"id":"report-eval"`, `"id":"stores"`, `"id":"llm-ops"`, `"id":"consolidate"`, "one agent, one MCP session"} {
+		if !strings.Contains(step.query, required) {
+			t.Fatalf("independent workflow review prompt missing sequence contract %q", required)
+		}
+	}
 	for _, forbidden := range []string{"PULSE CONSOLIDATED REVIEW", "batches of at most two"} {
 		if strings.Contains(step.query, forbidden) {
 			t.Fatalf("independent prompt retained consolidated contract %q", forbidden)

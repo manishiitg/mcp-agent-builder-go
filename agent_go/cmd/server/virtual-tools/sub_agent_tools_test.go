@@ -2,9 +2,65 @@ package virtualtools
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestHandleCallGenericAgentPropagatesMessageSequence(t *testing.T) {
+	var captured []GenericAgentMessage
+	ctx := context.WithValue(context.Background(), ExecuteGenericAgentKey, ExecuteGenericAgentFunc(
+		func(ctx context.Context, todoID, instructions string) (string, error) {
+			captured = GenericAgentMessageSequenceFromContext(ctx)
+			if todoID != "review" || instructions != "collect shared evidence" {
+				t.Fatalf("unexpected opening args: todo=%q instructions=%q", todoID, instructions)
+			}
+			return "complete", nil
+		},
+	))
+
+	_, err := handleCallGenericAgent(ctx, map[string]interface{}{
+		"todo_id":        "review",
+		"instructions":   "collect shared evidence",
+		"preferred_tier": float64(1),
+		"message_sequence": []interface{}{
+			map[string]interface{}{"id": "lens", "title": "Lens", "message": "inspect"},
+			map[string]interface{}{"id": "final", "message": "consolidate"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleCallGenericAgent: %v", err)
+	}
+	want := []GenericAgentMessage{
+		{ID: "lens", Title: "Lens", Message: "inspect"},
+		{ID: "final", Message: "consolidate"},
+	}
+	if !reflect.DeepEqual(captured, want) {
+		t.Fatalf("captured sequence = %#v, want %#v", captured, want)
+	}
+}
+
+func TestCallGenericAgentSchemaPublishesMessageSequence(t *testing.T) {
+	tools := CreateSubAgentTools()
+	for _, tool := range tools {
+		if tool.Function == nil || tool.Function.Name != "call_generic_agent" {
+			continue
+		}
+		encoded, err := json.Marshal(tool.Function.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(encoded)
+		for _, want := range []string{`"message_sequence"`, `"maxItems":12`, `"id"`, `"message"`} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("call_generic_agent schema missing %s: %s", want, text)
+			}
+		}
+		return
+	}
+	t.Fatal("call_generic_agent tool not found")
+}
 
 func TestHandleCallSubAgentPropagatesMessageSequenceRestart(t *testing.T) {
 	called := false

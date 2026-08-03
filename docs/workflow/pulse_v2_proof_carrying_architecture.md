@@ -2384,6 +2384,34 @@ should be judged against all four: it is not better merely because it is
 cheaper, and it is not successful merely because it closes more findings if
 the workflow's goal does not improve.
 
+### Consolidated Workflow Review: one agent, native ordered turns
+
+**Implementation status (2026-08-03): shipped in the working tree.** The
+operational reviewers are consolidated into one `workflow_review` agent, while
+`strategy_auditor` and `goal_advisor` remain independent agents. Workflow Review
+is not one oversized prompt and is not six separately spawned agents. The
+backend now accepts `message_sequence` on background executor agents and on
+both generic-agent entry points. It creates one agent, then sends an opening
+instruction followed by ordered user messages while preserving the same
+conversation history, MCP session, folder guard, and isolated coding workspace.
+
+The scheduled sequence is:
+
+1. opening evidence/backlog collection;
+2. correctness and pending-fix verification;
+3. plan and artifact drift;
+4. report and eval truthfulness;
+5. learnings, knowledgebase, and database contracts;
+6. LLM, cost, timing, and tool/runtime operations;
+7. semantic deduplication and final review.
+
+Only the final turn receives the trusted completion marker. A failed turn stops
+the sequence immediately, and `workflow_review` is rejected at launch if the
+scheduled caller omits `message_sequence`; it cannot silently regress to the
+old single-turn shape. Independent work still uses separate agents and runs in
+parallel. Ordered turns are only for lenses that intentionally share evidence
+and reasoning state.
+
 ### Longitudinal impact: did repeated Pulse work advance the goal?
 
 **Implementation status (2026-08-03): shipped in the working tree.** Gate now

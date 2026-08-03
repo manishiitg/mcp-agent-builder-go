@@ -2649,7 +2649,7 @@ func postRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleStep {
 		module: pulseModuleWorkflowReview,
 		step: postRunMonitorStep{
 			label: "workflow-review",
-			query: fmt.Sprintf(`PULSE MODULE — WORKFLOW REVIEW. pulse_run_id=%q. Run one independent READ-ONLY REVIEW agent and keep one continuous context. Review the workflow through these ordered lenses, checkpointing a compact conclusion after each before continuing: (1) correctness and safe exploratory QA, including failed/hidden-error tool calls and arrived verification evidence; (2) plan/changelog and artifact drift; (3) report and eval truthfulness; (4) learnings, knowledgebase, and database contracts; (5) cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Collect shared goal, plan, latest-run, worklist, lifecycle, and cost evidence once; reuse it across lenses and open original sources only when the decision needs them. Reconcile the complete active and suppressed backlog before discovery. Semantically consolidate the same root cause across lenses into one finding, retain every distinct evidence pointer, and finish with one priority-ordered set of unique findings plus a separate verification section. Do not evaluate whether the selected tactic is strategically complete or invent a different strategy: those belong to independent strategy_auditor and goal_advisor agents. Load the focused builder references needed by the lenses in one read_skill call. Never edit files or DB, run producing actions, create questions, update HTML, publish, notify, start fix attempts, or mark module state. %s The single consolidated Fixer applies bounded repairs after the reviewer barrier and marks workflow_review exactly once.`, pulseRunID, pulseModuleImproveLogReminder),
+			query: fmt.Sprintf(`PULSE MODULE — WORKFLOW REVIEW. pulse_run_id=%q. Run one independent READ-ONLY REVIEW agent as a native backend message sequence in one continuous context. In the opening turn, load the focused builder references in one read_skill call, collect shared goal, plan, latest-run, worklist, lifecycle, and cost evidence once, reconcile the complete active and suppressed backlog, and produce only a compact evidence map for the later ordered lenses. Do not perform all lenses in the opening turn. The required follow-up turns cover: (1) correctness and safe exploratory QA, including failed/hidden-error tool calls and arrived verification evidence; (2) plan/changelog and artifact drift; (3) report and eval truthfulness; (4) learnings, knowledgebase, and database contracts; (5) cost, time, model selection, tool/runtime reliability, and plan-design hygiene; then (6) semantic consolidation. Reuse earlier evidence and open original sources only when the current decision needs them. In the final turn: Semantically consolidate the same root cause across lenses into one finding, retain every distinct evidence pointer, and return one priority-ordered set of unique findings plus a separate verification section. Do not evaluate whether the selected tactic is strategically complete or invent a different strategy: those belong to independent strategy_auditor and goal_advisor agents. Never edit files or DB, run producing actions, create questions, update HTML, publish, notify, start fix attempts, or mark module state. %s The single consolidated Fixer applies bounded repairs after the reviewer barrier and marks workflow_review exactly once.`, pulseRunID, pulseModuleImproveLogReminder),
 		},
 	}
 
@@ -2795,11 +2795,26 @@ func postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module string)
 	if label == "" {
 		return postRunMonitorStep{}, false
 	}
+	sequenceContract := ""
+	if module == pulseModuleWorkflowReview {
+		sequenceContract = `
+
+For workflow_review, the call_generic_agent request MUST include this message_sequence (these are ordered follow-up turns after the opening instructions turn):
+message_sequence=[
+  {"id":"correctness","title":"Correctness and verification","message":"Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
+  {"id":"artifact-drift","title":"Plan and artifact drift","message":"Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
+  {"id":"report-eval","title":"Report and eval truthfulness","message":"Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+  {"id":"stores","title":"Stores contracts","message":"Continue in the same context. Review learnings, knowledgebase, and database contracts, freshness, consumers, and integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+  {"id":"llm-ops","title":"LLM and tool operations","message":"Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
+  {"id":"consolidate","title":"Consolidate review","message":"Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."}
+]
+Do not replace this with multiple call_generic_agent calls: the backend sequence deliberately preserves one agent, one MCP session, one isolated workspace, and one conversation history.`
+	}
 	return postRunMonitorStep{
 		label: label,
 		query: fmt.Sprintf("PULSE INDEPENDENT READ-ONLY REVIEW. pulse_run_id=%q, review_run_id=%q, module=%q. "+
 			"Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"}]) and follow its reviewer phase for this module only. Reconcile the complete active retained backlog, awaiting-verification work, and any already-saved SQLite result before discovery. If the evidence is already sufficient, do not launch a duplicate reviewer. Otherwise make exactly one call_generic_agent call asynchronously with role=\"reviewer\", module=%q, and these exact run identities; never combine reviewers in one shell command or use background curl, & or wait. Record its execution_id, end the current turn, and resume only from the automatic completion notification. Then confirm the SQLite result can be loaded with get_pulse_review_result and stop without editing, starting a fix attempt, or marking module state. The single consolidated Fixer stage after all selected reviews owns every mutation and terminal module result.",
-			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief,
+			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief + sequenceContract,
 	}, true
 }
 
