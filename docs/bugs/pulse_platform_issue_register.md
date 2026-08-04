@@ -159,7 +159,7 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-024 Tool-error marker omits tool name | P2 | Cross-workflow logs | **implemented 2026-08-04 (mcpagent d1eca1f + Codex follow-up); identity is recovered before per-tool failure classification, with a narrow envelope fallback and explicit "unknown"; runtime reverify remains** |
 | PLAT-025 Workspace shell stdout buffer is unbounded | P1 | Platform availability | **queued for Claude Code** |
 | PLAT-026 Selected running workflow hidden from global activity | P1 | RTS Latency | **implemented 2026-08-04 (a first pass missed the same-workflow-sibling case per Codex review; corrected — see ticket); runtime reverify remains** |
-| PLAT-027 Live asynchronous child hidden after parent completion | P0 | Social Media | **implemented 2026-08-04; runtime reverify remains** |
+| PLAT-027 Async todo-task turn falsely completes its parent and hides the live child | P0 | Social Media | **backend completion gate + UI projection implemented 2026-08-04; runtime reverify remains** |
 | PLAT-028 Recovered CDP tab forwarded as action argument | P1 | Social Media | **implemented and executor-tested 2026-08-04; runtime reverify remains** |
 
 The two tool-error findings below are one family, not two independent repair
