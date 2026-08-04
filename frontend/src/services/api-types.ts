@@ -2682,6 +2682,12 @@ export interface WorkflowNotificationInfoResponse {
   pulse_summary_instructions?: string
   run_summary_channels?: string[]
   pulse_summary_channels?: string[]
+  // Who each summary is emailed to. Empty means the account default recipient.
+  run_summary_recipients?: string[]
+  pulse_summary_recipients?: string[]
+  // Slack channels per summary, as webhook secret names (one webhook = one channel).
+  run_summary_slack_webhooks?: string[]
+  pulse_summary_slack_webhooks?: string[]
   exclude_channels?: string[]
   block_recipients?: string[]
 }
@@ -2921,6 +2927,10 @@ export interface UpdateWorkflowManifestRequest {
   pulse_notification_instructions?: string
   run_notification_channels?: string[]
   pulse_notification_channels?: string[]
+  // Send an empty array to clear a recipient list back to the account default;
+  // omit the field to leave it unchanged.
+  run_notification_recipients?: string[]
+  pulse_notification_recipients?: string[]
   notification_instructions?: string
 }
 

@@ -184,28 +184,45 @@ func TestGmailPickRecipient(t *testing.T) {
 
 	// explicit hint wins
 	dest := &NotificationDestination{Gmail: &GmailDest{Email: "hint@example.com"}}
-	if got, err := g.pickRecipient(dest); err != nil || got != "hint@example.com" {
-		t.Fatalf("explicit hint = %q, err=%v, want hint@example.com", got, err)
+	if got := g.pickRecipient(dest); got != "hint@example.com" {
+		t.Fatalf("explicit hint = %q, want hint@example.com", got)
 	}
 
 	// explicit To override may contain more than one recipient
-	if got, err := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "Hint@Example.com, ops@example.com"}}); err != nil || got != "hint@example.com, ops@example.com" {
-		t.Fatalf("multi-recipient explicit hint = %q, err=%v, want two recipients", got, err)
+	if got := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "Hint@Example.com, ops@example.com"}}); got != "hint@example.com, ops@example.com" {
+		t.Fatalf("multi-recipient explicit hint = %q, want two recipients", got)
 	}
 
-	// explicit blocked hint is blocked before any send happens
-	if got, err := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "blocked@example.com"}}); err == nil || got != "" {
-		t.Fatalf("blocked hint = %q, err=%v, want blocked recipient error", got, err)
+	// A blocked address is dropped, and the rest of the list still receives the
+	// mail. Failing the whole send here meant one denylisted colleague silenced
+	// the notification for everyone else on it.
+	if got := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "ops@example.com, blocked@example.com, lead@example.com"}}); got != "ops@example.com, lead@example.com" {
+		t.Fatalf("mixed list = %q, want the blocked address dropped and the rest kept", got)
+	}
+
+	// When every resolved recipient is blocked there is genuinely nowhere to
+	// send, which is a silent skip rather than an error.
+	if got := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "blocked@example.com"}}); got != "" {
+		t.Fatalf("fully blocked hint = %q, want empty (skip)", got)
+	}
+
+	// A per-workflow denylist filters the same way, without dropping the others.
+	perWorkflow := &NotificationDestination{Gmail: &GmailDest{
+		Email:             "ops@example.com, lead@example.com",
+		BlockedRecipients: []string{"lead@example.com"},
+	}}
+	if got := g.pickRecipient(perWorkflow); got != "ops@example.com" {
+		t.Fatalf("per-workflow denylist = %q, want only the allowed recipient", got)
 	}
 
 	// no hint, no user -> workspace default
-	if got, err := g.pickRecipient(nil); err != nil || got != "fallback@example.com" {
-		t.Errorf("default = %q, err=%v, want fallback@example.com", got, err)
+	if got := g.pickRecipient(nil); got != "fallback@example.com" {
+		t.Errorf("default = %q, want fallback@example.com", got)
 	}
 
 	// disabled service still resolves recipient via fields (enablement gates at SendNotification)
-	if got, err := g.pickRecipient(&NotificationDestination{}); err != nil || got != "fallback@example.com" {
-		t.Errorf("empty dest = %q, err=%v, want fallback@example.com", got, err)
+	if got := g.pickRecipient(&NotificationDestination{}); got != "fallback@example.com" {
+		t.Errorf("empty dest = %q, want fallback@example.com", got)
 	}
 }
 
@@ -218,36 +235,41 @@ func TestGmailValidateCCRecipients(t *testing.T) {
 		},
 	}
 
-	got, err := g.validateCCRecipients([]string{" CC@Example.com ", "other@example.com,cc@example.com"})
-	if err != nil {
-		t.Fatalf("validateCCRecipients returned error: %v", err)
-	}
+	got := g.filterCCRecipients([]string{" CC@Example.com ", "other@example.com,cc@example.com"})
 	want := []string{"cc@example.com", "other@example.com"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("validateCCRecipients = %#v, want %#v", got, want)
+		t.Fatalf("filterCCRecipients = %#v, want %#v", got, want)
 	}
 
-	if got, err := g.validateCCRecipients([]string{"blocked@example.com"}); err == nil || len(got) != 0 {
-		t.Fatalf("blocked cc = %#v, err=%v, want blocked recipient error", got, err)
+	// A blocked CC is removed; the send continues to everyone else.
+	if got := g.filterCCRecipients([]string{"cc@example.com", "blocked@example.com"}); !reflect.DeepEqual(got, []string{"cc@example.com"}) {
+		t.Fatalf("mixed cc = %#v, want the blocked address dropped", got)
+	}
+	if got := g.filterCCRecipients([]string{"blocked@example.com"}); len(got) != 0 {
+		t.Fatalf("fully blocked cc = %#v, want no CC recipients", got)
 	}
 }
 
-func TestValidateRecipientsAgainstBlockedList(t *testing.T) {
-	got, err := validateRecipientsAgainstList(
+func TestFilterRecipientsAgainstBlockedList(t *testing.T) {
+	got, dropped := filterRecipientsAgainstList(
 		[]string{"User@Example.com, ops@example.com"},
-		"to",
 		[]string{"blocked@example.com"},
 	)
-	if err != nil {
-		t.Fatalf("validateRecipientsAgainstList returned error: %v", err)
-	}
 	want := []string{"user@example.com", "ops@example.com"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("validateRecipientsAgainstList = %#v, want %#v", got, want)
+		t.Fatalf("allowed = %#v, want %#v", got, want)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %#v, want none", dropped)
 	}
 
-	if got, err := validateRecipientsAgainstList([]string{"blocked@example.com"}, "to", []string{"BLOCKED@example.com"}); err == nil || len(got) != 0 {
-		t.Fatalf("blocked recipient = %#v, err=%v, want blocked recipient error", got, err)
+	// Matching is case-insensitive on both sides, and only the blocked entry goes.
+	got, dropped = filterRecipientsAgainstList([]string{"Ops@Example.com, blocked@example.com"}, []string{"BLOCKED@example.com"})
+	if !reflect.DeepEqual(got, []string{"ops@example.com"}) {
+		t.Fatalf("allowed = %#v, want only ops@example.com", got)
+	}
+	if !reflect.DeepEqual(dropped, []string{"blocked@example.com"}) {
+		t.Fatalf("dropped = %#v, want the blocked address reported", dropped)
 	}
 }
 
@@ -269,12 +291,12 @@ func TestNormalizeGmailConfigDedupesBlockedRecipients(t *testing.T) {
 func TestGmailDenylistAllowsRecipientsByDefault(t *testing.T) {
 	g := &GmailService{defaultTo: "fallback@example.com"}
 
-	if got, err := g.pickRecipient(nil); err != nil || got != "fallback@example.com" {
-		t.Fatalf("default = %q, err=%v, want fallback@example.com", got, err)
+	if got := g.pickRecipient(nil); got != "fallback@example.com" {
+		t.Fatalf("default = %q, want fallback@example.com", got)
 	}
 
-	if got, err := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "hint@example.com"}}); err != nil || got != "hint@example.com" {
-		t.Fatalf("hint = %q, err=%v, want hint@example.com", got, err)
+	if got := g.pickRecipient(&NotificationDestination{Gmail: &GmailDest{Email: "hint@example.com"}}); got != "hint@example.com" {
+		t.Fatalf("hint = %q, want hint@example.com", got)
 	}
 }
 

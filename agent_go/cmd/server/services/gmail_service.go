@@ -45,14 +45,18 @@ func gmailConfigFilePath() string {
 type GmailConfig struct {
 	Enabled bool `json:"enabled"`
 
-	// DefaultTo is the workspace-wide fallback recipient (the equivalent of
+	// DefaultTo is the workspace-wide fallback recipient list (the equivalent of
 	// Slack's default channel). Used when a notification carries no explicit
-	// destination hint and the target user has no Gmail preference set.
+	// destination hint and the target user has no Gmail preference set. It may
+	// name several addresses separated by commas; they are all addressed on the
+	// same message.
 	DefaultTo string `json:"default_to"`
 
 	// BlockedRecipients is a denylist for outbound Gmail recipients. Explicit
 	// destination hints, per-user Gmail preferences, To overrides, and CC
-	// recipients matching this list are rejected instead of being sent.
+	// recipients matching this list are removed from the message; everyone else
+	// on it still receives it. A message whose every recipient is blocked has
+	// nowhere to go and is skipped.
 	BlockedRecipients []string `json:"blocked_recipients,omitempty"`
 
 	// GwsPath is the path to the gws binary. Empty means "gws" on $PATH.
@@ -311,9 +315,12 @@ func (g *GmailService) IsEnabled() bool {
 //  2. per-user preference (looked up via dest.UserID)
 //  3. workspace-wide default (g.defaultTo)
 //
-// Returns "" only when Gmail is disabled or has no default and no hint — the
-// caller treats that as "skip silently".
-func (g *GmailService) pickRecipient(dest *NotificationDestination) (string, error) {
+// Blocked addresses are removed from the resolved list rather than failing the
+// whole send: a denylist means "never email this person", not "if this person
+// appears, email nobody". Returns "" when Gmail has no destination at all, or
+// when every resolved recipient was blocked — the caller treats that as
+// "skip silently", which is correct because there is genuinely nowhere to send.
+func (g *GmailService) pickRecipient(dest *NotificationDestination) string {
 	candidate := ""
 	if dest != nil && dest.Gmail != nil && strings.TrimSpace(dest.Gmail.Email) != "" {
 		candidate = strings.TrimSpace(dest.Gmail.Email)
@@ -328,31 +335,38 @@ func (g *GmailService) pickRecipient(dest *NotificationDestination) (string, err
 		g.mu.RUnlock()
 	}
 	if candidate == "" {
-		return "", nil
+		return ""
 	}
-	recipients, err := g.validateRecipients([]string{candidate}, "to", destBlockedRecipients(dest)...)
-	if err != nil {
-		return "", err
+	recipients, dropped := g.filterRecipients([]string{candidate}, destBlockedRecipients(dest)...)
+	if len(dropped) > 0 {
+		// Worth a line: a message going to fewer people than configured is
+		// invisible otherwise, and this is the only place it is decided.
+		log.Printf("[GMAIL] Skipped %d blocked To recipient(s): %s", len(dropped), strings.Join(dropped, ", "))
 	}
 	if len(recipients) == 0 {
-		return "", nil
+		return ""
 	}
-	return strings.Join(recipients, ", "), nil
+	return strings.Join(recipients, ", ")
 }
 
-func (g *GmailService) validateCCRecipients(cc []string, extraBlocked ...string) ([]string, error) {
-	return g.validateRecipients(cc, "cc", extraBlocked...)
+// filterCCRecipients drops blocked CC addresses and keeps the rest.
+func (g *GmailService) filterCCRecipients(cc []string, extraBlocked ...string) []string {
+	allowed, dropped := g.filterRecipients(cc, extraBlocked...)
+	if len(dropped) > 0 {
+		log.Printf("[GMAIL] Skipped %d blocked CC recipient(s): %s", len(dropped), strings.Join(dropped, ", "))
+	}
+	return allowed
 }
 
-// validateRecipients rejects any recipient in the account-wide blocked list OR
+// filterRecipients removes every recipient in the account-wide blocked list OR
 // in extraBlocked (a per-notification/per-workflow denylist). The two lists are
 // unioned — extraBlocked can only add to the block set, never remove from it.
-func (g *GmailService) validateRecipients(recipients []string, label string, extraBlocked ...string) ([]string, error) {
+func (g *GmailService) filterRecipients(recipients []string, extraBlocked ...string) (allowed, dropped []string) {
 	blocked := g.blockedRecipients()
 	if len(extraBlocked) > 0 {
 		blocked = append(append([]string(nil), blocked...), extraBlocked...)
 	}
-	return validateRecipientsAgainstList(recipients, label, blocked)
+	return filterRecipientsAgainstList(recipients, blocked)
 }
 
 // destBlockedRecipients extracts the per-notification Gmail denylist carried on
@@ -364,7 +378,12 @@ func destBlockedRecipients(dest *NotificationDestination) []string {
 	return nil
 }
 
-func validateRecipientsAgainstList(recipients []string, label string, blockedRecipients []string) ([]string, error) {
+// filterRecipientsAgainstList splits a recipient list into the addresses that
+// may be emailed and the ones a denylist excludes. It never fails the send:
+// dropping one blocked address must not silence the message for everyone else
+// on the list, which is what an all-or-nothing check did once recipient lists
+// could hold more than one person.
+func filterRecipientsAgainstList(recipients []string, blockedRecipients []string) (allowed, dropped []string) {
 	recipients = normalizeEmailList(recipients)
 	blocked := map[string]bool{}
 	for _, recipient := range normalizeEmailList(blockedRecipients) {
@@ -372,10 +391,12 @@ func validateRecipientsAgainstList(recipients []string, label string, blockedRec
 	}
 	for _, recipient := range recipients {
 		if blocked[recipient] {
-			return nil, fmt.Errorf("gmail %s recipient %q is in the blocked recipients list", label, recipient)
+			dropped = append(dropped, recipient)
+			continue
 		}
+		allowed = append(allowed, recipient)
 	}
-	return recipients, nil
+	return allowed, dropped
 }
 
 // SendNotification implements NotificationConnector. It renders the feedback
@@ -387,10 +408,7 @@ func (g *GmailService) SendNotification(ctx context.Context, uniqueID string, me
 	if !g.IsEnabled() {
 		return "", nil
 	}
-	to, err := g.pickRecipient(dest)
-	if err != nil {
-		return "", err
-	}
+	to := g.pickRecipient(dest)
 	if to == "" {
 		return "", nil
 	}
@@ -417,10 +435,7 @@ func (g *GmailService) SendNotification(ctx context.Context, uniqueID string, me
 		htmlBody = gc.HTMLBody
 		attachments = gc.Attachments
 	}
-	cc, err = g.validateCCRecipients(cc, destBlockedRecipients(dest)...)
-	if err != nil {
-		return "", err
-	}
+	cc = g.filterCCRecipients(cc, destBlockedRecipients(dest)...)
 
 	return g.deliver(ctx, to, cc, subject, body, htmlBody, attachments)
 }
@@ -430,10 +445,7 @@ func (g *GmailService) SendUserNotification(ctx context.Context, message string,
 	if !g.IsEnabled() {
 		return "", nil
 	}
-	to, err := g.pickRecipient(dest)
-	if err != nil {
-		return "", err
-	}
+	to := g.pickRecipient(dest)
 	if to == "" {
 		return "", nil
 	}
@@ -456,10 +468,7 @@ func (g *GmailService) SendUserNotification(ctx context.Context, message string,
 	if strings.TrimSpace(body) == "" && strings.TrimSpace(htmlBody) == "" && len(attachments) == 0 {
 		return "", nil
 	}
-	cc, err = g.validateCCRecipients(cc, destBlockedRecipients(dest)...)
-	if err != nil {
-		return "", err
-	}
+	cc = g.filterCCRecipients(cc, destBlockedRecipients(dest)...)
 	return g.deliver(ctx, to, cc, subject, body, htmlBody, attachments)
 }
 
@@ -680,17 +689,18 @@ func (g *GmailService) sendTest(ctx context.Context, to string, blockedRecipient
 	if to == "" {
 		return "", fmt.Errorf("no recipient: set a default address first")
 	}
-	var recipients []string
-	var err error
+	var recipients, dropped []string
 	if hasBlockedOverride {
-		recipients, err = validateRecipientsAgainstList([]string{to}, "test", blockedRecipients)
+		recipients, dropped = filterRecipientsAgainstList([]string{to}, blockedRecipients)
 	} else {
-		recipients, err = g.validateRecipients([]string{to}, "test")
+		recipients, dropped = g.filterRecipients([]string{to})
 	}
-	if err != nil {
-		return "", err
-	}
+	// Unlike a real notification, a test is an explicit action the user just
+	// asked for, so a blocked address is reported instead of quietly skipped.
 	if len(recipients) == 0 {
+		if len(dropped) > 0 {
+			return "", fmt.Errorf("every test recipient is in the blocked recipients list: %s", strings.Join(dropped, ", "))
+		}
 		return "", fmt.Errorf("no recipient: set a default address first")
 	}
 	to = strings.Join(recipients, ", ")
@@ -704,9 +714,34 @@ func normalizeGmailConfig(cfg *GmailConfig) *GmailConfig {
 		return &GmailConfig{}
 	}
 	out := *cfg
-	out.DefaultTo = strings.TrimSpace(out.DefaultTo)
+	// DefaultTo holds one OR MORE addresses. Split it the same way the send path
+	// splits recipients so a pasted "a@x.com, b@x.com" is stored canonically
+	// rather than as one malformed address that never delivers. Case is kept:
+	// the local part of an address is case-sensitive in principle, and the send
+	// path lowercases only for denylist comparison.
+	out.DefaultTo = strings.Join(splitEmailListPreservingCase(out.DefaultTo), ", ")
 	out.BlockedRecipients = normalizeEmailList(out.BlockedRecipients)
 	return &out
+}
+
+// splitEmailListPreservingCase splits a recipient string into individual
+// addresses, dropping blanks and case-insensitive duplicates while leaving each
+// surviving address spelled as the user typed it.
+func splitEmailListPreservingCase(value string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	}) {
+		email := strings.TrimSpace(part)
+		key := strings.ToLower(email)
+		if email == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, email)
+	}
+	return out
 }
 
 func normalizeEmailList(values []string) []string {

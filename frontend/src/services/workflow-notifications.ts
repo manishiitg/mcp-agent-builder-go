@@ -13,6 +13,12 @@ export interface WorkflowNotificationInfo {
   pulseSummaryInstructions: string
   runSummaryChannels: string[]
   pulseSummaryChannels: string[]
+  // Who each summary is emailed to. Empty means the account default recipient.
+  runSummaryRecipients: string[]
+  pulseSummaryRecipients: string[]
+  // Slack channels per summary, as webhook secret names (one webhook = one channel).
+  runSummarySlackWebhooks: string[]
+  pulseSummarySlackWebhooks: string[]
   excludeChannels: string[]
   blockRecipients: string[]
 }
@@ -34,6 +40,10 @@ export async function loadWorkflowNotificationInfo(workspacePath: string): Promi
     pulseSummaryInstructions: response.pulse_summary_instructions || '',
     runSummaryChannels: response.run_summary_channels || [],
     pulseSummaryChannels: response.pulse_summary_channels || [],
+    runSummaryRecipients: response.run_summary_recipients || [],
+    pulseSummaryRecipients: response.pulse_summary_recipients || [],
+    runSummarySlackWebhooks: response.run_summary_slack_webhooks || [],
+    pulseSummarySlackWebhooks: response.pulse_summary_slack_webhooks || [],
     excludeChannels: response.exclude_channels || [],
     blockRecipients: response.block_recipients || [],
   }
@@ -56,6 +66,10 @@ export async function loadOrgNotificationInfo(): Promise<WorkflowNotificationInf
     pulseSummaryInstructions: response.pulse_summary_instructions || '',
     runSummaryChannels: response.run_summary_channels || [],
     pulseSummaryChannels: response.pulse_summary_channels || [],
+    runSummaryRecipients: response.run_summary_recipients || [],
+    pulseSummaryRecipients: response.pulse_summary_recipients || [],
+    runSummarySlackWebhooks: response.run_summary_slack_webhooks || [],
+    pulseSummarySlackWebhooks: response.pulse_summary_slack_webhooks || [],
     excludeChannels: response.exclude_channels || [],
     blockRecipients: response.block_recipients || [],
   }

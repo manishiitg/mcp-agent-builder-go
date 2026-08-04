@@ -738,3 +738,173 @@ func TestEmailToKeepsWorkflowBlockedRecipients(t *testing.T) {
 		t.Fatal("expected Gmail notification")
 	}
 }
+
+// The per-workflow recipient lists are the positive counterpart to
+// block_recipients: they say where a summary is emailed. The backend addresses
+// the mail from the list matching notification_kind, so the agent never has to
+// pass email_to to reach the configured people.
+func TestNotifyUserRoutesToConfiguredRecipientsByKind(t *testing.T) {
+	baseDest := func() *services.NotificationDestination {
+		return &services.NotificationDestination{
+			UserID:                 "user-1",
+			Gmail:                  &services.GmailDest{Email: "account-default@example.com"},
+			RunSummaryRecipients:   []string{"run@example.com", "ops@example.com"},
+			PulseSummaryRecipients: []string{"pulse@example.com"},
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		kind string
+		want string
+	}{
+		{name: "run summary uses the run list", kind: "run_summary", want: "run@example.com, ops@example.com"},
+		{name: "pulse summary uses the pulse list", kind: "pulse_summary", want: "pulse@example.com"},
+		// An unclassified send has no configured list and must fall through to
+		// whatever the destination already resolved, exactly as channel routing does.
+		{name: "general falls back to the account default", kind: "general", want: "account-default@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := services.GetNotificationManager()
+			ch := make(chan *services.NotificationDestination, 1)
+			manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: ch})
+			t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+			ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
+			ctx = context.WithValue(ctx, BotNotificationDestinationKey, baseDest())
+
+			if _, err := handleNotifyUser(ctx, map[string]interface{}{
+				"message_for_user":  "FYI: done",
+				"notification_kind": tc.kind,
+			}); err != nil {
+				t.Fatalf("handleNotifyUser returned error: %v", err)
+			}
+
+			select {
+			case dest := <-ch:
+				if dest == nil || dest.Gmail == nil || dest.Gmail.Email != tc.want {
+					t.Fatalf("gmail To = %#v, want %q", dest.Gmail, tc.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("expected Gmail notification")
+			}
+		})
+	}
+}
+
+// A one-off email_to is for a single send the user asked for. It must still beat
+// the saved list, otherwise the argument would be silently ignored whenever a
+// workflow had recipients configured.
+func TestExplicitEmailToBeatsConfiguredRecipients(t *testing.T) {
+	manager := services.GetNotificationManager()
+	ch := make(chan *services.NotificationDestination, 1)
+	manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: ch})
+	t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+	ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
+	ctx = context.WithValue(ctx, BotNotificationDestinationKey, &services.NotificationDestination{
+		UserID:               "user-1",
+		RunSummaryRecipients: []string{"run@example.com"},
+	})
+
+	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "FYI: done",
+		"notification_kind": "run_summary",
+		"email_to":          []interface{}{"just-this-once@example.com"},
+	}); err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.Gmail == nil || dest.Gmail.Email != "just-this-once@example.com" {
+			t.Fatalf("gmail To = %#v, want the explicit override", dest.Gmail)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Gmail notification")
+	}
+}
+
+// Configured recipients say where mail GOES; they never widen permission. An
+// address on the workflow denylist must stay carried on the destination so the
+// Gmail connector still rejects it.
+func TestConfiguredRecipientsKeepWorkflowDenylist(t *testing.T) {
+	manager := services.GetNotificationManager()
+	ch := make(chan *services.NotificationDestination, 1)
+	manager.RegisterConnector(&testUserNotificationConnector{name: "gmail", ch: ch})
+	t.Cleanup(func() { manager.UnregisterConnector("gmail") })
+
+	ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
+	ctx = context.WithValue(ctx, BotNotificationDestinationKey, &services.NotificationDestination{
+		UserID:               "user-1",
+		Gmail:                &services.GmailDest{BlockedRecipients: []string{"blocked@example.com"}},
+		RunSummaryRecipients: []string{"blocked@example.com"},
+	})
+
+	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "FYI: done",
+		"notification_kind": "run_summary",
+	}); err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.Gmail == nil {
+			t.Fatalf("gmail destination = %#v, want Gmail dest", dest)
+		}
+		if len(dest.Gmail.BlockedRecipients) != 1 || dest.Gmail.BlockedRecipients[0] != "blocked@example.com" {
+			t.Fatalf("blocked recipients = %#v, want the workflow denylist preserved", dest.Gmail.BlockedRecipients)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Gmail notification")
+	}
+}
+
+// A Slack Incoming Webhook is bound to one channel, so per-summary channels are
+// per-summary webhooks. The kind selects the set; a kind with none configured
+// falls back to the workflow's single webhook rather than posting nowhere.
+func TestWebhooksForKindSelectsChannelsAndFallsBack(t *testing.T) {
+	runHook := services.SlackWebhookDest{SecretName: "SLACK_RUNS", URL: "https://hooks.slack.com/services/T/B/runs"}
+	pulseHook := services.SlackWebhookDest{SecretName: "SLACK_PULSE", URL: "https://hooks.slack.com/services/T/B/pulse"}
+	fallback := services.SlackWebhookDest{SecretName: "SLACK_DEFAULT", URL: "https://hooks.slack.com/services/T/B/default"}
+
+	dest := &services.NotificationDestination{
+		SlackWebhook:         &fallback,
+		RunSummaryWebhooks:   []services.SlackWebhookDest{runHook},
+		PulseSummaryWebhooks: []services.SlackWebhookDest{pulseHook},
+	}
+
+	if got := webhooksForKind(dest, "run_summary"); len(got) != 1 || got[0].SecretName != "SLACK_RUNS" {
+		t.Fatalf("run_summary webhooks = %#v, want the run channel", got)
+	}
+	if got := webhooksForKind(dest, "pulse_summary"); len(got) != 1 || got[0].SecretName != "SLACK_PULSE" {
+		t.Fatalf("pulse_summary webhooks = %#v, want the pulse channel", got)
+	}
+	// "general" has no configured channel of its own, and a kind whose list is
+	// empty must not go silent — both fall back to the single workflow webhook.
+	if got := webhooksForKind(dest, "general"); len(got) != 1 || got[0].SecretName != "SLACK_DEFAULT" {
+		t.Fatalf("general webhooks = %#v, want the fallback channel", got)
+	}
+	noPulse := &services.NotificationDestination{SlackWebhook: &fallback}
+	if got := webhooksForKind(noPulse, "pulse_summary"); len(got) != 1 || got[0].SecretName != "SLACK_DEFAULT" {
+		t.Fatalf("unconfigured pulse = %#v, want the fallback channel", got)
+	}
+	// No webhook at all anywhere means no Slack post, not a post to an empty URL.
+	if got := webhooksForKind(&services.NotificationDestination{}, "run_summary"); len(got) != 0 {
+		t.Fatalf("no webhooks configured = %#v, want none", got)
+	}
+}
+
+// The delivery report is what the agent repeats back to the user. Adding
+// per-channel routing must not rename the single-channel result, or every
+// existing workflow's report silently changes shape.
+func TestWebhookResultChannelLabel(t *testing.T) {
+	hook := services.SlackWebhookDest{SecretName: "SLACK_RUNS"}
+	if got := webhookResultChannel(hook, false); got != "slack_webhook" {
+		t.Fatalf("single-channel label = %q, want slack_webhook", got)
+	}
+	if got := webhookResultChannel(hook, true); got != "slack_webhook:SLACK_RUNS" {
+		t.Fatalf("multi-channel label = %q, want the qualified name", got)
+	}
+}

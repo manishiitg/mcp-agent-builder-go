@@ -36,6 +36,126 @@ interface WorkflowNotificationPopupProps {
 const iconButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50'
 const setupClass = 'inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground'
 
+// RecipientEditor edits one summary's To list. An empty list is a valid, normal
+// state — it means "use the account default" — so it reads as a fallback rather
+// than an error. Addresses already on a denylist are flagged here because the
+// send path silently skips them, which is otherwise invisible until an expected
+// email never arrives.
+function RecipientEditor({
+  label,
+  recipients,
+  onChange,
+  blockedRecipients,
+  accountDefault,
+  inputId,
+}: {
+  label: string
+  recipients: string[]
+  onChange: (next: string[]) => void
+  blockedRecipients: string[]
+  accountDefault: string
+  inputId: string
+}) {
+  const [draft, setDraft] = useState('')
+  const [invalid, setInvalid] = useState<string | null>(null)
+  const blockedSet = new Set(blockedRecipients.map(email => email.trim().toLowerCase()))
+
+  const commit = (raw: string) => {
+    const parts = raw.split(/[,;\s]+/).map(part => part.trim().toLowerCase()).filter(Boolean)
+    if (parts.length === 0) return
+    const rejected = parts.filter(part => !part.includes('@'))
+    if (rejected.length > 0) {
+      setInvalid(`${rejected[0]} is not an email address`)
+      return
+    }
+    setInvalid(null)
+    onChange([...recipients, ...parts.filter(part => !recipients.includes(part))])
+    setDraft('')
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={inputId} className="block text-xs font-medium text-foreground">{label}</label>
+      <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background px-2 py-2">
+        {recipients.map(email => (
+          <span
+            key={email}
+            className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs ${blockedSet.has(email)
+              ? 'border-destructive/40 bg-destructive/10 text-destructive'
+              : 'border-border bg-muted text-foreground'}`}
+            title={blockedSet.has(email) ? `${email} is on a blocked recipients list and will be skipped` : email}
+          >
+            <span className="truncate">{email}</span>
+            <button
+              type="button"
+              onClick={() => onChange(recipients.filter(value => value !== email))}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={`Remove ${email}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          id={inputId}
+          type="text"
+          inputMode="email"
+          value={draft}
+          onChange={event => { setDraft(event.target.value); setInvalid(null) }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ',') {
+              event.preventDefault()
+              commit(draft)
+            } else if (event.key === 'Backspace' && draft === '' && recipients.length > 0) {
+              onChange(recipients.slice(0, -1))
+            }
+          }}
+          // Commit on blur too: typing an address and clicking Save directly is
+          // the obvious way to use this, and losing that entry would look like
+          // the save silently dropped it.
+          onBlur={() => commit(draft)}
+          placeholder={recipients.length === 0 ? 'name@example.com' : 'Add another…'}
+          className="min-w-[12rem] flex-1 bg-transparent px-1 py-0.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      {invalid ? (
+        <span className="block text-xs text-destructive">{invalid}</span>
+      ) : recipients.length === 0 ? (
+        <span className="block text-xs text-muted-foreground">
+          {accountDefault ? <>Falls back to the account default: <span className="font-mono">{accountDefault}</span></> : 'No recipients set and no account default configured — email would have nowhere to go.'}
+        </span>
+      ) : recipients.some(email => blockedSet.has(email)) ? (
+        <span className="block text-xs text-destructive">Addresses shown in red are on a blocked recipients list and are dropped from the send. The other recipients still receive it.</span>
+      ) : null}
+    </div>
+  )
+}
+
+// SlackChannelRow reports which Slack channel a summary posts to. A Slack
+// Incoming Webhook is bound to one channel at creation and cannot be
+// retargeted, so a channel here IS a webhook secret. Read-only: choosing one
+// means picking an encrypted secret, which /notify does with list_secrets.
+function SlackChannelRow({ webhooks, fallbackSecretName }: { webhooks: string[]; fallbackSecretName?: string }) {
+  return (
+    <div className="space-y-1">
+      <span className="block text-xs font-medium text-foreground">Slack channel</span>
+      {webhooks.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {webhooks.map(secret => (
+            <span key={secret} className="w-fit max-w-full truncate rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-xs text-foreground" title={`Posts through encrypted webhook secret ${secret}`}>{secret}</span>
+          ))}
+        </div>
+      ) : (
+        <span className="block text-xs text-muted-foreground">
+          {fallbackSecretName
+            ? <>Uses the workflow webhook <code className="font-mono">{fallbackSecretName}</code>. Set a different channel for this summary with <code className="text-foreground">/notify</code>.</>
+            : <>No Slack webhook configured. Add one with <code className="text-foreground">/notify</code>.</>}
+        </span>
+      )}
+    </div>
+  )
+}
+
 const stateBadgeClass = (state: WorkflowNotificationState): string => {
   switch (state) {
     case 'ready':
@@ -84,6 +204,8 @@ export default function WorkflowNotificationPopup({
   const [pulseInstructions, setPulseInstructions] = useState('')
   const [runChannels, setRunChannels] = useState<string[]>([])
   const [pulseChannels, setPulseChannels] = useState<string[]>([])
+  const [runRecipients, setRunRecipients] = useState<string[]>([])
+  const [pulseRecipients, setPulseRecipients] = useState<string[]>([])
   const [savingInstructions, setSavingInstructions] = useState(false)
 
   const load = useCallback(async () => {
@@ -97,6 +219,8 @@ export default function WorkflowNotificationPopup({
       setPulseInstructions(next.pulseSummaryInstructions)
       setRunChannels(next.runSummaryChannels)
       setPulseChannels(next.pulseSummaryChannels)
+      setRunRecipients(next.runSummaryRecipients)
+      setPulseRecipients(next.pulseSummaryRecipients)
       onStateLoaded?.(next.effectiveState)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load notification status')
@@ -135,6 +259,8 @@ export default function WorkflowNotificationPopup({
     || pulseInstructions.trim() !== (info?.pulseSummaryInstructions || '').trim()
     || JSON.stringify(runChannels) !== JSON.stringify(info?.runSummaryChannels || [])
     || JSON.stringify(pulseChannels) !== JSON.stringify(info?.pulseSummaryChannels || [])
+    || JSON.stringify(runRecipients) !== JSON.stringify(info?.runSummaryRecipients || [])
+    || JSON.stringify(pulseRecipients) !== JSON.stringify(info?.pulseSummaryRecipients || [])
 
   const channelOptions = [
     { id: 'slack', label: 'Slack' },
@@ -158,15 +284,21 @@ export default function WorkflowNotificationPopup({
         pulse_notification_instructions: pulseInstructions.trim(),
         run_notification_channels: runChannels,
         pulse_notification_channels: pulseChannels,
+        run_notification_recipients: runRecipients,
+        pulse_notification_recipients: pulseRecipients,
       })
       const persistedRun = saved?.manifest?.capabilities?.notifications?.run_summary_instructions || ''
       const persistedPulse = saved?.manifest?.capabilities?.notifications?.pulse_summary_instructions || ''
       const persistedRunChannels = saved?.manifest?.capabilities?.notifications?.run_summary_channels || []
       const persistedPulseChannels = saved?.manifest?.capabilities?.notifications?.pulse_summary_channels || []
+      const persistedRunRecipients = saved?.manifest?.capabilities?.notifications?.run_summary_recipients || []
+      const persistedPulseRecipients = saved?.manifest?.capabilities?.notifications?.pulse_summary_recipients || []
       if (persistedRun.trim() !== runInstructions.trim()
         || persistedPulse.trim() !== pulseInstructions.trim()
         || JSON.stringify(persistedRunChannels) !== JSON.stringify(runChannels)
-        || JSON.stringify(persistedPulseChannels) !== JSON.stringify(pulseChannels)) {
+        || JSON.stringify(persistedPulseChannels) !== JSON.stringify(pulseChannels)
+        || JSON.stringify(persistedRunRecipients) !== JSON.stringify(runRecipients)
+        || JSON.stringify(persistedPulseRecipients) !== JSON.stringify(pulseRecipients)) {
         throw new Error('The backend did not save these notification preferences. Restart AgentWorks to load the latest backend, then try again.')
       }
       await load()
@@ -334,7 +466,7 @@ export default function WorkflowNotificationPopup({
                           <MailX className="h-3.5 w-3.5 text-muted-foreground" />
                           <span className="text-sm font-medium text-foreground">Blocked recipients</span>
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">Emails this {scopeLabel} never sends to, on top of the account-wide denylist.</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Emails this {scopeLabel} never sends to, on top of the account-wide denylist. A blocked address is dropped from a send; the remaining recipients still get it.</p>
                       </div>
                       {info.blockRecipients.length > 0 ? (
                         <div className="flex min-w-0 flex-wrap gap-1.5">
@@ -352,11 +484,11 @@ export default function WorkflowNotificationPopup({
                 {scopeKind === 'workflow' && (
                   <section className="rounded-md border border-border">
                     <div className="border-b border-border px-4 py-3">
-                      <h3 className="text-sm font-semibold text-foreground">Notification content</h3>
-                      <p className="mt-0.5 text-xs text-muted-foreground">Set separate content and delivery channels for the workflow result and Pulse's review.</p>
+                      <h3 className="text-sm font-semibold text-foreground">Notification content and recipients</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">Set separate content, delivery channels, and email recipients for the workflow result and Pulse's review.</p>
                     </div>
                     <div className="space-y-4 px-4 py-3">
-                      <label className="block space-y-1.5">
+                      <div className="block space-y-1.5">
                         <span className="text-xs font-medium text-foreground">Workflow run summary</span>
                         <span className="block text-xs text-muted-foreground">What happened in the run: outcomes, outputs, failures, goal movement, and metrics.</span>
                         <textarea
@@ -376,8 +508,17 @@ export default function WorkflowNotificationPopup({
                             </label>
                           ))}
                         </div>
-                      </label>
-                      <label className="block space-y-1.5">
+                        <RecipientEditor
+                          inputId="run-summary-recipients"
+                          label="Email to"
+                          recipients={runRecipients}
+                          onChange={setRunRecipients}
+                          blockedRecipients={[...gmailBlocked, ...(info?.blockRecipients || [])]}
+                          accountDefault={gmailDefault}
+                        />
+                        <SlackChannelRow webhooks={info?.runSummarySlackWebhooks || []} fallbackSecretName={info?.slackWebhook.secret_name} />
+                      </div>
+                      <div className="block space-y-1.5">
                         <span className="text-xs font-medium text-foreground">Pulse review summary</span>
                         <span className="block text-xs text-muted-foreground">What Pulse found or changed: reviews, fixes, recommendations, decisions, and next actions.</span>
                         <textarea
@@ -397,7 +538,16 @@ export default function WorkflowNotificationPopup({
                             </label>
                           ))}
                         </div>
-                      </label>
+                        <RecipientEditor
+                          inputId="pulse-summary-recipients"
+                          label="Email to"
+                          recipients={pulseRecipients}
+                          onChange={setPulseRecipients}
+                          blockedRecipients={[...gmailBlocked, ...(info?.blockRecipients || [])]}
+                          accountDefault={gmailDefault}
+                        />
+                        <SlackChannelRow webhooks={info?.pulseSummarySlackWebhooks || []} fallbackSecretName={info?.slackWebhook.secret_name} />
+                      </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-xs text-muted-foreground">Used by the final Notify step on every Pulse run.</span>
                         <button

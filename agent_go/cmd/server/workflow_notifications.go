@@ -51,11 +51,19 @@ type WorkflowNotificationInfoResponse struct {
 	// Per-workflow preferences from workflow.json notifications. ExcludeChannels
 	// lists inherited account-level channels this workflow opts out of;
 	// BlockRecipients is the workflow's own email denylist (added to the
-	// account-wide one). Both are display-only here — edits go through /notify.
+	// account-wide one), and both are display-only here — edits go through
+	// /notify. The Run/PulseSummaryRecipients lists say where mail is actually
+	// sent and ARE editable from the popup.
 	RunSummaryInstructions   string   `json:"run_summary_instructions,omitempty"`
 	PulseSummaryInstructions string   `json:"pulse_summary_instructions,omitempty"`
 	RunSummaryChannels       []string `json:"run_summary_channels,omitempty"`
 	PulseSummaryChannels     []string `json:"pulse_summary_channels,omitempty"`
+	RunSummaryRecipients     []string `json:"run_summary_recipients,omitempty"`
+	PulseSummaryRecipients   []string `json:"pulse_summary_recipients,omitempty"`
+	// Slack channels per summary, as webhook secret names (one webhook = one
+	// channel). Display-only — edits go through /notify.
+	RunSummarySlackWebhooks   []string `json:"run_summary_slack_webhooks,omitempty"`
+	PulseSummarySlackWebhooks []string `json:"pulse_summary_slack_webhooks,omitempty"`
 	ExcludeChannels          []string `json:"exclude_channels,omitempty"`
 	BlockRecipients          []string `json:"block_recipients,omitempty"`
 }
@@ -202,6 +210,10 @@ func (api *StreamingAPI) handleGetWorkflowNotifications(w http.ResponseWriter, r
 		response.PulseSummaryInstructions = manifest.Capabilities.Notifications.EffectivePulseSummaryInstructions()
 		response.RunSummaryChannels = manifest.Capabilities.Notifications.RunSummaryChannels
 		response.PulseSummaryChannels = manifest.Capabilities.Notifications.PulseSummaryChannels
+		response.RunSummaryRecipients = manifest.Capabilities.Notifications.RunSummaryRecipients
+		response.PulseSummaryRecipients = manifest.Capabilities.Notifications.PulseSummaryRecipients
+		response.RunSummarySlackWebhooks = manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames
+		response.PulseSummarySlackWebhooks = manifest.Capabilities.Notifications.PulseSummarySlackWebhookSecretNames
 		response.ExcludeChannels = manifest.Capabilities.Notifications.ExcludeChannels
 		response.BlockRecipients = manifest.Capabilities.Notifications.BlockRecipients
 	}

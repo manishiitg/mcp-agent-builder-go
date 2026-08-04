@@ -2680,10 +2680,12 @@ func legacyPostRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleSt
 }
 
 type workflowNotificationContentInstructions struct {
-	runSummary           string
-	pulseSummary         string
-	runSummaryChannels   []string
-	pulseSummaryChannels []string
+	runSummary             string
+	pulseSummary           string
+	runSummaryChannels     []string
+	pulseSummaryChannels   []string
+	runSummaryRecipients   []string
+	pulseSummaryRecipients []string
 }
 
 func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities) workflowNotificationContentInstructions {
@@ -2692,10 +2694,12 @@ func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities)
 	}
 	notifications := capabilities.Notifications
 	return workflowNotificationContentInstructions{
-		runSummary:           notifications.EffectiveRunSummaryInstructions(),
-		pulseSummary:         notifications.EffectivePulseSummaryInstructions(),
-		runSummaryChannels:   append([]string(nil), notifications.RunSummaryChannels...),
-		pulseSummaryChannels: append([]string(nil), notifications.PulseSummaryChannels...),
+		runSummary:             notifications.EffectiveRunSummaryInstructions(),
+		pulseSummary:           notifications.EffectivePulseSummaryInstructions(),
+		runSummaryChannels:     append([]string(nil), notifications.RunSummaryChannels...),
+		pulseSummaryChannels:   append([]string(nil), notifications.PulseSummaryChannels...),
+		runSummaryRecipients:   append([]string(nil), notifications.RunSummaryRecipients...),
+		pulseSummaryRecipients: append([]string(nil), notifications.PulseSummaryRecipients...),
 	}
 }
 
@@ -2713,6 +2717,12 @@ func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotific
 	}
 	if len(ownerInstructions.runSummaryChannels) > 0 || len(ownerInstructions.pulseSummaryChannels) > 0 {
 		notificationContext += fmt.Sprintf("\n\nSPLIT NOTIFICATION ROUTING. Send two notify_user calls, not one combined message. Send the workflow outcome with notification_kind=\"run_summary\"; configured channels: %s. Send Pulse activity with notification_kind=\"pulse_summary\"; configured channels: %s. The backend enforces these routes.", notificationChannelSummary(ownerInstructions.runSummaryChannels), notificationChannelSummary(ownerInstructions.pulseSummaryChannels))
+	}
+	if len(ownerInstructions.runSummaryRecipients) > 0 || len(ownerInstructions.pulseSummaryRecipients) > 0 {
+		// Stated so the finalizer does not "helpfully" pass email_to and override
+		// the owner's saved lists. The backend applies these by notification_kind
+		// on its own; an explicit email_to would replace them for that send.
+		notificationContext += fmt.Sprintf("\n\nCONFIGURED EMAIL RECIPIENTS. The backend addresses each email automatically from the workflow's saved lists — run summary: %s; Pulse summary: %s. Do NOT set email_to; sending with the correct notification_kind is what routes it to the right people.", notificationRecipientSummary(ownerInstructions.runSummaryRecipients), notificationRecipientSummary(ownerInstructions.pulseSummaryRecipients))
 	}
 	if notificationContext != "" {
 		notificationContext += "\n\nThese instructions control content detail and emphasis only; they never change recipients, channels, secrets, permissions, or safety rules."
@@ -2750,6 +2760,16 @@ func notificationChannelSummary(channels []string) string {
 		return "all enabled channels (legacy default)"
 	}
 	return strings.Join(channels, ", ")
+}
+
+// notificationRecipientSummary describes a saved recipient list for the Pulse
+// finalizer prompt. An unset list is spelled out as the account default rather
+// than left blank, so the finalizer does not read it as "nobody".
+func notificationRecipientSummary(recipients []string) string {
+	if len(recipients) == 0 {
+		return "the account default recipient"
+	}
+	return strings.Join(recipients, ", ")
 }
 
 func pulseReviewRunID(pulseRunID string, now time.Time) string {

@@ -281,14 +281,17 @@ Goal: per-workflow notification preferences now live in structured workflow.json
 The workflow.json "notifications" object supports:
   - "slack_webhook_secret_name": existing field, a workflow-scoped Slack Incoming Webhook secret reference (leave any existing value untouched);
   - "exclude_channels": array of account-level channel names ("gmail", "slack", "whatsapp") this workflow opts OUT of. An account-level channel enabled globally is otherwise inherited by every workflow;
-  - "block_recipients": array of email addresses this workflow must never email, unioned with the account-wide denylist (block-only; never unblocks a globally-blocked address).
+  - "block_recipients": array of email addresses this workflow must never email, unioned with the account-wide denylist (block-only; never unblocks a globally-blocked address);
+  - "run_summary_recipients" / "pulse_summary_recipients": arrays of email addresses each summary is sent TO. These are the positive "send here" lists, the opposite of block_recipients. Empty means the account default recipient is used.
 
 1. Read workflow.json and soul/soul.md. If soul/soul.md has no "## Notifications" section AND workflow.json needs no change, this is a no-op migration — skip to step 4 (version bump only).
 2. If soul/soul.md has a "## Notifications" section, translate ONLY explicit, user-approved preferences into workflow.json "notifications":
    - "do not email" / "no email" / "disable email for this workflow" -> add "gmail" to exclude_channels;
    - "no Slack" / "no WhatsApp" for this workflow -> add that channel to exclude_channels;
-   - "never email X" / "do not email address X" -> add X to block_recipients.
-   Preserve any existing notifications.slack_webhook_secret_name and any exclude_channels/block_recipients already present (union, de-duplicated). Do NOT invent preferences, recipients, or channels that are not explicitly stated. Do NOT copy account-wide Gmail enablement, default recipient, or the global disallowed-recipients list into workflow.json — those stay account-level.
+   - "never email X" / "do not email address X" -> add X to block_recipients;
+   - "email X" / "send the results to X" / "notify X" -> add X to run_summary_recipients (and to pulse_summary_recipients if the preference covers Pulse activity too).
+   Read the DIRECTION carefully before writing an address: an address the user wants to RECEIVE mail goes in a *_summary_recipients list, never in block_recipients. Putting a wanted recipient in block_recipients does the exact opposite of what was asked and silently drops their mail.
+   Preserve any existing notifications.slack_webhook_secret_name and any exclude_channels/block_recipients/*_summary_recipients already present (union, de-duplicated). Do NOT invent preferences, recipients, or channels that are not explicitly stated. Do NOT copy account-wide Gmail enablement, default recipient, or the global disallowed-recipients list into workflow.json — those stay account-level.
 3. Update soul/soul.md: remove the "## Notifications" section. If it also held a genuinely user-approved, non-channel/non-recipient constraint that has no structured home (e.g. an explicit cadence rule the user approved), move that single sentence into the "## Constraints" section rather than losing it; otherwise just delete the heading and its body. Keep ## Objective, ## Success Criteria, and ## Constraints. soul.md stays Markdown.
 4. Update workflow.json "version" to "1.0.12". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, publish, or make unrelated changes in this step.
 

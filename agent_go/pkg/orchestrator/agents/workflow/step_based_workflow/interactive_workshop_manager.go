@@ -1274,6 +1274,26 @@ func uniqueStringsPreserveOrder(values []string) []string {
 	return result
 }
 
+// notificationRecipientSummary renders a configured recipient list for the
+// agent-facing config read-out. An empty list is described by what it actually
+// does at send time rather than as a blank, so the agent does not read a
+// missing override as "this workflow emails nobody".
+func notificationRecipientSummary(recipients []string) string {
+	if len(recipients) == 0 {
+		return "not configured (uses the account default recipient)"
+	}
+	return strings.Join(recipients, ", ")
+}
+
+// notificationWebhookSummary renders the Slack channels configured for one
+// summary. Each entry is a webhook secret, and a webhook is one channel.
+func notificationWebhookSummary(secretNames []string) string {
+	if len(secretNames) == 0 {
+		return "not configured (uses the workflow's single Slack webhook, if any)"
+	}
+	return strings.Join(secretNames, ", ")
+}
+
 // persistWorkflowConfigToManifest writes the current in-memory workflow config
 // (servers, tools, skills, secrets) back to workflow.json so changes survive
 // session end.
@@ -6729,6 +6749,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			var pulseNotificationChannels []string
 			var notificationExcludeChannels []string
 			var notificationBlockRecipients []string
+			var runNotificationRecipients []string
+			var pulseNotificationRecipients []string
+			var runNotificationWebhooks []string
+			var pulseNotificationWebhooks []string
 			if content, readErr := ctrl.ReadWorkspaceFile(ctx, "workflow.json"); readErr == nil {
 				var manifest struct {
 					Capabilities struct {
@@ -6741,6 +6765,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							Instructions             string   `json:"instructions"`
 							ExcludeChannels          []string `json:"exclude_channels"`
 							BlockRecipients          []string `json:"block_recipients"`
+							RunSummaryRecipients     []string `json:"run_summary_recipients"`
+							PulseSummaryRecipients   []string `json:"pulse_summary_recipients"`
+
+							RunSummarySlackWebhookSecretNames   []string `json:"run_summary_slack_webhook_secret_names"`
+							PulseSummarySlackWebhookSecretNames []string `json:"pulse_summary_slack_webhook_secret_names"`
 						} `json:"notifications"`
 					} `json:"capabilities"`
 				}
@@ -6757,6 +6786,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 					notificationExcludeChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.ExcludeChannels)
 					notificationBlockRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.BlockRecipients)
+					runNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummaryRecipients)
+					pulseNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummaryRecipients)
+					runNotificationWebhooks = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames)
+					pulseNotificationWebhooks = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummarySlackWebhookSecretNames)
 					runNotificationChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummaryChannels)
 					pulseNotificationChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummaryChannels)
 				}
@@ -6787,6 +6820,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			if len(notificationBlockRecipients) > 0 {
 				sb.WriteString(fmt.Sprintf("- Blocked recipients: %s\n", strings.Join(notificationBlockRecipients, ", ")))
+			}
+			// State both recipient lists unconditionally. "Not configured" is a real
+			// answer here — it means mail goes to the account default — and leaving
+			// the line out entirely reads as "no email is sent", which is wrong.
+			sb.WriteString(fmt.Sprintf("- Workflow run summary recipients: %s\n", notificationRecipientSummary(runNotificationRecipients)))
+			sb.WriteString(fmt.Sprintf("- Pulse review summary recipients: %s\n", notificationRecipientSummary(pulseNotificationRecipients)))
+			if len(runNotificationWebhooks) > 0 || len(pulseNotificationWebhooks) > 0 {
+				sb.WriteString(fmt.Sprintf("- Workflow run summary Slack channels: %s\n", notificationWebhookSummary(runNotificationWebhooks)))
+				sb.WriteString(fmt.Sprintf("- Pulse review summary Slack channels: %s\n", notificationWebhookSummary(pulseNotificationWebhooks)))
 			}
 
 			// Show available secrets that can be added
@@ -6983,6 +7025,26 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"items":       map[string]interface{}{"type": "string", "enum": []string{"gmail", "slack", "whatsapp"}},
 					"minItems":    1,
 					"description": "Channels for the Pulse review summary only. The backend enforces this allowlist. Omit to retain the current/default routing.",
+				},
+				"run_notification_slack_webhooks": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Which Slack CHANNEL(S) the workflow run summary posts to, as names of existing encrypted secrets that each hold a complete Slack Incoming Webhook URL. A webhook is bound to one channel when it is created and cannot be retargeted, so a different channel means a different webhook secret — store each with set_workflow_secret, then list its name here. Listing several posts the run summary to several channels. Stored in workflow.json capabilities.notifications.run_summary_slack_webhook_secret_names. Omit to leave unchanged; pass an empty array to fall back to the workflow's single slack_webhook_secret_name.",
+				},
+				"pulse_notification_slack_webhooks": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Which Slack CHANNEL(S) the Pulse review summary posts to, as encrypted-secret names holding Slack Incoming Webhook URLs. Use when Pulse activity belongs in a different channel than the run outcome. Stored in workflow.json capabilities.notifications.pulse_summary_slack_webhook_secret_names. Omit to leave unchanged; pass an empty array to fall back to the workflow's single slack_webhook_secret_name.",
+				},
+				"run_notification_recipients": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Email addresses the workflow run summary is sent TO, stored in workflow.json capabilities.notifications.run_summary_recipients and applied automatically to every run_summary send. This is the positive 'send here' list — set it when the user names who should receive this workflow's run emails. Omit to leave unchanged; pass an empty array to clear it and fall back to the account default recipient. Never blocks anything: the account-wide and per-workflow denylists are still applied on top, so a blocked address listed here is skipped rather than unblocked.",
+				},
+				"pulse_notification_recipients": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Email addresses the Pulse review summary is sent TO, stored in workflow.json capabilities.notifications.pulse_summary_recipients and applied automatically to every pulse_summary send. Use when Pulse findings should reach different people than the run outcome. Omit to leave unchanged; pass an empty array to clear it and fall back to the account default recipient. Denylists still apply on top.",
 				},
 				"update_tier_fallbacks": map[string]interface{}{
 					"type":        "object",
@@ -7399,8 +7461,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			pulseRaw, pulseProvided := args["pulse_notification_instructions"]
 			runChannelsRaw, runChannelsProvided := args["run_notification_channels"]
 			pulseChannelsRaw, pulseChannelsProvided := args["pulse_notification_channels"]
+			runRecipientsRaw, runRecipientsProvided := args["run_notification_recipients"]
+			pulseRecipientsRaw, pulseRecipientsProvided := args["pulse_notification_recipients"]
 			if (runProvided && runRaw != nil) || (pulseProvided && pulseRaw != nil) ||
-				(runChannelsProvided && runChannelsRaw != nil) || (pulseChannelsProvided && pulseChannelsRaw != nil) {
+				(runChannelsProvided && runChannelsRaw != nil) || (pulseChannelsProvided && pulseChannelsRaw != nil) ||
+				(runRecipientsProvided && runRecipientsRaw != nil) || (pulseRecipientsProvided && pulseRecipientsRaw != nil) {
 				parseInstructions := func(name string, raw interface{}, provided bool) (string, error) {
 					if !provided || raw == nil {
 						return "", nil
@@ -7488,6 +7553,48 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if parseErr != nil {
 					return "Error: " + parseErr.Error() + ".", nil
 				}
+				// Recipient lists are stored as-given minus obvious junk. An empty
+				// array is a legitimate value here — it clears the list back to the
+				// account default — so unlike channels it is not an error.
+				parseRecipients := func(name string, raw interface{}, provided bool) ([]string, error) {
+					if !provided || raw == nil {
+						return nil, nil
+					}
+					values, ok := raw.([]interface{})
+					if !ok {
+						return nil, fmt.Errorf("%s must be an array of email addresses", name)
+					}
+					recipients := make([]string, 0, len(values))
+					seen := map[string]bool{}
+					for _, rawValue := range values {
+						value, ok := rawValue.(string)
+						if !ok {
+							return nil, fmt.Errorf("%s must contain only email addresses", name)
+						}
+						for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+							return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+						}) {
+							email := strings.ToLower(strings.TrimSpace(part))
+							if email == "" || seen[email] {
+								continue
+							}
+							if !strings.Contains(email, "@") {
+								return nil, fmt.Errorf("%s contains %q, which is not an email address", name, part)
+							}
+							seen[email] = true
+							recipients = append(recipients, email)
+						}
+					}
+					return recipients, nil
+				}
+				runRecipients, parseErr := parseRecipients("run_notification_recipients", runRecipientsRaw, runRecipientsProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+				pulseRecipients, parseErr := parseRecipients("pulse_notification_recipients", pulseRecipientsRaw, pulseRecipientsProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
 				delete(notifications, "instructions")
 				for key, value := range map[string]string{
 					"run_summary_instructions":   strings.TrimSpace(runInstructions),
@@ -7504,6 +7611,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 				if pulseChannelsProvided {
 					notifications["pulse_summary_channels"] = pulseChannels
+				}
+				// An explicitly emptied list is stored as "no override" by removing
+				// the key, which is what falls back to the account default.
+				if runRecipientsProvided {
+					if len(runRecipients) == 0 {
+						delete(notifications, "run_summary_recipients")
+					} else {
+						notifications["run_summary_recipients"] = runRecipients
+					}
+				}
+				if pulseRecipientsProvided {
+					if len(pulseRecipients) == 0 {
+						delete(notifications, "pulse_summary_recipients")
+					} else {
+						notifications["pulse_summary_recipients"] = pulseRecipients
+					}
 				}
 				if len(notifications) == 0 {
 					delete(caps, "notifications")
@@ -7522,7 +7645,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 				anyChanged = true
 				sb.WriteString("\n### Notification Instructions (updated)\nSaved separate workflow run and Pulse review content preferences in workflow.json.\n")
-				logger.Info(fmt.Sprintf("Updated workflow notification instructions: run_configured=%v pulse_configured=%v", strings.TrimSpace(runInstructions) != "", strings.TrimSpace(pulseInstructions) != ""))
+				if runRecipientsProvided {
+					sb.WriteString(fmt.Sprintf("- Run summary recipients: %s\n", notificationRecipientSummary(runRecipients)))
+				}
+				if pulseRecipientsProvided {
+					sb.WriteString(fmt.Sprintf("- Pulse summary recipients: %s\n", notificationRecipientSummary(pulseRecipients)))
+				}
+				logger.Info(fmt.Sprintf("Updated workflow notification instructions: run_configured=%v pulse_configured=%v run_recipients=%d pulse_recipients=%d", strings.TrimSpace(runInstructions) != "", strings.TrimSpace(pulseInstructions) != "", len(runRecipients), len(pulseRecipients)))
 			}
 
 			// --- Workflow-scoped one-way Slack webhook ---
@@ -7648,6 +7777,192 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					sb.WriteString(fmt.Sprintf("\n### Slack Incoming Webhook (configured)\n- Encrypted backend-only secret: %s\n- Applies immediately to notify_user in this builder turn and to future workflow runs. notify_user renders rich Block Kit by default; the agent never receives the URL. It is one-way and is not used for human_feedback.\n", secretName))
 				}
 				logger.Info(fmt.Sprintf("Updated workflow Slack webhook secret reference: configured=%v", secretName != ""))
+			}
+
+			// --- Per-summary Slack channels (one webhook == one channel) ---
+			runWebhooksRaw, runWebhooksProvided := args["run_notification_slack_webhooks"]
+			pulseWebhooksRaw, pulseWebhooksProvided := args["pulse_notification_slack_webhooks"]
+			if (runWebhooksProvided && runWebhooksRaw != nil) || (pulseWebhooksProvided && pulseWebhooksRaw != nil) {
+				// Validate before writing anything: a name with no stored value, or
+				// one holding something that is not a webhook URL, would persist as a
+				// channel that silently never receives a message.
+				resolveWebhookSecret := func(name string) (string, error) {
+					var value string
+					if iwm.resolveSecretValues != nil {
+						value = iwm.resolveSecretValues(ctx, []string{name})[name]
+					}
+					if strings.TrimSpace(value) == "" {
+						for _, secret := range iwm.controller.GetSecrets() {
+							if secret.Name == name {
+								value = secret.Value
+								break
+							}
+						}
+					}
+					if strings.TrimSpace(value) == "" {
+						return "", fmt.Errorf("Slack webhook secret %q has no stored value. Save the full Incoming Webhook URL with set_workflow_secret first", name)
+					}
+					if validateErr := services.ValidateSlackIncomingWebhookURL(value); validateErr != nil {
+						return "", fmt.Errorf("secret %q is not a valid Slack Incoming Webhook URL: %w", name, validateErr)
+					}
+					return value, nil
+				}
+				parseWebhooks := func(argName string, raw interface{}, provided bool) ([]string, map[string]string, error) {
+					if !provided || raw == nil {
+						return nil, nil, nil
+					}
+					values, ok := raw.([]interface{})
+					if !ok {
+						return nil, nil, fmt.Errorf("%s must be an array of secret names", argName)
+					}
+					names := make([]string, 0, len(values))
+					resolved := map[string]string{}
+					seen := map[string]bool{}
+					for _, rawValue := range values {
+						name, ok := rawValue.(string)
+						if !ok {
+							return nil, nil, fmt.Errorf("%s must contain only secret names", argName)
+						}
+						name = strings.TrimSpace(name)
+						if name == "" || seen[name] {
+							continue
+						}
+						value, resolveErr := resolveWebhookSecret(name)
+						if resolveErr != nil {
+							return nil, nil, resolveErr
+						}
+						seen[name] = true
+						names = append(names, name)
+						resolved[name] = value
+					}
+					return names, resolved, nil
+				}
+				runWebhookNames, runWebhookValues, parseErr := parseWebhooks("run_notification_slack_webhooks", runWebhooksRaw, runWebhooksProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+				pulseWebhookNames, pulseWebhookValues, parseErr := parseWebhooks("pulse_notification_slack_webhooks", pulseWebhooksRaw, pulseWebhooksProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+
+				content, readErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+				if readErr != nil {
+					return fmt.Sprintf("Failed to read workflow.json: %v", readErr), nil
+				}
+				var manifest map[string]interface{}
+				if parseErr := json.Unmarshal([]byte(content), &manifest); parseErr != nil {
+					return fmt.Sprintf("Failed to parse workflow.json: %v", parseErr), nil
+				}
+				caps, _ := manifest["capabilities"].(map[string]interface{})
+				if caps == nil {
+					caps = make(map[string]interface{})
+				}
+				notifications, _ := caps["notifications"].(map[string]interface{})
+				if notifications == nil {
+					notifications = make(map[string]interface{})
+				}
+				applyWebhookNames := func(key string, names []string, provided bool) {
+					if !provided {
+						return
+					}
+					if len(names) == 0 {
+						delete(notifications, key)
+						return
+					}
+					notifications[key] = names
+				}
+				applyWebhookNames("run_summary_slack_webhook_secret_names", runWebhookNames, runWebhooksProvided)
+				applyWebhookNames("pulse_summary_slack_webhook_secret_names", pulseWebhookNames, pulseWebhooksProvided)
+				if len(notifications) == 0 {
+					delete(caps, "notifications")
+				} else {
+					caps["notifications"] = notifications
+				}
+
+				// Same backend-only guarantee the single webhook gets: a credential
+				// referenced by notifications must never reach the agent as SECRET_*.
+				backendOnly := append(append([]string{}, runWebhookNames...), pulseWebhookNames...)
+				if len(backendOnly) > 0 {
+					blocked := map[string]bool{}
+					for _, name := range backendOnly {
+						blocked[name] = true
+					}
+					for _, key := range []string{"selected_secrets", "selected_global_secret_names"} {
+						if rawSelected, ok := caps[key].([]interface{}); ok {
+							filtered := make([]interface{}, 0, len(rawSelected))
+							for _, entry := range rawSelected {
+								if name, _ := entry.(string); !blocked[strings.TrimSpace(name)] {
+									filtered = append(filtered, entry)
+								}
+							}
+							caps[key] = filtered
+						}
+					}
+				}
+				manifest["capabilities"] = caps
+				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+				updated, marshalErr := json.MarshalIndent(manifest, "", "  ")
+				if marshalErr != nil {
+					return fmt.Sprintf("Failed to marshal workflow.json: %v", marshalErr), nil
+				}
+				if writeErr := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(updated)); writeErr != nil {
+					return fmt.Sprintf("Failed to write workflow.json: %v", writeErr), nil
+				}
+
+				if len(backendOnly) > 0 {
+					blocked := map[string]bool{}
+					for _, name := range backendOnly {
+						blocked[name] = true
+					}
+					currentSecrets := iwm.controller.GetSecrets()
+					filtered := make([]orchestrator.SecretEntry, 0, len(currentSecrets))
+					for _, secret := range currentSecrets {
+						if !blocked[strings.TrimSpace(secret.Name)] {
+							filtered = append(filtered, secret)
+						}
+					}
+					iwm.controller.SetSecrets(filtered)
+					if iwm.workshopConfig != nil {
+						iwm.workshopConfig.Secrets = append([]orchestrator.SecretEntry(nil), filtered...)
+					}
+					if envRef := iwm.controller.GetWorkspaceEnvRef(); envRef != nil {
+						iwm.controller.LockWorkspaceEnv()
+						for name := range blocked {
+							delete(envRef, "SECRET_"+name)
+						}
+						iwm.controller.UnlockWorkspaceEnv()
+					}
+				}
+
+				// Apply to the live builder turn so a test notify_user right after
+				// this call already posts to the newly chosen channels.
+				toWebhookDests := func(names []string, values map[string]string) []services.SlackWebhookDest {
+					var dests []services.SlackWebhookDest
+					for _, name := range names {
+						dests = append(dests, services.SlackWebhookDest{SecretName: name, URL: values[name]})
+					}
+					return dests
+				}
+				if destination, ok := ctx.Value(virtualtools.BotNotificationDestinationKey).(*services.NotificationDestination); ok && destination != nil {
+					if runWebhooksProvided {
+						destination.RunSummaryWebhooks = toWebhookDests(runWebhookNames, runWebhookValues)
+					}
+					if pulseWebhooksProvided {
+						destination.PulseSummaryWebhooks = toWebhookDests(pulseWebhookNames, pulseWebhookValues)
+					}
+				}
+
+				anyChanged = true
+				sb.WriteString("\n### Slack channels per summary (updated)\n")
+				if runWebhooksProvided {
+					sb.WriteString(fmt.Sprintf("- Workflow run summary channels: %s\n", notificationWebhookSummary(runWebhookNames)))
+				}
+				if pulseWebhooksProvided {
+					sb.WriteString(fmt.Sprintf("- Pulse review summary channels: %s\n", notificationWebhookSummary(pulseWebhookNames)))
+				}
+				sb.WriteString("Each webhook is one Slack channel. The agent never receives these URLs; the backend posts through them by notification_kind.\n")
+				logger.Info(fmt.Sprintf("Updated per-summary Slack webhooks: run=%d pulse=%d", len(runWebhookNames), len(pulseWebhookNames)))
 			}
 
 			// --- Tier Fallbacks ---
