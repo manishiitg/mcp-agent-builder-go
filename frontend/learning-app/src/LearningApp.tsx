@@ -1281,7 +1281,12 @@ export default function LearningApp() {
   // parentConversationID). No multi-conversation list, so the id is fixed.
   const conversationId = 'parent'
   const resumedRef = useRef(false)
-  const childResumedRef = useRef(false)
+  // Which activity's conversation is currently loaded into childMessages.
+  // Keyed by dir rather than a plain "have we resumed once" flag: the bound
+  // activity CHANGES underneath the child whenever the parent runs
+  // open_activity, and a once-ever guard left the previous activity's chat on
+  // screen under the new activity's name.
+  const loadedActivityDirRef = useRef<string | null>(null)
   const childMessages = useChildChatStore((s) => s.childMessages)
   const childRenderGroups = groupConsecutivePhotos(childMessages)
   const setChildMessages = useChildChatStore((s) => s.setChildMessages)
@@ -2100,17 +2105,28 @@ export default function LearningApp() {
       .then((act: Activity | null) => {
         if (cancelled) return
         setChildActivity(act)
-        if (!act || childResumedRef.current || useChildChatStore.getState().childMessages.length > 0) return
-        childResumedRef.current = true
+        if (!act) return
+        // Reload whenever the bound activity changes, not just once ever.
+        // Skipped mid-turn: replacing the thread under an in-flight send would
+        // drop the optimistic message and the reply being streamed into it.
+        if (loadedActivityDirRef.current === act.dir) return
+        if (useChildChatStore.getState().childSending) return
+        loadedActivityDirRef.current = act.dir
         fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${act.dir}/conversation.json`)}`)
           .then((r2) => r2.json())
           .then((dd) => {
-            if (!dd?.content) return
-            const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-            const loaded = (c.messages || []).map(toParentMsg)
-            setChildMessages(loaded)
+            // A newer activity may have been bound while this was in flight;
+            // applying a stale one would recreate the bug this fixes.
+            if (loadedActivityDirRef.current !== act.dir) return
+            const c = dd?.content ? (JSON.parse(dd.content) as { messages?: StoredMsg[] }) : { messages: [] }
+            // Replaces rather than merges — a brand-new activity has no
+            // conversation file yet, and must start empty rather than
+            // inheriting whatever was on screen.
+            setChildMessages((c.messages || []).map(toParentMsg))
+            setChildRemoteStatus('')
+            setChildRemoteToolCalls([])
           })
-          .catch(() => {})
+          .catch(() => { if (loadedActivityDirRef.current === act.dir) setChildMessages([]) })
       })
       .catch(() => { if (!cancelled) setChildActivity(null) })
     return () => { cancelled = true }
