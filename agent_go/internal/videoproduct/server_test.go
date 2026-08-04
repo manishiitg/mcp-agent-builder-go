@@ -314,23 +314,33 @@ func TestProjectCreatesCinematicWorkflowWithIsolatedRegularSteps(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Name != cinematicWorkflowName || len(payload.Steps) != 8 || len(payload.Runs) != 0 {
+	// The UI shows one pipeline's stages; the plan on disk carries every
+	// pipeline's, behind the routing step.
+	if payload.Name != cinematicWorkflowName || len(payload.Steps) != len(DefaultPipeline().Stages) || len(payload.Runs) != 0 {
 		t.Fatalf("unexpected workflow payload: %+v", payload)
+	}
+	totalStages := 0
+	for _, pipeline := range pipelineRegistry {
+		totalStages += len(pipeline.Stages)
 	}
 	configData, err := os.ReadFile(filepath.Join(server.store.ProjectDir(project.ID), "planning", "step_config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	configText := string(configData)
-	if strings.Count(configText, `"db_access": "none"`) != 8 || strings.Count(configText, `"knowledgebase_access": "none"`) != 8 || strings.Count(configText, `"learnings_access": "none"`) != 8 {
+	if strings.Count(configText, `"db_access": "none"`) != totalStages || strings.Count(configText, `"knowledgebase_access": "none"`) != totalStages || strings.Count(configText, `"learnings_access": "none"`) != totalStages {
 		t.Fatalf("all workflow steps must disable DB, KB, and learnings access: %s", configText)
 	}
 	planData, err := os.ReadFile(filepath.Join(server.store.ProjectDir(project.ID), "planning", "plan.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(planData), `"type": "regular"`) != 8 || strings.Contains(string(planData), "message_sequence") {
-		t.Fatalf("cinematic stages must be eight regular steps: %s", planData)
+	// Every stage is a regular step; routing adds exactly one non-regular step.
+	if strings.Count(string(planData), `"type": "regular"`) != totalStages || strings.Contains(string(planData), "message_sequence") {
+		t.Fatalf("every pipeline stage must be a regular step: %s", planData)
+	}
+	if strings.Count(string(planData), `"type": "routing"`) != 1 {
+		t.Fatalf("plan must contain exactly one routing step: %s", planData)
 	}
 }
 

@@ -145,7 +145,7 @@ func workflowConversationInput(history []Message) string {
 	return "Recent project conversation (the latest User entry is the current request; earlier entries are context and approvals):\n\n" + strings.Join(entries, "\n\n")
 }
 
-func applyWorkflowHumanInput(toolName string, args map[string]interface{}, history []Message) {
+func applyWorkflowHumanInput(pipeline *Pipeline, toolName string, args map[string]interface{}, history []Message) {
 	input := workflowConversationInput(history)
 	if input == "" {
 		return
@@ -156,10 +156,10 @@ func applyWorkflowHumanInput(toolName string, args map[string]interface{}, histo
 		}
 		return
 	}
-	if toolName != "run_full_workflow" || len(cinematicSteps) == 0 {
+	if toolName != "run_full_workflow" || len(pipeline.Stages) == 0 {
 		return
 	}
-	firstStepID := cinematicSteps[0].ID
+	firstStepID := pipeline.Stages[0].ID
 	switch existing := args["human_inputs"].(type) {
 	case map[string]interface{}:
 		if value, _ := existing[firstStepID].(string); strings.TrimSpace(value) == "" {
@@ -178,31 +178,50 @@ func workflowRelativePath(projectID string) string {
 	return filepath.ToSlash(filepath.Join("projects", projectID))
 }
 
-func (s *WorkflowService) EnsureProject(projectID, title string) error {
+func (s *WorkflowService) EnsureProject(project Project) error {
+	projectID, title := project.ID, project.Title
 	root := s.store.ProjectDir(projectID)
 	for _, dir := range []string{"planning", "variables", "soul"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			return err
 		}
 	}
-	files := map[string]interface{}{
-		"workflow.json":             cinematicWorkflowManifest(projectID, title),
-		"planning/plan.json":        cinematicPlan(),
-		"planning/step_config.json": cinematicStepConfig(),
-		"variables/variables.json":  map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
+	// The pipeline definition in code is the source of truth for the plan, the
+	// step config and the skills each stage gets, so these are rewritten every
+	// time a project is opened. Written once, they would freeze at whatever the
+	// definition looked like on the day the project was created: a project made
+	// before stage skills existed would never get them, and a later correction
+	// to a stage's instructions — including the rule that Assets must not spend
+	// without approval — would silently never reach it.
+	//
+	// Safe to overwrite here because this product exposes only execute_step,
+	// query_step and run_full_workflow. The plan-editing tools that write
+	// step_config.json at runtime are not part of Video Studio, so there is no
+	// engine-authored state in these two files to preserve.
+	generated := map[string]interface{}{
+		"planning/plan.json":        planForAll(pipelineRegistry),
+		"planning/step_config.json": stepConfigForAll(pipelineRegistry),
 	}
-	for name, value := range files {
+	for name, value := range generated {
+		if err := writeProjectJSON(root, name, value); err != nil {
+			return err
+		}
+	}
+
+	// Created once and then left alone: workflow.json carries creation
+	// timestamps, and variables.json is runtime state rather than definition.
+	seeded := map[string]interface{}{
+		"workflow.json":            cinematicWorkflowManifest(projectID, title),
+		"variables/variables.json": map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
+	}
+	for name, value := range seeded {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		data, err := json.MarshalIndent(value, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		if err := writeProjectJSON(root, name, value); err != nil {
 			return err
 		}
 	}
@@ -214,6 +233,20 @@ func (s *WorkflowService) EnsureProject(projectID, title string) error {
 		}
 	}
 	return nil
+}
+
+// writeProjectJSON writes one JSON file under the project root, creating the
+// parent folder if the definition introduced a new location.
+func writeProjectJSON(root, name string, value interface{}) error {
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
 }
 
 func cinematicWorkflowManifest(projectID, title string) map[string]interface{} {
@@ -229,48 +262,97 @@ func cinematicWorkflowManifest(projectID, title string) map[string]interface{} {
 	}
 }
 
-func cinematicPlan() map[string]interface{} { return planFor(DefaultPipeline()) }
+const routeStepID = "route"
 
-// planFor renders a pipeline as the workflow plan the step runner consumes.
-// Each stage depends on the previous stage's artifact and must produce its own,
-// which is what makes "wrote a plan but produced nothing" a stage failure.
-func planFor(pipeline *Pipeline) map[string]interface{} {
-	steps := make([]map[string]interface{}, 0, len(pipeline.Stages))
-	for i, stage := range pipeline.Stages {
-		deps := []string{}
-		if i > 0 {
-			deps = []string{pipeline.Stages[i-1].Output}
-		}
-		steps = append(steps, map[string]interface{}{
-			"type": "regular", "id": stage.ID, "title": stage.Title, "description": stage.Description,
-			"context_dependencies": deps, "context_output": stage.Output, "has_loop": false,
-			"validation_schema": map[string]interface{}{"files": []map[string]interface{}{{"file_name": stage.Output, "must_exist": true}}},
+func cinematicPlan() map[string]interface{} { return planForAll(pipelineRegistry) }
+
+// planForAll renders every pipeline into ONE plan: a deterministic routing step,
+// then each pipeline's stages as its own branch.
+//
+// One plan rather than one per pipeline is what AgentWorks' routing expects, and
+// it means the branch is chosen when a run starts instead of having to be known
+// when the project's files are first written — so nothing has to be stored on the
+// project to remember it.
+//
+// There is deliberately no step that "decides" the route. When the user has
+// already said what they want, the chat agent passes route_selections to
+// run_full_workflow and the engine seeds the choice; otherwise default_route_id
+// applies. Spending an LLM stage to re-derive a choice the user already stated is
+// what AgentWorks' own guidance warns against.
+func planForAll(pipelines []*Pipeline) map[string]interface{} {
+	steps := make([]map[string]interface{}, 0, 1+len(pipelines)*8)
+
+	routes := make([]map[string]interface{}, 0, len(pipelines))
+	for _, pipeline := range pipelines {
+		routes = append(routes, map[string]interface{}{
+			"route_id": pipeline.ID, "route_name": pipeline.Name,
+			"condition":    pipeline.WhenToUse,
+			"next_step_id": pipeline.Stages[0].ID,
 		})
 	}
+
+	// Deterministic by contract: the engine rejects a routing step that carries a
+	// description, because routing never runs an agent.
+	steps = append(steps, map[string]interface{}{
+		"type": "routing", "id": routeStepID, "title": "Route",
+		"routing_question": "Which pipeline does this brief call for?",
+		"routes":           routes,
+		"default_route_id": pipelines[0].ID,
+	})
+
+	for _, pipeline := range pipelines {
+		for i, stage := range pipeline.Stages {
+			deps := []string{}
+			if i > 0 {
+				deps = []string{pipeline.Stages[i-1].Output}
+			}
+			step := map[string]interface{}{
+				"type": "regular", "id": stage.ID, "title": stage.Title, "description": stage.Description,
+				"context_dependencies": deps, "context_output": stage.Output, "has_loop": false,
+				"validation_schema": map[string]interface{}{"files": []map[string]interface{}{{"file_name": stage.Output, "must_exist": true}}},
+			}
+			// Without this the last stage of one branch would fall straight into
+			// the first stage of the next branch in the step list.
+			if i == len(pipeline.Stages)-1 {
+				step["next_step_id"] = "end"
+			}
+			steps = append(steps, step)
+		}
+	}
+
 	return map[string]interface{}{"steps": steps}
 }
 
-func cinematicStepConfig() map[string]interface{} { return stepConfigFor(DefaultPipeline()) }
+func cinematicStepConfig() map[string]interface{} { return stepConfigForAll(pipelineRegistry) }
 
-// stepConfigFor renders per-stage agent configuration. Learnings, knowledge base
-// and workflow DB stay off for every stage: this product keeps its state in its
-// own database, and leaving them on had stage agents probing facilities that are
-// not there.
-func stepConfigFor(pipeline *Pipeline) map[string]interface{} {
-	steps := make([]map[string]interface{}, 0, len(pipeline.Stages))
-	for _, stage := range pipeline.Stages {
-		agentConfig := map[string]interface{}{
-			"execution_llm":       map[string]interface{}{"provider": "claude-code", "model_id": DefaultClaudeModel},
-			"execution_max_turns": 100, "use_code_execution_mode": true, "declared_execution_mode": "agentic",
-			"additional_read_paths": []string{"uploads"}, "learnings_access": "none", "knowledgebase_access": "none", "db_access": "none",
+func baseStageAgentConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"execution_llm":       map[string]interface{}{"provider": "claude-code", "model_id": DefaultClaudeModel},
+		"execution_max_turns": 100, "use_code_execution_mode": true, "declared_execution_mode": "agentic",
+		"additional_read_paths": []string{"uploads"}, "learnings_access": "none", "knowledgebase_access": "none", "db_access": "none",
+	}
+}
+
+// stepConfigForAll renders per-stage agent configuration for every pipeline plus
+// the shared intake step. Learnings, knowledge base and workflow DB stay off for
+// every stage: this product keeps its state in its own database, and leaving them
+// on had stage agents probing facilities that are not there.
+//
+// The routing step gets no entry — it runs deterministically inside the engine
+// and never launches an agent.
+func stepConfigForAll(pipelines []*Pipeline) map[string]interface{} {
+	steps := make([]map[string]interface{}, 0, len(pipelines)*8)
+	for _, pipeline := range pipelines {
+		for _, stage := range pipeline.Stages {
+			agentConfig := baseStageAgentConfig()
+			if len(stage.Skills) > 0 {
+				// enabled_skills is the STEP-level selector and takes skill folder
+				// names. selected_skills is the workshop-level preset and is ignored
+				// here, so using it would silently give the stage no skills at all.
+				agentConfig["enabled_skills"] = append([]string{}, stage.Skills...)
+			}
+			steps = append(steps, map[string]interface{}{"id": stage.ID, "title": stage.Title, "agent_configs": agentConfig})
 		}
-		if len(stage.Skills) > 0 {
-			// enabled_skills is the STEP-level selector and takes skill folder
-			// names. selected_skills is the workshop-level preset and is ignored
-			// here, so using it would silently give the stage no skills at all.
-			agentConfig["enabled_skills"] = append([]string{}, stage.Skills...)
-		}
-		steps = append(steps, map[string]interface{}{"id": stage.ID, "title": stage.Title, "agent_configs": agentConfig})
 	}
 	return map[string]interface{}{"steps": steps}
 }
@@ -294,9 +376,10 @@ func secretEntries(values map[string]string) []orchestrator.SecretEntry {
 }
 
 func (s *WorkflowService) projectSession(ctx ProjectContext) (*projectWorkflowSession, error) {
-	if err := s.EnsureProject(ctx.Project.ID, ctx.Project.Title); err != nil {
+	if err := s.EnsureProject(ctx.Project); err != nil {
 		return nil, err
 	}
+	pipeline := DefaultPipeline()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if state := s.sessions[ctx.Project.ID]; state != nil {
@@ -334,7 +417,7 @@ func (s *WorkflowService) projectSession(ctx ProjectContext) (*projectWorkflowSe
 	if err != nil {
 		return nil, err
 	}
-	notifier := newVideoWorkflowNotifier(s.store, ctx.Project.ID, s.autoNotify)
+	notifier := newVideoWorkflowNotifier(s.store, ctx.Project.ID, pipeline, s.autoNotify)
 	workshop.SetWorkshopExecutionNotifier(notifier)
 	state := &projectWorkflowSession{session: workshop, notifier: notifier, env: env}
 	s.sessions[ctx.Project.ID] = state
@@ -342,6 +425,38 @@ func (s *WorkflowService) projectSession(ctx ProjectContext) (*projectWorkflowSe
 }
 
 var executionIDPattern = regexp.MustCompile(`(?i)execution_id[:= ]+["'` + "`" + `]?([a-z0-9._:-]+)`)
+
+// pipelineFromArgs works out which pipeline a workflow call is really for, so
+// the run and its activity are labelled with the branch that will actually
+// execute rather than always with the default one.
+//
+// run_full_workflow carries route_selections; execute_step names a single stage,
+// and stage ids are unique across the plan, so the owning pipeline follows from
+// the id. Falls back to the default when neither says.
+func pipelineFromArgs(args map[string]interface{}) *Pipeline {
+	if raw, ok := args["route_selections"]; ok {
+		var selected string
+		switch typed := raw.(type) {
+		case map[string]interface{}:
+			selected, _ = typed[routeStepID].(string)
+		case map[string]string:
+			selected = typed[routeStepID]
+		}
+		if selected = strings.TrimSpace(selected); selected != "" {
+			for _, pipeline := range pipelineRegistry {
+				if pipeline.ID == selected {
+					return pipeline
+				}
+			}
+		}
+	}
+	if stepID, _ := args["step_id"].(string); strings.TrimSpace(stepID) != "" {
+		if owner := pipelineForStage(strings.TrimSpace(stepID)); owner != nil {
+			return owner
+		}
+	}
+	return DefaultPipeline()
+}
 
 func (s *WorkflowService) Tools(ctx ProjectContext, emit func(AgentEvent)) ([]agentsession.Tool, error) {
 	state, err := s.projectSession(ctx)
@@ -359,20 +474,37 @@ func (s *WorkflowService) Tools(ctx ProjectContext, emit func(AgentEvent)) ([]ag
 		}
 		def := definition
 		result = append(result, agentsession.Tool{Name: def.name, Description: def.description, Params: def.params, Category: "video_workflow", Handler: func(callCtx context.Context, args map[string]interface{}) (reply string, callErr error) {
-			applyWorkflowHumanInput(def.name, args, ctx.History)
+			// Resolve the branch the caller actually selected. The routing step
+			// decides it during execution, but the caller already told us in the
+			// same call, so the label can be right immediately instead of always
+			// naming the default pipeline.
+			activePipeline := pipelineFromArgs(args)
+			applyWorkflowHumanInput(activePipeline, def.name, args, ctx.History)
 			started := time.Now()
 			callID := fmt.Sprintf("workflow-%d", started.UnixNano())
-			workflowName, stepName := workflowActivityContext(cinematicWorkflowName, cinematicSteps, def.name, args)
+			workflowName, stepName := workflowActivityContext(activePipeline.Name, activePipeline.Steps(), def.name, args)
 			if emit != nil {
 				emit(AgentEvent{Type: "tool", Tool: def.name, Workflow: workflowName, Step: stepName, ToolCallID: callID, Status: "running"})
 			}
+			// execute_step and run_full_workflow only DISPATCH; the stages then run
+			// for minutes in the background. Reporting how long the dispatch took
+			// put "11 ms" next to a workflow's name, which reads as the video
+			// having been made in 11ms. Progress for those comes from stage state,
+			// not from this tool call.
+			backgrounded := def.name == "execute_step" || def.name == "run_full_workflow"
 			defer func() {
 				status := "completed"
 				if callErr != nil {
 					status = "failed"
+				} else if backgrounded {
+					status = "started"
+				}
+				event := AgentEvent{Type: "tool", Tool: def.name, Workflow: workflowName, Step: stepName, ToolCallID: callID, Status: status}
+				if !backgrounded || callErr != nil {
+					event.DurationMS = time.Since(started).Milliseconds()
 				}
 				if emit != nil {
-					emit(AgentEvent{Type: "tool", Tool: def.name, Workflow: workflowName, Step: stepName, ToolCallID: callID, Status: status, DurationMS: time.Since(started).Milliseconds()})
+					emit(event)
 				}
 			}()
 			var run WorkflowRun
@@ -385,7 +517,11 @@ func (s *WorkflowService) Tools(ctx ProjectContext, emit func(AgentEvent)) ([]ag
 				if err := s.ensureGroup(ctx.Project.ID, group); err != nil {
 					return "Could not prepare this video run: " + err.Error(), nil
 				}
-				run, callErr = s.store.BeginWorkflowRun(ctx.Project.ID, cinematicWorkflowName, group, copyCinematicSteps())
+				// Seeded with every pipeline's steps: the routing step picks the
+				// branch during execution, so the run row cannot know in advance
+				// which stages will report, and a status for a step with no row
+				// is silently discarded.
+				run, callErr = s.store.BeginWorkflowRun(ctx.Project.ID, activePipeline.Name, group, AllPipelineSteps())
 				if callErr != nil {
 					return "", callErr
 				}
@@ -451,6 +587,7 @@ type workflowAutoNotification struct {
 type videoWorkflowNotifier struct {
 	store      *Store
 	projectID  string
+	pipeline   *Pipeline
 	mu         sync.Mutex
 	pending    *workflowLaunch
 	execRuns   map[string]string
@@ -461,8 +598,8 @@ type videoWorkflowNotifier struct {
 	autoNotify func(workflowAutoNotification)
 }
 
-func newVideoWorkflowNotifier(store *Store, projectID string, autoNotify func(workflowAutoNotification)) *videoWorkflowNotifier {
-	return &videoWorkflowNotifier{store: store, projectID: projectID, execRuns: map[string]string{}, runModes: map[string]string{}, runGroups: map[string]string{}, runUsers: map[string]string{}, completed: map[string]bool{}, autoNotify: autoNotify}
+func newVideoWorkflowNotifier(store *Store, projectID string, pipeline *Pipeline, autoNotify func(workflowAutoNotification)) *videoWorkflowNotifier {
+	return &videoWorkflowNotifier{store: store, projectID: projectID, pipeline: pipeline, execRuns: map[string]string{}, runModes: map[string]string{}, runGroups: map[string]string{}, runUsers: map[string]string{}, completed: map[string]bool{}, autoNotify: autoNotify}
 }
 
 func (n *videoWorkflowNotifier) setAutoNotificationHandler(handler func(workflowAutoNotification)) {
@@ -480,12 +617,30 @@ func (n *videoWorkflowNotifier) Prepare(runID, mode, group, userID string) {
 	n.runUsers[runID] = userID
 }
 
-func stageIDFromName(name string) string {
+// stageIDFromName resolves a step name across EVERY pipeline, not just the
+// default one. A run's branch is chosen by the routing step at execution time,
+// so the stage reporting status may belong to a pipeline this run was not
+// labelled with; matching only the default pipeline silently dropped every
+// status update for the other branch.
+//
+// Titles are matched only within the pipeline whose stage ids also match, since
+// branches deliberately reuse titles ("Research", "Quality check"). Ids are
+// unique across the plan, so they are tried first.
+func stageIDFromName(_ *Pipeline, name string) string {
 	base := strings.ToLower(strings.TrimSpace(strings.Split(name, "[")[0]))
 	base = strings.TrimPrefix(base, "step: ")
-	for _, step := range cinematicSteps {
-		if base == strings.ToLower(step.ID) || base == strings.ToLower(step.Title) {
-			return step.ID
+	for _, pipeline := range pipelineRegistry {
+		for _, stage := range pipeline.Stages {
+			if base == strings.ToLower(stage.ID) {
+				return stage.ID
+			}
+		}
+	}
+	for _, pipeline := range pipelineRegistry {
+		for _, stage := range pipeline.Stages {
+			if base == strings.ToLower(stage.Title) {
+				return stage.ID
+			}
 		}
 	}
 	return ""
@@ -504,7 +659,7 @@ func (n *videoWorkflowNotifier) OnExecutionStart(start stepworkflow.WorkshopExec
 	n.mu.Unlock()
 	if runID != "" {
 		_ = n.store.SetWorkflowExecution(runID, start.ID)
-		if stepID := stageIDFromName(start.Name); stepID != "" {
+		if stepID := stageIDFromName(n.pipeline, start.Name); stepID != "" {
 			_ = n.store.SetWorkflowStep(runID, stepID, "running")
 		}
 	}
@@ -531,10 +686,10 @@ func (n *videoWorkflowNotifier) OnExecutionComplete(execID, name, result string,
 	}
 	stepID := ""
 	if meta != nil {
-		stepID = stageIDFromName(meta["step_name"])
+		stepID = stageIDFromName(n.pipeline, meta["step_name"])
 	}
 	if stepID == "" {
-		stepID = stageIDFromName(name)
+		stepID = stageIDFromName(n.pipeline, name)
 	}
 	if stepID != "" {
 		_ = n.store.SetWorkflowStep(runID, stepID, status)
@@ -548,12 +703,12 @@ func (n *videoWorkflowNotifier) OnExecutionComplete(execID, name, result string,
 	if mode == "execute_step" && status == "completed" {
 		finalStatus = "ready"
 	}
-	label := "Cinematic video workflow"
+	label := n.pipeline.Name + " workflow"
 	if stepID != "" {
 		label = stepID
-		for _, step := range cinematicSteps {
-			if step.ID == stepID {
-				label = step.Title
+		for _, stage := range n.pipeline.Stages {
+			if stage.ID == stepID {
+				label = stage.Title
 				break
 			}
 		}
@@ -650,7 +805,7 @@ func (n *videoWorkflowNotifier) OnExecutionTerminated(execID, name string) {
 	if runID == "" {
 		return
 	}
-	if stepID := stageIDFromName(name); stepID != "" {
+	if stepID := stageIDFromName(n.pipeline, name); stepID != "" {
 		_ = n.store.SetWorkflowStep(runID, stepID, "cancelled")
 	}
 	_ = n.store.FinishWorkflowRun(runID, "cancelled")

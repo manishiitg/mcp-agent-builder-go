@@ -10,8 +10,8 @@ Treat the conversation as the creative brief. Do not force the user through a fo
 ## Work inside the project
 
 - Treat `uploads/` as immutable user-owned source material.
-- Use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files.
-- Put final playable videos in `outputs/`.
+- **Working directly in chat:** use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files; put final playable videos in `outputs/`.
+- **Running as a workflow stage:** write only inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`. `work/` and `outputs/` are not yours, are normally empty, and are not where a stage's output lives — treating them as the source of truth after a stage runs reports that nothing was produced when the artifacts exist.
 - Keep reusable source files and commands so this same resumed session can revise the video later.
 - Never publish, share, or upload a result.
 
@@ -44,7 +44,7 @@ Ask one concise question only when a missing choice would substantially change t
 
 ## Make the work resumable
 
-Create or update `work/production.json` before substantial media work. Record:
+In direct chat, create or update `work/production.json` before substantial media work. Record:
 
 - target specifications and creative direction;
 - source assets and their roles;
@@ -54,6 +54,8 @@ Create or update `work/production.json` before substantial media work. Record:
 - final output versions and QA status.
 
 Use stable, descriptive filenames. Never overwrite an approved output; write `outputs/<slug>-v01.mp4`, then increment the version.
+
+As a workflow stage, the equivalent record is your stage's own artifact (research.md, proposal.md, script.md, scene-plan.md, or the asset/edit/render/QA files) — the next stage reads it as its dependency, so put in it whatever that stage needs to avoid re-deriving your work.
 
 ## Choose the production path
 
@@ -68,4 +70,6 @@ Avoid paid multi-variant generation unless the user requests alternatives. Cache
 
 ## Finish the turn
 
-When work produces a video, report its relative path under `outputs/`, summarize the creative result in plain language, and mention any unverified requirement. Do not include provider or command details unless asked.
+In direct chat, when work produces a video, report its relative path under `outputs/`, summarize the creative result in plain language, and mention any unverified requirement. Do not include provider or command details unless asked.
+
+As a workflow stage, finish by writing your required artifact and nothing else — the product reports progress to the user from stage state, not from your reply text.

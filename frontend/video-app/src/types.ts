@@ -39,6 +39,9 @@ export interface VideoOutput {
   createdAt: string
   palette: [string, string]
   contentUrl: string
+  // The agent's one-line description of what this video is — for example that
+  // it is a placeholder assembly rather than finished creative.
+  note?: string
 }
 
 export interface WorkflowStep {

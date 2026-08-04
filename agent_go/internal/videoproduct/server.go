@@ -66,6 +66,12 @@ func NewServer(config Config) (*Server, error) {
 	}
 	_ = os.Setenv("WORKSPACE_DOCS_PATH", config.DataDir)
 	_ = os.Setenv("WORKSPACE_API_URL", config.WorkspaceAPIURL)
+	// Publish this product's skills to the shared resolver before any agent
+	// exists, so a stage naming one in enabled_skills resolves it.
+	if err := registerProductSkills(); err != nil {
+		store.Close()
+		return nil, err
+	}
 	workflow := NewWorkflowService(store, config.WorkspaceAPIURL, config.MCPConfigPath)
 	// Start the shared MCP bridge now, before any request can build a
 	// workflow tool registry that would otherwise snapshot MCP_API_TOKEN
@@ -361,7 +367,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, u User) {
 		writeError(w, 500, "could not create project")
 		return
 	}
-	if err := s.workflow.EnsureProject(p.ID, p.Title); err != nil {
+	if err := s.workflow.EnsureProject(p); err != nil {
 		writeError(w, 500, "project was created but its workflow could not be prepared")
 		return
 	}
@@ -374,7 +380,7 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, u User) {
 	if !handleStoreError(w, err) {
 		return
 	}
-	if err := s.workflow.EnsureProject(projectID, p.Title); err != nil {
+	if err := s.workflow.EnsureProject(p); err != nil {
 		writeError(w, 500, "could not prepare project workflows")
 		return
 	}
@@ -388,7 +394,7 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, u User) {
 	pipeline := DefaultPipeline()
 	writeJSON(w, 200, map[string]interface{}{
 		"name": pipeline.Name, "description": pipeline.Description,
-		"steps": copyCinematicSteps(), "runs": runs,
+		"steps": pipeline.Steps(), "runs": runs,
 	})
 }
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request, u User) {
@@ -487,6 +493,29 @@ func (s *Server) projectVideos(userID, projectID string) ([]Video, error) {
 	}
 	projectRoot := s.store.ProjectDir(projectID)
 	items := []Video{}
+
+	// Prefer what the agent chose to show. A run leaves many video files behind
+	// — raw shots, silent intermediates, byte-identical delivery copies — so
+	// listing every file presents them all as equally finished and buries the
+	// one the user actually wants. Fall back to scanning only while the agent has
+	// not presented anything, so a project is never silently empty.
+	if presented, err := s.store.PresentedVideos(userID, projectID); err != nil {
+		return nil, err
+	} else if len(presented) > 0 {
+		for _, video := range presented {
+			path := filepath.Join(projectRoot, filepath.FromSlash(video.Path))
+			info, statErr := os.Stat(path)
+			if statErr != nil || info.IsDir() {
+				continue // presented then deleted; skip rather than 404 the panel
+			}
+			id := base64.RawURLEncoding.EncodeToString([]byte(video.Path))
+			items = append(items, Video{
+				ID: id, Name: video.Title, Size: info.Size(), CreatedAt: video.CreatedAt, Note: video.Note,
+				ContentURL: "/api/projects/" + projectID + "/videos/" + id + "/content",
+			})
+		}
+		return items, nil
+	}
 	for _, folder := range []string{"outputs", "runs"} {
 		root := filepath.Join(projectRoot, folder)
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {

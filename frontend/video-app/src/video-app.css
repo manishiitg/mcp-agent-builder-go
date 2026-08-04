@@ -304,13 +304,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 .workflow-template span { display: grid; gap: 3px; min-width: 0; }
 .workflow-template strong { color: #4d4a44; font-size: 10px; font-weight: 700; }
 .workflow-template small { color: #918c83; font-size: 8px; font-weight: 450; line-height: 1.45; }
-.workflow-stage.is-pending { opacity: .62; }
-.workflow-stage.is-running i { color: #fff; background: #d97757; box-shadow: 0 0 0 3px rgba(217,119,87,.16); animation: pulse 1.5s infinite; }
-.workflow-stage.is-running strong { color: #9f4d36; }
-.workflow-stage.is-completed i { color: #35704f; background: #dcefe2; }
-.workflow-stage.is-failed i, .workflow-stage.is-cancelled i { color: #fff; background: #b4573f; }
-.workflow-stage.is-failed strong { color: #a3452c; }
 .tab-running-dot { width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: #d97757; animation: pulse 1.5s infinite; }
+/* Live stage-by-stage progress for a background run. The chat is otherwise
+   silent for minutes while stages execute, so this is the only place the work
+   is visible while it happens. */
+.run-progress { margin: 0 0 10px; padding-left: 11px; border-left: 2px solid #e2ded6; }
+.run-progress-label { display: block; margin-bottom: 6px; color: #a8a29a; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.run-progress-step { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.run-progress-step i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #cfc9bf; }
+.run-progress-step strong { color: #7d766d; font-size: 11px; font-weight: 600; }
+.run-progress-step small { color: #a8a29a; font-size: 9px; }
+.run-progress-step.is-running i { background: #d97757; box-shadow: 0 0 0 3px rgba(217,119,87,.16); animation: pulse 1.5s infinite; }
+.run-progress-step.is-running strong { color: #9f4d36; }
+.run-progress-step.is-completed i { background: #5ea981; }
+.run-progress-step.is-failed i, .run-progress-step.is-cancelled i { background: #b4573f; }
+.run-progress-step.is-failed strong { color: #a3452c; }
 .asset-drop { display: flex; width: 100%; min-height: 180px; align-items: center; justify-content: center; flex-direction: column; gap: 7px; border: 1px dashed #d8d9e2; border-radius: 12px; color: #989ba9; background: #fafafd; }
 .asset-drop:hover { border-color: #aaa1db; color: #6855c6; background: #faf9ff; }
 .asset-drop strong { margin-top: 5px; color: #5e6270; font-size: 11px; }.asset-drop span { font-size: 9px; }

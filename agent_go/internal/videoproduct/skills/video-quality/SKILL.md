@@ -7,6 +7,8 @@ description: Validate a candidate video technically, visually, and editorially b
 
 Do not call a video complete because rendering succeeded. Validate the exact output file the user will receive.
 
+If the render report says the candidate was assembled from `placeholder: true` assets, apply only the **Deterministic checks** below — a solid-color or drawtext placeholder has no face, hand, or lip movement to check, and grading it against creative criteria it was never meant to satisfy is meaningless. Skip visual and content review, and record the verdict as a placeholder-pipeline pass or fail, not a creative `PASS` — the distinction matters because a placeholder passing means the *pipeline* works, not that the video is finished.
+
 ## Deterministic checks
 
 Use `ffprobe` and `ffmpeg` where available to verify:
@@ -40,11 +42,17 @@ For a single recurring presenter, compare early and late face crops. For multi-p
 
 ## Record the result
 
-Write a concise machine-readable report under `work/qa/<output-name>.json` containing:
+Write a concise machine-readable report containing:
 
 - output path and inspected specifications;
 - pass/fail checks and warnings;
 - sampled frame times;
 - unresolved items and the final verdict.
 
+**Running as a workflow stage:** the report is delivery.md inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`, and it must name the exact candidate file you validated. **Working directly in chat:** write it under `work/qa/<output-name>.json`.
+
 Only mark the candidate `PASS` when all required checks succeed. Fix failures and rerender the smallest affected layer. If a check cannot run locally, label it unverified and tell the user exactly what remains unchecked.
+
+## Quality gate (binding)
+
+Never mark a video complete because a render step returned without error. `PASS` means you personally opened the exact file the user will receive and every required check above passed against it — not that a prior stage reported success.

@@ -125,6 +125,11 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs(project_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS presented_videos (
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ path TEXT NOT NULL, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, PRIMARY KEY(project_id,path)
+);
 CREATE TABLE IF NOT EXISTS workflow_step_runs (
  workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
  step_id TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL,
@@ -399,6 +404,41 @@ func (s *Store) UpdateProject(userID, projectID, title, description string) (Pro
 		return Project{}, err
 	}
 	return s.Project(userID, projectID)
+}
+
+// PresentVideo records a video the agent has chosen to show the user. Presenting
+// is deliberate rather than discovered: a run leaves many video files behind —
+// raw shots, silent intermediates, byte-identical delivery copies — and only the
+// agent knows which one is the deliverable, because the delivery report names it.
+func (s *Store) PresentVideo(projectID, path, title, note string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO presented_videos(project_id,path,title,note,created_at) VALUES(?,?,?,?,?)
+		 ON CONFLICT(project_id,path) DO UPDATE SET title=excluded.title,note=excluded.note`,
+		projectID, path, title, note, dbTime(time.Now()))
+	return err
+}
+
+// PresentedVideos returns the videos an agent explicitly surfaced, newest first.
+func (s *Store) PresentedVideos(userID, projectID string) ([]PresentedVideo, error) {
+	if _, err := s.Project(userID, projectID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT path,title,note,created_at FROM presented_videos WHERE project_id=? ORDER BY created_at DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PresentedVideo
+	for rows.Next() {
+		var v PresentedVideo
+		var created string
+		if err := rows.Scan(&v.Path, &v.Title, &v.Note, &created); err != nil {
+			return nil, err
+		}
+		v.CreatedAt = parseTime(created)
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ArchiveProject(userID, projectID string) error {

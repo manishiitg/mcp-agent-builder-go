@@ -14,6 +14,7 @@ func TestBuiltinVideoSkills(t *testing.T) {
 		"video-shot-generation": "reference",
 		"video-editing":         "hard cuts",
 		"video-quality":         "work/qa/",
+		"html-composition":      "headless Chrome",
 	}
 
 	skills := builtinSkills()

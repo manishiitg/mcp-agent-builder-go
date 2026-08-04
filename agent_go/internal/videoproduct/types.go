@@ -46,6 +46,18 @@ type Video struct {
 	Size       int64     `json:"size"`
 	CreatedAt  time.Time `json:"createdAt"`
 	ContentURL string    `json:"contentUrl"`
+	// Note is the agent's one-line description of what this video is. Only set
+	// for videos the agent chose to present.
+	Note string `json:"note,omitempty"`
+}
+
+// PresentedVideo is a video the agent explicitly surfaced to the user, as
+// opposed to any video file that happens to exist under the project.
+type PresentedVideo struct {
+	Path      string
+	Title     string
+	Note      string
+	CreatedAt time.Time
 }
 
 type WorkflowStep struct {

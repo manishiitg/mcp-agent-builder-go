@@ -39,20 +39,20 @@ func TestApplyWorkflowHumanInput(t *testing.T) {
 	history := []Message{{Role: "assistant", Body: "What should we make?"}, {Role: "user", Body: "Create a calm product launch film."}}
 
 	stepArgs := map[string]interface{}{"step_id": "research"}
-	applyWorkflowHumanInput("execute_step", stepArgs, history)
+	applyWorkflowHumanInput(DefaultPipeline(), "execute_step", stepArgs, history)
 	stepInput, _ := stepArgs["human_input"].(string)
 	if !strings.Contains(stepInput, "Assistant: What should we make?") || !strings.Contains(stepInput, "User: Create a calm product launch film.") {
 		t.Fatalf("execute_step human_input = %#v", stepArgs["human_input"])
 	}
 
 	explicitArgs := map[string]interface{}{"step_id": "research", "human_input": "Use the approved brief."}
-	applyWorkflowHumanInput("execute_step", explicitArgs, history)
+	applyWorkflowHumanInput(DefaultPipeline(), "execute_step", explicitArgs, history)
 	if explicitArgs["human_input"] != "Use the approved brief." {
 		t.Fatalf("explicit human_input was replaced: %#v", explicitArgs["human_input"])
 	}
 
 	fullArgs := map[string]interface{}{"human_inputs": map[string]interface{}{"proposal": "Use option B."}}
-	applyWorkflowHumanInput("run_full_workflow", fullArgs, history)
+	applyWorkflowHumanInput(DefaultPipeline(), "run_full_workflow", fullArgs, history)
 	inputs := fullArgs["human_inputs"].(map[string]interface{})
 	researchInput, _ := inputs["research"].(string)
 	if !strings.Contains(researchInput, "User: Create a calm product launch film.") || inputs["proposal"] != "Use option B." {
@@ -69,7 +69,7 @@ func TestWorkflowCompletionDispatchesSyntheticAgentTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	notifications := make(chan workflowAutoNotification, 1)
-	notifier := newVideoWorkflowNotifier(server.store, project.ID, func(notification workflowAutoNotification) {
+	notifier := newVideoWorkflowNotifier(server.store, project.ID, DefaultPipeline(), func(notification workflowAutoNotification) {
 		notifications <- notification
 	})
 	notifier.Prepare(run.ID, "execute_step", "launch-film", user.ID)

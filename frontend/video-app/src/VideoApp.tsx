@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import {
-  ArrowLeft, ArrowUp, Check, Clock3, FolderOpen, KeyRound,
+  ArrowLeft, ArrowUp, Clock3, FolderOpen, KeyRound,
   LayoutGrid, ListChecks, LogOut, Menu, MessageSquareText, MoreHorizontal, Paperclip, Play,
   Plus, Search, Settings, Sparkles, Video, X,
 } from 'lucide-react'
@@ -18,50 +18,43 @@ const EMPTY_TOOL_ACTIVITY: ToolActivity[] = []
 // list silently misrepresents whichever one is actually running.
 const PIPELINE_FALLBACK_DESCRIPTION = 'How an idea moves from a brief to a finished video.'
 
-// The newest run is first (the API orders runs by updated_at DESC).
+// The newest run is first (the API orders runs by updated_at DESC). Used only
+// for the header pill and the Workflow tab's running-dot — the panel itself is
+// a static reference view of the pipeline definition, not a run tracker: it
+// looks identical before, during, and after a run.
 function latestRun(workflow: ProjectWorkflow): WorkflowRun | undefined { return workflow.runs[0] }
 function runningStep(run?: WorkflowRun) { return run?.status === 'running' ? run.steps.find((step) => step.status === 'running') : undefined }
 
-function runSummary(run: WorkflowRun | undefined, fallback: string) {
-  if (!run) return fallback
-  if (run.status === 'running') {
-    const current = runningStep(run)
-    return current ? `Working on ${current.title.toLowerCase()} right now` : 'Getting started'
-  }
-  if (run.status === 'completed') return `Finished ${run.updatedAt.toLowerCase()}`
-  if (run.status === 'failed') {
-    const failed = run.steps.find((step) => step.status === 'failed')
-    return failed ? `Stopped at ${failed.title.toLowerCase()} — nothing after it ran` : 'Stopped before finishing'
-  }
-  if (run.status === 'cancelled') return 'Cancelled before finishing'
-  // Between individual stages the run returns to a reusable "ready" state, so
-  // fall back to progress rather than the generic pipeline blurb — otherwise
-  // finished stages read as if nothing has happened yet.
-  const done = run.steps.filter((step) => step.status === 'completed').length
-  if (done > 0) return `${done} of ${run.steps.length} stages done`
-  return fallback
-}
-
-function StageMark({ status, position }: { status: string; position: number }) {
-  if (status === 'completed') return <Check size={12} strokeWidth={3} />
-  if (status === 'failed' || status === 'cancelled') return <X size={12} strokeWidth={3} />
-  return <>{position}</>
+// A run's stages execute in the background, long after the chat turn that
+// started them ended, so the chat would otherwise sit silent for minutes with
+// nothing to show. The run's own step rows are already polled every couple of
+// seconds — this just puts them on screen.
+//
+// Only stages that have actually reported are listed: a run is seeded with every
+// pipeline's steps because the branch is picked mid-run, so showing pending ones
+// would list the stages of a pipeline this run is not taking.
+function RunProgress({ run }: { run: WorkflowRun }) {
+  const touched = run.steps.filter((step) => step.status !== 'pending')
+  if (touched.length === 0) return null
+  return <div className="run-progress" aria-label="Workflow progress">
+    <span className="run-progress-label">{run.name}</span>
+    {touched.map((step) => <div key={step.id} className={`run-progress-step is-${step.status}`}>
+      <i />
+      <strong>{step.title}</strong>
+      <small>{step.status === 'running' ? 'working' : step.status}</small>
+    </div>)}
+  </div>
 }
 
 function WorkflowPanel({ workflow }: { workflow: ProjectWorkflow }) {
-  const run = latestRun(workflow)
-  const statusByStep = new Map((run?.steps ?? []).map((step) => [step.id, step.status]))
   const description = workflow.description || PIPELINE_FALLBACK_DESCRIPTION
   return <div className="inspector-body">
-    <div className="inspector-title"><div><h2>{workflow.name}</h2><p>{runSummary(run, description)}</p></div></div>
+    <div className="inspector-title"><div><h2>{workflow.name}</h2><p>{description}</p></div></div>
     <div className="workflow-template">
-      {workflow.steps.map((stage, index) => {
-        const status = statusByStep.get(stage.id) ?? 'pending'
-        return <div key={stage.id} className={`workflow-stage is-${status}`}>
-          <i><StageMark status={status} position={stage.position || index + 1} /></i>
-          <span><strong>{stage.title}</strong>{stage.summary && <small>{stage.summary}</small>}</span>
-        </div>
-      })}
+      {workflow.steps.map((stage, index) => <div key={stage.id}>
+        <i>{stage.position || index + 1}</i>
+        <span><strong>{stage.title}</strong>{stage.summary && <small>{stage.summary}</small>}</span>
+      </div>)}
     </div>
   </div>
 }
@@ -218,13 +211,19 @@ function ProjectWorkspace({ project, onBack, onSend, onSteer, onCancel, onUpload
           {streaming && <div className="stream-think"><span className="stream-think-label">Thinking</span><div className="stream-think-body is-streaming"><ChatMarkdown text={streaming} streaming linkComponent={ProjectChatLink} workspaceLinkRoots={PROJECT_FILE_ROOTS} /></div></div>}
           <div className="working-state"><div className="typing-dots"><i /><i /><i /></div><span className="working-label">{activeStage ? activeStage.title : 'Working on your request'}</span></div>
         </div></article>}
+        {/* Shown whenever a run is live — including when the chat agent itself is
+            idle, which is the normal state while background stages grind away. */}
+        {activeRun && <article className="message assistant"><div className="message-avatar"><Sparkles size={16} /></div><div className="message-content">
+          <RunProgress run={activeRun} />
+          <div className="working-state"><div className="typing-dots"><i /><i /><i /></div><span className="working-label">{activeStage ? `Working on ${activeStage.title.toLowerCase()}` : 'Starting…'}</span></div>
+        </div></article>}
         {SHOW_LOCAL_TOOL_DEBUG && toolActivity.length > 0 && <div className="video-tool-debug" aria-label="Local tool activity"><ToolCallSummary defaultExpanded calls={toolActivity.map((activity) => ({ id: activity.id, tool: activity.name, status: activity.status, durationMs: activity.durationMs }))} /></div>}
         {error && <p className="chat-error">{error}</p>}<div ref={messageEnd} />
       </div>
       <div className="composer-dock"><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={project.sessionStatus === 'working' ? 'Add another direction…' : 'Message your project…'} rows={3} /><div className="composer-tools"><button type="button" className="composer-icon" onClick={() => fileInput.current?.click()} aria-label="Attach files"><Paperclip size={18} /></button><button className="send-button" type="submit" disabled={!draft.trim()} aria-label="Send message"><ArrowUp size={18} /></button></div><input ref={fileInput} hidden type="file" multiple onChange={(event) => void addFiles(event.target.files)} /></form><p className="composer-hint">{project.sessionStatus === 'working' ? 'Your new message will guide the current work' : 'Enter to send · Shift + Enter for a new line'}</p></div>
     </section><aside className="project-inspector"><div className="inspector-tabs" role="tablist"><button className={tab === 'videos' ? 'active' : ''} onClick={() => setTab('videos')}><Video size={16} /> Videos <span>{project.videos.length}</span></button><button className={tab === 'assets' ? 'active' : ''} onClick={() => setTab('assets')}><FolderOpen size={16} /> Assets</button><button className={tab === 'workflows' ? 'active' : ''} onClick={() => setTab('workflows')}><ListChecks size={16} /> Workflow{activeRun && <i className="tab-running-dot" aria-label="Running" />}</button></div>
       {tab === 'file' && previewPath ? <ProjectFilePreview projectId={project.id} path={previewPath} onClose={() => setTab('assets')} />
-        : tab === 'videos' ? <div className="inspector-body"><div className="inspector-title"><div><h2>Project videos</h2><p>Everything created in this conversation</p></div></div>{project.videos.length ? <div className="video-list">{project.videos.map((video) => <article className="video-row clickable" key={video.id} onClick={() => window.open(mediaURL(video.contentUrl), '_blank')}><div className="video-thumb" style={projectArtStyle(video.palette)}><span><Play size={17} fill="currentColor" /></span></div><div><strong>{video.title}</strong><span>{video.createdAt}</span></div></article>)}</div> : <div className="inspector-empty"><Video size={26} /><h3>No videos yet</h3><p>Describe your first video in chat and it will appear here.</p></div>}</div>
+        : tab === 'videos' ? <div className="inspector-body"><div className="inspector-title"><div><h2>Project videos</h2><p>Everything created in this conversation</p></div></div>{project.videos.length ? <div className="video-list">{project.videos.map((video) => <article className="video-row clickable" key={video.id} onClick={() => window.open(mediaURL(video.contentUrl), '_blank')}><div className="video-thumb" style={projectArtStyle(video.palette)}><span><Play size={17} fill="currentColor" /></span></div><div><strong>{video.title}</strong><span>{video.note || video.createdAt}</span></div></article>)}</div> : <div className="inspector-empty"><Video size={26} /><h3>No videos yet</h3><p>Describe your first video in chat and it will appear here.</p></div>}</div>
           : tab === 'workflows' ? <WorkflowPanel workflow={project.workflow} />
             : <div className="inspector-body"><div className="inspector-title"><div><h2>Project files</h2><p>Uploads, working files, and finished outputs</p></div><button className="small-add" onClick={() => fileInput.current?.click()}><Plus size={16} /> Add</button></div><ProjectFileBrowser nodes={project.files} onOpen={(path) => { setPreviewPath(path); setTab('file') }} /></div>}
     </aside></div>

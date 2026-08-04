@@ -44,6 +44,7 @@ export interface ApiVideo {
   size: number
   createdAt: string
   contentUrl: string
+  note?: string
 }
 
 export interface ApiProjectFileNode {

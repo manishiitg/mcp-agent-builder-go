@@ -11,7 +11,7 @@ function updatedLabel(value: string) { const elapsed = Date.now() - new Date(val
 function paletteFor(id: string): [string, string] { const palettes: [string, string][] = [['#5b60d6', '#9b78d9'], ['#346c80', '#6eaf9a'], ['#8a4f67', '#d58b72'], ['#536a9a', '#7892d0']]; return palettes[id.charCodeAt(0) % palettes.length] }
 function mapMessage(message: ApiMessage): ChatMessage { return { id: message.id, role: message.role, author: message.author, body: message.body, time: timeLabel(message.createdAt) } }
 function mapAsset(asset: ApiAsset): ProjectAsset { return { id: asset.id, name: asset.name, kind: asset.kind, size: bytesLabel(asset.size) } }
-function mapVideo(video: ApiVideo, palette: [string, string]): VideoOutput { return { id: video.id, title: video.name, duration: '', createdAt: updatedLabel(video.createdAt), palette, contentUrl: video.contentUrl } }
+function mapVideo(video: ApiVideo, palette: [string, string]): VideoOutput { return { id: video.id, title: video.name, duration: '', createdAt: updatedLabel(video.createdAt), palette, contentUrl: video.contentUrl, note: video.note } }
 function mapWorkflow(bundle: ApiWorkflowBundle) { return { name: bundle.name, description: bundle.description, steps: bundle.steps, runs: bundle.runs.map((run) => ({ id: run.id, name: run.name, groupName: run.groupName, status: run.status, currentStep: run.currentStep, updatedAt: updatedLabel(run.updatedAt), steps: run.steps })) } }
 
 async function hydrateProject(project: ApiProject): Promise<VideoProject> {
