@@ -845,6 +845,23 @@ func extractWhatsAppMessageText(m *waProto.Message) string {
 	if m.ExtendedTextMessage != nil && m.ExtendedTextMessage.Text != nil {
 		return strings.TrimSpace(*m.ExtendedTextMessage.Text)
 	}
+	// A CAPTION is the message text too. Attaching several photos and typing
+	// underneath is the normal way to send "here are her answers, what do you
+	// think?" — WhatsApp delivers that as an ImageMessage carrying Caption, not
+	// as a separate text message. Reading only Conversation/ExtendedTextMessage
+	// silently dropped it: the handler saw empty text, filed the photos, and
+	// returned without running a turn. Observed live on 2026-08-04 — fourteen
+	// photos landed in inbox/ and the question written with them was never
+	// answered, with nothing logged to say why.
+	if m.ImageMessage != nil {
+		return strings.TrimSpace(m.ImageMessage.GetCaption())
+	}
+	if m.VideoMessage != nil {
+		return strings.TrimSpace(m.VideoMessage.GetCaption())
+	}
+	if m.DocumentMessage != nil {
+		return strings.TrimSpace(m.DocumentMessage.GetCaption())
+	}
 	return ""
 }
 
@@ -1073,6 +1090,12 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 				w.noteUpload(savedPath)
 			}
 			acct.react(info.Chat, info.Sender, info.ID, "👀")
+			log.Printf("[whatsapp] media with no text — filed, no turn started")
+		} else {
+			// Nothing usable at all. Worth a line: this is the path a message
+			// type we do not understand yet falls down, and it is otherwise
+			// completely silent — which is how dropped captions went unnoticed.
+			log.Printf("[whatsapp] message %s had no text we could read — ignored", info.ID)
 		}
 		return
 	}
