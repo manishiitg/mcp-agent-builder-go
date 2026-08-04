@@ -306,10 +306,17 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 			if i > 0 {
 				deps = []string{pipeline.Stages[i-1].Output}
 			}
+			// A stage whose only required file is its own report can pass while
+			// describing work it never did, so any concrete artifact it must
+			// leave behind is required too.
+			required := []map[string]interface{}{{"file_name": stage.Output, "must_exist": true}}
+			for _, artifact := range stage.Artifacts {
+				required = append(required, map[string]interface{}{"file_name": artifact, "must_exist": true})
+			}
 			step := map[string]interface{}{
 				"type": "regular", "id": stage.ID, "title": stage.Title, "description": stage.Description,
 				"context_dependencies": deps, "context_output": stage.Output, "has_loop": false,
-				"validation_schema": map[string]interface{}{"files": []map[string]interface{}{{"file_name": stage.Output, "must_exist": true}}},
+				"validation_schema": map[string]interface{}{"files": required},
 			}
 			// Without this the last stage of one branch would fall straight into
 			// the first stage of the next branch in the step list.
