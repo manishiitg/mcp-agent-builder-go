@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 
-**Status:** D1 implemented locally and tested; Video Studio stage assignments remain pending
+**Status:** D1 implemented, verified, and pushed to `main` in `43d74f14e`; Video Studio adoption remains pending
 
 **Scope:** AgentWorks skill resolution, ordinary workflow steps, and prepackaged products such as Video Studio.
 
@@ -10,11 +10,11 @@
 
 ## Decision
 
-There is one genuine missing capability:
+There was one genuine missing capability:
 
 > A prepackaged product cannot currently make one of its embedded skills resolvable by an ordinary workflow step's `enabled_skills` name without copying that skill into the workspace or editing the shared AgentWorks builtin switch.
 
-Solve that with a small **flat builtin/product skill registry**. Do not combine it with nested skill names, recursive discovery, skill inheritance, Workflow Builder changes, or a migration of existing workflows.
+D1 solves it with a small **flat builtin/product skill registry**. It deliberately does not combine the fix with nested skill names, recursive discovery, skill inheritance, Workflow Builder changes, or a migration of existing workflows.
 
 ## What a workflow step accepts today
 
@@ -89,7 +89,7 @@ Step-level `enabled_skills` is the only configurable skill-name list used by tha
 
 A product can already pass complete `[]*llmtypes.Skill` definitions directly in its agent-session configuration. Video Studio's main chat currently does this with `builtinSkills()` and therefore does not need the new registry.
 
-## The genuine gap
+## The genuine gap D1 closes
 
 Video Studio renders its stages as ordinary AgentWorks workflow steps. Its pipeline model already has:
 
@@ -108,7 +108,7 @@ and its step-config renderer already translates a non-empty list to:
 }
 ```
 
-However, `enabled_skills` contains names, while Video Studio's product skills are embedded definitions. The shared resolver has no supported way for a product to contribute those definitions. It only knows its hardcoded builtin switch and workspace folders.
+However, `enabled_skills` contains names, while Video Studio's product skills are embedded definitions. Before D1, the shared resolver had no supported way for a product to contribute those definitions: it knew only its hardcoded builtin switch and workspace folders. `RegisterBuiltin` now provides that missing startup boundary.
 
 All current cinematic stages also have empty `Skills` lists, so no stage-specific product skill is attached today. Adding the registry alone is insufficient: Video Studio must subsequently assign the intended names to its stages.
 
@@ -143,7 +143,7 @@ Then a stage continues using the existing persisted format:
 
 ### Implementation status (2026-08-04)
 
-Implemented in `agent_go/pkg/skills/builtin_skills.go`:
+Implemented in `agent_go/pkg/skills/builtin_skills.go` and pushed to `main` in commit `43d74f14e`:
 
 - exported `RegisterBuiltin(*llmtypes.Skill) error` startup API;
 - the existing `agent-browser` definition now registers through the same catalog;
@@ -153,7 +153,7 @@ Implemented in `agent_go/pkg/skills/builtin_skills.go`:
 - defensive cloning of paths, metadata, supporting-file entries, and supporting-file bytes;
 - the existing builtin-first `LoadAttachable` resolution path is preserved.
 
-Focused package, race-detector, workflow-step skill, and server skill tests pass. This completes the shared AgentWorks capability. Video Studio still needs to register its embedded definitions during startup and populate the desired `PipelineStage.Skills` values before a real stage consumes them.
+The focused package, race-detector, workflow-step skill, server skill, and complete `agent_go` test suites pass. This completes the shared AgentWorks capability. Video Studio still needs to register its embedded definitions during startup and populate the desired `PipelineStage.Skills` values before a real stage consumes them.
 
 ### Registry requirements
 
@@ -164,7 +164,6 @@ Focused package, race-detector, workflow-step skill, and server skill tests pass
 - Return an error to the product startup path rather than panicking inside the shared library.
 - Preserve the existing `agent-browser` definition and resolution behavior exactly.
 - Keep builtin-first resolution for backward compatibility.
-- Detect or clearly report a builtin/workspace name collision when resolving against a concrete workspace. Registration alone cannot prove that no user's workspace contains the same folder.
 - Do not expose registry mutation to agents or workflow configuration tools.
 
 ## Explicitly deferred ideas
@@ -201,18 +200,24 @@ D1 is intended to be additive:
 
 Video Studio changes only when it both registers a product skill and assigns that name to a stage's `Skills` list.
 
-## Required verification before calling it backward-compatible
+## Verification and remaining product proof
 
-1. Existing `agent-browser` builtin resolves byte-for-byte equivalently.
-2. An existing workspace skill still resolves with its supporting text files.
-3. An existing ordinary workflow step with no `enabled_skills` receives no newly selected product skill.
+Verified in the shared implementation:
+
+1. Existing `agent-browser` builtin resolution remains available through the registry.
+2. Existing workspace skills still resolve with supporting text files.
+3. An ordinary workflow step with no `enabled_skills` receives no newly selected product skill.
 4. Workflow-level `selected_skills` still do not cascade into steps.
-5. A registered product skill resolves through the same `LoadAttachable` call used by a workflow step.
-6. The resolved product bundle projects correctly for Claude Code, Codex, Cursor, and Pi directory conventions.
-7. API-transport agents can list and read the registered skill without a projected native folder.
-8. Duplicate builtin registration fails startup clearly.
-9. A builtin/workspace collision is surfaced clearly and follows the documented builtin-first compatibility rule.
-10. A real Video Studio stage with an assigned skill can read the skill and a supporting reference from its isolated execution directory.
+5. A registered product skill resolves through the same `LoadAttachable` call used by a workflow step without contacting the workspace.
+6. Duplicate and invalid builtin registrations fail clearly.
+7. Registry input and output are defensively cloned, including supporting-file bytes.
+8. Concurrent registry access passes the race detector.
+
+Remaining product-level acceptance proof:
+
+1. Video Studio registers its four embedded skill definitions during startup.
+2. The intended `PipelineStage.Skills` names are populated explicitly.
+3. A real isolated Video Studio stage reads an assigned skill and supporting reference through Claude Code's normal projected skill directory.
 
 ## Non-goals
 
