@@ -506,6 +506,10 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Tool, path, and permission repair",
 		"Scheduler and lifecycle repair",
 		"Evaluation and report repair",
+		"Learning and skill purity repair",
+		"Do not launder content through references",
+		"re-read every content-bearing Markdown file",
+		"`learnings_access=\"read-write\"`",
 	} {
 		if !strings.Contains(fixPractices, want) {
 			t.Fatalf("pulse-fixer-practices missing %q", want)
@@ -937,6 +941,11 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			// SKILL.md grew to 272 lines, never once mentioning its shape.
 			"`index_shape`",
 			"do not estimate",
+			"`purity_manifest`",
+			"`learning_objective_audit`",
+			"`references/` is progressive",
+			"Moving non-skill content into `references/` is laundering",
+			"Do not sample references",
 		},
 		"improve-knowledge": {
 			"READ-ONLY KNOWLEDGEBASE HEALTH REVIEW",
@@ -1466,6 +1475,10 @@ func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {
 		"knowledgebase/_freshness.json",
 		"last_confirmed_run",
 		"freshness (confirmation recency)",
+		"complete skill package has no recorded",
+		"every content-bearing Markdown reference",
+		"must leave the entire package",
+		"index or valid Markdown shape alone is not proof",
 	} {
 		if !strings.Contains(postRun, want) {
 			t.Fatalf("post-run-monitor missing freshness trigger %q", want)

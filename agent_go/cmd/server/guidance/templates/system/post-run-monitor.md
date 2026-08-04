@@ -586,7 +586,11 @@ Mark due on any of:
   `learning_objective` no longer matches the step; `lock_learnings` should be
   cleared because guidance is stale; mature stable learnings should be locked
   with evidence; a run discovered reusable HOW-to knowledge worth capturing;
-  selectors/API quirks changed.
+  selectors/API quirks changed; the complete skill package has no recorded
+  purity baseline; or `SKILL.md` / any reference contains business facts, run
+  results/current status, owner-value copies, current strategy, incident or
+  decision history, provenance, or platform architecture that is not required
+  as a runner-facing procedure.
 - **Knowledgebase**: KB notes or KB config are missing, duplicated, stale,
   contradictory, or no longer aligned with the plan.
 - **DB**: schema, table contracts, upsert rules, report SQL, eval consumers,
@@ -615,6 +619,14 @@ The Pulse Fixer applies bounded learning/step-config edits, bounded KB
 note/config changes, and bounded DB contract fixes directly (never speculative
 row migrations), each independently verified, using absolute workspace paths
 in reviewer prompts and evidence.
+
+For the learning dimension, review the complete skill package rather than a
+sample: the root `SKILL.md`, every content-bearing Markdown reference, and every
+effective `learnings_access="read-write"` objective. References are part of the
+skill. Detailed reusable HOW may move from the root into a reference; non-skill
+content must leave the entire package and be routed to its authoritative store.
+The Fixer must re-run the same semantic classification after editing. A lean
+index or valid Markdown shape alone is not proof of purity.
 
 Load `assumption-audit` for all three: reusable HOW must not preserve business
 policy, fixed strategy/architecture, or an unverified limitation as if it were
