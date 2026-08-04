@@ -4156,7 +4156,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
   return (
     <div ref={terminalCenterRef} className={`flex min-h-0 min-w-0 flex-col bg-[#191a18] text-neutral-100 ${compact ? '' : 'flex-1 overflow-hidden'}`}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {(!hasPendingTerminalActivity && groupedTerminals.orderedTerminals.length === 0) ? (
           <TerminalWaitingPane
             className="min-h-0 flex-1"
@@ -4171,8 +4171,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           </div>
         )}
 
+        {/* Error disclosure must not participate in terminal layout. A height
+            change makes live xterm reconnect at a new grid and clears the
+            scrollback the user is currently reading. */}
         {sessionErrorBanner.length > 0 && (
-          <div className="flex flex-col gap-1 border-b border-red-900/35 bg-red-950/15 px-3 py-2">
+          <div
+            className="absolute left-2 right-2 top-2 z-[70] flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm sm:left-16"
+            data-testid="terminal-global-error-overlay"
+          >
             {sessionErrorBanner.map(entry => {
               const isOpen = expandedErrorIDs.has(entry.id)
               return (
@@ -4594,8 +4600,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       {terminalPreValidationSummary(selectedTerminalView)}
                     </div>
                   )}
-                  {selectedTerminalErrors.length > 0 && (
-                    <div className="flex flex-col gap-1 border-b border-red-900/45 bg-red-950/15 px-3 py-2">
+                  {/* Keep scoped errors over the viewport rather than above it.
+                      Opening, closing, or dismissing one must not resize tmux. */}
+                  <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    {selectedTerminalErrors.length > 0 && (
+                    <div
+                      className="absolute left-2 right-2 top-2 z-30 flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm"
+                      data-testid="terminal-scoped-error-overlay"
+                    >
                       {selectedTerminalErrors.map(entry => {
                         const isOpen = expandedErrorIDs.has(entry.id)
                         return (
@@ -4635,8 +4647,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                         )
                       })}
                     </div>
-                  )}
-                  {selectedTerminalIsSynthetic || showFormattedView ? (
+                    )}
+                    {selectedTerminalIsSynthetic || showFormattedView ? (
                     // Clean view always renders the real event stream. Never
                     // substitute the legacy parsed-row card: it is not the
                     // conversation UI and can carry stale sibling metadata.
@@ -4705,7 +4717,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       xtermTheme={rawXtermTheme}
                       message="Terminal output is being restored. If this session was released after inactivity, new output will attach here automatically."
                     />
-                  )}
+                    )}
+                  </div>
                   {selectedTerminalView && (() => {
                     const st = selectedTerminalView.status || {}
                     const tokensIn = formatTokens(st.total_input_tokens || st.input_tokens)
