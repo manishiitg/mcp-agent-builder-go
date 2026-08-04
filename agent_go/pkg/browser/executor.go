@@ -547,6 +547,18 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		}
 	}
 	commandArgs = normalizeAgentBrowserCommandArgs(command, commandArgs)
+	// Recover the unambiguous bare tN form before any command-specific planning
+	// or subprocess argument construction. Previously this happened in the CDP
+	// selection block below, after commandArgs had already been copied into
+	// cmdArgs. The executor would therefore select t2 correctly but still invoke
+	// agent-browser with `click t2 e64`, where t2 was misread as the element ref.
+	if isCdpMode && inlineCDPTab == "" && command != "tab" && !isBrowserDocumentationCommand(command) {
+		if recovered, cleaned := unmarkedCDPTabArg(commandArgs); recovered != "" {
+			log.Printf("[BROWSER] CDP: recovered unmarked tab %q from %q args; treat it as --tab %s", recovered, command, recovered)
+			inlineCDPTab = recovered
+			commandArgs = cleaned
+		}
+	}
 	if isBrowserOpenCommand(command) && len(commandArgs) > 0 {
 		log.Printf("[BROWSER] navigation: browser=%q agent=%q workflow=%q command=%q tab=%q target=%q",
 			session, agentSessionID, workflowSessionID, command, inlineCDPTab, displayCDPTabURL(commandArgs[0]))
@@ -741,22 +753,6 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 			}
 		} else {
 			tabForCommand := inlineCDPTab
-			// A tab id sent as a bare positional (["--cdp", url, "t1"]) instead
-			// of marked (["--cdp", url, "--tab", "t1"]) is recovered rather than
-			// rejected. open already does exactly this
-			// (stripInlineTabFromOpenArgs); rejecting it here only meant a real
-			// agent burned a turn on a retry that changed nothing but the
-			// spelling. The tab requirement itself stays strict: recovery needs
-			// the unambiguous tN form outside a flag's value slot, so
-			// `type --text t1` is never mistaken for a tab, and a page action
-			// with no tab-shaped argument still fails.
-			if tabForCommand == "" {
-				if recovered, cleaned := unmarkedCDPTabArg(commandArgs); recovered != "" {
-					log.Printf("[BROWSER] CDP: recovered unmarked tab %q from %q args; treat it as --tab %s", recovered, command, recovered)
-					tabForCommand = recovered
-					commandArgs = cleaned
-				}
-			}
 			if tabForCommand == "" && isBrowserOpenCommand(command) {
 				tabForCommand = getCDPTabSelection(cdpPort, cdpOwner)
 			}
@@ -1250,13 +1246,9 @@ func (e *Executor) cdpTabSelectionError(ctx context.Context, session, cdpURL str
 }
 
 // unmarkedCDPTabArg looks for a tab id that was passed as a bare positional
-// (["--cdp", url, "t7"]) instead of being marked with tab/--tab. The tab
-// selection is still rejected -- silently guessing which positional is a tab
-// would misread ordinary arguments -- but naming the token lets the error say
-// "you passed t7, mark it" instead of the misleading "no tab was provided",
-// and lets the retry hints drop the stray token instead of repeating it.
-// Only the strict tN id form counts, and only outside a flag's value slot, so
-// e.g. type --text t7 is never mistaken for a tab selection.
+// (["--cdp", url, "t7"]) instead of being marked with tab/--tab. Only the
+// strict tN id form counts, and only outside a flag's value slot, so e.g.
+// type --text t7 is never mistaken for a tab selection.
 func unmarkedCDPTabArg(args []string) (tab string, rest []string) {
 	for i, arg := range args {
 		if !isCDPTabID(arg) {

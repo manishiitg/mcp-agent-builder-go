@@ -152,28 +152,10 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
   const dbAccess = agentConfig?.db_access
   const hasExplicitDbAccess = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || dbAccess === 'none'
   const showDbMetadata = hasExplicitDbAccess || referencesDatabase
-  const dbAccessLabel = dbAccess === 'read-write'
-    ? 'Read/write'
-    : dbAccess === 'write'
-      ? 'Write'
-      : dbAccess === 'read'
-        ? 'Read'
-        : dbAccess === 'none'
-          ? 'Off'
-          : referencesDatabase
-            ? 'Referenced'
-            : 'DB'
+  const dbAccessLabel = 'Read/write'
   const dbDisplayText = referencesDatabase && !hasExplicitDbAccess
-    ? 'References DB paths, SQLite, or $DB_PATH in this step.'
-    : dbAccess === 'none'
-      ? 'Database access is disabled for this step.'
-      : dbAccess === 'read'
-        ? 'Reads database state during this step.'
-        : dbAccess === 'write'
-          ? 'Writes database updates during this step.'
-          : dbAccess === 'read-write'
-            ? 'Reads and writes database state during this step.'
-            : 'Database metadata is enabled for this step.'
+    ? 'References database state. Runtime gives every workflow step managed read/write access.'
+    : 'Runtime gives every workflow step managed read/write access through the workflow DB tools.'
   const statusIcon = statusIcons[status]
   const nodeBorderColor = status === 'pending' && executionModeVisuals.borderClassName
     ? executionModeVisuals.borderClassName

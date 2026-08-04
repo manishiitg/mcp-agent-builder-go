@@ -580,6 +580,18 @@ same bounded-fix authority — only the content domain differs — so one
 due-decision and one Fixer pass covers all three, each with its own small
 checklist inside.
 
+The three checklists produce one reconciled `ownership_manifest`. For every
+misplaced or duplicated semantic item it records `item`, `current_location`,
+`semantic_type`, `authoritative_owner`, `duplicate_locations`,
+`migration_or_removal_action`, and `verification`. Apply one rule across all
+stores: **one semantic item, one authoritative owner**. Soul owns why/goals/
+preferences/hard constraints; Plan and step config own current behavior;
+Validation owns deterministic proof contracts; Learnings owns reusable
+execution HOW; Knowledgebase owns durable domain facts with provenance; DB owns
+structured operational state; Pulse owns findings, diagnosis, attempts,
+decisions, and fix verification. Other stores may reference the canonical
+record by stable ID/path, but may not keep a second copy that can drift.
+
 Mark due on any of:
 
 - **Learnings**: plan or prompt changes affected step behavior;
@@ -592,12 +604,15 @@ Mark due on any of:
   decision history, provenance, or platform architecture that is not required
   as a runner-facing procedure.
 - **Knowledgebase**: KB notes or KB config are missing, duplicated, stale,
-  contradictory, or no longer aligned with the plan.
+  contradictory, no longer aligned with the plan, have no complete purity
+  baseline, or contain Soul/Plan/Validation/Learnings/DB/Pulse-owned material.
 - **DB**: schema, table contracts, upsert rules, report SQL, eval consumers,
   or `db/README.md` no longer match current writers and readers; multiple
   tables/files encode the same logical control state with unclear canonical
   ownership or synchronization invariant; a claimed DB repair changed a store
-  the runtime decision path does not actually consume.
+  the runtime decision path does not actually consume; or content-bearing
+  TEXT/JSON columns act as hidden Soul/Plan/Validation/Learnings/KB/Pulse
+  stores instead of structured operational state.
 - **freshness (confirmation recency), learnings and KB**: `learnings/_global/`
   or `knowledgebase/notes/` has content but its own
   `_freshness.json.last_confirmed_run` is many runs / a long business interval
@@ -614,7 +629,8 @@ must reuse that conclusion rather than file a duplicate finding from the same
 
 The read-only reviewer follows `improve-learnings`, `improve-knowledge`, and
 `improve-database` as its three checklists. `knowledgebase/context` is
-user-owned runtime business context — read it for evidence, never rewrite it.
+user-owned runtime business context — do not inspect or rewrite it during KB
+maintenance; use explicit user-provided evidence when its meaning matters.
 The Pulse Fixer applies bounded learning/step-config edits, bounded KB
 note/config changes, and bounded DB contract fixes directly (never speculative
 row migrations), each independently verified, using absolute workspace paths
@@ -627,6 +643,22 @@ skill. Detailed reusable HOW may move from the root into a reference; non-skill
 content must leave the entire package and be routed to its authoritative store.
 The Fixer must re-run the same semantic classification after editing. A lean
 index or valid Markdown shape alone is not proof of purity.
+
+For the KB dimension, inventory every content-bearing note file and return a
+`kb_purity_manifest`; large notes may be read in bounded chunks but no file may
+be omitted. For the DB dimension, return a `db_ownership_manifest` covering
+each relevant table and content-bearing TEXT/JSON column with bounded samples,
+writers, consumers, lifecycle, and semantic owner. Reconcile all three outputs
+into the one Stores `ownership_manifest` before filing findings, so the same
+misplacement is not reported once per store.
+
+Recommend `lock_learnings` or `lock_knowledgebase` only after the relevant
+complete manifest is clean and the current plan still matches it. Learning
+locks are per step: shared `learnings/_global/` content alone is not evidence;
+use that step's effective objective, description hash, recent successful runs,
+and `.learning_metadata.json`. Recommend unlocking whenever the content or its
+owner contract has drifted. `lock_code` remains a separate, stricter executable
+stability decision.
 
 Load `assumption-audit` for all three: reusable HOW must not preserve business
 policy, fixed strategy/architecture, or an unverified limitation as if it were

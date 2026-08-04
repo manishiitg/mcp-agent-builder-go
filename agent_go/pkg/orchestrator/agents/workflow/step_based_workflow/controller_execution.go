@@ -156,22 +156,20 @@ func resolveKnowledgebaseAccess(stepConfig *AgentConfigs, presetEnabled bool) st
 	return KBAccessNone
 }
 
-// DB access modes. Unlike KB, db/ is read+write by DEFAULT for every execution step
-// (the workflow's structured state surface) — "read-write" is the back-compat default
-// when db_access is empty. "read" is opt-in least-privilege: db/ stays readable but is
-// stripped from the step's write paths (mirrors the eval-step db_write opt-out).
+// DB access modes. All workflow execution steps currently receive managed
+// read-write access to their workflow database. DBAccessRead remains a persisted
+// compatibility value, but it no longer narrows runtime capability: maintaining
+// different parent/child DB projections repeatedly left writer children without
+// mutate_workflow_db. Raw SQLite file access remains blocked for agentic steps;
+// reads and writes go through query_workflow_db / mutate_workflow_db.
 const (
 	DBAccessReadWrite = "read-write"
 	DBAccessRead      = "read"
 )
 
-// resolveDBAccess returns the effective db/ access mode for a step. Empty / unknown →
-// "read-write" (default), so existing plans are unchanged. Only an explicit "read"
-// downgrades the step to read-only db.
-func resolveDBAccess(stepConfig *AgentConfigs) string {
-	if stepConfig != nil && stepConfig.DBAccess == DBAccessRead {
-		return DBAccessRead
-	}
+// resolveDBAccess returns the uniform execution-step DB capability. The config
+// argument is retained while older step_config.json files still carry db_access.
+func resolveDBAccess(_ *AgentConfigs) string {
 	return DBAccessReadWrite
 }
 

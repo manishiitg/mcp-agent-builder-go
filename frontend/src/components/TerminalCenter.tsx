@@ -19,6 +19,7 @@ import { TERMINAL_REFRESH_REQUEST_EVENT } from '../utils/terminalRefresh'
 import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
 import { terminalPayloadHasVisibleContent } from '../utils/terminalVisibleContent'
 import { useTheme } from '../hooks/useTheme'
+import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
 import type { Theme } from '../contexts/ThemeContext'
 import { normalizeAnsiForEmbeddedXterm } from '../utils/ansiSanitize'
 import { preserveTerminalContinuity } from '../utils/terminalContinuity'
@@ -42,6 +43,7 @@ import { selectTerminalEvents } from '../utils/terminalEventTranscript'
 import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
 import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from '../utils/terminalEventPage'
+import { projectExecutionTreeTerminals } from '../utils/terminalExecutionProjection'
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -882,7 +884,11 @@ function formatSelectedTerminalMeta(terminal: TerminalSnapshot): string {
   // The selected pane already exposes provider/model/transport and execution
   // details in its status area. Keep this header to the minimum orientation
   // context: the title is rendered separately, followed by type and freshness.
-  return [terminalStepTypeLabel(terminal), formatUpdatedAge(terminal)].filter(Boolean).join(' · ')
+  return [
+    terminal.execution_tree_placeholder ? terminal.display_meta : '',
+    terminalStepTypeLabel(terminal),
+    formatUpdatedAge(terminal),
+  ].filter(Boolean).join(' · ')
 }
 
 function findPlanStepByID(steps: PlanStep[] | undefined, stepID: string): PlanStep | null {
@@ -2503,6 +2509,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // filtering by currentSessionId surfaces this chat's workflow steps
   // without leaking terminals from other chat tabs / unrelated workflows.
   const viewAll = false
+  // A foreground turn can finish before its asynchronous child starts. Keep
+  // polling while the surrounding session still expects activity; stopping on
+  // a briefly idle tree between dispatch and child registration would miss the
+  // later child and recreate the invisibility bug. Once the session is settled,
+  // the hook still polls for as long as the tree itself reports live work.
+  const { data: sessionExecutionTree } = useSessionExecutionTree(
+    currentSessionId,
+    !!currentSessionId,
+    hasPendingTerminalActivity,
+  )
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([])
   const [runtimeStatesBySession, setRuntimeStatesBySession] = useState<Record<string, RuntimeSnapshot>>({})
   // archivedTurnContents caches `:turn-N` snapshot bodies so we can stitch
@@ -2993,7 +3009,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   }, [clearableNonRunningTerminals, dismissTerminal])
 
   const groupedTerminals = useMemo(() => {
-    const uniqueTerminals = dedupeTerminalsByID(terminals)
+    const projectedTerminals = projectExecutionTreeTerminals(terminals, sessionExecutionTree)
+    const uniqueTerminals = dedupeTerminalsByID(projectedTerminals)
     const railTerminals = uniqueTerminals.filter(isRailVisibleTerminal)
     // Selection always sees the complete terminal set. Rail filters only affect
     // navigation, so changing a filter cannot make the active pane jump.
@@ -3033,7 +3050,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       visibleGroups,
       sectionCounts,
     }
-  }, [terminals, terminalRailFilter, terminalRailSearch, selectedID])
+  }, [terminals, sessionExecutionTree, terminalRailFilter, terminalRailSearch, selectedID])
   const terminalFocusActive = activeEventViewMode === 'terminal'
   const currentMainTerminal = useMemo(
     () => groupedTerminals.currentTerminals.find(terminal => isMainAgentTerminal(terminal)) || null,
@@ -3526,6 +3543,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
   useEffect(() => {
     if (!selectedTerminalView || useLiveAttachForSelected) return
+    if (selectedTerminalView.execution_tree_placeholder) return
     const detailKey = terminalDetailCacheKey(selectedTerminalView)
     const cached = terminalDetailCacheRef.current[detailKey]
     // selectedTerminalView may contain a deliberately stale cached body to
@@ -3907,8 +3925,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
             // gives no clue which one finished last. Nothing in the icon or the
             // tooltip carried a time at all. Surface the age so recency is
             // readable without destabilising the order.
-            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
-            aria-label={`Open ${title} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
+            title={`${title} · ${terminal.display_meta ? `${terminal.display_meta} · ` : ''}${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
+            aria-label={`Open ${title}${terminal.display_meta ? `, ${terminal.display_meta}` : ''} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
           >
             <span className="relative inline-flex h-5 w-5 items-center justify-center rounded border border-neutral-700/80 bg-neutral-900/90">
               <TerminalTypeGlyph terminal={terminal} className="h-3 w-3" />
@@ -4694,6 +4712,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       contentRef={terminalOutputRef as React.RefObject<HTMLDivElement | null>}
                       xtermTheme={rawXtermTheme}
                       message="Attaching to the live tmux session. If the agent is idle after inactivity, output will appear here when it resumes."
+                    />
+                  ) : selectedTerminalView?.execution_tree_placeholder ? (
+                    <TerminalWaitingPane
+                      className="min-w-0 flex-1 overflow-hidden overscroll-contain"
+                      contentRef={terminalOutputRef as React.RefObject<HTMLDivElement | null>}
+                      xtermTheme={rawXtermTheme}
+                      message="This asynchronous agent is running. Its detailed terminal will appear here as soon as the runtime publishes it."
                     />
                   ) : selectedTerminalView && selectedTerminalDisplayContent ? (
                     <StaticXtermPane

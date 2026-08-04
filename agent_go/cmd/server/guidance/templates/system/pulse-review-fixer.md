@@ -82,6 +82,19 @@ Relocating business facts, run state, owner values, strategy, incidents,
 decisions, provenance, or architecture history from `SKILL.md` into a reference
 does not fix the finding.
 
+The Stores turn returns one reconciled `ownership_manifest`, not three
+disconnected lists. Each misplaced or duplicated item names its current
+location, semantic type, authoritative owner, duplicate locations, bounded
+migration/removal action, and verification. Enforce one semantic item, one
+authoritative owner across Soul, Plan/step config, Validation, Learnings,
+Knowledgebase, DB, and Pulse. The KB lens inventories every content-bearing
+note in `kb_purity_manifest`; the DB lens maps every relevant table and
+content-bearing TEXT/JSON column in `db_ownership_manifest`. Stable references
+to canonical records are valid; copied content is not. Lock recommendations are
+valid only after the complete relevant manifest is clean, with learning locks
+proven per step from its own objective, description hash, successful runs, and
+`.learning_metadata.json` rather than the shared global skill alone.
+
 **Verify before discovering.** The reviewer is the independent check on fixes it
 did not make. Before looking for anything new, take every `changed_unverified`
 finding this module owns whose `next_check` evidence has since arrived, and

@@ -927,6 +927,7 @@ export interface TerminalSnapshot {
   session_id: string
   owner_id?: string
   execution_id?: string
+  parent_execution_id?: string
   execution_kind?: string
   label?: string
   scope?: string
@@ -941,6 +942,9 @@ export interface TerminalSnapshot {
   display_meta?: string
   tmux_session?: string
   content_source?: 'tmux_pipe' | 'tmux_capture' | 'event_stream' | string
+  // True for the short-lived rail row projected from the live execution tree
+  // before the corresponding terminal/transcript snapshot has been retained.
+  execution_tree_placeholder?: boolean
   // Rich step context — populated by the orchestrator's bridge for
   // workflow-step terminals. Used to render the transport-class chip
   // and the "step 3/7 · attempt 1 · triggered by X" meta row.

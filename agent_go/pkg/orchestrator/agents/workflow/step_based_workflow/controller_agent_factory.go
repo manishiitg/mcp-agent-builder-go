@@ -280,14 +280,8 @@ func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsP
 	common.SetSessionShellEnv(sessionID, env)
 }
 
-func resolveEffectiveDBAccess(stepConfig *AgentConfigs, evaluationMode, evaluationDBWrite bool) string {
-	if !evaluationMode {
-		return resolveDBAccess(stepConfig)
-	}
-	if evaluationDBWrite {
-		return DBAccessReadWrite
-	}
-	return DBAccessRead
+func resolveEffectiveDBAccess(stepConfig *AgentConfigs, _, _ bool) string {
+	return resolveDBAccess(stepConfig)
 }
 
 const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
@@ -1195,10 +1189,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		if len(writePaths) > 0 {
 			stepEnvOutputPathOverride = writePaths[0]
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
-		if dbAccess == DBAccessReadWrite && !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
-			dbAccess = DBAccessRead
+		// The item-specific override may narrow files/KB/learnings, but DB is a
+		// uniform workflow-step capability. Restore the workflow DB path instead
+		// of silently downgrading the child and removing mutate_workflow_db.
+		if !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
+			dbPath := getDBPath(hcpo.GetWorkspacePath())
+			readPaths = common.DeduplicateStrings(append(readPaths, dbPath))
+			writePaths = common.DeduplicateStrings(append(writePaths, dbPath))
 		}
+		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
 	}
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.

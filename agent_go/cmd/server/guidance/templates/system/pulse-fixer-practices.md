@@ -216,6 +216,45 @@ Verification is an immediate semantic re-read, not merely a successful patch:
   may be `fixed_verified` when this complete post-change re-read passes; routed
   KB/DB/plan changes still follow their own proof boundary.
 
+## Cross-store ownership repair
+
+Apply this playbook to every Stores Health finding, including KB and DB purity:
+
+1. **Reconcile before editing.** Merge the learning `purity_manifest`,
+   `kb_purity_manifest`, and `db_ownership_manifest` into one
+   `ownership_manifest`. Each item names its current location, semantic type,
+   authoritative owner, duplicate locations, action, and verification. One
+   semantic item has one authoritative owner: Soul=why/goals/preferences/hard
+   constraints; Plan/step config=current behavior; Validation=deterministic
+   proof; Learnings=reusable execution HOW; KB=durable domain facts with
+   provenance; DB=structured operational state; Pulse=findings, diagnosis,
+   attempts, decisions, and fix verification.
+2. **Protect the only copy.** Preserve exact source evidence in Pulse before
+   removing anything. Never rewrite user-owned `knowledgebase/context`, invent
+   provenance, or move ambiguous row semantics. If the destination write is
+   not authorized or meaning is unclear, keep the source and record the exact
+   blocker or user decision instead of creating data loss.
+3. **Move meaning, not formatting.** Put reusable HOW in a skill, durable facts
+   with provenance in KB notes, and structured state in normalized DB records.
+   Soul/Plan/Validation changes use their canonical workflow tools. Pulse keeps
+   review history. Replace legitimate cross-store consumers with stable
+   IDs/paths or queries, not copied prose/JSON snapshots.
+4. **Remove duplicates only after destination proof.** Re-read the destination,
+   prove provenance/keys and downstream consumers, then remove the old copy.
+   Re-run all three manifests and confirm no contradictory owner remains. A
+   patch success or smaller file is not verification.
+5. **Lock only after cleanup.** Set `lock_learnings` or
+   `lock_knowledgebase` only when the complete relevant manifest is clean and
+   current-run evidence confirms stability. Decide learning locks per step from
+   that step's effective objective, description hash, successful-run evidence,
+   and `.learning_metadata.json`; shared `_global` content is insufficient.
+   Unlock on drift. Treat `lock_code` as a separate, stricter executable proof.
+
+Immediate semantic moves may be `fixed_verified` only when source removal,
+destination exactness, references, and the current consumer are all re-checked.
+Behavioral/configuration changes that need a producing run remain
+`changed_unverified` with that exact run boundary.
+
 ## Tool, path, and permission repair
 
 - Interpret nested bridge envelopes and semantic error markers, not only process

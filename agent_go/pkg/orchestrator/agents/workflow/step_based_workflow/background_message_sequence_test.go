@@ -79,6 +79,12 @@ func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing
 		"read-write learning_objective",
 		"references are part of the skill",
 		"moving non-skill content behind a reference link is not a repair",
+		"one semantic item, one authoritative owner",
+		"kb_purity_manifest",
+		"db_ownership_manifest",
+		"ownership_manifest",
+		"lock_knowledgebase",
+		"per step from its own metadata and run evidence",
 		"do not emit the guides' legacy standalone module envelopes",
 		"do not mark stores_health",
 	} {

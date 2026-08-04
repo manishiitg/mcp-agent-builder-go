@@ -9,7 +9,11 @@ function getHttpStatus(error: unknown): number | undefined {
   return typeof response?.status === 'number' ? response.status : undefined
 }
 
-export function useSessionExecutionTree(sessionId?: string | null, enabled: boolean = true) {
+export function useSessionExecutionTree(
+  sessionId?: string | null,
+  enabled: boolean = true,
+  pollWhileEnabled: boolean = false,
+) {
   return useQuery<SessionExecutionTreeResponse>({
     queryKey: ['session-execution-tree', sessionId],
     queryFn: () => agentApi.getSessionExecutionTree(sessionId!),
@@ -18,7 +22,7 @@ export function useSessionExecutionTree(sessionId?: string | null, enabled: bool
       if (getHttpStatus(query.state.error) === 404) return false
       const data = query.state.data
       if (!data) return 3000
-      return executionTreeRuntimeStatus(data) === 'busy' ? 4000 : false
+      return executionTreeRuntimeStatus(data) === 'busy' || pollWhileEnabled ? 4000 : false
     },
     staleTime: 1000,
     retry: false,

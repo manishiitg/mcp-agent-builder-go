@@ -284,6 +284,54 @@ func TestAgentBrowserPreservesFocusWhenRealTabIsAlreadyActive(t *testing.T) {
 	}
 }
 
+func TestAgentBrowserBareTabIsNotForwardedAsPageActionArgument(t *testing.T) {
+	resetCDPRegistryForTest(t)
+	t.Setenv("CDP_HOST", "localhost")
+	const (
+		port  = 29229
+		owner = "bare-tab-owner"
+	)
+
+	var commands []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request ShellExecuteRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, request.Command)
+		stdout := `{"success":true,"data":{"tabs":[{"active":true,"tabId":"t2","url":"https://example.com/"}]}}`
+		if strings.Contains(request.Command, " click ") {
+			stdout = `{"success":true,"data":{"clicked":true}}`
+		}
+		_ = json.NewEncoder(w).Encode(APIResponse{Success: true, Data: ShellExecuteResponse{Stdout: stdout, ExitCode: 0}})
+	}))
+	defer server.Close()
+
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, owner)
+	_, err := NewExecutor(NewClient(server.URL), WithCdpPort(port)).HandleAgentBrowser(ctx, map[string]interface{}{
+		"command": "click",
+		"args":    []string{"--cdp", "http://localhost:29229", "t2", "e64"},
+		"session": "agent-session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands = %#v, want tab-state check followed by click", commands)
+	}
+	clickCommand := commands[1]
+	for _, unwanted := range []string{" click t2 ", " t2 e64"} {
+		if strings.Contains(clickCommand, unwanted) {
+			t.Fatalf("bare CDP tab leaked into page-action arguments: %q", clickCommand)
+		}
+	}
+	for _, want := range []string{" click e64 ", " --cdp http://localhost:29229 ", " --json"} {
+		if !strings.Contains(clickCommand, want) {
+			t.Fatalf("click command %q missing %q", clickCommand, want)
+		}
+	}
+}
+
 func TestAgentBrowserSelectsRealTabWhenAnotherTabIsActive(t *testing.T) {
 	resetCDPRegistryForTest(t)
 	t.Setenv("CDP_HOST", "localhost")

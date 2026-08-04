@@ -2853,3 +2853,107 @@ alone did not prevent the historical pollution. If new non-skill content still
 appears after the Pulse contract is live, the next hardening step is a guarded
 learning-write workflow that classifies proposed content before committing it;
 do not add brittle date/ID keyword rejection in Go.
+
+## Decision: Stores Health enforces one authoritative owner across workflow stores (2026-08-04)
+
+### Problem
+
+The learning purity contract fixed only one side of a broader ownership
+problem. KB review could detect stale or duplicate notes without proving that
+every note contained KB-owned material. DB review could verify schema and
+control-state paths without noticing long-form prompts, strategy, facts, or
+review history hidden in TEXT/JSON columns. Soul, Plan, Validation, Learnings,
+KB, DB, and Pulse could therefore retain independently stale copies of the same
+meaning while each individual store looked locally valid.
+
+### Ownership model
+
+Pulse Stores Health now applies one rule: **one semantic item, one
+authoritative owner**.
+
+| Owner | Canonical content |
+|---|---|
+| Soul | Why the workflow exists; goals, owner preferences, hard constraints, safety boundaries |
+| Plan / step config | What the current workflow does; strategy, cadence, routing, inputs, outputs, dependencies, behavior |
+| Validation | Deterministic acceptance and proof contracts |
+| Learnings | Reusable execution HOW: tools, selectors, parsing, retries, recovery, stable failure signatures |
+| Knowledgebase | Durable domain facts and patterns with provenance |
+| DB | Structured operational state: entities, metrics, actions, queues, status, timestamps, relationships, history rows |
+| Pulse | Findings, diagnosis, attempts, decisions, fix evidence, and verification history |
+
+Another store may retain a stable ID/path/query that resolves the canonical
+record. It must not retain a second prose or JSON copy that can drift.
+
+### Reviewer contract
+
+The continuous Workflow Review Stores turn loads all three store checklists and
+returns one reconciled `ownership_manifest`. Each misplaced or duplicated item
+has:
+
+```text
+item
+current_location
+semantic_type
+authoritative_owner
+duplicate_locations
+migration_or_removal_action
+verification
+```
+
+The component checkpoints are evidence for that final manifest:
+
+- Learnings: the existing complete `purity_manifest` and
+  `learning_objective_audit`, plus `ownership_candidates`.
+- Knowledgebase: required `kb_purity_manifest` covering every content-bearing
+  note on disk. Large files may use heading/search-routed bounded chunks, but no
+  file may be omitted. User-owned `knowledgebase/context/` is not inspected or
+  rewritten by maintenance.
+- DB: required `db_ownership_manifest` for every relevant table and every
+  content-bearing TEXT/JSON column, using bounded samples. It names structured
+  purpose, keys, writers, consumers, retention/lifecycle, sample evidence, and
+  semantic owner.
+
+The reviewer remains read-only. It reconciles the three lenses before filing
+findings so one misplaced item is not reported separately by its source and
+destination stores.
+
+### Fixer contract
+
+The one consolidated Fixer:
+
+1. classifies meaning before changing files or rows;
+2. preserves exact source evidence in Pulse and never discards the only copy;
+3. writes the authoritative destination only through its allowed workflow
+   tools, preserving provenance and keys;
+4. replaces legitimate cross-store copies with stable references where needed;
+5. re-reads the destination and proves the current consumer before removing the
+   old copy;
+6. re-runs all purity/ownership manifests and confirms no contradictory owner
+   remains.
+
+It never rewrites user-owned KB context, invents provenance, or performs a
+speculative semantic row migration. Ambiguous ownership or unavailable write
+authority produces a bounded decision/blocker rather than data loss. Immediate
+semantic moves are `fixed_verified` only after source removal, destination
+exactness, references, and consumer behavior are checked. Behavioral changes
+that require a producing run remain `changed_unverified` with that run as the
+next boundary.
+
+### Lock policy
+
+`lock_learnings` and `lock_knowledgebase` are recommendations only after the
+complete relevant manifest is clean and current evidence confirms stability.
+Learning locks are decided per step from its effective objective, description
+hash, recent successful runs, and its own `.learning_metadata.json`; the shared
+`learnings/_global/` package alone cannot prove that a particular contributor
+should be locked. Drift clears the recommendation. `lock_code` remains a
+separate, stricter executable-stability decision.
+
+### Implementation status and validation
+
+Implemented in the learning, KB, DB, post-run monitor, review/fixer, legacy
+scheduled Stores, and continuous Workflow Review sequence guidance. Regression
+tests pin all three manifests, the one-owner rule, cross-store Fixer playbook,
+and lock-after-cleanup rule. This remains an agentic prompt-and-tools contract;
+it does not add keyword classifiers, migrations, or new persistence logic in
+Go.

@@ -112,6 +112,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 			wants: []string{
 				"exactly one", "saved review and lifecycle evidence", "automatic notification", `get_pulse_state(view="review")`,
 				"one consolidated Fixer", "terminal current-run result", "cannot block later reviewers", "compact, priority-ordered Fix queue",
+				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
 			},
 		},
 		"pulse-finalizer": {
@@ -311,6 +312,9 @@ func TestPulseGuidanceTracesStateChangesToRuntimeConsumers(t *testing.T) {
 	}
 	for _, want := range []string{
 		"control-state ownership map",
+		"`db_ownership_manifest`",
+		"content-bearing TEXT/JSON column",
+		"one semantic item, one authoritative owner",
 		"source-of-truth collisions",
 		"writer -> canonical record -> runtime reader -> decision/output",
 		"runtime decision consumed the canonical value",
@@ -507,6 +511,11 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Scheduler and lifecycle repair",
 		"Evaluation and report repair",
 		"Learning and skill purity repair",
+		"Cross-store ownership repair",
+		"one authoritative owner",
+		"`kb_purity_manifest`",
+		"`db_ownership_manifest`",
+		"Lock only after cleanup",
 		"Do not launder content through references",
 		"re-read every content-bearing Markdown file",
 		"`learnings_access=\"read-write\"`",
@@ -943,6 +952,8 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"do not estimate",
 			"`purity_manifest`",
 			"`learning_objective_audit`",
+			"`ownership_candidates`",
+			"one semantic item, one authoritative owner",
 			"`references/` is progressive",
 			"Moving non-skill content into `references/` is laundering",
 			"Do not sample references",
@@ -958,6 +969,10 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			// near-duplicate sections before anyone looked at its shape.
 			"`note_shape`",
 			"do not estimate",
+			"`kb_purity_manifest`",
+			"`ownership_candidates`",
+			"one semantic item, one authoritative owner",
+			"No content-bearing note file may be omitted",
 		},
 		"improve-database": {
 			"READ-ONLY DATABASE HEALTH REVIEW",
@@ -966,6 +981,10 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"call_generic_agent",
 			"Pulse Fixer",
 			"verification commands",
+			"`db_ownership_manifest`",
+			"`ownership_candidates`",
+			"content-bearing TEXT/JSON column",
+			"one semantic item, one authoritative owner",
 		},
 		"improve-report": {
 			"READ-ONLY REPORT HEALTH REVIEW",
@@ -1479,6 +1498,11 @@ func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {
 		"every content-bearing Markdown reference",
 		"must leave the entire package",
 		"index or valid Markdown shape alone is not proof",
+		"one reconciled `ownership_manifest`",
+		"one semantic item, one authoritative owner",
+		"`kb_purity_manifest`",
+		"`db_ownership_manifest`",
+		"Recommend `lock_learnings` or `lock_knowledgebase` only after",
 	} {
 		if !strings.Contains(postRun, want) {
 			t.Fatalf("post-run-monitor missing freshness trigger %q", want)

@@ -1022,11 +1022,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setMessageSequenceShellEnv(sessionID,
 		"",
 		hcpo.snapshotWorkspaceEnv(),
 	)
-	dbAccess := DBAccessRead
-	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil && dbWritePathGranted(cfg.WritePaths, hcpo.GetWorkspacePath()) {
-		dbAccess = DBAccessReadWrite
-	}
-	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), dbAccess, false)
+	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), DBAccessReadWrite, false)
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceRuntimeSessionID(stepPath string, stepID string) string {
@@ -1154,7 +1150,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
 	return MessageSequenceWriteAccess{
-		DB:            requested.DB && resolveDBAccess(stepConfig) == DBAccessReadWrite,
+		// DB is intentionally not narrowed by an item's write_access. Every
+		// workflow step and sequence turn receives the same managed DB tools.
+		DB:            true,
 		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())),
 		Learnings:     requested.Learnings && resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
@@ -1191,7 +1189,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		readPaths = appendLearningReadPaths(readPaths, baseWorkspacePath, stepID)
 	}
 	writePaths = []string{stepFolderPath, downloadsPath}
-	if itemWriteAccess.DB && dbAccess == DBAccessReadWrite {
+	if dbAccess == DBAccessReadWrite {
 		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
 	}
 	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
@@ -1228,10 +1226,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 	if writeAccess.Knowledgebase {
 		kbAccess = KBAccessReadWrite
 	}
-	dbAccess := DBAccessRead
-	if writeAccess.DB {
-		dbAccess = DBAccessReadWrite
-	}
+	dbAccess := DBAccessReadWrite
 	// Honor the step's declared context_output so the sequence writes the file
 	// downstream steps expect (in execution/<stepID>/, the normal step folder).
 	// Fall back to the generic name only when the step declares no output.

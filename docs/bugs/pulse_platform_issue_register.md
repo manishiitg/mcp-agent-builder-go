@@ -16,6 +16,9 @@ Follow-up UI/runtime inspection added PLAT-020 (scheduled-session continuation)
 and PLAT-021 (proposal/decision projection). See the dated sections below.
 The subsequent tool-error review added PLAT-022 through PLAT-026 and assigned
 that independent batch to Claude Code.
+The later Social Media runtime investigation expanded PLAT-003 to uniform
+workflow-step DB read/write and added PLAT-027 (live child visibility) and
+PLAT-028 (CDP tab argument normalization).
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -66,7 +69,7 @@ Rules:
 |---|---|---|---|---|
 | [PLAT-001-A](pulse_platform/plat-001.md) | Reverify keyed human-input propagation | Claude Code | `runtime_reverify` | workflow orchestration/handoff |
 | [PLAT-002-A](pulse_platform/plat-002.md) | Reverify canonical nested tool-failure status | Claude Code | `runtime_reverify` | tool bridge and terminal status |
-| [PLAT-003-A](pulse_platform/plat-003.md) | Reverify reachable workflow DB capability | Claude Code | `runtime_reverify` | DB capability materialization |
+| [PLAT-003-A](pulse_platform/plat-003.md) | Reverify uniform workflow-step DB read/write | Codex | `runtime_reverify` | DB capability materialization |
 | [PLAT-005-A](pulse_platform/plat-005.md) | Reverify multi-name API-spec lookup | Claude Code | `runtime_reverify` | mcpagent API bridge |
 | [PLAT-006-A](pulse_platform/plat-006.md) | Reverify workflow-step shell cwd | Claude Code | `runtime_reverify` | step session/bridge cwd |
 | [PLAT-007-A](pulse_platform/plat-007.md) | Exercise workflow image verification E2E | Claude Code | `runtime_e2e_reverify` | media tool path/model routing |
@@ -87,6 +90,8 @@ Rules:
 | [PLAT-026-A](pulse_platform/plat-026.md) | Keep selected running workflow visible exactly once | Claude Code | `implemented` | `GlobalActivityMonitor.tsx` |
 | [PLAT-024-A](pulse_platform/plat-024.md) | Populate missing tool names in canonical error markers | Claude Code + Codex follow-up | `implemented` | mcpagent/provider logging |
 | [PLAT-025-A](pulse_platform/plat-025.md) | Bound workspace-shell stdout memory without corrupting scripted JSON | Claude Code | `queued` | `workspace/handlers/shell.go` |
+| [PLAT-027-A](pulse_platform/plat-027.md) | Keep a live asynchronous child visible after parent completion | Codex | `implemented` | terminal execution-tree projection |
+| [PLAT-028-A](pulse_platform/plat-028.md) | Remove a recovered CDP tab from final page-action arguments | Codex | `implemented` | browser executor argument normalization |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -130,7 +135,7 @@ directory, tool-registration, or media-tool failure but predates
 |---|---:|---|---|
 | PLAT-001 Human-input propagation | P0 | Upwork | **implementation fixed; runtime reverify** |
 | PLAT-002 Tool-failure status precedence | P0 | Upwork, Build-in-public, Social Media | **canonical CLI/runtime fix implemented; runtime reverify** |
-| PLAT-003 Workflow DB tool exposure | P0 | Build-in-public, Instagram, RTS Latency | **implemented on current main; runtime reverify** |
+| PLAT-003 Workflow DB tool exposure | P0 | Build-in-public, Instagram, RTS Latency, Social Media | **expanded to uniform workflow-step read/write; runtime reverify** |
 | PLAT-004 Scheduler completion detection | P0 | RTS Latency | **runtime verified 2026-08-04** |
 | PLAT-005 `get_api_spec` multi-name contract | P1 | RTS Latency | **fixed in mcpagent; runtime reverify** |
 | PLAT-006 Workflow-step shell cwd contract | P1 | RTS Latency | **reverify** implemented fix |
@@ -154,6 +159,8 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-024 Tool-error marker omits tool name | P2 | Cross-workflow logs | **implemented 2026-08-04 (mcpagent d1eca1f + Codex follow-up); identity is recovered before per-tool failure classification, with a narrow envelope fallback and explicit "unknown"; runtime reverify remains** |
 | PLAT-025 Workspace shell stdout buffer is unbounded | P1 | Platform availability | **queued for Claude Code** |
 | PLAT-026 Selected running workflow hidden from global activity | P1 | RTS Latency | **implemented 2026-08-04 (a first pass missed the same-workflow-sibling case per Codex review; corrected — see ticket); runtime reverify remains** |
+| PLAT-027 Live asynchronous child hidden after parent completion | P0 | Social Media | **implemented 2026-08-04; runtime reverify remains** |
+| PLAT-028 Recovered CDP tab forwarded as action argument | P1 | Social Media | **implemented and executor-tested 2026-08-04; runtime reverify remains** |
 
 The two tool-error findings below are one family, not two independent repair
 projects. The database-tool symptoms across three workflows are also one shared
@@ -310,6 +317,31 @@ npm test -- --run src/components/workflow/pulseFindingPresentation.test.ts
 npx tsc -b --pretty false
 ```
 
+### Additional workflow-runtime repairs — 2026-08-04
+
+Three related changes were implemented after the repair pass above. None
+required a backend restart during development:
+
+1. **PLAT-003 — uniform workflow DB access.** Every workflow execution step,
+   including evaluation and message-sequence children, now gets the same
+   managed read-write capability. Legacy `db_access=read` and item-level DB
+   flags no longer create parent/child capability drift. Agentic access remains
+   mediated by `query_workflow_db` and `mutate_workflow_db`; this does not
+   reopen raw SQLite/WAL/SHM access.
+2. **PLAT-027 — asynchronous-child visibility.** The terminal rail now projects
+   live children directly from the session execution tree while their detailed
+   terminal snapshot is pending. The placeholder reconciles with the real
+   terminal by execution identity, so the child remains visible without a
+   duplicate after its parent turn completes.
+3. **PLAT-028 — CDP tab normalization.** A bare, unambiguous tab ID such as
+   `t2` is now recovered before command planning and subprocess construction.
+   `click t2 e64` therefore routes to tab `t2` and invokes `click e64` instead
+   of treating the tab as an element selector.
+
+Focused verification covered workflow-step capability/folder-guard routes,
+terminal execution-tree projection, and the real browser executor boundary.
+Each fragment records its exact acceptance and remaining runtime recheck.
+
 ## Ticket files
 
 The fragment is canonical for current ownership, implementation notes,
@@ -325,7 +357,7 @@ priority and historical run context.
 | [PLAT-017](pulse_platform/plat-017.md) | [PLAT-018](pulse_platform/plat-018.md) | [PLAT-019](pulse_platform/plat-019.md) | [PLAT-020](pulse_platform/plat-020.md) |
 | [PLAT-021](pulse_platform/plat-021.md) |  |  |  |
 | [PLAT-022](pulse_platform/plat-022.md) | [PLAT-023](pulse_platform/plat-023.md) | [PLAT-024](pulse_platform/plat-024.md) | [PLAT-025](pulse_platform/plat-025.md) |
-| [PLAT-026](pulse_platform/plat-026.md) |  |  |  |
+| [PLAT-026](pulse_platform/plat-026.md) | [PLAT-027](pulse_platform/plat-027.md) | [PLAT-028](pulse_platform/plat-028.md) |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
@@ -370,7 +402,9 @@ After a platform fix ships:
 
 1. PLAT-001 human-input propagation — implementation complete; real full-run reverify pending.
 2. PLAT-002 canonical tool-error precedence — implementation and focused tests complete; persisted runtime evidence pending.
-3. PLAT-003 DB capability exposure — already implemented and bridge/capability tests pass; source workflows need post-build reverify.
+3. PLAT-003 DB capability exposure — uniform workflow-step read/write is
+   implemented and focused capability tests pass; source workflows need
+   post-build reverify.
 4. PLAT-004 scheduler completion barrier — runtime verified by the full
    2026-08-04 RTS scheduled run; retain regression coverage.
 5. Reverify the corrected PLAT-020 same-session schedule-to-chat handoff first:
@@ -386,6 +420,9 @@ After a platform fix ships:
    ownership.
 10. Repair/query-test the remaining P1 observability and media defects.
 11. Address the P2 configuration and changelog completeness gaps.
+12. Reverify PLAT-027 and PLAT-028 together on the next Social Media CDP run:
+    the asynchronous child must stay visible and its browser action must not
+    forward the tab ID as an element selector.
 
 The first four are ordered ahead of cost and UI completeness because they can
 change what a workflow does while still allowing it to report success.
