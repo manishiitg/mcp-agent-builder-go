@@ -56,7 +56,7 @@ Apply the parent-provided `assumption-audit` learnings/skills lens within this c
 
 ## Reconcile against unreviewed plan changes
 
-The parent may pass `plan_change_backlog` from `get_pulse_module_state`: plan-mod
+The parent may pass `plan_change_backlog` from `get_pulse_state(view="module")`: plan-mod
 calls whose knock-on effects nobody has traced yet, each with its reason,
 affected step ids and changed field names.
 

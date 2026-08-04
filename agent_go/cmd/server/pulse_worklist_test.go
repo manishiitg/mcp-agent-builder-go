@@ -40,6 +40,53 @@ func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t 
 	}
 }
 
+// The three cross-checks (disposition value, verification proof, next_check
+// boundary) are independent — nothing about the disposition value being wrong
+// depends on whether the next_check text also mismatches — so all of them must
+// be reported in one rejection.
+//
+// On 2026-08-04 finding PUL-70B1057E took three separate record_pulse_result
+// rejections to clear this function alone, because it returned on the first
+// mismatch and only revealed the next one after the caller fixed it: wrong
+// disposition value, then a verification proof that didn't match the
+// reviewer's evidence, then a next_check that didn't match the reviewer's
+// boundary text.
+func TestValidateReviewerVerificationDispositionsCombinesAllMismatches(t *testing.T) {
+	review := []step_based_workflow.PulseReviewVerificationResult{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		Verdict:   step_based_workflow.VerificationInconclusive,
+		Expected:  "widened selector pool applied",
+		Observed:  "selector pool unchanged",
+		NextCheck: "next default/reddit run after 2026-08-04T02:00Z",
+	}}
+	dispositions := []step_based_workflow.PulseFindingDisposition{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		// Wrong disposition value, a verification proof that doesn't match the
+		// reviewer's evidence, and a next_check that doesn't match the
+		// reviewer's boundary — three independent mismatches at once.
+		Disposition: step_based_workflow.FindingDispositionAwaitingRun,
+		Verification: []step_based_workflow.PulseFindingVerification{{
+			Verdict:  step_based_workflow.VerificationInconclusive,
+			Expected: "something else entirely",
+			Observed: "something else entirely",
+		}},
+		NextCheck: "a different boundary",
+	}}
+	err := validateReviewerVerificationDispositions(review, dispositions)
+	if err == nil {
+		t.Fatal("mismatched disposition accepted")
+	}
+	for _, want := range []string{
+		`requires disposition "changed_unverified", got "awaiting_run"`,
+		"must carry the reviewer's structured inconclusive proof",
+		"next_check must match the reviewer boundary",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejection %q is missing %q", err.Error(), want)
+		}
+	}
+}
+
 func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -166,6 +213,42 @@ func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
 	}
 	if !detailBody.Success || detailBody.Review.Markdown != markdown {
 		t.Fatalf("detail response = %+v", detailBody)
+	}
+}
+
+func TestGetPulseAgentMetricsAPIExposesReviewersAndFixer(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	ctx := context.Background()
+	for _, metric := range []step_based_workflow.PulseAgentMetricRecord{
+		{ExecutionID: "review-1-exec", PulseRunID: "pulse-1", ReviewRunID: "review-1", Module: "strategy_auditor", Role: "reviewer", Status: "completed", DurationMS: 1200},
+		{ExecutionID: "fixer-1-exec", PulseRunID: "pulse-1", ReviewRunID: "review-1", Module: "pulse_fixer", Role: "fixer", Status: "completed", DurationMS: 2400},
+	} {
+		if err := step_based_workflow.RecordPulseAgentMetric(ctx, workspacePath, metric); err != nil {
+			t.Fatalf("record metric: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/workflow/pulse-agent-metrics?workspace_path=Workflow%2Fexample&pulse_run_id=pulse-1", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetPulseAgentMetrics(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Success bool                                         `json:"success"`
+		Metrics []step_based_workflow.PulseAgentMetricRecord `json:"metrics"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.Success || len(body.Metrics) != 2 {
+		t.Fatalf("response = %#v", body)
+	}
+	if body.Metrics[0].Role != "fixer" || body.Metrics[1].Role != "reviewer" {
+		t.Fatalf("newest metrics order/content = %#v", body.Metrics)
 	}
 }
 
@@ -346,7 +429,7 @@ func TestBeginPulseFixerRunSeedsOnlySelectedModules(t *testing.T) {
 			}
 		}
 	}
-	mark := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	mark := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	if _, err := mark(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   payload.PulseRunID,
@@ -466,29 +549,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	if selected.FindingID == "" || selected.FindingID != selected.Issue.ID || !strings.HasPrefix(selected.FindingID, "PUL-") {
 		t.Fatalf("legacy finding did not receive compact issue identity: %+v", selected)
 	}
-	startFix := executors["start_pulse_fix_attempt"].(func(context.Context, map[string]interface{}) (string, error))
-	startedJSON, err := startFix(ctx, map[string]interface{}{
-		"workspace_path": workspacePath,
-		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleBugReview,
-		"summary":        "Repair the stale run binding.",
-		"findings": []map[string]interface{}{{
-			"fingerprint": selected.Fingerprint,
-			"finding_id":  selected.Issue.ID,
-		}},
-		"intended_files": []string{"planning/step_config.json"},
-		"before_refs":    []string{"step_config:sha256:before"},
-	})
-	if err != nil {
-		t.Fatalf("start fix attempt: %v", err)
-	}
-	var started struct {
-		Attempt step_based_workflow.PulseFixAttempt `json:"attempt"`
-	}
-	if err := json.Unmarshal([]byte(startedJSON), &started); err != nil || started.Attempt.AttemptID == "" {
-		t.Fatalf("decode fix attempt: payload=%s err=%v", startedJSON, err)
-	}
-	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
@@ -503,7 +564,6 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"finding_dispositions": []map[string]interface{}{{
 			"fingerprint":   selected.Fingerprint,
 			"finding_id":    selected.Issue.ID,
-			"attempt_id":    started.Attempt.AttemptID,
 			"disposition":   "fixed_verified",
 			"summary":       "The stale run binding was corrected and the targeted test passed.",
 			"changed_files": []string{"planning/step_config.json"},
@@ -585,7 +645,7 @@ func TestMarkPulseModuleChangedRequiresAuditProof(t *testing.T) {
 	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
-	execute := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	_, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
@@ -1250,11 +1310,11 @@ func TestResolveRunConcernToolCannotCloseWithoutVerification(t *testing.T) {
 func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	_, executors, _ := createPulseWorklistTools()
-	execute := executors["get_pulse_module_state"].(func(context.Context, map[string]interface{}) (string, error))
+	execute := executors["get_pulse_state"].(func(context.Context, map[string]interface{}) (string, error))
 
-	raw, err := execute(context.Background(), map[string]interface{}{"workspace_path": "Workflow/example"})
+	raw, err := execute(context.Background(), map[string]interface{}{"workspace_path": "Workflow/example", "view": "module"})
 	if err != nil {
-		t.Fatalf("get_pulse_module_state: %v", err)
+		t.Fatalf("get_pulse_state(view=module): %v", err)
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {

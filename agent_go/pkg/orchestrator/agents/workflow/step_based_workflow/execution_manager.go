@@ -239,11 +239,9 @@ func (em *ExecutionManager) PrepareForBatchGroup(
 	// Clone base context or create new one
 	var execCtx *ExecutionContext
 	if baseExecCtx != nil {
-		execCtx = &ExecutionContext{
-			SkipHumanInput:    baseExecCtx.SkipHumanInput,
-			RunSingleStepOnly: baseExecCtx.RunSingleStepOnly,
-			SingleStepTarget:  baseExecCtx.SingleStepTarget,
-		}
+		cloned := *baseExecCtx
+		cloned.HumanInputs = cloneWorkflowStringMap(baseExecCtx.HumanInputs)
+		execCtx = &cloned
 	} else {
 		execCtx = &ExecutionContext{}
 	}

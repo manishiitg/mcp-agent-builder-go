@@ -8,9 +8,17 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { isScheduledWorkflowSession, openActiveSession } from '../utils/workflowSessionRestore'
 import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
-import { hasIdleAliveCodingAgent, hasLiveBackgroundAgents, nonWorkflowActivityTitle } from '../utils/activitySessions'
-import { runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
-import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
+import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
+import { runtimeNeedsUserInput } from '../utils/runtimeActivity'
+import {
+  currentActiveSession,
+  currentSessionId as resolveCurrentSessionId,
+  headerStatusLabel,
+  sessionWorkflowKey,
+  statusTone,
+  visibleActivitySessions,
+} from '../utils/globalActivityMonitorStatus'
+import { isInternalChildSession } from '../utils/workflowSessionKinds'
 
 // This matches useChatStore's active-session cache TTL. A longer store TTL also
 // increases the monitor's effective freshness window and should be changed here.
@@ -23,33 +31,6 @@ type ActivityMonitorItem =
 
 function isWorkflowSession(session: ActiveSessionInfo): boolean {
   return session.agent_mode?.toLowerCase().includes('workflow') ?? false
-}
-
-function isActiveSession(session: ActiveSessionInfo): boolean {
-  const status = sessionRuntimeStatus(session)
-
-  // Scheduled/cron sessions: show only while actively running (so user can observe),
-  // hide once completed — they don't need user attention after finishing.
-  if (isScheduledWorkflowSession(session)) {
-    return (
-      status === 'busy' ||
-      status === 'idle' ||
-      hasLiveBackgroundAgents(session)
-    )
-  }
-
-  // Idle-but-alive coding-agent CLI: a live tmux pane still holding agent context,
-  // ready to resume the moment the user sends another message. Shown as idle (clock).
-  if (hasIdleAliveCodingAgent(session)) return true
-
-  if (
-    runtimeNeedsUserInput(session) ||
-    hasLiveBackgroundAgents(session) ||
-    status === 'busy' ||
-    status === 'idle'
-  ) return true
-
-  return false
 }
 
 function sessionTitle(session: ActiveSessionInfo, workflow?: RunningWorkflowInfo, fallbackWorkflowName?: string | null): string {
@@ -183,56 +164,37 @@ export const GlobalActivityMonitor: React.FC = () => {
   }, [getActiveSessions])
 
   const activeSessions = useMemo(() => {
-    return activeSessionsCache.filter(isActiveSession)
+    return activeSessionsCache.filter(session =>
+      !isInternalChildSession({
+        parentSessionId: session.parent_session_id,
+        sessionKind: session.session_kind,
+      }) && isVisibleActivitySession(session)
+    )
   }, [activeSessionsCache])
 
-  const currentSessionId = useMemo(() => {
-    if (showWorkflowsOverview || !activeTabId) return null
-    const activeTab = chatTabs[activeTabId]
-    if (!activeTab || activeTab.metadata?.mode !== selectedModeCategory) return null
-    return activeTab.sessionId ?? null
-  }, [activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview])
-  const visibleSessions = useMemo(() => {
-    const filtered = activeSessions.filter(session => session.session_id !== currentSessionId)
+  // Shared with ModePresetBar's current-workflow selector, so the two agree
+  // on which session is "current" — see globalActivityMonitorStatus.ts.
+  const currentSessionId = useMemo(
+    () => resolveCurrentSessionId(activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview),
+    [activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview],
+  )
+  // The plain session-id exclusion below only ever removed the current tab's
+  // own session. A sibling session for the SAME workflow — a background Pulse
+  // schedule, a second tab observing the same run — has a different session
+  // id, so it survived into the pill list while ModePresetBar's selector also
+  // showed that workflow's status: the one workflow appeared twice at once,
+  // which is exactly the acceptance criterion ("appears exactly once") this
+  // component exists to satisfy. Excluding by the current session's workflow
+  // identity, not just its id, is what actually closes that gap.
+  const currentWorkflowKey = useMemo(() => {
+    const session = currentActiveSession(activeSessionsCache, currentSessionId)
+    return session && isWorkflowSession(session) ? sessionWorkflowKey(session) : ''
+  }, [activeSessionsCache, currentSessionId])
 
-    // De-duplicate by workflow: if multiple sessions share the same workflow
-    // identity, keep the most useful authoritative session row. A retained tmux
-    // wins because it can reopen the live pane.
-    const workflowKey = (s: ActiveSessionInfo) => s.workflow_name || s.workflow_label || s.workspace_path || ''
-    const byWorkflow = new Map<string, ActiveSessionInfo>()
-    const nonWorkflow: ActiveSessionInfo[] = []
-    const rank = (s: ActiveSessionInfo) => {
-      const st = sessionRuntimeStatus(s)
-      let score = 0
-      if (st === 'busy') score += 30
-      if (st === 'idle') score += 10
-      if (hasLiveBackgroundAgents(s)) score += 20
-      if (runtimeNeedsUserInput(s)) score += 15
-      if (s.has_retained_tmux_session) score += 50
-      return score
-    }
-    const timestamp = (s: ActiveSessionInfo) =>
-      Date.parse(s.last_activity || s.created_at || '') || 0
-
-    for (const session of filtered) {
-      const key = isWorkflowSession(session) ? workflowKey(session) : ''
-      if (!key) {
-        nonWorkflow.push(session)
-        continue
-      }
-      const existing = byWorkflow.get(key)
-      if (!existing) {
-        byWorkflow.set(key, session)
-        continue
-      }
-      const rankDelta = rank(session) - rank(existing)
-      if (rankDelta > 0 || (rankDelta === 0 && timestamp(session) > timestamp(existing))) {
-        byWorkflow.set(key, session)
-      }
-    }
-
-    return [...byWorkflow.values(), ...nonWorkflow]
-  }, [activeSessions, currentSessionId])
+  const visibleSessions = useMemo(
+    () => visibleActivitySessions(activeSessions, currentSessionId, currentWorkflowKey),
+    [activeSessions, currentSessionId, currentWorkflowKey],
+  )
 
   const visibleActivityKeys = useMemo(() => {
     const keys = new Set<string>()

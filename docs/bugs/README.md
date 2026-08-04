@@ -3,6 +3,10 @@
 Each file is one investigated defect: symptom, evidence, root cause, and what was
 changed. They are written to be re-read by someone who was not there.
 
+Cross-workflow Pulse findings that require shared runtime work are consolidated
+in [pulse_platform_issue_register.md](pulse_platform_issue_register.md). It is a
+triage register, not a replacement for the individual incident reports below.
+
 ## The agent-facing contract (2026-08-01 → 02)
 
 Nine of these were written in two days and describe one subsystem: **what an
@@ -53,6 +57,12 @@ A tool that fails behind the HTTP bridge returns its error as stdout with
 the UI as a green check until `frontend/src/utils/toolCallFormatting.ts` learned
 to read the harness envelope and stderr. Before changing anything in this area,
 confirm the failure is actually visible — otherwise a fix cannot be verified.
+
+## The agent-facing contract, part two (2026-08-04)
+
+| Document | What it establishes |
+|---|---|
+| [what_the_runtime_tells_an_agent_about_itself.md](what_the_runtime_tells_an_agent_about_itself.md) | Seven defects from one `grep '[TOOL_ERROR]'` over a 5h37m window (137 markers). Four sharpen the house pattern into something worse: **the runtime named a cause the code had evidence against** — a denial blaming "workshop mode" the registry has never heard of, a shell tool description asserting a working directory that was never true, a guard advising a workspace path for a file that cannot exist there, and a Pulse pre-check answered with an identity error the validator two lines above had just disproved. Also: a 100KB cap that turned out to live on a test fixture while the live path was uncapped, allow-lists withholding tools the prompts instruct agents to call, and a deliberate re-registration that became fatal when a map became a slice — which killed the Chief of Staff daily pass two days running. |
 
 ## Earlier incidents
 

@@ -216,7 +216,7 @@ Use this document only when creating a new `builder/improve.html` or doing the r
        dates from pulse_module_state, never a static claim) separately from "is each area
        healthy" (the dot color, never blended into one score). Never hide a clean module —
        silence must not look the same as never-checked. Read last_ran_at/last_result per
-       module from get_pulse_module_state; dot class ok|warn|bad|pending (pending = never
+       module from get_pulse_state(view="module"); dot class ok|warn|bad|pending (pending = never
        checked, use --ink-3, say "never checked" not a fabricated date). Update this row
        every Pulse pass, in the same write as Today's outcome. -->
   <div class="coverage" aria-label="Pulse coverage">

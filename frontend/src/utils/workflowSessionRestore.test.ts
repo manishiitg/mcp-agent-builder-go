@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isScheduledWorkflowSession } from './workflowSessionRestore'
+import { isScheduledWorkflowSession, pickWorkflowActiveSession } from './workflowSessionRestore'
 import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-types'
 
 const session = (overrides: Partial<ActiveSessionInfo> = {}): ActiveSessionInfo => ({
@@ -30,5 +30,63 @@ describe('workflow session restore classification', () => {
   it('does not classify ordinary workflow runs as scheduled', () => {
     expect(isScheduledWorkflowSession(session({ triggered_by: 'manual' }))).toBe(false)
     expect(isScheduledWorkflowSession(session(), runningWorkflow({ triggered_by: 'manual' }))).toBe(false)
+  })
+
+  it('keeps the Pulse parent selected instead of its newer internal reviewer', () => {
+    const parent = session({
+      session_id: 'pulse-root-1',
+      preset_query_id: 'rtslatency',
+      workspace_path: 'Workflow/rtslatency',
+      last_activity: '2026-08-03T09:00:00Z',
+    })
+    const child = session({
+      session_id: 'pulse-reviewer-1',
+      parent_session_id: parent.session_id,
+      session_kind: 'pulse_reviewer',
+      preset_query_id: 'rtslatency',
+      workspace_path: 'Workflow/rtslatency',
+      has_retained_tmux_session: true,
+      last_activity: '2026-08-03T09:05:00Z',
+    })
+    const preset = {
+      id: 'rtslatency',
+      label: 'RTS latency',
+      selectedFolder: { filepath: 'Workflow/rtslatency' },
+    } as Parameters<typeof pickWorkflowActiveSession>[1]
+
+    expect(pickWorkflowActiveSession([child, parent], preset, {})?.session_id).toBe(parent.session_id)
+  })
+
+  it('can select a completed turn whose retained terminal is still alive', () => {
+    const retained = session({
+      status: 'completed',
+      preset_query_id: 'rtslatency',
+      workspace_path: 'Workflow/rtslatency',
+      has_retained_tmux_session: true,
+      last_activity: new Date().toISOString(),
+    })
+    const preset = {
+      id: 'rtslatency',
+      label: 'RTS latency',
+      selectedFolder: { filepath: 'Workflow/rtslatency' },
+    } as Parameters<typeof pickWorkflowActiveSession>[1]
+
+    expect(pickWorkflowActiveSession([retained], preset, {})?.session_id).toBe(retained.session_id)
+  })
+
+  it('uses authoritative running runtime state even when legacy status says completed', () => {
+    const running = session({
+      status: 'completed',
+      preset_query_id: 'build-in-public',
+      workspace_path: 'Workflow/build-in-public',
+      runtime_state: { phase: 'running' } as ActiveSessionInfo['runtime_state'],
+    })
+    const preset = {
+      id: 'build-in-public',
+      label: 'Build in public',
+      selectedFolder: { filepath: 'Workflow/build-in-public' },
+    } as Parameters<typeof pickWorkflowActiveSession>[1]
+
+    expect(pickWorkflowActiveSession([running], preset, {})?.session_id).toBe(running.session_id)
   })
 })

@@ -135,11 +135,36 @@ func ParsePulseFindingDetailMarkers(summary string) []pulseFindingDetailMarker {
 	return markers
 }
 
+func pulseFindingCanonicalFingerprint(stepID string, marker pulseFindingDetailMarker) string {
+	identity := strings.TrimSpace(marker.FindingID)
+	prefix := "finding_id:"
+	if identity == "" {
+		identity = strings.TrimSpace(marker.TargetKey)
+		prefix = "target_key:"
+	}
+	if identity == "" {
+		return concernFingerprint(stepID, marker.Concern)
+	}
+	// Structured IDs are workflow-global identities. Including the reporting
+	// module here recreated the same issue once per reviewer.
+	return concernFingerprint("__structured_finding__", prefix+strings.ToLower(identity))
+}
+
+func pulseFindingFingerprintsByConcern(summary, stepID string) map[string]string {
+	out := map[string]string{}
+	for _, marker := range ParsePulseFindingDetailMarkers(summary) {
+		normalized := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
+		out[normalized] = pulseFindingCanonicalFingerprint(stepID, marker)
+	}
+	return out
+}
+
 func recordPulseFindingDetailsAt(
 	ctx context.Context,
 	db pulseFindingLifecycleDB,
 	workspacePath, runFolder, stepID, summary, observedAt string,
 	concernLines []string,
+	fingerprints map[string]string,
 ) error {
 	markers := ParsePulseFindingDetailMarkers(summary)
 	if len(markers) == 0 {
@@ -156,7 +181,10 @@ func recordPulseFindingDetailsAt(
 		if !knownConcerns[normalizedConcern] {
 			continue
 		}
-		fingerprint := concernFingerprint(stepID, marker.Concern)
+		fingerprint := fingerprints[normalizedConcern]
+		if fingerprint == "" {
+			fingerprint = pulseFindingCanonicalFingerprint(stepID, marker)
+		}
 		encoded, err := json.Marshal(marker.PulseFindingDetails)
 		if err != nil {
 			return fmt.Errorf("encode Pulse finding details: %w", err)

@@ -78,6 +78,44 @@ func TestSQLiteLedgerConcurrentAppendsAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestSummarizeExecutionDoesNotMixParallelAgents(t *testing.T) {
+	ledger, err := NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLedger() error = %v", err)
+	}
+	defer ledger.Close()
+
+	for i, executionID := range []string{"pulse-review-workflow", "pulse-review-strategy", "pulse-review-workflow"} {
+		if err := ledger.Append(Entry{
+			EventID:          fmt.Sprintf("pulse-event-%d", i),
+			IdempotencyKey:   fmt.Sprintf("pulse-call-%d", i),
+			Timestamp:        time.Date(2026, 8, 3, 6, i, 0, 0, time.UTC),
+			ExecutionID:      executionID,
+			Scope:            "pulse",
+			EffectiveModelID: "claude-opus-5",
+			LLMCallCount:     1,
+			PromptTokens:     100 + i,
+			CompletionTokens: 10 + i,
+			CacheReadTokens:  1000 + i,
+			TotalCostUSD:     float64(i+1) / 10,
+			BillingBasis:     "provider_actual",
+		}); err != nil {
+			t.Fatalf("Append(%d) error = %v", i, err)
+		}
+	}
+
+	summary, err := ledger.SummarizeExecution("pulse-review-workflow")
+	if err != nil {
+		t.Fatalf("SummarizeExecution() error = %v", err)
+	}
+	if summary.Total.CallCount != 2 || summary.Total.PromptTokens != 202 || summary.Total.CompletionTokens != 22 || summary.Total.CacheReadTokens != 2002 {
+		t.Fatalf("execution summary mixed agents or lost calls: %#v", summary.Total)
+	}
+	if math.Abs(summary.Total.TotalCostUSD-0.4) > 1e-9 {
+		t.Fatalf("TotalCostUSD = %v, want 0.4", summary.Total.TotalCostUSD)
+	}
+}
+
 func TestSQLiteLedgerMigrationQuarantinesMalformedRowsAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	legacyPath := filepath.Join(root, "costs.jsonl")

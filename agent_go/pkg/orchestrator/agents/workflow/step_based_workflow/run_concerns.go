@@ -135,6 +135,14 @@ func concernFingerprint(stepID, text string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// preValidationConcernFingerprint identifies the step's output-contract gate,
+// not an individual JSON path. The detailed failed checks remain in the concern
+// text and the per-run pre_validation.json evidence, while one lifecycle row
+// represents the repair the Fixer must make.
+func preValidationConcernFingerprint(stepID string) string {
+	return concernFingerprint(stepID, "prevalidation:step-output-contract")
+}
+
 // existingWorkflowReviewFingerprint preserves the identity of an exact
 // historical operational finding after the six reviewer modules were folded
 // into workflow_review. Without this bridge the same CONCERNS payload would be
@@ -209,15 +217,16 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 		return 0, err
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	recorded, err := recordRunConcernLinesAt(
+	fingerprints := pulseFindingFingerprintsByConcern(summary, stepID)
+	recorded, err := recordRunConcernLinesAtWithFingerprints(
 		ctx, db, runFolder, groupName, stepID, phase, lines,
-		observedAt,
+		observedAt, fingerprints,
 	)
 	if err != nil {
 		return recorded, err
 	}
 	if err := recordPulseFindingDetailsAt(
-		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines,
+		ctx, db, workspacePath, runFolder, stepID, summary, observedAt, lines, fingerprints,
 	); err != nil {
 		return recorded, err
 	}
@@ -231,12 +240,29 @@ func recordRunConcernLinesAt(
 	lines []string,
 	observedAt string,
 ) (int, error) {
+	return recordRunConcernLinesAtWithFingerprints(ctx, db, runFolder, groupName, stepID, phase, lines, observedAt, nil)
+}
+
+func recordRunConcernLinesAtWithFingerprints(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	runFolder, groupName, stepID, phase string,
+	lines []string,
+	observedAt string,
+	fingerprints map[string]string,
+) (int, error) {
 	if strings.TrimSpace(observedAt) == "" {
 		observedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	recorded := 0
 	for _, text := range lines {
-		fp := concernFingerprint(stepID, text)
+		normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
+		fp := fingerprints[normalizedText]
+		if phase == ConcernPhasePreValidation {
+			fp = preValidationConcernFingerprint(stepID)
+		} else if fp == "" {
+			fp = concernFingerprint(stepID, text)
+		}
 		if stepID == pulsemodules.WorkflowReviewID {
 			if historical := existingWorkflowReviewFingerprint(ctx, db, text); historical != "" {
 				fp = historical
@@ -263,7 +289,10 @@ func recordRunConcernLinesAt(
 				group_name = excluded.group_name,
 				last_seen_run = excluded.last_seen_run,
 				last_seen_at = excluded.last_seen_at,
-				seen_count = run_concerns.seen_count + 1,
+				seen_count = run_concerns.seen_count + CASE
+					WHEN excluded.phase = 'prevalidation' AND run_concerns.last_seen_run = excluded.last_seen_run THEN 0
+					ELSE 1
+				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
 			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
@@ -307,23 +336,9 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 		limit = 50
 	}
 	// Rank by how many active concerns a step has before ranking by how often
-	// any one of them recurred.
-	//
-	// seen_count alone treats "came back" as the only importance signal, which
-	// is right for one finding that will not stay fixed and exactly wrong for a
-	// cluster: many distinct symptoms of one cause, each seen once. Fingerprints
-	// hash the finding text, so one schema mismatch files once per field it
-	// names — social-media had 38 concerns from execute-find-opportunities, all
-	// opportunities.json failing its validation_schema, every one at
-	// seen_count=1. Sorted by recurrence they landed at positions 62 through 132
-	// of 135, each looking like an unrelated one-off, while 36 seen-twice items
-	// held the top. The single largest real defect in that workflow presented as
-	// its least important, and four Pulse passes read the list and worked from
-	// the top.
-	//
-	// Counting the cluster puts the step with the most open work first and keeps
-	// its rows adjacent, so a reviewer can recognize one cause and fix it once
-	// instead of triaging 38 lookalikes.
+	// any one of them recurred. Prevalidation is already one root concern per
+	// step; this clustering remains useful for distinct execution/review concerns
+	// that share a step and should be read together.
 	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count, c.status
 		FROM run_concerns c

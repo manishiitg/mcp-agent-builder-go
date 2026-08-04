@@ -22,7 +22,7 @@ import (
 
 // TestPulseReviewerVerificationClosesThroughMCPBridge is the transport-level
 // regression for the critical lifecycle seam. It uses the production mcpbridge
-// stdio binary, the production mark_pulse_module_result executor, and SQLite.
+// stdio binary, the production record_pulse_result executor, and SQLite.
 // No direct executor call is used for the operation under test.
 func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	ctx := context.Background()
@@ -46,18 +46,11 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 		t.Fatalf("load filed concern: count=%d err=%v", len(backlog), err)
 	}
 	finding := backlog[0]
-	attempt, err := step_based_workflow.StartPulseFixAttempt(ctx, workspacePath, priorRunID, pulseModuleBugReview,
-		"Populate latency through the canonical collector path",
-		[]step_based_workflow.PulseFixFindingRef{{Fingerprint: finding.Fingerprint, FindingID: finding.Issue.ID}},
-		[]string{"planning/step_config.json"}, []string{"sha256:before"})
-	if err != nil {
-		t.Fatalf("start prior attempt: %v", err)
-	}
 	_, err = markPulseModuleResultFromAgentWithAuditAndFindings(ctx, workspacePath, pulseModuleBugReview, priorRunID,
 		"changed", "Change applied; next producing run is required.", []string{"bounded repair"},
 		PulseModuleAuditInput{ChangedFiles: []string{"planning/step_config.json"}, Verification: []string{"awaiting next run"}},
 		[]step_based_workflow.PulseFindingDisposition{{
-			Fingerprint: finding.Fingerprint, FindingID: finding.Issue.ID, AttemptID: attempt.AttemptID,
+			Fingerprint: finding.Fingerprint, FindingID: finding.Issue.ID,
 			Disposition: step_based_workflow.FindingDispositionChangedUnverified,
 			Summary:     "Awaiting run-12", ChangedFiles: []string{"planning/step_config.json"},
 			BeforeRefs: []string{"sha256:before"}, AfterRefs: []string{"sha256:after"}, NextCheck: "run-12 collector artifact",
@@ -67,6 +60,13 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record prior changed_unverified result: %v", err)
 	}
+	// The backend opened the attempt from that disposition; the reviewer marker
+	// must name the exact attempt the backend chose.
+	candidates, err := step_based_workflow.LoadPulseReviewVerificationCandidates(ctx, workspacePath, pulseModuleBugReview)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("backend did not open one verifiable attempt: %#v err=%v", candidates, err)
+	}
+	attemptID := candidates[0].AttemptID
 
 	if _, err := recordPulseWorklist(ctx, workspacePath, currentRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
 		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Verify the prior repair."},
@@ -77,22 +77,22 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	observed := "run-12 contains latency_ms=42"
 	reviewRunID := "2026-08-01T00-00-00.000Z_bridge-verification"
 	marker := fmt.Sprintf(`PULSE_VERIFICATION_JSON: {"finding_id":%q,"fingerprint":%q,"attempt_id":%q,"verdict":"passed","expected":%q,"observed":%q,"evidence":["runs/run-12/result.json"]}`,
-		finding.Issue.ID, finding.Fingerprint, attempt.AttemptID, expected, observed)
+		finding.Issue.ID, finding.Fingerprint, attemptID, expected, observed)
 	if err := step_based_workflow.RecordPulseReview(ctx, workspacePath, pulseModuleBugReview, reviewRunID, currentRunID, "", "## Verification\n"+marker); err != nil {
 		t.Fatalf("record structured review: %v", err)
 	}
 
 	_, executors, _ := createPulseWorklistTools()
-	executor, ok := executors["mark_pulse_module_result"].(func(context.Context, map[string]interface{}) (string, error))
+	executor, ok := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	if !ok {
-		t.Fatal("mark_pulse_module_result executor has unexpected type")
+		t.Fatal("record_pulse_result executor has unexpected type")
 	}
 	const sessionID = "pulse-fixer-bridge-session"
 	release := registerTrustedPulseSession(sessionID, currentRunID)
 	defer release()
 
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/tools/custom/mark_pulse_module_result" {
+		if r.URL.Path != "/tools/custom/record_pulse_result" {
 			http.Error(w, "unknown tool", http.StatusNotFound)
 			return
 		}
@@ -128,7 +128,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	}
 	schemaJSON, _ := json.Marshal(schema)
 	toolsJSON, _ := json.Marshal([]map[string]interface{}{{
-		"name": "mark_pulse_module_result", "description": "Apply a verified Pulse lifecycle result.",
+		"name": "record_pulse_result", "description": "Apply a verified Pulse lifecycle result.",
 		"input_schema": json.RawMessage(schemaJSON), "type": "custom",
 	}})
 	bridgeClient, err := client.NewStdioMCPClient(bridgeBinary, append(os.Environ(),
@@ -150,13 +150,13 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 		t.Fatalf("initialize mcpbridge: %v", err)
 	}
 	request := mcp.CallToolRequest{}
-	request.Params.Name = "mark_pulse_module_result"
+	request.Params.Name = "record_pulse_result"
 	request.Params.Arguments = map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": currentRunID, "module": pulseModuleBugReview,
 		"result": "done", "reason": "Independent reviewer proved the prior repair on run-12.",
 		"evidence": []interface{}{"runs/run-12/result.json"},
 		"finding_dispositions": []interface{}{map[string]interface{}{
-			"fingerprint": finding.Fingerprint, "finding_id": finding.Issue.ID, "attempt_id": attempt.AttemptID,
+			"fingerprint": finding.Fingerprint, "finding_id": finding.Issue.ID,
 			"disposition": step_based_workflow.FindingDispositionFixedVerified, "summary": "Verified on run-12",
 			"changed_files": []interface{}{"planning/step_config.json"},
 			"before_refs":   []interface{}{"sha256:before"}, "after_refs": []interface{}{"sha256:after"},

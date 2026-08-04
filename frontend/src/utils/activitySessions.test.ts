@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import type { ActiveSessionInfo } from '../services/api-types'
 import {
   hasActiveSessionWork,
   hasIdleAliveCodingAgent,
   hasLiveBackgroundAgents,
   isTerminalActivityStatus,
+  isVisibleActivitySession,
   nonWorkflowActivityTitle,
   RETAINED_TMUX_ACTIVE_WINDOW_MS,
 } from './activitySessions'
@@ -46,6 +48,40 @@ describe('activity session helpers', () => {
     expect(isTerminalActivityStatus('completed')).toBe(true)
     expect(isTerminalActivityStatus('stopped')).toBe(true)
     expect(isTerminalActivityStatus('running')).toBe(false)
+  })
+})
+
+describe('isVisibleActivitySession', () => {
+  const now = Date.parse('2026-08-03T12:00:00Z')
+  const session = (overrides: Partial<ActiveSessionInfo> = {}): ActiveSessionInfo => ({
+    session_id: 'workflow-1',
+    observer_id: '',
+    agent_mode: 'workflow',
+    status: 'completed',
+    last_activity: '2026-08-03T11:55:00Z',
+    created_at: '2026-08-03T11:00:00Z',
+    ...overrides,
+  })
+
+  it('includes a session whose legacy status is completed while runtime is running', () => {
+    expect(isVisibleActivitySession(session({
+      runtime_state: { phase: 'running' } as ActiveSessionInfo['runtime_state'],
+    }), now)).toBe(true)
+  })
+
+  it('includes a completed interactive turn while its retained terminal is alive', () => {
+    expect(isVisibleActivitySession(session({ has_retained_tmux_session: true }), now)).toBe(true)
+  })
+
+  it('does not resurrect a completed scheduled run because it retained a terminal', () => {
+    expect(isVisibleActivitySession(session({
+      triggered_by: 'cron',
+      has_retained_tmux_session: true,
+    }), now)).toBe(false)
+  })
+
+  it('excludes a settled session with no retained terminal or live runtime', () => {
+    expect(isVisibleActivitySession(session(), now)).toBe(false)
   })
 })
 

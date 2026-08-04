@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -12,6 +13,7 @@ import (
 type tokenUsageFileStore struct {
 	workspacePath string
 	readFile      func(context.Context, string) (string, error)
+	listFiles     func(context.Context, string) ([]string, error)
 	writeFile     func(context.Context, string, string) error
 	deleteFile    func(context.Context, string) error
 	warnf         func(string)
@@ -22,6 +24,7 @@ func newBaseOrchestratorTokenUsageStore(bo *BaseOrchestrator) *tokenUsageFileSto
 	return &tokenUsageFileStore{
 		workspacePath: bo.GetWorkspacePath(),
 		readFile:      bo.ReadWorkspaceFile,
+		listFiles:     bo.ListWorkspaceFiles,
 		writeFile:     bo.WriteWorkspaceFile,
 		deleteFile:    bo.DeleteWorkspaceFile,
 		warnf: func(msg string) {
@@ -30,6 +33,13 @@ func newBaseOrchestratorTokenUsageStore(bo *BaseOrchestrator) *tokenUsageFileSto
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
+	}
+}
+
+func emptyTokenUsageFile() *TokenUsageFile {
+	return &TokenUsageFile{
+		ByModel:        make(map[string]*ModelTokenUsage),
+		ByStepAndModel: make(map[string]map[string]*ModelTokenUsage),
 	}
 }
 
@@ -193,6 +203,47 @@ func (s *tokenUsageFileStore) readRun(ctx context.Context, iterationFolder strin
 		ByModel:        make(map[string]*ModelTokenUsage),
 		ByStepAndModel: make(map[string]map[string]*ModelTokenUsage),
 	}
+}
+
+// readRunAcrossDates resolves a run from the authoritative daily execution
+// ledger. A run can cross midnight, so no single date shard is authoritative.
+// Each shard owns a disjoint time interval; merging its run projection once
+// preserves both aggregate and per-step views without adding those views
+// together.
+func (s *tokenUsageFileStore) readRunAcrossDates(ctx context.Context, iterationFolder string) *TokenUsageFile {
+	if strings.TrimSpace(iterationFolder) == "" || s.listFiles == nil {
+		return emptyTokenUsageFile()
+	}
+	s.ensureRunMigrated(ctx, iterationFolder)
+
+	scope, runFolder := NormalizeCostScopeAndRunFolder(iterationFolder)
+	dirPath := filepath.Join(s.workspacePath, "costs", string(scope), ExtractGroupFolderFromRunFolder(runFolder))
+	names, err := s.listFiles(ctx, dirPath)
+	if err != nil {
+		return emptyTokenUsageFile()
+	}
+	sort.Strings(names)
+	var merged *TokenUsageFile
+	for _, name := range names {
+		name = filepath.Base(strings.TrimSpace(name))
+		if filepath.Ext(name) != ".json" {
+			continue
+		}
+		content, readErr := s.readFile(ctx, filepath.Join(dirPath, name))
+		if readErr != nil || strings.TrimSpace(content) == "" {
+			continue
+		}
+		daily, parseErr := s.parseDailyGroupTokenUsageFile(content)
+		if parseErr != nil {
+			s.warnf(fmt.Sprintf("⚠️ Failed to parse daily token usage file %s: %v", filepath.Join(dirPath, name), parseErr))
+			continue
+		}
+		merged = MergeTokenUsageFiles(merged, daily.RunFolders[runFolder])
+	}
+	if merged == nil {
+		return emptyTokenUsageFile()
+	}
+	return merged
 }
 
 func (s *tokenUsageFileStore) ensurePhaseMigrated(ctx context.Context) {

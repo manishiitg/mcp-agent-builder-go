@@ -410,7 +410,7 @@ This is a product-managed Pulse presentation migration. Do ONLY this compact-rep
 
 Goal: builder/improve.html remains the readable published history, while SQLite and the Pulse popup own the complete operational issue tracker. Make the active HTML lighter without deleting history.
 
-1. Read workflow.json and builder/improve.html. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Call get_pulse_finding_backlog without a module filter.
+1. Read workflow.json and builder/improve.html. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Call get_pulse_state(view="backlog") without a module filter.
 2. If builder/improve.html exists, upgrade it to data-pulse-schema="3" while preserving the verdict/status header, coverage, Today's outcome, collapsed Technical details, filters, material Activity history, hidden #pulse-agent-handoff, and Archive links.
 3. Add exactly one data-source="sqlite" Current work section after Today's outcome. Derive Open, Fixing, and Verify counts from the returned issue statuses. Show at most three Important now items and three Needs verification items, with a compact +N more in Pulse note when truncated. Stable issue ids may appear only in data-issue-id attributes.
 4. Do not copy skeleton instructions or example comments into the saved HTML. Remove visible raw agent output, .modfields reviewer field dumps, and any visible Agent log. Full review evidence already lives in SQLite.

@@ -22,7 +22,7 @@ When updating `builder/improve.html`, keep the first screen short and user-prior
 
 ## Timeout Recovery
 
-The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Strategy Auditor or Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. A timed-out reviewer is retained as incomplete evidence but does not cancel independent reviewers or the consolidated Fixer; the Fixer records a truthful terminal result for its module. A failed pre-change backup still blocks mutation, and a failed Fixer still prevents later maintenance writes. Dashboard and ordered finalization run in recovery when safe. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns read SQLite module results, SQLite-backed reviewer records, and current target state; they do not treat HTML as recovery truth and must not claim that timed-out or skipped work succeeded.
+The scheduler uses a sliding inactivity timeout: 10 minutes without observable progress for a normal Pulse step and 30 minutes without progress for Strategy Auditor or Goal Advisor. Tmux output, tool calls, tracked execution changes, and session activity reset that timer, so healthy long-running work is not canceled merely because its total duration exceeds 10 or 30 minutes. A timed-out reviewer is retained as incomplete evidence but does not cancel independent reviewers or the consolidated Fixer; the Fixer records a truthful terminal result for its module. A failed Fixer still prevents later maintenance writes. Dashboard and ordered finalization run in recovery when safe. If the finalizer itself times out, any final command that did not record an outcome is marked `timed_out`. Recovery turns read SQLite module results, SQLite-backed reviewer records, and current target state; they do not treat HTML as recovery truth and must not claim that timed-out or skipped work succeeded.
 
 ## Gate Contract
 
@@ -30,7 +30,7 @@ Gate decides what the next Pulse modules should do. Read runtime facts first and
 HTML only for narrative context; HTML never overrides contradictory runtime state.
 Gate must call:
 
-- `get_pulse_module_state(workspace_path="<current workflow>")` before deciding.
+- `get_pulse_state(view="module", workspace_path="<current workflow>")` before deciding.
 - `record_pulse_worklist(workspace_path="<current workflow>", pulse_run_id="<pulse session id>", decisions=[...])` exactly once before stopping.
 
 Gate uses a **progressive evidence scan**. Start with compact state and metadata:
@@ -142,7 +142,7 @@ review stage reaches a terminal stage outcome does it send one consolidated
 Fixer stage for the pass. Review stages never mutate or mark module state. The
 Fixer is the only writer and records every due module's result.
 
-1. Read `get_pulse_module_state`, `get_pulse_finding_backlog`, the durable
+1. Read `get_pulse_state` views `module` and `backlog`, the durable
    Gate/worklist, current-run module results, and saved SQLite reviewer records. If every due module already has a
    terminal current-run result, stop. This avoids repeating completed review
    work. On recovery, inspect the current target files, runtime state, and
@@ -180,7 +180,7 @@ Fixer is the only writer and records every due module's result.
    points to a specific step.
    Explicitly forbid file edits, config or plan changes, publishing,
    notification, user questions, mutation tools, `builder/improve.html` writes,
-   and `mark_pulse_module_result`.
+   and `record_pulse_result`.
    Avoid narrative recaps and wide tables. Require this compact response shape:
    one-line verdict; every evidence-backed severity-ordered finding row
    containing stable finding id, target key (file,
@@ -214,7 +214,7 @@ Fixer is the only writer and records every due module's result.
    it must not use sleep, `list_executions`, `query_step`, or a polling loop.
    The backend saves each complete human-readable Markdown result directly in
    SQLite and supplies a compact review identity in that notification. Load it
-   with `get_pulse_review_result` before the review stage ends. The returned JSON
+   with `get_pulse_state(view="review")` before the review stage ends. The returned JSON
    carries both human Markdown and validated structured verification outcomes.
 5. For Goal Advisor, first obtain the read-only strategy review, then send that
    draft and its evidence to a separate read-only critic. The parent accepts,
@@ -229,7 +229,8 @@ Fixer is the only writer and records every due module's result.
    recommended action, verification, and user-judgment flag. Do not repeat
    narrative reviewer prose in later reasoning.
    Reconcile it with the durable backlog before mutation. A queue item is one
-   coherent repair bundle and becomes durable through `start_pulse_fix_attempt`.
+   coherent repair bundle; the backend makes it durable from the disposition
+   you record for it.
    Group findings only when they share a root cause, compatible target changes,
    and one verification condition. Cross-reviewer grouping is allowed, but no
    finding may disappear and there is no arbitrary queue cap. Waiting-on-run,
@@ -254,13 +255,12 @@ Fixer is the only writer and records every due module's result.
    tools; never launch a second mutating maintenance agent. Load
    `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`. Before mutation,
    capture exact targets, time, hashes/versions, and latest baseline ids; a write
-   or any pre-boundary artifact is not proof. Re-read `get_pulse_module_state`,
-   map each actionable issue to its backlog record, and call
-   `start_pulse_fix_attempt` before mutation with `issue.id` as `finding_id`, the
-   fingerprint from the same item, intended files, and before refs. IDs address
-   records but do not determine semantic sameness. Block an actionable finding
-   that lacks either value. One attempt may link several findings; retain its
-   `attempt_id`.
+   or any pre-boundary artifact is not proof. Re-read `get_pulse_state(view="module")`
+   and map each actionable issue to its backlog record. Every disposition carries
+   `issue.id` as `finding_id`, the fingerprint from the same item, and the files
+   it changed; the backend opens or reuses the fix-attempt record from that.
+   IDs address records but do not determine semantic sameness. Block an
+   actionable finding that lacks either value.
 
    After verification, give every finding exactly one evidence-backed
    disposition: `fixed_verified`, `verified_no_change`, `changed_unverified`,
@@ -273,7 +273,7 @@ Fixer is the only writer and records every due module's result.
    a started attempt and only passed post-change proof; inconclusive stays
    awaiting verification; failed proof reopens.
 
-   Call `mark_pulse_module_result` with one `finding_dispositions` row per
+   Call `record_pulse_result` with one `finding_dispositions` row per
    finding. For `result=changed`, also pass exact `changed_files` and factual
    `verification`; before/after refs are only real hashes, versions, or cursors.
    It commits module audit and finding lifecycle atomically. Preserve exact
@@ -306,7 +306,7 @@ Fixer is the only writer and records every due module's result.
    its terminal result. Do not claim the module completed while any finding id
    is missing, duplicated without a canonical link, or lacks a durable
    disposition.
-10. Within the single Fixer, call `mark_pulse_module_result` exactly once for every due module immediately
+10. Within the single Fixer, call `record_pulse_result` exactly once for every due module immediately
     after that module reaches an honest terminal state, including clean,
     changed, changed-unverified, blocked, or failed outcomes.
     A reviewer failure is retained for only
@@ -503,7 +503,7 @@ the triggers above.
 
 #### Artifact lens (formerly artifact_review)
 
-`get_pulse_module_state` returns `plan_change_backlog`: the exact count of
+`get_pulse_state(view="module")` returns `plan_change_backlog`: the exact count of
 changelog entries not yet stamped `artifact_review.done`, newest first, with each
 entry's reason, affected step ids and changed field names. Use it instead of
 deriving the backlog from the changelog files yourself. It is evidence, not a
@@ -873,7 +873,7 @@ blocks, and `exclude_channels`. Never infer notification preferences from
 `soul/soul.md`.
 Enabled account-level notification channels (for example Gmail) are inherited automatically and count as enabled for this workflow. Do not skip notification merely because the workflow has no dedicated Slack webhook, and do not write a redundant Gmail setting into `workflow.json`.
 
-Before finalizing, read `get_pulse_module_state` and confirm every module marked
+Before finalizing, read `get_pulse_state(view="module")` and confirm every module marked
 due for this `pulse_run_id` has a terminal module result. If any due result is
 missing, do not publish or notify a complete Pulse. Run each unresolved
 module's independent read-only review when needed, then run the one consolidated
@@ -887,7 +887,7 @@ result. Success is rejected when the HTML is unchanged, uses the retired format,
 or lacks the current Pulse handoff.
 
 Backup, publish, and notify then share one ordered finalizer turn. Mark each
-`running` then terminal with `mark_pulse_final_command_result`; leftover
+`running` then terminal with `record_pulse_result(command=...)`; leftover
 waiting/running commands become failed. Backup may skip only when its source
 hash proves the current state is backed up. Publish skips when disabled,
 unverified, or current and never verifies first publish unattended. Notify runs

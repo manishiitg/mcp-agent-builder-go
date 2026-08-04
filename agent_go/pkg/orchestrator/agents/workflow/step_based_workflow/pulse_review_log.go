@@ -27,7 +27,7 @@ import (
 // reviewer caught a half-finished migration where two live consumers were reading
 // a deleted path and silently getting nothing. Every one of those seven left
 // `last_result` empty in pulse_module_state, because recording the outcome depends
-// on the Pulse Fixer calling mark_pulse_module_result, and it did not. A cycle
+// on the Pulse Fixer calling record_pulse_result, and it did not. A cycle
 // that found a live breakage left no trace for the next cycle to learn from.
 //
 // So this is written by Go at the moment the backend persists a reviewer artifact
@@ -82,6 +82,7 @@ type PulseReviewArtifactRecord struct {
 	RecordedAt       string                          `json:"recorded_at"`
 	Markdown         string                          `json:"markdown,omitempty"`
 	Verifications    []PulseReviewVerificationResult `json:"verifications"`
+	Metrics          *PulseAgentMetricRecord         `json:"metrics,omitempty"`
 }
 
 // PulseReviewVerificationResult is the reviewer's structured judgment about a
@@ -434,7 +435,18 @@ func LoadPulseReviewArtifacts(ctx context.Context, workspacePath, module string,
 		}
 		out = append(out, artifact)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	metrics, err := LoadPulseAgentMetrics(ctx, workspacePath, "", "", "reviewer", -1)
+	if err != nil {
+		return nil, err
+	}
+	attachPulseReviewMetrics(out, metrics)
+	return out, nil
 }
 
 func LoadPulseReviewArtifact(ctx context.Context, workspacePath string, id int64) (*PulseReviewArtifactRecord, error) {
@@ -469,6 +481,13 @@ func LoadPulseReviewArtifact(ctx context.Context, workspacePath string, id int64
 			return nil, err
 		}
 	}
+	metrics, err := LoadPulseAgentMetrics(ctx, workspacePath, artifact.PulseRunID, artifact.Module, "reviewer", -1)
+	if err != nil {
+		return nil, err
+	}
+	withMetrics := []PulseReviewArtifactRecord{artifact}
+	attachPulseReviewMetrics(withMetrics, metrics)
+	artifact = withMetrics[0]
 	return &artifact, nil
 }
 
@@ -507,7 +526,29 @@ func LoadPulseReviewArtifactForRun(ctx context.Context, workspacePath, reviewRun
 			return nil, err
 		}
 	}
+	metrics, err := LoadPulseAgentMetrics(ctx, workspacePath, artifact.PulseRunID, artifact.Module, "reviewer", -1)
+	if err != nil {
+		return nil, err
+	}
+	withMetrics := []PulseReviewArtifactRecord{artifact}
+	attachPulseReviewMetrics(withMetrics, metrics)
+	artifact = withMetrics[0]
 	return &artifact, nil
+}
+
+func attachPulseReviewMetrics(reviews []PulseReviewArtifactRecord, metrics []PulseAgentMetricRecord) {
+	byReview := make(map[string]*PulseAgentMetricRecord, len(metrics))
+	for i := range metrics {
+		metric := &metrics[i]
+		key := strings.TrimSpace(metric.ReviewRunID) + "\x00" + pulsemodules.Normalize(metric.Module)
+		if _, exists := byReview[key]; !exists {
+			byReview[key] = metric
+		}
+	}
+	for i := range reviews {
+		key := strings.TrimSpace(reviews[i].ReviewRunID) + "\x00" + pulsemodules.Normalize(reviews[i].Module)
+		reviews[i].Metrics = byReview[key]
+	}
 }
 
 func LoadPulseReviewVerificationsForPulseRun(ctx context.Context, workspacePath, pulseRunID, module string) ([]PulseReviewVerificationResult, error) {

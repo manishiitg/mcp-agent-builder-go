@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -863,14 +864,19 @@ type PlanFieldChange struct {
 // successful plan-mod tool call appends one entry to the active session file
 // under planning/changelog/.
 type PlanChangelogEntry struct {
-	Timestamp      string                       `json:"timestamp"`                 // ISO 8601 UTC
-	Tool           string                       `json:"tool"`                      // tool name (e.g. "update_scripted_step")
-	Reason         string                       `json:"reason"`                    // mandatory rationale supplied by the agent
-	StepIDs        []string                     `json:"step_ids,omitempty"`        // affected step IDs
-	Changes        []PlanFieldChange            `json:"changes,omitempty"`         // per-field old/new values when known
-	AddedSteps     []json.RawMessage            `json:"added_steps,omitempty"`     // full JSON of steps added (for revert)
-	DeletedSteps   []json.RawMessage            `json:"deleted_steps,omitempty"`   // full JSON of steps deleted (for revert)
-	ArtifactReview *PlanChangelogArtifactReview `json:"artifact_review,omitempty"` // Pulse Artifact Review completion metadata
+	Timestamp       string                       `json:"timestamp"`                 // ISO 8601 UTC
+	Tool            string                       `json:"tool"`                      // tool name (e.g. "update_scripted_step")
+	Reason          string                       `json:"reason"`                    // mandatory rationale supplied by the agent
+	StepIDs         []string                     `json:"step_ids,omitempty"`        // affected step IDs
+	Changes         []PlanFieldChange            `json:"changes,omitempty"`         // per-field old/new values when known
+	AddedSteps      []json.RawMessage            `json:"added_steps,omitempty"`     // full JSON of steps added (for revert)
+	DeletedSteps    []json.RawMessage            `json:"deleted_steps,omitempty"`   // full JSON of steps deleted (for revert)
+	ArtifactReview  *PlanChangelogArtifactReview `json:"artifact_review,omitempty"` // Pulse Artifact Review completion metadata
+	Target          string                       `json:"target"`                    // canonical artifact path or surface
+	BeforeRef       string                       `json:"before_ref"`                // immutable digest of the pre-mutation state
+	AfterRef        string                       `json:"after_ref"`                 // immutable digest of the post-mutation state
+	Actor           string                       `json:"actor"`                     // managed mutation authority
+	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
 }
 
 type PlanChangelogArtifactReview struct {
@@ -959,6 +965,7 @@ func writePlanChangelogEntry(
 	if entry.Timestamp == "" {
 		entry.Timestamp = now.Format(time.RFC3339)
 	}
+	completePlanChangelogEntry(&entry)
 
 	relPath := filepath.Join("planning", "changelog", planChangelogSessionFile)
 	changelogPath := normalizePathForWorkspaceAPI(relPath, workspacePath)
@@ -982,6 +989,62 @@ func writePlanChangelogEntry(
 	}
 	logger.Info(fmt.Sprintf("📝 Plan changelog: %s — %s", entry.Tool, entry.Reason))
 	return nil
+}
+
+func artifactContentRef(value interface{}) string {
+	encoded, _ := json.Marshal(value)
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func completePlanChangelogEntry(entry *PlanChangelogEntry) {
+	if entry == nil {
+		return
+	}
+	tool := strings.ToLower(strings.TrimSpace(entry.Tool))
+	if entry.Target == "" {
+		switch {
+		case strings.Contains(tool, "evaluation"):
+			entry.Target = evaluationPlanRelPath
+		case strings.Contains(tool, "learning"):
+			entry.Target = "learnings/_global"
+		case strings.Contains(tool, "workflow_config"):
+			entry.Target = "workflow.json"
+		case strings.Contains(tool, "step_config"):
+			entry.Target = "planning/step_config.json"
+		default:
+			entry.Target = "planning/plan.json"
+		}
+	}
+	if entry.BeforeRef == "" {
+		before := make([]interface{}, 0, len(entry.Changes))
+		for _, change := range entry.Changes {
+			before = append(before, change.OldValue)
+		}
+		entry.BeforeRef = artifactContentRef(before)
+	}
+	if entry.AfterRef == "" {
+		after := make([]interface{}, 0, len(entry.Changes))
+		for _, change := range entry.Changes {
+			after = append(after, change.NewValue)
+		}
+		entry.AfterRef = artifactContentRef(after)
+	}
+	if entry.Actor == "" {
+		entry.Actor = "managed_tool:" + strings.TrimSpace(entry.Tool)
+	}
+	if entry.DependencyClass == "" {
+		switch {
+		case strings.Contains(tool, "evaluation"):
+			entry.DependencyClass = "evaluation_contract"
+		case strings.Contains(tool, "learning"):
+			entry.DependencyClass = "runtime_guidance"
+		case strings.Contains(tool, "workflow_config") || strings.Contains(tool, "step_config"):
+			entry.DependencyClass = "runtime_configuration"
+		default:
+			entry.DependencyClass = "workflow_plan"
+		}
+	}
 }
 
 // getUpdateRegularStepSchema returns the JSON schema for update_scripted_step.

@@ -6,8 +6,8 @@ Dashboard owns `builder/improve.html`, `builder/card.health.html`, and Pulse
 questions; do not rewrite them in this turn.
 
 Run Backup, Publish, then Notify. Before and after each, call
-`mark_pulse_final_command_result` with its exact name and truthful `running` then
-terminal status. Continue through Notify after individual failures.
+`record_pulse_result` with `command` set to its exact name and a truthful
+`running` then terminal `result`. Continue through Notify after individual failures.
 
 1. **Backup.** Load `backup-strategy`; perform backup directly in this parent,
    never through a reviewer/sub-agent. Skip only when the current source hash is

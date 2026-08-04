@@ -87,6 +87,72 @@ func TestConfigureWorkflowDBSessionRetainsScriptedCompatibility(t *testing.T) {
 	}
 }
 
+func TestWorkshopToolAgentBridgeSessionOverridesParentRouting(t *testing.T) {
+	t.Setenv("MCP_API_URL", "http://127.0.0.1:7777/s/parent-workshop")
+	sessionID := "workshop-pulse-fixer-child"
+	t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+
+	configureWorkshopToolAgentBridgeSession(sessionID)
+	env := common.GetSessionShellEnv(sessionID)
+	for key, want := range map[string]string{
+		"MCP_SESSION_ID": sessionID,
+		"MCP_API_URL":    "http://127.0.0.1:7777/s/" + sessionID,
+		"MCP_CUSTOM":     "http://127.0.0.1:7777/s/" + sessionID + "/tools/custom",
+	} {
+		if got := env[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestPulseFixerDBCapabilityPreflight(t *testing.T) {
+	t.Setenv("MCP_API_URL", "http://127.0.0.1:7777/s/stale-parent")
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	tools := []llmtypes.Tool{tool("query_workflow_db"), tool("mutate_workflow_db")}
+	executors := map[string]interface{}{
+		"query_workflow_db":  func(context.Context, map[string]interface{}) (string, error) { return "", nil },
+		"mutate_workflow_db": func(context.Context, map[string]interface{}) (string, error) { return "", nil },
+	}
+
+	t.Run("accepts explicit child-scoped read-write capability", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-ok"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
+		if err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors); err != nil {
+			t.Fatalf("preflight rejected valid Fixer capability: %v", err)
+		}
+	})
+
+	t.Run("fails before provider work when mutation grant is absent", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-no-db-write"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, nil)
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessRead, false)
+		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
+		if err == nil || !strings.Contains(err.Error(), "lacks workflow DB write scope") {
+			t.Fatalf("preflight did not fail closed on missing DB write scope: %v", err)
+		}
+	})
+
+	t.Run("fails before provider work when shell routes to parent session", func(t *testing.T) {
+		sessionID := "pulse-fixer-preflight-stale-route"
+		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
+		configureWorkshopToolAgentBridgeSession(sessionID)
+		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
+		common.SetSessionShellEnv(sessionID, map[string]string{"MCP_SESSION_ID": "parent-workshop"})
+		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
+		if err == nil || !strings.Contains(err.Error(), "shell bridge session") {
+			t.Fatalf("preflight did not reject stale parent routing: %v", err)
+		}
+	})
+}
+
 func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
@@ -122,6 +188,66 @@ func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	}
 	if slices.Contains(names, "mutate_workflow_db") || executors["mutate_workflow_db"] != nil {
 		t.Fatalf("KB maintenance received DB mutation authority: tools=%v executors=%v", names, executors)
+	}
+}
+
+func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
+	base.WorkspaceTools = []llmtypes.Tool{
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"),
+	}
+	base.WorkspaceToolExecutors = map[string]interface{}{
+		"execute_shell_command": noop,
+		"query_workflow_db":     noop,
+		"mutate_workflow_db":    noop,
+	}
+	base.ToolCategories = map[string]string{
+		"execute_shell_command": "workspace_advanced",
+		"query_workflow_db":     "workflow_db",
+		"mutate_workflow_db":    "workflow_db",
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+
+	tests := []struct {
+		name         string
+		access       string
+		wantMutation bool
+	}{
+		{name: "read only", access: DBAccessRead, wantMutation: false},
+		{name: "read write", access: DBAccessReadWrite, wantMutation: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A deliberately narrow explicit list must not remove capability-
+			// derived DB tools.
+			tools, executors := hcpo.prepareCustomTools(&AgentConfigs{
+				DBAccess:           tt.access,
+				EnabledCustomTools: []string{"workspace_advanced:execute_shell_command"},
+			})
+			names := make([]string, 0, len(tools))
+			for _, definition := range tools {
+				if definition.Function != nil {
+					names = append(names, definition.Function.Name)
+				}
+			}
+			if !slices.Contains(names, "query_workflow_db") || executors["query_workflow_db"] == nil {
+				t.Fatalf("db_access=%q missing query tool: tools=%v executors=%v", tt.access, names, executors)
+			}
+			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
+			if gotMutation != tt.wantMutation {
+				t.Fatalf("db_access=%q mutation materialized=%v, want %v (tools=%v)", tt.access, gotMutation, tt.wantMutation, names)
+			}
+		})
 	}
 }
 

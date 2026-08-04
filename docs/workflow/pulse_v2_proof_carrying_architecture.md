@@ -2193,6 +2193,37 @@ findings fix-attempted by more than one module were zero in both workflows.
 
 ---
 
+## Decision: give every Fixer a versioned engineering-practices skill (2026-08-03)
+
+**Status: implemented.** Prompt reminders were not enough to make repair quality
+consistent across schema drift, database, tool/runtime, path/permission,
+scheduler, evaluation, and report defects. The canonical Builder reference skill
+now exposes `references/pulse-fixer-practices.md`. Both scheduled consolidated
+Pulse and standalone `/pulse-fixer` require the child Fixer to load it through
+`read_skill` together with `pulse-review-fixer` and `fix-verification`.
+
+The skill separates diagnosis from proof: reproduce evidence, consolidate
+symptoms into a coherent root-cause bundle, map producer/validator/consumer blast
+radius, apply the smallest complete semantics-preserving repair, exercise the
+real consumer path, then use the existing lifecycle proof contract. Its first
+focused playbook covers schema/artifact drift and explicitly treats
+prevalidation as a guard rather than a durable repair. All file- and field-level
+validation failures from one step stay linked to one step-level root bundle
+instead of becoming independent repair projects.
+
+The stable boundary is:
+
+- the **practices skill** teaches how to diagnose and repair;
+- the **current Pulse bundle** supplies finding-specific evidence;
+- `fix-verification` decides whether the result is verified now or must remain
+  `changed_unverified` until a producing run.
+
+Materialization and scheduler/standalone prompt tests pin the reference's
+availability and mandatory loading so isolated background agents cannot silently
+lose it.
+
+---
+
 ## Decision: the Fixer verifies its own fixes (2026-08-01)
 
 **Status: kept for fixes provable at the time; superseded for the rest.** The
@@ -2389,6 +2420,72 @@ Acceptance coverage includes:
 Focused allowlist/quarantine tests, the complete `step_based_workflow` package,
 and the Pulse/guidance/render server test subset passed on 2026-08-03.
 
+### Confirmed defect: a denied DB mutation can remain `applied` (2026-08-03)
+
+**Status: open; documented only, not fixed.** The Social Media Pulse run
+`schedule-cron--4128e261_1785724255412842000` exposed two defects at one Fixer
+boundary: an approved Stores repair did not receive effective database-write
+authorization, and the failed attempt was nevertheless persisted as
+`applied`.
+
+The exact attempt was `fix-f469ceb54c5f17e2`, owned by `stores_health`, for
+finding `PUL-66B8DD4A`. Its bounded purpose was to normalize the one
+object-shaped element at `likes_posted.likes[39]` while preserving semantic
+value and array order. Human input `pulse-likes-stray-element-2026-07-24` had
+already selected `normalize_it`; at the time of the attempt it was still
+truthfully `answered` with an empty `consumed_at`.
+
+The guarded mutation returned effective `db_access=""`. The verification
+receipt therefore recorded:
+
+```text
+verdict: failed
+expected: all 61 likes entries are normalized strings with semantic value preserved
+observed: mutation denied; store remained 60 strings plus one object
+changed_files: []
+```
+
+The finding lifecycle correctly ended at `blocked`, with the next check
+"retry only in a write-authorized stores stage." No partial DB change occurred
+and the human answer was not consumed. However, `pulse_fix_attempts.status`
+for the same attempt is `applied`. The resulting state is internally
+contradictory: zero changed files, no successful DB mutation receipt, failed
+verification, blocked finding, but applied attempt.
+
+This is not one bug disguised as another:
+
+1. **Authorization defect:** a consolidated Fixer handling an approved,
+   bounded Stores finding did not receive narrowly scoped DB mutation access.
+2. **Lifecycle defect:** terminal attempt status trusted the agent-supplied
+   disposition instead of deriving it from mutation and verification receipts.
+
+The safe denial behavior is correct and must remain fail-closed. The future
+repair must not restore broad shell access or grant the Fixer unrestricted DB
+writes. It should issue a scoped authorization for the exact workflow DB and
+approved mutation boundary, then make terminal lifecycle state a backend
+invariant:
+
+- a file repair is `applied` only with a non-empty validated change boundary;
+- a DB-only repair is `applied` only with a successful mutation receipt naming
+  the database, operation, affected rows, and post-write verification;
+- a denied mutation or failed verification forces `blocked` or `failed` and
+  forbids `applied` and `verified`;
+- a human answer is consumed only after the authorized mutation and required
+  verification succeed;
+- `verified` requires applicable passed checks and no failed check.
+
+Acceptance coverage must include:
+
+1. Approved Stores mutation with no write grant: no mutation, attempt
+   `blocked`, finding `blocked`, answer unconsumed.
+2. Approved Stores mutation with an exact scoped grant: one mutation receipt,
+   post-write re-read passes, attempt `verified`, answer consumed once.
+3. Empty `changed_files` and no successful DB receipt: `applied` is rejected.
+4. Any failed verification attached to an attempt: `applied`/`verified` is
+   rejected even if the agent requests that disposition.
+5. Retry after authorization is idempotent and cannot consume the answer or
+   mutate the row twice.
+
 ### Standing cross-workflow research questions
 
 Preserve these as the four governing questions for continued observation of
@@ -2455,6 +2552,15 @@ tables `pulse_interventions`, `pulse_intervention_sources`,
 `GET /api/workflow/pulse-impact` and the Pulse popup's **Goal impact over time**
 section are projections. Historical assessments remain append-only, while the
 popup summarizes only the latest assessment per intervention.
+
+Reviewer/Fixer resource measurement is also implemented. Each Pulse child is
+joined to the central cost ledger by its exact execution ID and persisted in
+workflow-local `pulse_agent_metrics`, including queue time, run time, calls,
+input/output/reasoning/cache tokens, model breakdown, cost, and explicit
+coverage status. The Pulse API and popup expose per-agent and latest-pass
+rollups. This closes the earlier `todo_task:0` attribution gap and supplies the
+review-efficiency half of the longitudinal scorecard; goal impact remains a
+separate intervention-level question below.
 
 Pulse must measure more than whether one review ran or one fix passed. The
 useful question is whether the accumulated review/fix cycle improves workflow

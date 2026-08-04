@@ -23,6 +23,10 @@ var pulseFinalCommandOrder = []string{
 	pulseFinalCommandNotify,
 }
 
+// pulseFinalCommandResultValues is the agent-reportable status set, shared by
+// the accept check and every rejection message that names it.
+var pulseFinalCommandResultValues = []string{"running", "done", "skipped", "blocked", "failed"}
+
 var validPulseFinalCommands = map[string]bool{
 	pulseFinalCommandDashboard: true,
 	pulseFinalCommandBackup:    true,
@@ -100,18 +104,18 @@ func markPulseFinalCommandState(ctx context.Context, workspacePath, command, pul
 func markPulseFinalCommandStateFromAgent(ctx context.Context, workspacePath, command, pulseRunID, status, reason string) (*PulseFinalCommandState, error) {
 	command = strings.TrimSpace(strings.ToLower(command))
 	if !validPulseFinalCommands[command] {
-		return nil, fmt.Errorf("final command %q is not valid", command)
+		return nil, fmt.Errorf("command %q is not a valid Pulse final command. Must be one of: %s", command, strings.Join(pulseFinalCommandOrder, ", "))
 	}
 	pulseRunID = strings.TrimSpace(pulseRunID)
 	status = strings.TrimSpace(strings.ToLower(status))
 	switch status {
 	case "running", "done", "skipped", "blocked", "failed":
 	default:
-		return nil, fmt.Errorf("status must be one of running, done, skipped, blocked, failed")
+		return nil, fmt.Errorf("result %q is not valid for command %q. Must be one of: %s", status, command, strings.Join(pulseFinalCommandResultValues, ", "))
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return nil, fmt.Errorf("reason is required")
+		return nil, fmt.Errorf("reason is required: one short factual sentence stating what this command did or why it could not run")
 	}
 
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)

@@ -10,7 +10,12 @@ func shellToolDef() llmtypes.Tool {
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "execute_shell_command",
-			Description: "Execute a shell command and return stdout, stderr, and exit code. Runs via shell (`sh -c`) with the working directory set to the workspace docs root. Both relative paths (resolved against the docs root) and absolute paths under the docs root are accepted. Other host paths are rejected unless the current session explicitly grants one read-only. With Local Chrome (CDP), use a supplied `~/Downloads/...` or `/Users/<user>/Downloads/...` path directly: the workspace `Downloads/` folder is separate and must not be substituted for the host path. Copy a granted host file into a writable workspace folder before modifying it.",
+			// The working directory is per-session and is NOT always the docs root:
+			// a workshop tool-agent runs in its workflow folder, a step in its run
+			// execution folder. Claiming the docs root here made agents prefix their
+			// own workflow path onto every relative path and fail with a bare
+			// "No such file or directory". Failed commands now report their cwd.
+			Description: "Execute a shell command and return stdout, stderr, and exit code. Runs via shell (`sh -c`). The working directory is session-specific — often your workflow or run folder, not the workspace docs root — so run `pwd` before assuming, and never prefix a relative path with a directory you may already be inside. Any command that fails reports the directory it ran in. Absolute paths under the docs root are accepted. Other host paths are rejected unless the current session explicitly grants one read-only. With Local Chrome (CDP), use a supplied `~/Downloads/...` or `/Users/<user>/Downloads/...` path directly: the workspace `Downloads/` folder is separate and must not be substituted for the host path. Copy a granted host file into a writable workspace folder before modifying it.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

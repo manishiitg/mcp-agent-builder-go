@@ -13,7 +13,7 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   SQLite, and files its `CONCERNS:` lines into the structured finding lifecycle.
   The call returns an `execution_id` immediately. End the current turn, wait for
   the automatic completion notification, then load the persisted result with
-  `get_pulse_review_result` before the parent validates, reports, or records any
+  `get_pulse_state(view="review")` before the parent validates, reports, or records any
   outcome. Do not poll, sleep, or repeatedly call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config, write `builder/improve.html`, mark changelog entries, or mark Pulse module state.
 - Read only the matching Artifact Review cursor, open findings, and relevant

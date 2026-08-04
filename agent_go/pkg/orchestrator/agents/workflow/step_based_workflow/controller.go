@@ -1259,11 +1259,41 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildExecutionContext() *ExecutionCon
 		RunSingleStepOnly: hcpo.runSingleStepOnly,
 		SingleStepTarget:  hcpo.singleStepTarget,
 		IsEvaluationMode:  hcpo.isEvaluationMode,
+		HumanInputs:       cloneWorkflowStringMap(hcpo.humanInputOverrides),
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Built ExecutionContext: skipHumanInput=%v, runSingleStepOnly=%v, singleStepTarget=%d, isEvaluationMode=%v", execCtx.SkipHumanInput, execCtx.RunSingleStepOnly, execCtx.SingleStepTarget, execCtx.IsEvaluationMode))
 
 	return execCtx
+}
+
+// cloneWorkflowStringMap prevents per-run input maps from being shared between
+// the workshop tool call, controller state, and batch/step execution contexts.
+func cloneWorkflowStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+// executionContextForStep derives an isolated context for one step. A keyed
+// run_full_workflow human_inputs value becomes prompt context only for its
+// matching executable step (or the response for a matching human_input step).
+// An explicit execute_step(human_input=...) value remains higher priority.
+func executionContextForStep(base *ExecutionContext, stepID string) *ExecutionContext {
+	if base == nil {
+		return nil
+	}
+	scoped := *base
+	scoped.HumanInputs = cloneWorkflowStringMap(base.HumanInputs)
+	if strings.TrimSpace(scoped.WorkshopHumanInput) == "" {
+		scoped.WorkshopHumanInput = scoped.HumanInputs[strings.TrimSpace(stepID)]
+	}
+	return &scoped
 }
 
 // HasExecutionOptions checks if execution options are set

@@ -24,9 +24,7 @@ func toolSet(names []string) map[string]bool {
 func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 	surface := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
 	for _, required := range []string{
-		"get_pulse_module_state",
-		"get_pulse_finding_backlog",
-		"get_pulse_review_result",
+		"get_pulse_state",
 		"get_workflow_command_guidance",
 		"execute_shell_command",
 	} {
@@ -40,15 +38,13 @@ func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 }
 
 // TestPulseFixerSurfaceCannotImpersonateACompletePass pins what the Fixer is
-// deliberately denied. Recording a worklist would let it decide what was due;
-// marking final commands would let it declare a Pulse finished. Both belong to
-// Gate and the finalizer, and a fixer holding either could report a complete
-// pass it never ran.
+// deliberately denied. Recording a worklist would let it decide what was due,
+// which belongs to Gate, and a fixer holding it could report a complete pass it
+// never ran.
 func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
 	surface := toolSet(pulseFixerStageToolAgentAllowedToolNames())
 	for _, denied := range []string{
 		"record_pulse_worklist",
-		"mark_pulse_final_command_result",
 		"create_plan",
 		"delete_plan_steps",
 	} {
@@ -57,9 +53,8 @@ func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"start_pulse_fix_attempt",
-		"mark_pulse_module_result",
-		"get_pulse_finding_backlog",
+		"record_pulse_result",
+		"get_pulse_state",
 		"update_step_config",
 	} {
 		if !surface[required] {
@@ -82,7 +77,7 @@ func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
 func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
 	reviewer := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
 	fixer := toolSet(pulseFixerStageToolAgentAllowedToolNames())
-	for _, writer := range []string{"start_pulse_fix_attempt", "mark_pulse_module_result"} {
+	for _, writer := range []string{"record_pulse_result", "record_pulse_impact"} {
 		if reviewer[writer] {
 			t.Fatalf("reviewer surface holds %q, which it can never be authorized to call", writer)
 		}
@@ -91,7 +86,7 @@ func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
 		}
 	}
 	// Both read the backlog: reconciliation is a reviewer duty, not a fixer one.
-	for _, reader := range []string{"get_pulse_module_state", "get_pulse_finding_backlog"} {
+	for _, reader := range []string{"get_pulse_state"} {
 		if !reviewer[reader] || !fixer[reader] {
 			t.Fatalf("%q must be readable by both roles", reader)
 		}

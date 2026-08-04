@@ -646,12 +646,55 @@ export interface PulseReviewRecord {
   content_sha256?: string
   recorded_at: string
   markdown?: string
+  metrics?: PulseAgentMetricRecord
+}
+
+export interface PulseAgentMetricRecord {
+  id: number
+  execution_id: string
+  agent_session_id?: string
+  pulse_run_id?: string
+  review_run_id?: string
+  module: string
+  role: 'reviewer' | 'fixer'
+  status: string
+  queued_at?: string
+  started_at?: string
+  completed_at?: string
+  queue_duration_ms: number
+  duration_ms: number
+  llm_call_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  reasoning_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_cost_usd: number
+  models?: Record<string, {
+    prompt_tokens: number
+    completion_tokens: number
+    reasoning_tokens: number
+    cache_read_tokens: number
+    cache_write_tokens: number
+    total_cost_usd: number
+    call_count: number
+  }>
+  usage_status: 'captured' | 'unavailable'
+  usage_error?: string
+  recorded_at: string
 }
 
 export interface PulseReviewsResponse {
   success: boolean
   total?: number
   reviews: PulseReviewRecord[]
+  error?: string
+}
+
+export interface PulseAgentMetricsResponse {
+  success: boolean
+  total?: number
+  metrics: PulseAgentMetricRecord[]
   error?: string
 }
 
@@ -968,6 +1011,8 @@ export interface ListTerminalsResponse {
 // Active Session Management Types
 export interface ActiveSessionInfo {
   session_id: string
+  parent_session_id?: string
+  session_kind?: string
   observer_id: string
   agent_mode: string
   status: string // "running", "paused", "completed"

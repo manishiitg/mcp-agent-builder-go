@@ -124,19 +124,21 @@ type TokenUsageSummary struct {
 // Stores both raw integers and string-formatted millions (with "M" suffix)
 type ModelTokenUsage struct {
 	Provider          string `json:"provider"`
-	InputTokens       int    `json:"input_tokens"`         // raw count
-	OutputTokens      int    `json:"output_tokens"`        // raw count
-	InputTokensM      string `json:"input_tokens_m"`       // formatted as "17.016M"
-	OutputTokensM     string `json:"output_tokens_m"`      // formatted as "0.116M"
-	CacheTokens       int    `json:"cache_tokens"`         // raw count (total = read + write)
-	CacheTokensM      string `json:"cache_tokens_m"`       // formatted as "4.546M"
-	CacheReadTokens   int    `json:"cache_read_tokens"`    // tokens read from cache (discounted)
-	CacheReadTokensM  string `json:"cache_read_tokens_m"`  // formatted
-	CacheWriteTokens  int    `json:"cache_write_tokens"`   // tokens written to cache (premium)
-	CacheWriteTokensM string `json:"cache_write_tokens_m"` // formatted
-	ReasoningTokens   int    `json:"reasoning_tokens"`     // raw count
-	ReasoningTokensM  string `json:"reasoning_tokens_m"`   // formatted as "0.000M"
-	LLMCallCount      int    `json:"llm_call_count"`       // count
+	PricingModelID    string `json:"pricing_model_id,omitempty"` // immutable model identity used for rates
+	PricingVersion    string `json:"pricing_version,omitempty"`  // versioned rate-card contract
+	InputTokens       int    `json:"input_tokens"`               // raw count
+	OutputTokens      int    `json:"output_tokens"`              // raw count
+	InputTokensM      string `json:"input_tokens_m"`             // formatted as "17.016M"
+	OutputTokensM     string `json:"output_tokens_m"`            // formatted as "0.116M"
+	CacheTokens       int    `json:"cache_tokens"`               // raw count (total = read + write)
+	CacheTokensM      string `json:"cache_tokens_m"`             // formatted as "4.546M"
+	CacheReadTokens   int    `json:"cache_read_tokens"`          // tokens read from cache (discounted)
+	CacheReadTokensM  string `json:"cache_read_tokens_m"`        // formatted
+	CacheWriteTokens  int    `json:"cache_write_tokens"`         // tokens written to cache (premium)
+	CacheWriteTokensM string `json:"cache_write_tokens_m"`       // formatted
+	ReasoningTokens   int    `json:"reasoning_tokens"`           // raw count
+	ReasoningTokensM  string `json:"reasoning_tokens_m"`         // formatted as "0.000M"
+	LLMCallCount      int    `json:"llm_call_count"`             // count
 	// Pricing fields (in USD)
 	InputCost      float64 `json:"input_cost_usd,omitempty"`
 	OutputCost     float64 `json:"output_cost_usd,omitempty"`

@@ -962,7 +962,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PULSE GATE / WORKLIST",
-		"get_pulse_module_state",
+		`get_pulse_state(view="module")`,
 		"record_pulse_worklist exactly once",
 		"Gate owns the durable worklist and the cheap per-run goal observation checkpoint",
 		"record_pulse_impact",
@@ -1009,7 +1009,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"applies safe fixes sequentially",
 		"Bug fix",
 		`module="bug_review"`,
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(bugReview, want) {
 			t.Fatalf("bug-review step missing %q:\n%s", want, bugReview)
@@ -1024,7 +1024,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"read-only review separate from Bug Review",
 		"mark_changelog_artifact_reviewed",
 		"artifact drift",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(artifact, want) {
 			t.Fatalf("artifact step missing %q:\n%s", want, artifact)
@@ -1037,7 +1037,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"must not edit files",
 		"parent Pulse Fixer applies and verifies",
 		"Report fix",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(reportHealth, want) {
 			t.Fatalf("report health step missing %q:\n%s", want, reportHealth)
@@ -1053,7 +1053,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"stale-evidence rejection",
 		"existing human-input flow before changing goal meaning",
 		"Eval fix",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(evalHealth, want) {
 			t.Fatalf("eval health step missing %q:\n%s", want, evalHealth)
@@ -1069,7 +1069,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"never rewrite knowledgebase/context",
 		"db/README.md",
 		"parent Pulse Fixer",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 		`module="stores_health"`,
 	} {
 		if !strings.Contains(storesHealth, want) {
@@ -1126,7 +1126,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"bounded missing pieces or corrections within the current strategy",
 		"Do not wait for or consume Bug Review, Artifact Review, or Goal Advisor conclusions",
 		`module="strategy_auditor"`,
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(strategyAuditor, want) {
 			t.Fatalf("strategy auditor step missing %q:\n%s", want, strategyAuditor)
@@ -1155,7 +1155,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		// that used to rewrite this into per-module language is gone, so the
 		// prompt the reviewer receives is the one written in the source.
 		"The parent Pulse Fixer consolidates advisor and critic results",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 	} {
 		if !strings.Contains(goalAdvisor, want) {
 			t.Fatalf("goal advisor step missing %q:\n%s", want, goalAdvisor)
@@ -1165,16 +1165,27 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"PULSE DASHBOARD",
 		"This stage alone owns Pulse render",
 		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"get_pulse_finding_backlog without a module filter",
+		`get_pulse_state(view="backlog") without a module filter`,
 		"builder/improve.html",
 		"builder/card.health.html",
-		"8 unique canonical coverage data-module ids",
-		"all 5 outcome cells",
-		`data-source="sqlite" Current work summary`,
-		"Important now/Needs verification queues",
-		"sibling collapsed technical-details section",
+		"3 unique canonical coverage data-module ids",
+		"exactly 3 Latest Pulse cells",
+		`data-source="sqlite" Current work count strip`,
+		"Open/Fixing/Verify",
+		"no duplicated operational-detail sections",
 		"#pulse-agent-handoff[data-pulse-run-id]",
 		`command="dashboard"`,
+		// The prompt used to say "mark command=dashboard done" without naming a
+		// tool. On 2026-08-04 the dashboard stage rendered correctly, then
+		// reached for mutate_workflow_db to write pulse_final_command_state
+		// directly — a reasonable guess, and the wrong one, since that table is
+		// framework-owned and the session has no db_access=read-write grant. The
+		// stage never called the sanctioned command API, and
+		// reconcilePulseDashboardCommand then marked the whole stage failed even
+		// though the render was correct. The finalize step below already names
+		// record_pulse_result explicitly; this closes the same gap here.
+		`record_pulse_result(command="dashboard"`,
+		"never mutate_workflow_db or direct SQL for it",
 	} {
 		if !strings.Contains(dashboard, want) {
 			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
@@ -1185,7 +1196,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"confirm every due module",
 		"never treat missing as success",
 		"in that order in this one turn",
-		"mark_pulse_final_command_result",
+		"record_pulse_result(command=...)",
 		"dedicated Dashboard stage",
 		"do not rewrite them",
 		"Backup",
@@ -2150,7 +2161,7 @@ func TestPostRunMonitorPrependsCompactPulseReportUpgradeForVersion117Manifest(t 
 	for _, want := range []string{
 		"WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18",
 		`data-pulse-schema="3"`,
-		"get_pulse_finding_backlog without a module filter",
+		`get_pulse_state(view="backlog") without a module filter`,
 		`data-source="sqlite" Current work`,
 		"Important now",
 		"Needs verification",
@@ -2251,12 +2262,12 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("selected labels = %#v, want %#v", got, want)
 	}
 	for index, module := range []string{pulseModuleWorkflowReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
-		query := steps[index+1].query
+		query := steps[index].query
 		for _, required := range []string{
 			`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`,
 			`module="` + module + `"`,
@@ -2270,7 +2281,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 		}
 	}
 	fixer := steps[len(steps)-3].query
-	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, "short priority-ordered repair list", "mark_pulse_module_result exactly once for every due module"} {
+	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, `references/pulse-fixer-practices.md`, `references/fix-verification.md`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
 		if !strings.Contains(fixer, required) {
 			t.Fatalf("consolidated Fixer prompt missing %q: %s", required, fixer)
 		}
@@ -2402,11 +2413,11 @@ func TestGateDurableWorklistRoutesModulesWithoutHTML(t *testing.T) {
 
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	if got, want := strings.Join(postRunStepLabels(steps), ","), "pre-backup,workflow-review,pulse-fixer,dashboard,finalize"; got != want {
+	if got, want := strings.Join(postRunStepLabels(steps), ","), "workflow-review,pulse-fixer,dashboard,finalize"; got != want {
 		t.Fatalf("selected labels = %q, want %q", got, want)
 	}
-	if !strings.Contains(steps[1].query, `module="workflow_review"`) {
-		t.Fatalf("durable due module was not routed: %s", steps[1].query)
+	if !strings.Contains(steps[0].query, `module="workflow_review"`) {
+		t.Fatalf("durable due module was not routed: %s", steps[0].query)
 	}
 }
 
@@ -2430,15 +2441,16 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 			t.Fatalf("independent prompt missing %q:\n%s", required, step.query)
 		}
 	}
-	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — WORKFLOW REVIEW", "one continuous context"} {
+	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — WORKFLOW REVIEW", "backend attaches the canonical", "one agent, one MCP session"} {
 		if !strings.Contains(step.query, required) {
 			t.Fatalf("independent prompt missing module brief %q", required)
 		}
 	}
-	for _, required := range []string{`message_sequence=[`, `"id":"correctness"`, `"id":"artifact-drift"`, `"id":"report-eval"`, `"id":"stores"`, `"id":"llm-ops"`, `"id":"consolidate"`, "one agent, one MCP session"} {
-		if !strings.Contains(step.query, required) {
-			t.Fatalf("independent workflow review prompt missing sequence contract %q", required)
-		}
+	if strings.Contains(step.query, `message_sequence=[`) {
+		t.Fatalf("scheduler duplicated the backend-owned sequence in its user message:\n%s", step.query)
+	}
+	if len(step.query) > 3000 {
+		t.Fatalf("workflow reviewer launcher prompt is %d bytes, want <= 3000", len(step.query))
 	}
 	for _, forbidden := range []string{"PULSE CONSOLIDATED REVIEW", "batches of at most two"} {
 		if strings.Contains(step.query, forbidden) {
@@ -2447,11 +2459,22 @@ func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) 
 	}
 }
 
+func TestApplyPulseReviewerChildSessionPinsParentAndKind(t *testing.T) {
+	req := map[string]interface{}{"query": "review"}
+	applyPulseReviewerChildSession(req, " pulse-root-1 ")
+
+	if got := req["parent_session_id"]; got != "pulse-root-1" {
+		t.Fatalf("parent_session_id = %#v, want pulse-root-1", got)
+	}
+	if got := req["session_kind"]; got != "pulse_reviewer" {
+		t.Fatalf("session_kind = %#v, want pulse_reviewer", got)
+	}
+}
+
 func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	intro := postRunMonitorIntro("trigger=manual", "Workflow/demo", "pulse-run-1", "completed", "runs/iteration-0")
 	archive := postRunMonitorArchiveStep(pulseImproveArchiveAssessment{Due: true, TimelineEntries: 24, RecentRunRows: 7}).query
 	gate := postRunMonitorGateStep("pulse-run-1", "runs/iteration-0", "completed").query
-	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
 	moduleStep, ok := postRunMonitorIndependentModuleStep("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", pulseModuleWorkflowReview)
 	if !ok {
 		t.Fatal("workflow review module step was not found")
@@ -2460,8 +2483,7 @@ func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
 	dashboard := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "dashboard")
 
 	for name, prompt := range map[string]string{
-		"intro":      intro,
-		"pre-backup": preBackup,
+		"intro": intro,
 	} {
 		if strings.TrimSpace(prompt) == "" {
 			t.Fatalf("%s scheduler prompt is empty", name)
@@ -2518,14 +2540,8 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 	}
 }
 
-func TestPulseBackupRunsOnlyInParentTurn(t *testing.T) {
-	preBackup := postRunMonitorPreBackupStep("pulse-run-1").query
+func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
 	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
-	for _, required := range []string{"directly in this parent turn", "never delegate Git/backup work", `read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}])`} {
-		if !strings.Contains(preBackup, required) {
-			t.Fatalf("pre-backup message missing parent-only backup guard %q", required)
-		}
-	}
 	if !strings.Contains(finalizer, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-finalizer.md"}])`) {
 		t.Fatalf("finalizer does not load its focused contract: %s", finalizer)
 	}
@@ -2614,7 +2630,7 @@ func TestSelectedPostRunMonitorModuleStepsFallsBackForPartialWorklist(t *testing
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "workflow-review", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"workflow-review", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}
@@ -2646,7 +2662,7 @@ func TestSelectedPostRunMonitorModuleStepsPartialWorklistKeepsDueGoalAdvisor(t *
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"pre-backup", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"goal-advisor", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
 	}
@@ -3972,4 +3988,32 @@ func pulseStepQueryByLabel(t *testing.T, steps []postRunMonitorStep, label strin
 	}
 	t.Fatalf("no %q stage in final steps", label)
 	return ""
+}
+
+// The dashboard stage used to say "mark command=dashboard done" without naming
+// a tool, unlike the finalize stage right below it, which spells out
+// record_pulse_result(command=...) explicitly. On 2026-08-04 rtslatency's
+// dashboard stage rendered builder/improve.html correctly, then reached for
+// mutate_workflow_db to write pulse_final_command_state directly — a
+// reasonable guess for "mark this row," and the wrong one: that table is
+// framework-owned bookkeeping, mutate_workflow_db correctly denied a session
+// without db_access=read-write, and the stage ended without ever calling the
+// sanctioned command API. reconcilePulseDashboardCommand then marked the
+// whole stage failed even though the render was correct.
+//
+// This test is deliberately independent of
+// TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer, whose detailed
+// per-stage assertions are currently unreachable dead code after a premature
+// return partway through that function (a concurrent, unrelated in-progress
+// edit — see the go vet "unreachable code" flag at this file's line 787).
+func TestPulseDashboardStagePromptNamesTheCommandTool(t *testing.T) {
+	dashboard := pulseStepQueryByLabel(t, postRunMonitorSteps(), "dashboard")
+	for _, want := range []string{
+		`record_pulse_result(command="dashboard"`,
+		"never mutate_workflow_db or direct SQL for it",
+	} {
+		if !strings.Contains(dashboard, want) {
+			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
+		}
+	}
 }

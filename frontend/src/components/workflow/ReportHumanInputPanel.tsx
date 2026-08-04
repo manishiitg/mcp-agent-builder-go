@@ -8,6 +8,7 @@ import {
   reportHumanInputHistory,
   reportHumanInputStatusLabel,
 } from '../../utils/reportHumanInputFormatting'
+import { sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
 import { useContainerSizeTier } from './reportWidgets/tableHelpers'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
@@ -15,6 +16,9 @@ type ReportHumanInputDraft = {
   selectedOptionId: string
   note: string
   submitting?: boolean
+  chatQuestion?: string
+  chatOpen?: boolean
+  askingInChat?: boolean
 }
 
 function sourceLabel(source: string): string {
@@ -226,6 +230,32 @@ export function ReportHumanInputPanel({
     }
   }
 
+  const askInChat = async (input: ReportHumanInput) => {
+    const question = drafts[input.id]?.chatQuestion?.trim() || ''
+    if (!question) {
+      useChatStore.getState().addToast('Write a question before opening chat.', 'error')
+      return
+    }
+
+    updateDraft(input.id, { askingInChat: true })
+    try {
+      const result = await sendReportHumanInputQuestionToChat({ input, workspacePath, userQuestion: question })
+      useChatStore.getState().addToast(
+        result.queuedBehindRunningTurn
+          ? 'Question added to the chat and queued behind the current turn.'
+          : result.reused
+            ? 'Question sent to the existing chat.'
+            : 'New chat opened and your question was sent.',
+        'success',
+      )
+      updateDraft(input.id, { chatQuestion: '', chatOpen: false })
+    } catch (err) {
+      useChatStore.getState().addToast(err instanceof Error ? err.message : 'Failed to send the question to chat.', 'error')
+    } finally {
+      updateDraft(input.id, { askingInChat: false })
+    }
+  }
+
   const renderHistoryRows = () => (
     <div className="grid gap-1.5">
       {history.map(input => {
@@ -368,7 +398,9 @@ export function ReportHumanInputPanel({
       <div className="mt-3 flex flex-col gap-2">
         {pending.map(input => {
           const draft = drafts[input.id] || { selectedOptionId: '', note: '' }
-          const busy = Boolean(draft.submitting)
+          const submitting = Boolean(draft.submitting)
+          const askingInChat = Boolean(draft.askingInChat)
+          const busy = submitting || askingInChat
           return (
             <article key={input.id} className="rounded-md border border-border/70 bg-background/75 p-3">
               <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -428,6 +460,49 @@ export function ReportHumanInputPanel({
                   className="mt-3 min-h-20 w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-cyan-400"
                 />
               )}
+              {draft.chatOpen && (
+                <div className="mt-3 rounded-md border border-cyan-400/25 bg-cyan-400/[0.05] p-2.5">
+                  <label htmlFor={`report-human-input-chat-${input.id}`} className="block text-xs font-semibold text-foreground">
+                    What do you want to ask?
+                  </label>
+                  <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                    The decision and its context will be included. Asking does not save or dismiss the decision.
+                  </p>
+                  <textarea
+                    id={`report-human-input-chat-${input.id}`}
+                    autoFocus
+                    value={draft.chatQuestion || ''}
+                    onChange={event => updateDraft(input.id, { chatQuestion: event.target.value })}
+                    onKeyDown={event => {
+                      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                        event.preventDefault()
+                        void askInChat(input)
+                      }
+                    }}
+                    placeholder="Ask what you want to understand before deciding"
+                    className="mt-2 min-h-20 w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-cyan-400"
+                  />
+                  <div className="mt-2 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateDraft(input.id, { chatOpen: false })}
+                      disabled={askingInChat}
+                      className="inline-flex h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void askInChat(input)}
+                      disabled={askingInChat || !(draft.chatQuestion || '').trim()}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/25 disabled:opacity-50"
+                    >
+                      {askingInChat ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="h-3.5 w-3.5" />}
+                      Send to chat
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
@@ -440,11 +515,21 @@ export function ReportHumanInputPanel({
                 </button>
                 <button
                   type="button"
+                  onClick={() => updateDraft(input.id, { chatOpen: !draft.chatOpen })}
+                  disabled={busy}
+                  aria-expanded={Boolean(draft.chatOpen)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:border-cyan-400/40 hover:bg-cyan-400/[0.06] disabled:opacity-50"
+                >
+                  <MessageSquareText className="h-3.5 w-3.5" />
+                  Ask in chat
+                </button>
+                <button
+                  type="button"
                   onClick={() => void answerInput(input)}
                   disabled={busy}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/25 disabled:opacity-50"
                 >
-                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                  {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                   Save answer
                 </button>
               </div>

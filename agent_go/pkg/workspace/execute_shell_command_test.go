@@ -518,6 +518,47 @@ func TestExecuteShellCommandPreservesReadOnlySessionGuard(t *testing.T) {
 	}
 }
 
+func TestExecuteShellCommandSessionEnvOverridesParentMCPRoute(t *testing.T) {
+	const sessionID = "pulse-fixer-child-session"
+	common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
+	common.SetSessionShellEnv(sessionID, map[string]string{
+		"MCP_SESSION_ID": sessionID,
+		"MCP_API_URL":    "http://127.0.0.1:45678/s/" + sessionID,
+	})
+	defer ClearSessionShellConfig(sessionID)
+
+	var got ExecuteShellCommandParams
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    map[string]interface{}{"stdout": "ok", "exit_code": 0},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithExtraEnv(map[string]string{
+		"MCP_SESSION_ID": "parent-workshop-session",
+		"MCP_API_URL":    "http://127.0.0.1:45678/s/parent-workshop-session",
+		"MCP_API_TOKEN":  "test-token",
+	}))
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	if _, err := client.ExecuteShellCommand(ctx, ExecuteShellCommandParams{Command: "printf ok"}); err != nil {
+		t.Fatalf("ExecuteShellCommand error: %v", err)
+	}
+	for key, want := range map[string]string{
+		"MCP_SESSION_ID": sessionID,
+		"MCP_API_URL":    "http://127.0.0.1:45678/s/" + sessionID,
+		"MCP_CUSTOM":     "http://127.0.0.1:45678/s/" + sessionID + "/tools/custom",
+		"MCP_AUTH":       "Authorization: Bearer test-token",
+	} {
+		if value := got.ExtraEnv[key]; value != want {
+			t.Fatalf("%s = %q, want %q (env=%#v)", key, value, want, got.ExtraEnv)
+		}
+	}
+}
+
 func TestExecuteShellCommandRejectsExplicitEmptySessionGuard(t *testing.T) {
 	sessionID := "test-empty-shell-guard"
 	common.SetSessionFolderGuard(sessionID, []string{}, []string{})

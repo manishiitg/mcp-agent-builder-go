@@ -153,15 +153,15 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_review_result.\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_finding_backlog for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_module_state for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
-		artifactContract += "LIFECYCLE HISTORY: call get_pulse_finding_backlog for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract += "LIFECYCLE HISTORY: call get_pulse_state(view=\"backlog\") for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
 }
 
 func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
 	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
-	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Use start_pulse_fix_attempt for each actionable bundle before mutation; that attempt is the durable queue record and must link every affected finding. Process verification outcomes first, then repairs, sequentially. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
+	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Process verification outcomes first, then repairs, sequentially. The backend opens the durable fix-attempt record from the disposition you write, so there is no attempt to declare and no attempt_id to carry. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
 	return scope + queue + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
 }
 
@@ -197,10 +197,30 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
+func canonicalWorkflowReviewMessageSequence() []backgroundMessageSequenceItem {
+	return []backgroundMessageSequenceItem{
+		{ID: "correctness", Title: "Correctness and verification", Message: "Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
+		{ID: "artifact-drift", Title: "Plan and artifact drift", Message: "Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
+		{ID: "report-eval", Title: "Report and eval truthfulness", Message: "Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+		{ID: "stores", Title: "Stores contracts", Message: "Continue in the same context. Review learnings, knowledgebase, and database contracts, freshness, consumers, and integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
+		{ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
+		{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."},
+	}
+}
+
+func defaultBackgroundMessageSequence(args map[string]interface{}) []backgroundMessageSequenceItem {
+	role, _ := args["role"].(string)
+	module, _ := args["module"].(string)
+	if strings.EqualFold(strings.TrimSpace(role), "reviewer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
+		return canonicalWorkflowReviewMessageSequence()
+	}
+	return nil
+}
+
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
-		return nil, nil
+		return defaultBackgroundMessageSequence(args), nil
 	}
 	items, ok := raw.([]interface{})
 	if !ok {
@@ -249,7 +269,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    maxBackgroundMessageSequenceItems,
-		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Use this when later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for role=reviewer, module=workflow_review: the backend supplies that module's canonical six follow-ups. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
 		"items": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -303,15 +323,18 @@ func executeBackgroundMessageSequence(
 	return result, nil
 }
 
-func validatePulseReviewIdentity(reviewRunID, module string) error {
+// ValidatePulseReviewIdentity rejects a review identity that cannot name a
+// saved review. It is exported because the review read is served by the shared
+// get_pulse_state tool in the server tool pool, not by a workshop-local tool.
+func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 	reviewRunID = strings.TrimSpace(reviewRunID)
 	module = strings.TrimSpace(module)
 	separator := strings.IndexByte(reviewRunID, '_')
 	if separator <= 0 {
-		return fmt.Errorf("review_run_id must start with a UTC date-time and underscore")
+		return fmt.Errorf("review_run_id %q must start with a UTC date-time and an underscore, e.g. 2026-08-01T00-00-00.000Z_<suffix>; use the id exactly as reported by the reviewer completion notification", reviewRunID)
 	}
 	if _, err := time.Parse("2006-01-02T15-04-05.000Z", reviewRunID[:separator]); err != nil {
-		return fmt.Errorf("review_run_id must start with YYYY-MM-DDTHH-MM-SS.mmmZ: %w", err)
+		return fmt.Errorf("review_run_id %q must start with YYYY-MM-DDTHH-MM-SS.mmmZ: %w", reviewRunID, err)
 	}
 	for _, r := range reviewRunID {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
@@ -331,13 +354,14 @@ func validatePulseReviewIdentity(reviewRunID, module string) error {
 		}
 	}
 	if !valid {
-		return fmt.Errorf("module %q is not a valid Pulse review module", module)
+		return fmt.Errorf("module %q is not a valid Pulse review module. Must be one of: %s",
+			module, strings.Join(pulsemodules.AcceptedForReviewArtifacts(), ", "))
 	}
 	return nil
 }
 
 func pulseReviewResultPath(reviewRunID, module string) (string, error) {
-	if err := validatePulseReviewIdentity(reviewRunID, module); err != nil {
+	if err := ValidatePulseReviewIdentity(reviewRunID, module); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("pulse_review_log:%s:%s", reviewRunID, module), nil
@@ -1465,6 +1489,12 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"agent_browser",
 		// mcpagent virtual tools (get_api_spec, get_prompt, get_resource)
 		"get_api_spec", "get_prompt", "get_resource",
+		// Read-only LLM capability discovery. The prompts instruct agents to check
+		// capabilities before pinning a provider/model, and llm-selection.md leans on
+		// it, but the allow-list never granted it — so a real, registered tool was
+		// rejected as "not available in the current workshop mode". Registration and
+		// this list live in different files, which is how they drifted.
+		"list_llm_capabilities",
 		// Sub-agent execution tools — used by execution agents running inside steps.
 		// These must always be allowed because SetToolAllowList also gates the code
 		// execution registry (HTTP calls), which blocks execution agents from calling
@@ -1554,16 +1584,12 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// workshop mode. Run mode can inspect outcomes, but should not mutate the
 	// dynamic Pulse worklist/result state.
 	pulseState := []string{
-		"get_pulse_module_state",
-		"get_pulse_finding_backlog",
-		"get_pulse_review_result",
+		"get_pulse_state",
 		"begin_pulse_fixer_run",
 		"record_pulse_worklist",
-		"start_pulse_fix_attempt",
-		"mark_pulse_module_result",
+		"record_pulse_result",
 		"record_pulse_impact",
 		"resolve_run_concern",
-		"mark_pulse_final_command_result",
 		"mark_changelog_artifact_reviewed",
 	}
 
@@ -1702,6 +1728,15 @@ func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
 		// claim a grant mcpagent already guarantees.
 		"get_workflow_command_guidance",
 
+		// Tool-surface discovery. The allow-list gates the code-execution bridge
+		// too, and it is checked before get_api_spec can reach its virtual-tool
+		// partition — so omitting it left every stage agent unable to find out
+		// which tools it actually has. That turns any denial into a guess: on
+		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
+		// surface and concluded its session was in the wrong workshop mode.
+		// Discovery grants no capability this list does not already grant.
+		"get_api_spec",
+
 		// Read-only workflow state.
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
@@ -1722,12 +1757,13 @@ func goalAdvisorFinalizerProposalToolAgentAllowedToolNames() []string {
 // mutation tools it needs to repair a workflow, plus the lifecycle writers that
 // record what it did.
 //
-// It deliberately omits record_pulse_worklist and mark_pulse_final_command_result.
-// A fixer stage must not decide which modules are due or declare a Pulse
-// finished — those stay with Gate and the finalizer, so a fixer child cannot
-// impersonate a complete pass. It also omits create_plan and the step add/delete
-// tools: reshaping the plan is a Goal Advisor decision under explicit approval,
-// not something a bounded repair reaches for.
+// It deliberately omits record_pulse_worklist. A fixer stage must not decide
+// which modules are due, so a fixer child cannot impersonate a complete pass.
+// Declaring a Pulse finished is likewise not its job: record_pulse_result is
+// granted for module results, and the finalizer stage is the only caller told to
+// use its command form. It also omits create_plan and the step add/delete tools:
+// reshaping the plan is a Goal Advisor decision under explicit approval, not
+// something a bounded repair reaches for.
 func pulseFixerStageToolAgentAllowedToolNames() []string {
 	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
 	tools = append(tools,
@@ -1737,15 +1773,23 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		"update_step_config", "update_validation_schema", "update_evaluation_plan", "validate_evaluation_plan",
 		"update_variable", "update_workflow_config",
 
-		// Durable finding lifecycle: read the backlog, open an attempt before
-		// mutating, then record one honest disposition per finding.
-		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
-		"start_pulse_fix_attempt", "mark_pulse_module_result", "record_pulse_impact", "resolve_run_concern",
+		// Durable finding lifecycle: read module state, the backlog, and saved
+		// reviews, then record one honest disposition per finding.
+		"get_pulse_state",
+		"record_pulse_result", "record_pulse_impact", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
 		// Write access to the workflow database. Reading it (query_workflow_db)
 		// and read_skill come from the common list every agent inherits; only the
 		// single writer gets mutate.
 		"mutate_workflow_db",
+
+		// Scheduler repair. pulse-fixer-practices.md gives this agent a
+		// "Scheduler and lifecycle repair" section, so withholding the schedule
+		// tools made its own instructions unfollowable — it burned four calls on
+		// update_schedule and reported the workflow unchanged. Creating and
+		// deleting schedules stay out: those reshape the run surface, which is a
+		// Workshop decision, not a bounded repair.
+		"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule",
 	)
 	return tools
 }
@@ -1802,6 +1846,15 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		// claim a grant mcpagent already guarantees.
 		"get_workflow_command_guidance",
 
+		// Tool-surface discovery. The allow-list gates the code-execution bridge
+		// too, and it is checked before get_api_spec can reach its virtual-tool
+		// partition — so omitting it left every stage agent unable to find out
+		// which tools it actually has. That turns any denial into a guess: on
+		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
+		// surface and concluded its session was in the wrong workshop mode.
+		// Discovery grants no capability this list does not already grant.
+		"get_api_spec",
+
 		// Read-only workflow state and report inspection.
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
@@ -1811,7 +1864,7 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		// against what is already tracked, so it needs to read the lifecycle —
 		// including saved reviews, which is how it tells a recurrence from a
 		// genuinely new finding.
-		"get_pulse_module_state", "get_pulse_finding_backlog", "get_pulse_review_result",
+		"get_pulse_state",
 	}
 }
 
@@ -2247,6 +2300,7 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
+	configureWorkshopToolAgentBridgeSession(sessionID)
 	dbAccess := DBAccessRead
 	if dbWritePathGranted(writePaths, workspacePath) {
 		dbAccess = DBAccessReadWrite
@@ -2266,6 +2320,73 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 		sessionID, agentKind, workspacePath, readPaths, writePaths, blockedWrites,
 	))
 	return sessionID
+}
+
+// configureWorkshopToolAgentBridgeSession makes shell-originated bridge calls
+// use the same child MCP session as direct tool calls. Without this override,
+// execute_shell_command inherits the long-lived workshop client's MCP URL. A
+// nested curl to mutate_workflow_db is then attributed to the parent session,
+// even though the child owns the folder guard and DB capability.
+func configureWorkshopToolAgentBridgeSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	env := map[string]string{"MCP_SESSION_ID": sessionID}
+	if scopedURL := buildSessionScopedMCPAPIURL(sessionID); scopedURL != "" {
+		env["MCP_API_URL"] = scopedURL
+	}
+	common.PopulateMCPBridgeShortEnv(env)
+	common.SetSessionShellEnv(sessionID, env)
+}
+
+func pulseFixerDBCapabilityPreflight(
+	sessionID string,
+	workspacePath string,
+	tools []llmtypes.Tool,
+	executors map[string]interface{},
+) error {
+	sessionID = strings.TrimSpace(sessionID)
+	workspacePath = strings.TrimSpace(workspacePath)
+	if sessionID == "" || workspacePath == "" {
+		return fmt.Errorf("Pulse Fixer DB capability preflight requires a session and workspace")
+	}
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || !cfg.FolderGuardSet {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has no folder guard", sessionID)
+	}
+	if !dbWritePathGranted(cfg.WritePaths, workspacePath) {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q lacks workflow DB write scope", sessionID)
+	}
+	if got := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); got != DBAccessReadWrite {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has db_access=%q, want %q", sessionID, got, DBAccessReadWrite)
+	}
+	if got := strings.TrimSpace(cfg.Env["MCP_SESSION_ID"]); got != sessionID {
+		return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge session=%q, want %q", got, sessionID)
+	}
+	if scopedURL := buildSessionScopedMCPAPIURL(sessionID); scopedURL != "" {
+		if got := strings.TrimSpace(cfg.Env["MCP_API_URL"]); got != scopedURL {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge URL=%q, want %q", got, scopedURL)
+		}
+	}
+
+	hasTool := func(name string) bool {
+		for _, tool := range tools {
+			if tool.Function != nil && tool.Function.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
+		if !hasTool(name) {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: required tool %q is not registered", name)
+		}
+		if executor, ok := executors[name]; !ok || executor == nil {
+			return fmt.Errorf("Pulse Fixer DB capability preflight: required executor %q is unavailable", name)
+		}
+	}
+	return nil
 }
 
 // workshopBlockedWritePaths denies writes to canonical files that must only
@@ -2999,24 +3120,8 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent Defini
 				return "no run folder selected; pass run_folder like 'iteration-0/group-1'", nil
 			}
 
-			var tokenFile *orchestrator.TokenUsageFile
+			tokenFile := iwm.controller.GetRunTokenUsageFile(ctx, runFolder)
 			runMissingReason := ""
-			if strings.TrimSpace(runFolder) == strings.TrimSpace(iwm.controller.selectedRunFolder) {
-				tokenFile = iwm.controller.GetCurrentRunTokenUsageFile()
-			} else {
-				tokenPath := filepath.ToSlash(filepath.Join("runs", runFolder, "token_usage.json"))
-				tokenContent, err := iwm.controller.ReadWorkspaceFile(ctx, tokenPath)
-				if err != nil {
-					runMissingReason = fmt.Sprintf("missing evidence: no run token usage data found at %s", tokenPath)
-				} else {
-					var parsed orchestrator.TokenUsageFile
-					if err := json.Unmarshal([]byte(tokenContent), &parsed); err != nil {
-						runMissingReason = fmt.Sprintf("missing evidence: failed to parse %s: %v", tokenPath, err)
-					} else {
-						tokenFile = &parsed
-					}
-				}
-			}
 			if tokenFile == nil || len(tokenFile.ByModel) == 0 && len(tokenFile.ByStepAndModel) == 0 {
 				if runMissingReason == "" {
 					runMissingReason = fmt.Sprintf("missing evidence: no run token usage data found for %s", runFolder)
@@ -3870,6 +3975,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			reviewExecID := fmt.Sprintf("%s-%s-%d", executionPrefix, sanitizeWorkshopAgentIdentityPart(todoID), time.Now().UnixNano())
 			agentSessionID := fmt.Sprintf("workshop-review-%d", time.Now().UnixNano())
+			queuedAt := time.Now().UTC()
 			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
 			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
 			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
@@ -3977,6 +4083,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			go func() {
 				var toolResult string
 				var toolErr error
+				var stageStartedAt time.Time
 				// Finalize and notify before releasing the execution context. Calling
 				// cancel first would misclassify a successful completion as cancelled.
 				defer cancel()
@@ -3994,6 +4101,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						}
 						defer func() { <-iwm.pulseReviewerSlots }()
 					}
+					stageStartedAt = time.Now().UTC()
 
 					var incompleteErr error
 					for attempt := 1; attempt <= 2; attempt++ {
@@ -4041,8 +4149,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							// one that never finds anything, and its next choice is a guess.
 							// Recorded here rather than by the Fixer: reviews that found live
 							// breakages have gone entirely unrecorded because the Fixer never
-							// called mark_pulse_module_result.
-							return fmt.Sprintf("Pulse reviewer completed and was persisted in SQLite.\nmodule: %s\nreview_run_id: %s\nCall get_pulse_review_result(review_run_id=%q, module=%q) before applying or recording fixes.", module, reviewRunID, reviewRunID, module), nil
+							// called record_pulse_result.
+							return fmt.Sprintf("Pulse reviewer completed and was persisted in SQLite.\nmodule: %s\nreview_run_id: %s\nCall get_pulse_state(view=\"review\", review_run_id=%q, module=%q) before applying or recording fixes.", module, reviewRunID, reviewRunID, module), nil
 						}
 						incompleteErr = completionErr
 						logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned incomplete output: %v", todoID, attempt, completionErr))
@@ -4056,6 +4164,40 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 					return "", finalErr
 				}()
+				if isPulseStage {
+					completedAt := time.Now().UTC()
+					status := "completed"
+					if toolErr != nil {
+						status = "failed"
+					}
+					queueDuration := completedAt.Sub(queuedAt)
+					duration := time.Duration(0)
+					startedAtText := ""
+					if !stageStartedAt.IsZero() {
+						queueDuration = stageStartedAt.Sub(queuedAt)
+						duration = completedAt.Sub(stageStartedAt)
+						startedAtText = stageStartedAt.Format(time.RFC3339Nano)
+					}
+					metricCtx, metricCancel := pulseReviewerPersistenceContext(execCtx)
+					metricErr := RecordPulseAgentMetric(metricCtx, workspacePath, PulseAgentMetricRecord{
+						ExecutionID:     reviewExecID,
+						AgentSessionID:  agentSessionID,
+						PulseRunID:      pulseRunID,
+						ReviewRunID:     reviewRunID,
+						Module:          module,
+						Role:            role,
+						Status:          status,
+						QueuedAt:        queuedAt.Format(time.RFC3339Nano),
+						StartedAt:       startedAtText,
+						CompletedAt:     completedAt.Format(time.RFC3339Nano),
+						QueueDurationMS: queueDuration.Milliseconds(),
+						DurationMS:      duration.Milliseconds(),
+					})
+					metricCancel()
+					if metricErr != nil {
+						logger.Warn(fmt.Sprintf("⚠️ Failed to persist Pulse agent metrics for %s: %v", reviewExecID, metricErr))
+					}
+				}
 			}()
 
 			logger.Info(fmt.Sprintf("🚀 Workshop: %s started asynchronously, execution_id=%q", strings.ToLower(reviewName), reviewExecID))
@@ -4066,67 +4208,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop call_generic_agent tool: %v", err))
 	}
 
-	if err := mcpAgent.RegisterCustomTool(
-		"get_pulse_review_result",
-		"Load one Pulse review from SQLite as JSON with markdown and validated structured verifications. Call this after the asynchronous call_generic_agent completion notification supplies its review_run_id and module. Pulse review Markdown files are no longer created.",
-		map[string]interface{}{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]interface{}{
-				"review_run_id": map[string]interface{}{"type": "string"},
-				"module":        map[string]interface{}{"type": "string"},
-			},
-			"required": []string{"review_run_id", "module"},
-		},
-		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			reviewRunID, _ := args["review_run_id"].(string)
-			module, _ := args["module"].(string)
-			if err := validatePulseReviewIdentity(strings.TrimSpace(reviewRunID), strings.TrimSpace(module)); err != nil {
-				return "", err
-			}
-			artifact, err := LoadPulseReviewArtifactForRun(
-				ctx, iwm.controller.GetWorkspacePath(), reviewRunID, module,
-			)
-			if errors.Is(err, sql.ErrNoRows) {
-				// The reviewer is asynchronous, so "not saved yet" is an ordinary
-				// state, not a defect. Returning the raw driver string told the
-				// agent nothing it could act on — 10 of these in one run, across
-				// two Pulse sessions, each followed by a blind retry. Name the
-				// identity that missed and the two things that actually explain
-				// it.
-				return "", fmt.Errorf(
-					"no saved Pulse review yet for review_run_id=%q module=%q. "+
-						"The reviewer persists its result only when it finishes, so either it is still running "+
-						"— resume from its completion notification rather than polling — or this identity pair is wrong. "+
-						"Use the review_run_id and module exactly as reported by the call_generic_agent completion notification",
-					reviewRunID, module,
-				)
-			}
-			if err != nil {
-				return "", err
-			}
-			payload, err := json.Marshal(map[string]interface{}{
-				"module":        artifact.Module,
-				"review_run_id": artifact.ReviewRunID,
-				"pulse_run_id":  artifact.PulseRunID,
-				"status":        artifact.Status,
-				"verifications": artifact.Verifications,
-				"markdown":      artifact.Markdown,
-			})
-			if err != nil {
-				return "", err
-			}
-			return string(payload), nil
-		},
-		"workflow",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop get_pulse_review_result tool: %v", err))
-	}
-
 	// Tool: run_goal_advisor_review — dedicated strategic review background pipeline.
 	if err := mcpAgent.RegisterCustomTool(
 		"run_goal_advisor_review",
-		"Start the dedicated background Goal Advisor pipeline. Use this for Pulse-selected strategic review: goal recovery, healthy 10x/headroom exploration, advancing or measuring the one active advisor experiment, approved proposal application, and Chief of Staff strategic recommendations. The pipeline runs advisor -> critic -> finalizer in separate background agents. It is analysis-first: advisor and critic never format HTML, and the finalizer may make only one bounded in-place Advisor log update when state materially changes. The durable experiment lifecycle lives in builder/improve.html; the parent Pulse turn should capture the returned execution_id and end its turn. Automatic completion notification will resume the session so it can record mark_pulse_module_result; do not poll query_step/list_executions while waiting.",
+		"Start the dedicated background Goal Advisor pipeline. Use this for Pulse-selected strategic review: goal recovery, healthy 10x/headroom exploration, advancing or measuring the one active advisor experiment, approved proposal application, and Chief of Staff strategic recommendations. The pipeline runs advisor -> critic -> finalizer in separate background agents. It is analysis-first: advisor and critic never format HTML, and the finalizer may make only one bounded in-place Advisor log update when state materially changes. The durable experiment lifecycle lives in builder/improve.html; the parent Pulse turn should capture the returned execution_id and end its turn. Automatic completion notification will resume the session so it can record record_pulse_result; do not poll query_step/list_executions while waiting.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -6281,37 +6366,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_llm_config",
-		"Show the current LLM configuration for the workflow: tiered config (tier 1/2/3 with fallbacks), phase LLM, and any per-step LLM overrides from step_config.json.",
+		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			var sb strings.Builder
-			sb.WriteString("## LLM Configuration\n\n")
-
-			// Show tiered config if enabled
-			if iwm.controller.tierResolver != nil && iwm.controller.tierResolver.config != nil {
-				tc := iwm.controller.tierResolver.config
-				sb.WriteString("\n### Tiered LLM Config (active)\n")
-				writeTierWithFallbacks := func(label string, cfg *AgentLLMConfig) {
-					if cfg == nil {
-						return
-					}
-					sb.WriteString(fmt.Sprintf("- **%s**: %s/%s", label, cfg.Provider, cfg.ModelID))
-					if len(cfg.Fallbacks) > 0 {
-						fallbackStrs := make([]string, len(cfg.Fallbacks))
-						for i, fb := range cfg.Fallbacks {
-							fallbackStrs[i] = fmt.Sprintf("%s/%s", fb.Provider, fb.ModelID)
-						}
-						sb.WriteString(fmt.Sprintf(" → fallbacks: %s", strings.Join(fallbackStrs, ", ")))
-					}
-					sb.WriteString("\n")
-				}
-				writeTierWithFallbacks("Tier 1 (high)", tc.Tier1)
-				writeTierWithFallbacks("Tier 2 (medium)", tc.Tier2)
-				writeTierWithFallbacks("Tier 3 (low)", tc.Tier3)
+			manifest, manifestErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+			if manifestErr != nil {
+				return "", fmt.Errorf("read workflow LLM configuration: %w", manifestErr)
 			}
+			resolved, resolveErr := renderResolvedWorkflowLLMRoles(manifest)
+			if resolveErr != nil {
+				return "", fmt.Errorf("resolve workflow LLM configuration: %w", resolveErr)
+			}
+			var sb strings.Builder
+			sb.WriteString(resolved)
 
 			// Show per-step overrides from step_config.json
 			stepConfigs, err := iwm.controller.ReadStepConfigs(ctx)
@@ -9910,7 +9980,7 @@ Analysis budget:
 - Return the strategic verdict even if the report markup is imperfect; formatting belongs to Report Health.
 
 Strict boundaries for this Advisor stage:
-- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or mark_pulse_module_result.
+- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or record_pulse_result.
 - Do NOT modify plan/config/eval/report/HTML files.
 - Produce an evidence-backed draft only. The Critic and Finalizer stages decide what survives.
 
@@ -9952,7 +10022,7 @@ Your job is to challenge the Advisor draft before anything is logged, proposed, 
 
 Strict boundaries for this Critic stage:
 - Read evidence yourself when needed; do not rely only on the Advisor's wording.
-- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or mark_pulse_module_result.
+- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or record_pulse_result.
 - Do NOT modify plan/config/eval/report/HTML files.
 
 Critique against these checks:
@@ -10065,7 +10135,7 @@ Experiment lifecycle contract:
 - Update the existing card in place. Do not append lifecycle duplicates. A deferred answer keeps the same experiment active with a future review checkpoint.
 
 Do not launch nested maintenance reviewers. Learning, KB, and DB health are separate generic read-only Pulse reviews.
-Do not call mark_pulse_module_result; the parent Pulse turn records the module result after reading your completion.
+Do not call record_pulse_result; the parent Pulse turn records the module result after reading your completion.
 
 When writing builder/improve.html, show both:
 - Advisor proposal/takeaway.
@@ -10262,6 +10332,13 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 	config.ServerNames = []string{mcpclient.NoServers}
 	toolAgentSessionID, releaseToolAgentSession := iwm.configureWorkshopToolAgentSessionWithID(config, stageAgentIdentity, readPaths, writePaths)
 	defer releaseToolAgentSession()
+	if access == goalAdvisorStagePulseFixer {
+		// Do not rely on the write-path inference used by ordinary workshop
+		// helpers. The Fixer is the single DB writer for this pass, so make its
+		// logical capability explicit and verify the complete tool/session surface
+		// before starting an expensive provider turn.
+		configureWorkflowDBSession(toolAgentSessionID, workspacePath, DBAccessReadWrite, false)
+	}
 
 	// A fixer stage writes Pulse state, and authority is keyed by the session id
 	// its tool calls actually carry — which setupWorkshopToolAgentSession
@@ -10280,6 +10357,11 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 	}
 
 	toolsToRegister, executorsToUse := filterWorkspaceToolsByName(iwm.controller.WorkspaceTools, iwm.controller.WorkspaceToolExecutors, allowedToolNames)
+	if access == goalAdvisorStagePulseFixer {
+		if err := pulseFixerDBCapabilityPreflight(toolAgentSessionID, workspacePath, toolsToRegister, executorsToUse); err != nil {
+			return "", err
+		}
+	}
 	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
 		return newWorkflowBackgroundTaskAgent(cfg, log, tracer, eventBridge)
 	}

@@ -199,17 +199,16 @@ func SavePreValidationLog(
 	}
 }
 
-// buildPreValidationConcernSummary renders one CONCERNS: line per failing
-// check, the shape RecordRunConcerns/ParseConcernLines expects. One line per
-// check (not one blob for the whole failure) is deliberate: each check has
-// its own concernFingerprint, so a field that keeps failing across many runs
-// accumulates its own seen_count instead of being invisible inside a summary
-// that changes shape every time a different check also happens to fail.
+// buildPreValidationConcernSummary renders one CONCERNS: line for the step's
+// complete failed gate. Field-level errors are evidence for that one step bug,
+// not independent bugs. RecordRunConcerns gives every prevalidation concern a
+// stable step-level fingerprint, so the detailed text can change from run to
+// run without splitting the lifecycle identity.
 func buildPreValidationConcernSummary(results *WorkspaceVerificationResult) string {
 	if results == nil {
 		return ""
 	}
-	var b strings.Builder
+	details := make([]string, 0, len(results.Summary.Errors))
 	for _, e := range results.Summary.Errors {
 		location := strings.TrimSpace(strings.TrimSpace(e.File) + " " + strings.TrimSpace(e.Path))
 		message := strings.TrimSpace(e.Message)
@@ -219,9 +218,18 @@ func buildPreValidationConcernSummary(results *WorkspaceVerificationResult) stri
 		if location == "" && message == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "%s prevalidation gate failed at %s: %s\n", concernLinePrefix, location, message)
+		detail := location
+		if detail != "" && message != "" {
+			detail += ": "
+		}
+		detail += message
+		details = append(details, detail)
 	}
-	return b.String()
+	if len(details) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s prevalidation gate failed for the step output contract (%d failed checks): %s\n",
+		concernLinePrefix, len(details), strings.Join(details, " | "))
 }
 
 // validateSchemaLimits checks if the schema exceeds resource limits

@@ -26,6 +26,8 @@ type DailyPhaseTokenUsageFile struct {
 	TokenUsage *PhaseTokenUsageFile `json:"token_usage"`
 }
 
+const modelPricingVersion = "2026-08-03"
+
 func NormalizeCostScopeAndRunFolder(iterationFolder string) (CostScope, string) {
 	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(iterationFolder)))
 	cleaned = strings.TrimPrefix(cleaned, "./")
@@ -88,6 +90,8 @@ func CloneModelTokenUsage(src *ModelTokenUsage) *ModelTokenUsage {
 	}
 	return &ModelTokenUsage{
 		Provider:            src.Provider,
+		PricingModelID:      src.PricingModelID,
+		PricingVersion:      src.PricingVersion,
 		InputTokens:         src.InputTokens,
 		OutputTokens:        src.OutputTokens,
 		InputTokensM:        src.InputTokensM,
@@ -131,6 +135,8 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 
 	return &ModelTokenUsage{
 		Provider:            modelTokenData.Provider,
+		PricingModelID:      modelTokenData.ModelID,
+		PricingVersion:      modelPricingVersion,
 		InputTokens:         modelTokenData.InputTokens,
 		OutputTokens:        modelTokenData.OutputTokens,
 		InputTokensM:        formatTokensM(modelTokenData.InputTokens),
@@ -184,6 +190,8 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 	inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow := calculatePricingFromModelData(modelTokenData)
 
 	if inputCost > 0 || outputCost > 0 || reasoningCost > 0 || cacheCost > 0 || totalCost > 0 {
+		usage.PricingModelID = modelID
+		usage.PricingVersion = modelPricingVersion
 		usage.InputCost = inputCost
 		usage.OutputCost = outputCost
 		usage.ReasoningCost = reasoningCost
@@ -422,6 +430,12 @@ func MergeModelTokenUsage(dst, src *ModelTokenUsage) *ModelTokenUsage {
 	dst.TotalCost += src.TotalCost
 	if src.Provider != "" {
 		dst.Provider = src.Provider
+	}
+	if src.PricingModelID != "" {
+		dst.PricingModelID = src.PricingModelID
+	}
+	if src.PricingVersion != "" {
+		dst.PricingVersion = src.PricingVersion
 	}
 	if src.ModelContextWindow > 0 {
 		dst.ModelContextWindow = src.ModelContextWindow

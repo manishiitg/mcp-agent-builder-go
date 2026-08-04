@@ -211,6 +211,8 @@ type ServerConfig struct {
 // ActiveSessionInfo represents an active session for page refresh recovery
 type ActiveSessionInfo struct {
 	SessionID                   string           `json:"session_id"`
+	ParentSessionID             string           `json:"parent_session_id,omitempty"`
+	SessionKind                 string           `json:"session_kind,omitempty"`
 	AgentMode                   string           `json:"agent_mode"`
 	Status                      string           `json:"status"` // "running", "paused", "completed"
 	LastActivity                time.Time        `json:"last_activity"`
@@ -395,6 +397,14 @@ type StreamingAPI struct {
 	sessionBusySince map[string]time.Time
 	sessionBusyMu    sync.RWMutex
 
+	// retainedMainTurns tracks direct follow-up turns submitted to a persistent
+	// coding-CLI tmux after the server-managed foreground Go turn has ended.
+	// Their structured terminal events remain available (the same events used by
+	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
+	// instead of guessing activity solely from the latest rendered spinner text.
+	retainedMainTurns   map[string]time.Time
+	retainedMainTurnsMu sync.Mutex
+
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
 	pendingMu          sync.RWMutex
@@ -531,8 +541,10 @@ func spaStaticFileHandler(root string) http.Handler {
 // QueryRequest represents an agent query request
 type QueryRequest struct {
 	Query           string                  `json:"query"`
-	Message         string                  `json:"message,omitempty"`       // Alias for Query (used by frontend)
-	SessionTitle    string                  `json:"session_title,omitempty"` // Short UI label for backend-started sessions; never use the full prompt here.
+	Message         string                  `json:"message,omitempty"`           // Alias for Query (used by frontend)
+	SessionTitle    string                  `json:"session_title,omitempty"`     // Short UI label for backend-started sessions; never use the full prompt here.
+	ParentSessionID string                  `json:"parent_session_id,omitempty"` // Internal child-session ownership used by refresh recovery.
+	SessionKind     string                  `json:"session_kind,omitempty"`      // Stable runtime kind such as pulse_reviewer; never infer this from titles.
 	Servers         []string                `json:"servers,omitempty"`
 	EnabledServers  []string                `json:"enabled_servers,omitempty"`
 	SelectedTools   []string                `json:"selected_tools,omitempty"` // Array of "server:tool" strings
@@ -1345,7 +1357,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverStartedAt,
 	)
 	terminalPipeRecorder := newTerminalPipeRecorder()
-	eventStore.SetEventAddedCallback(func(sessionID string, event events.Event) {
+	terminalEventObserver := func(sessionID string, event events.Event) {
 		if !terminalStore.HandleEventWithChange(sessionID, event) {
 			return
 		}
@@ -1357,7 +1369,8 @@ func runServer(cmd *cobra.Command, args []string) {
 		if terminalPipeRecorder != nil {
 			terminalPipeRecorder.ObserveSnapshots(terminalStore.List(sessionID))
 		}
-	})
+	}
+	eventStore.SetEventAddedCallback(terminalEventObserver)
 	log.Printf("📡 EventStore retention: max %d events per session", maxSessionEvents)
 
 	// Initialize the operator-state store (bot connector configs + user
@@ -1489,6 +1502,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		bgAgentRegistry:                 NewBackgroundAgentRegistry(),
 		sessionBusy:                     make(map[string]bool),
 		sessionBusySince:                make(map[string]time.Time),
+		retainedMainTurns:               make(map[string]time.Time),
 		pendingCompletions:              make(map[string][]string),
 		completionRetryScheduled:        make(map[string]bool),
 		pendingStartNotifications:       make(map[string][]string),
@@ -1503,6 +1517,14 @@ func runServer(cmd *cobra.Command, args []string) {
 		stoppedSessions:                 make(map[string]bool),
 		interruptedTurns:                make(map[string]bool),
 	}
+	// Terminal Center's Formatted view and the runtime coordinator now consume
+	// the same accepted structured events. The terminal observer updates the
+	// durable pane snapshot first; retained-turn reconciliation then uses that
+	// authoritative result to settle only the matching main-agent turn.
+	eventStore.SetEventAddedCallback(func(sessionID string, event events.Event) {
+		terminalEventObserver(sessionID, event)
+		api.observeRetainedMainTurnEvent(sessionID, event)
+	})
 
 	// BG-001: Wire the onDropped callback so a full notification channel re-queues
 	// the completion instead of silently losing it permanently.
@@ -1811,6 +1833,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-module-state", api.handleGetPulseModuleState).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-findings", api.handleGetPulseFindings).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
@@ -2962,7 +2985,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Track active session for page refresh recovery (no observer needed)
 	if !claimedChiefOfStaffChat {
-		api.trackActiveSession(sessionID, req.AgentMode, req.Query, currentUserID, req.BotPlatform, req.TriggeredBy, req.SessionTitle)
+		api.trackActiveSession(sessionID, req.AgentMode, req.Query, currentUserID, req.BotPlatform, req.TriggeredBy, req.SessionTitle, req.ParentSessionID, req.SessionKind)
 	}
 	api.activeSessionsMux.Lock()
 	if sess, ok := api.activeSessions[sessionID]; ok {
@@ -5946,6 +5969,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[BUILDER LOG] Failed to write conversation log: %v", err)
 				} else {
 					log.Printf("[BUILDER LOG] Saved conversation log (%d messages) to %s", len(finalHistory), logPath)
+					// The workflow history list is served from chat-index.json. Writing
+					// the transcript without this leaves the chat on disk but absent
+					// from /resume, so the user is offered an older conversation and the
+					// agent legitimately has no memory of the one they were just in.
+					if err := updatePersistedChatHistoryIndex(currentUserID, persistSessionID, req.AgentMode, persistedHistoryForDisk, chatRuntime, logPath, int64(len(convJSON)), time.Now()); err != nil {
+						log.Printf("[BUILDER LOG] Failed to update chat index for %s: %v", logPath, err)
+					}
 				}
 			}
 
@@ -5962,21 +5992,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 				phaseKey := workflowPhaseID
 				modelUsage := &orchestrator.ModelTokenUsage{
-					Provider:         finalProvider,
-					InputTokens:      promptTokens,
-					OutputTokens:     completionTokens,
-					InputTokensM:     fmtM(promptTokens),
-					OutputTokensM:    fmtM(completionTokens),
-					CacheTokens:      cacheTokens,
-					CacheTokensM:     fmtM(cacheTokens),
-					ReasoningTokens:  reasoningTokens,
-					ReasoningTokensM: fmtM(reasoningTokens),
-					LLMCallCount:     llmCallCount,
-					InputCost:        inputCost,
-					OutputCost:       outputCost,
-					ReasoningCost:    reasoningCost,
-					CacheCost:        cacheCost,
-					TotalCost:        totalCost,
+					Provider:          finalProvider,
+					InputTokens:       promptTokens,
+					OutputTokens:      completionTokens,
+					InputTokensM:      fmtM(promptTokens),
+					OutputTokensM:     fmtM(completionTokens),
+					CacheTokens:       cacheTokens,
+					CacheTokensM:      fmtM(cacheTokens),
+					CacheReadTokens:   usage.CacheReadTokens,
+					CacheReadTokensM:  fmtM(usage.CacheReadTokens),
+					CacheWriteTokens:  usage.CacheWriteTokens,
+					CacheWriteTokensM: fmtM(usage.CacheWriteTokens),
+					ReasoningTokens:   reasoningTokens,
+					ReasoningTokensM:  fmtM(reasoningTokens),
+					LLMCallCount:      llmCallCount,
+					InputCost:         inputCost,
+					OutputCost:        outputCost,
+					ReasoningCost:     reasoningCost,
+					CacheCost:         cacheCost,
+					TotalCost:         totalCost,
 				}
 
 				workflowRoot := workflowPhaseFolder
@@ -5998,7 +6032,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					legacyTokenFileExists = true
 				}
 				now := time.Now()
-				modelID := mcpagent.ReadAgentRuntimeInfo(underlying).LLMConfig.ModelID
+				runtimeInfo := mcpagent.ReadAgentRuntimeInfo(underlying)
+				modelID := strings.TrimSpace(runtimeInfo.EffectiveModelID)
+				if modelID == "" {
+					modelID = runtimeInfo.LLMConfig.ModelID
+				}
+				orchestrator.EnsureModelTokenUsagePricing(modelID, modelUsage)
 				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
@@ -6209,7 +6248,7 @@ func (api *StreamingAPI) claimChiefOfStaffChatSession(sessionID, userID, query, 
 }
 
 // trackActiveSession tracks a new active session
-func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID, botPlatform, triggeredBy, sessionTitle string) {
+func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID, botPlatform, triggeredBy, sessionTitle, parentSessionID, sessionKind string) {
 	if api.eventStore != nil {
 		api.eventStore.SetSessionOwner(sessionID, userID)
 	}
@@ -6227,19 +6266,27 @@ func (api *StreamingAPI) trackActiveSession(sessionID, agentMode, query, userID,
 		if strings.TrimSpace(sessionTitle) == "" {
 			sessionTitle = existing.Title
 		}
+		if strings.TrimSpace(parentSessionID) == "" {
+			parentSessionID = existing.ParentSessionID
+		}
+		if strings.TrimSpace(sessionKind) == "" {
+			sessionKind = existing.SessionKind
+		}
 	}
 
 	api.activeSessions[sessionID] = &ActiveSessionInfo{
-		SessionID:    sessionID,
-		AgentMode:    agentMode,
-		Status:       "running",
-		LastActivity: time.Now(),
-		CreatedAt:    time.Now(),
-		Query:        query,
-		Title:        strings.TrimSpace(sessionTitle),
-		UserID:       userID,
-		BotPlatform:  botPlatform,
-		TriggeredBy:  triggeredBy,
+		SessionID:       sessionID,
+		ParentSessionID: strings.TrimSpace(parentSessionID),
+		SessionKind:     strings.TrimSpace(sessionKind),
+		AgentMode:       agentMode,
+		Status:          "running",
+		LastActivity:    time.Now(),
+		CreatedAt:       time.Now(),
+		Query:           query,
+		Title:           strings.TrimSpace(sessionTitle),
+		UserID:          userID,
+		BotPlatform:     botPlatform,
+		TriggeredBy:     triggeredBy,
 	}
 
 	logfWithContext(
@@ -6445,9 +6492,83 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
+		api.retainedMainTurnsMu.Lock()
+		if api.retainedMainTurns == nil {
+			api.retainedMainTurns = make(map[string]time.Time)
+		}
+		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnsMu.Unlock()
+		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
 		return
 	}
+}
+
+func retainedMainTurnCompletionEvent(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "streaming_end", "agent_end", "conversation_end", "unified_completion":
+		return true
+	default:
+		return false
+	}
+}
+
+// observeRetainedMainTurnEvent settles the explicit busy lifecycle opened by
+// markRetainedMainCodingTurnRunning. These are the same structured events that
+// back Terminal Center's Formatted view. A normal foreground turn is unaffected
+// because it never enters retainedMainTurns, and a child completion is ignored
+// because its terminal ownership does not resolve to the main coding agent.
+func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event events.Event) {
+	eventType := strings.ToLower(strings.TrimSpace(event.Type))
+	if api == nil || api.terminalStore == nil || !retainedMainTurnCompletionEvent(eventType) {
+		return
+	}
+
+	api.retainedMainTurnsMu.Lock()
+	startedAt, tracked := api.retainedMainTurns[sessionID]
+	api.retainedMainTurnsMu.Unlock()
+	if !tracked || (!event.Timestamp.IsZero() && event.Timestamp.Before(startedAt)) {
+		return
+	}
+
+	snapshot, ok := api.terminalStore.GetRaw(event.TerminalID)
+	if !ok || !codingAgentSnapshotIsMainAgent(snapshot) {
+		return
+	}
+
+	// streaming_end is first applied by the terminal observer. It can reject an
+	// intermediate provider end while the pane still shows newer active work.
+	// Higher-level completion events are definitive and may settle the retained
+	// logical turn while deliberately keeping the tmux process alive for resume.
+	if eventType != "streaming_end" && snapshot.Active {
+		if completed, changed := api.terminalStore.MarkTurnCompleted(snapshot.TerminalID); changed {
+			snapshot = completed
+		}
+	}
+	if snapshot.Active {
+		return
+	}
+
+	api.retainedMainTurnsMu.Lock()
+	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	if stillTracked && currentStart.Equal(startedAt) {
+		delete(api.retainedMainTurns, sessionID)
+	} else {
+		stillTracked = false
+	}
+	api.retainedMainTurnsMu.Unlock()
+	if !stillTracked {
+		return
+	}
+
+	api.setSessionBusy(sessionID, false)
+	if strings.EqualFold(strings.TrimSpace(snapshot.State), "failed") {
+		api.updateSessionStatus(sessionID, "error")
+	} else {
+		api.updateSessionStatus(sessionID, "completed")
+	}
+	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
+		eventType, sessionID, snapshot.TerminalID, snapshot.State)
 }
 
 // deliverRetainedMainTerminalInput sends directly to a live main coding-agent
@@ -6504,7 +6625,6 @@ func (api *StreamingAPI) deliverRetainedMainTerminalInput(ctx context.Context, s
 func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, provider string) string {
 	messageID := newSteerMessageID()
 	api.recordLiveCodingAgentUserMessage(sessionID, message, provider, messageID, "sent_to_cli")
-	api.setSessionBusy(sessionID, false)
 	api.markRetainedMainCodingTurnRunning(sessionID)
 	return messageID
 }
@@ -7368,6 +7488,10 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 		}
 		writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, retainedProvider, api)
 		log.Printf("[LIVE INPUT] Delivered user message directly to retained terminal for session %s provider=%s: %.80s", sessionID, retainedProvider, req.Message)
+		// Steering never completes a query turn, so without this the transcript
+		// stays frozen at the last real turn and a restart resumes from there.
+		// Runs after the response is written; it must not be on the send path.
+		api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
 		return
 	}
 

@@ -17,6 +17,7 @@ import type {
   PulseFinalCommandState,
   PulseFindingLifecycle,
   PulseImpactLedger,
+  PulseAgentMetricRecord,
   PulseModuleState,
   PulseReviewRecord,
 } from '../../services/api-types'
@@ -53,6 +54,17 @@ function formatDate(value?: string): string {
 
 function readable(value?: string): string {
   return (value || '').trim().replaceAll('_', ' ') || 'No data'
+}
+
+const compactMetricNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+
+function formatAgentDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 1) return '0s'
+  const seconds = Math.round(milliseconds / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  if (hours > 0) return `${hours}h ${minutes % 60}m`
+  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
 }
 
 function statusTone(value?: string): string {
@@ -171,6 +183,7 @@ export function PulseWorkspace({
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
+  const [agentMetrics, setAgentMetrics] = useState<PulseAgentMetricRecord[]>([])
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
   const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
@@ -189,10 +202,11 @@ export function PulseWorkspace({
     if (!workspacePath) return
     setLoading(true)
     setError(null)
-    const [findingResult, reviewResult, impactResult] = await Promise.allSettled([
+    const [findingResult, reviewResult, impactResult, metricResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
       agentApi.getPulseImpact(workspacePath),
+      agentApi.getPulseAgentMetrics(workspacePath),
     ])
     const errors: string[] = []
     if (findingResult.status === 'fulfilled' && findingResult.value.success) {
@@ -225,6 +239,16 @@ export function PulseWorkspace({
           : impactResult.value.error || 'Could not load goal impact.',
       )
     }
+    if (metricResult.status === 'fulfilled' && metricResult.value.success) {
+      setAgentMetrics(metricResult.value.metrics || [])
+    } else {
+      setAgentMetrics([])
+      errors.push(
+        metricResult.status === 'rejected'
+          ? (metricResult.reason instanceof Error ? metricResult.reason.message : 'Could not load reviewer measurements.')
+          : metricResult.value.error || 'Could not load reviewer measurements.',
+      )
+    }
     setError(errors.length > 0 ? errors.join(' ') : null)
     setLoading(false)
   }, [workspacePath])
@@ -233,6 +257,7 @@ export function PulseWorkspace({
     setSelectedModule(null)
     setFindings([])
     setReviews([])
+    setAgentMetrics([])
     setImpact({ interventions: [], observations: [], assessments: [] })
     void load()
   }, [load])
@@ -327,6 +352,33 @@ export function PulseWorkspace({
       latest: Array.from(latestBySeries.values()).slice(0, 4),
     }
   }, [impact])
+  const latestPassMetrics = useMemo(() => {
+    const latestPulseRunID = agentMetrics.find((metric) => metric.pulse_run_id)?.pulse_run_id
+    if (!latestPulseRunID) return null
+    const rows = agentMetrics.filter((metric) => metric.pulse_run_id === latestPulseRunID)
+    const captured = rows.filter((metric) => metric.usage_status === 'captured')
+    const started = rows
+      .map((metric) => Date.parse(metric.started_at || ''))
+      .filter(Number.isFinite)
+    const completed = rows
+      .map((metric) => Date.parse(metric.completed_at || ''))
+      .filter(Number.isFinite)
+    return {
+      pulseRunID: latestPulseRunID,
+      reviewers: rows.filter((metric) => metric.role === 'reviewer').length,
+      fixers: rows.filter((metric) => metric.role === 'fixer').length,
+      agentTimeMS: rows.reduce((sum, metric) => sum + metric.duration_ms, 0),
+      wallTimeMS: started.length > 0 && completed.length > 0
+        ? Math.max(...completed) - Math.min(...started)
+        : 0,
+      calls: captured.reduce((sum, metric) => sum + metric.llm_call_count, 0),
+      promptTokens: captured.reduce((sum, metric) => sum + metric.prompt_tokens, 0),
+      cacheReadTokens: captured.reduce((sum, metric) => sum + metric.cache_read_tokens, 0),
+      completionTokens: captured.reduce((sum, metric) => sum + metric.completion_tokens, 0),
+      cost: captured.reduce((sum, metric) => sum + metric.total_cost_usd, 0),
+      unavailable: rows.length - captured.length,
+    }
+  }, [agentMetrics])
 
   const health = queueCounts.needs_action > 0
     ? {
@@ -628,6 +680,20 @@ export function PulseWorkspace({
         <div className="border-b px-4 py-3">
           <h3 className="text-sm font-semibold text-foreground">Reviewers</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">Choose a reviewer to see its latest judgment or open the full forensic report</p>
+		  {latestPassMetrics && (
+		    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground" title={latestPassMetrics.pulseRunID}>
+		      <span className="font-medium text-foreground">Latest measured pass</span>
+		      <span>{latestPassMetrics.reviewers} reviewer{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} fixer` : ''}</span>
+		      <span>{formatAgentDuration(latestPassMetrics.wallTimeMS)} wall</span>
+		      <span>{formatAgentDuration(latestPassMetrics.agentTimeMS)} agent time</span>
+		      <span>{latestPassMetrics.calls} calls</span>
+		      <span>{compactMetricNumber.format(latestPassMetrics.promptTokens)} input</span>
+		      <span>{compactMetricNumber.format(latestPassMetrics.cacheReadTokens)} cached</span>
+		      <span>{compactMetricNumber.format(latestPassMetrics.completionTokens)} output</span>
+		      <span>${latestPassMetrics.cost.toFixed(2)}</span>
+		      {latestPassMetrics.unavailable > 0 && <span className="text-amber-700 dark:text-amber-300">{latestPassMetrics.unavailable} usage unavailable</span>}
+		    </div>
+		  )}
         </div>
         <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
           {moduleSummaries.map((module) => {
@@ -670,6 +736,14 @@ export function PulseWorkspace({
                 <div className="mt-1 text-[9px] text-muted-foreground">
                   {module.latestReview ? formatDate(module.latestReview.recorded_at) : 'Awaiting evidence'}
                 </div>
+				{module.latestReview?.metrics && (
+				  <div className="mt-1 text-[9px] text-muted-foreground">
+				    {formatAgentDuration(module.latestReview.metrics.duration_ms)}
+				    {module.latestReview.metrics.usage_status === 'captured' && (
+				      <> · {compactMetricNumber.format(module.latestReview.metrics.completion_tokens)} output · ${module.latestReview.metrics.total_cost_usd.toFixed(2)}</>
+				    )}
+				  </div>
+				)}
               </button>
             )
           })}
