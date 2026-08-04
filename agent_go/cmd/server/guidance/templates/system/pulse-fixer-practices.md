@@ -163,6 +163,59 @@ consumer contract.
 - Never perform a speculative migration. When row meaning is ambiguous, retain
   the evidence and request the missing decision.
 
+## Learning and skill purity repair
+
+Apply this playbook whenever a finding concerns `learnings/_global/`, a
+`learning_objective`, or `learnings_access`.
+
+1. **Inventory the complete skill package.** Read the root `SKILL.md` and every
+   content-bearing Markdown file under `references/`. References are part of
+   the skill, not an archive for content removed from the index.
+2. **Classify before editing.** Keep only reusable execution HOW: procedures,
+   selector strategy, auth/API/CLI/tool quirks, parsing/retry/recovery rules,
+   stable failure signatures, and concise operational constraints needed to
+   perform the task. Route everything else by meaning:
+   - business/domain facts → knowledgebase;
+   - run results/current values/status → DB or run evidence;
+   - owner goals/preferences/thresholds → `soul.md`;
+   - strategy/cadence/routing/current step behavior → plan/config;
+   - incidents, provenance, action/run IDs, decisions, and fix history → durable
+     Pulse review/finding/decision evidence;
+   - platform architecture/schema history → authoritative documentation or DB
+     contract, retaining only the short runner-facing instruction in the skill.
+3. **Do not launder content through references.** Move detailed reusable HOW
+   from `SKILL.md` to a focused reference. Remove non-skill content from the
+   whole package; putting it in `references/` is not a repair.
+4. **Preserve evidence before removal.** Cite the exact source block in the
+   durable Pulse result. If an authoritative destination already contains the
+   material, remove the duplicate. If a bounded authorized KB/config repair is
+   safe, apply it through the canonical tool. Never invent a fact, rewrite
+   user-owned context, mutate run data speculatively, or discard the only copy
+   of an unresolved user decision.
+5. **Repair contribution configuration.** For every effective
+   `learnings_access="read-write"` step, require a concrete objective that asks
+   only for reusable HOW. Clear a misplaced/legacy objective and set access to
+   `read` when the step should consume but not contribute. Preserve
+   `read-write` only when the objective and actual skill coverage agree.
+6. **Keep the root as an index.** `SKILL.md` contains valid frontmatter, a short
+   scope, core cross-cutting instructions, and links to focused references.
+   Detailed HOW belongs in references without duplication.
+
+Verification is an immediate semantic re-read, not merely a successful patch:
+
+- re-inventory and re-read every content-bearing Markdown file in the skill;
+- confirm every remaining block is reusable execution HOW;
+- confirm no incident/provenance, decision ledger, run result/current status,
+  business fact, strategy, owner-value duplicate, or architecture history was
+  retained or hidden in a reference;
+- validate all index links and confirm references are reachable without
+  duplicate homes;
+- re-read every changed step config and confirm effective access/objective
+  pairing;
+- name separately routed work that could not be safely applied. Content cleanup
+  may be `fixed_verified` when this complete post-change re-read passes; routed
+  KB/DB/plan changes still follow their own proof boundary.
+
 ## Tool, path, and permission repair
 
 - Interpret nested bridge envelopes and semantic error markers, not only process

@@ -1,39 +1,5 @@
 package skills
 
-import "github.com/manishiitg/multi-llm-provider-go/llmtypes"
-
-// IsBuiltinSkill reports whether folderName is served from the hardcoded
-// builtin registry rather than the workspace skills/ folder. Builtin names
-// must not exist on disk — a disk copy would be shadowed at attach time and
-// could carry contradictory guidance.
-func IsBuiltinSkill(folderName string) bool {
-	return builtinAttachableSkill(folderName) != nil
-}
-
-func builtinAttachableSkill(folderName string) *llmtypes.Skill {
-	switch folderName {
-	case "agent-browser":
-		return &llmtypes.Skill{
-			Name: "agent-browser",
-			// Names where the Builder-specific rules actually are. The description
-			// used to say "follow Builder-specific CDP … rules" without saying
-			// where they live, and the surrounding skill list tells an agent to
-			// read learnings/_global/ for workflow content — so a CDP step on
-			// 2026-08-02 tried learnings/_global/references/browser-usage.md.
-			// It had the filename exactly right and only the parent wrong: the doc
-			// is projected to .agents/skills/builder-reference/references/, and is
-			// also served by read_skill. Naming the tool is the stable
-			// answer, since the projected directory differs per provider
-			// (.agents/ vs .claude/) while the tool call does not.
-			Description: "Use agent-browser through Builder's managed tool. Load version-matched core/specialized skills from the installed CLI, then call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/browser-usage.md\"}]) for Builder-specific CDP tab ownership, locking, file, and safety rules. Do not guess a path for it under learnings/.",
-			Content:     agentBrowserSkillContent,
-			Source:      llmtypes.SkillSource{Origin: "builtin"},
-		}
-	default:
-		return nil
-	}
-}
-
 const agentBrowserSkillContent = `# Agent Browser In Builder
 
 Use the Builder MCP tool ` + "`workspace_browser.agent_browser`" + `. Do not run the ` + "`agent-browser`" + ` CLI directly through shell. Builder's tool owns CDP validation, shared-tab locking, session isolation, and workspace file guards.

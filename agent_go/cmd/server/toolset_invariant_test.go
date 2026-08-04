@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
@@ -75,9 +77,42 @@ func TestToolSetInvariants(t *testing.T) {
 	// 1. The workflow tool pool (workflowMode=true) must register every human tool.
 	tools, _, cats := createCustomTools(true, "default", "invariant-test")
 	pool := map[string]bool{}
+	counts := map[string]int{}
 	for _, tl := range tools {
 		if tl.Function != nil {
 			pool[tl.Function.Name] = true
+			counts[tl.Function.Name]++
+		}
+	}
+	for name, count := range counts {
+		if count != 1 {
+			t.Fatalf("workflow pool contains %d definitions for %q", count, name)
+		}
+	}
+	browserTools := virtualtools.CreateWorkspaceBrowserTools()
+	withBrowser := append(append([]llmtypes.Tool(nil), tools...), browserTools...)
+	browserExecutors := virtualtools.CreateWorkspaceBrowserToolExecutors()
+	executors := map[string]interface{}{}
+	_, baseExecutors, _ := createCustomTools(true, "default", "filter-invariant-test")
+	for name, executor := range baseExecutors {
+		executors[name] = executor
+	}
+	for name, executor := range browserExecutors {
+		executors[name] = executor
+	}
+	filtered, _ := orchestrator.FilterCustomToolsByCategory(withBrowser, executors, []string{
+		"workspace_advanced:*", "human_tools:*", "workspace_browser:*",
+		"workflow_db:query_workflow_db", "workflow_db:mutate_workflow_db",
+	})
+	filteredCounts := map[string]int{}
+	for _, tool := range filtered {
+		if tool.Function != nil {
+			filteredCounts[tool.Function.Name]++
+		}
+	}
+	for name, count := range filteredCounts {
+		if count != 1 {
+			t.Fatalf("filtered workflow pool contains %d definitions for %q", count, name)
 		}
 	}
 	for _, n := range []string{"human_feedback", "notify_user", "create_human_input_request", "mark_human_input_consumed"} {

@@ -2726,3 +2726,130 @@ WHERE e.event_type = 'reopened';
 
 As of 2026-08-01 it is 0 in both workflows. A rising count is the signal that
 independent verification has started to earn its cost.
+
+## Decision: Pulse enforces workflow learnings as pure skill content (2026-08-04)
+
+**Implementation status (2026-08-04): implemented locally and verified; not
+yet live until the backend is rebuilt/restarted. Existing workflow learning
+files are not rewritten by this code change. They are reviewed and repaired by
+the next applicable Pulse Workflow Review + consolidated Fixer pass.**
+
+### Problem
+
+`learnings/_global/` is projected and loaded as a skill, but real workflow
+skills accumulated material that was not skill content: business identity,
+current strategy and cadence, run metrics/status, incident narratives,
+operator-decision receipts, action/run IDs, provenance, database retirement
+history, and platform architecture rationale. The direct post-step learning
+prompt already said "HOW only — not facts or results," so another prompt
+sentence was not a sufficient repair.
+
+The previous Pulse learning-health contract also had a category error. It
+correctly tried to keep the root `SKILL.md` lean, but could recommend moving a
+detailed section into `references/` without first deciding whether that section
+belonged in a skill at all. References are progressive-disclosure skill
+content. Moving non-skill material there reduces index size while preserving
+the semantic pollution.
+
+### Decided content boundary
+
+The complete `learnings/_global/` package is one skill. Only reusable execution
+HOW may remain in `SKILL.md` or its Markdown references:
+
+- procedures and operational recipes;
+- selector and interaction strategies;
+- auth, API, MCP, CLI, SDK, and tool quirks;
+- parsing, retry, recovery, timing, and file-format rules;
+- stable failure signatures and the minimum runner-facing instruction needed
+  to avoid them.
+
+Everything else is classified by meaning and routed out of the skill:
+
+- business/domain facts -> knowledgebase;
+- run output, current values, metrics, and status -> DB or run evidence;
+- owner goals, preferences, caps, thresholds, and safety constraints ->
+  `soul.md`;
+- current strategy, cadence, allocation, routing, and step behavior -> plan and
+  step config;
+- incidents, provenance, action/run IDs, decisions, and fix history -> durable
+  Pulse review/finding/decision evidence;
+- platform architecture and schema history -> authoritative documentation or
+  DB contracts, leaving at most the concise operational rule in the skill.
+
+A date, ID, handle, metric, or product name is not rejected mechanically. Pulse
+uses agentic judgment about the content's role: does a future runner need it to
+perform the task, or does it merely explain what happened previously?
+
+### Reviewer contract
+
+The scheduled `workflow_review` stores turn now explicitly loads the
+`improve-learnings`, `improve-knowledge`, and `improve-database` references. It
+uses their audit rules inside the continuous Workflow Review conversation and
+suppresses their legacy standalone `stores_health` result envelopes.
+
+The learning lens must return two complete checkpoints:
+
+1. `purity_manifest`: enumerate `SKILL.md` and every content-bearing Markdown
+   reference, classify every violation, and never sample away an entire file;
+2. `learning_objective_audit`: account for every effective
+   `learnings_access="read-write"` step as `valid_how`, `misconfigured`, or
+   `missing_coverage`, and identify stale objectives on read-only/disabled
+   steps that should be cleared.
+
+Missing a recorded package-wide purity baseline or observing non-skill content
+anywhere in the package is now a Stores-lens due signal for Workflow Review.
+The reviewer remains read-only and records bounded recommendations plus exact
+source evidence.
+
+### Fixer contract
+
+The single consolidated Fixer now has a dedicated **Learning and skill purity
+repair** playbook:
+
+1. inventory the entire content-bearing skill package;
+2. classify before editing;
+3. move detailed reusable HOW from the root into focused references;
+4. never launder non-skill content through references;
+5. preserve the exact source/evidence in the durable Pulse result before
+   removal and use only authorized, non-speculative destination writes;
+6. repair bad `learning_objective` / `learnings_access` pairing;
+7. re-read the whole skill package and changed configs after mutation.
+
+A smaller root file, valid Markdown, a successful patch, or content hidden
+behind a reference link is not verification. Content cleanup can be recorded as
+`fixed_verified` only after the post-change semantic re-read confirms that every
+remaining block is reusable execution HOW, all links resolve, and contribution
+configuration matches the retained skill coverage. Any routed KB, DB, soul, or
+plan work keeps its own authorization and proof boundary.
+
+### Implementation and tests
+
+Changed runtime/guidance surfaces:
+
+- `canonicalWorkflowReviewMessageSequence` stores turn;
+- scheduled and legacy Pulse Workflow/Stores prompts;
+- `improve-learnings` reviewer checklist;
+- `post-run-monitor` due and review contract;
+- `pulse-review-fixer` orchestration contract;
+- `pulse-fixer-practices` mutation and verification playbook.
+
+Regression coverage pins the scheduled stores-turn instructions, required
+purity/objective fields, due signals, routing rules, anti-laundering rule, and
+post-fix re-read. Verified with:
+
+```text
+go test ./cmd/server/guidance -count=1
+go test ./pkg/orchestrator/agents/workflow/step_based_workflow -count=1
+go test ./cmd/server -count=1
+git diff --check
+```
+
+### Remaining boundary
+
+This change makes Pulse the semantic cleanup and repair backstop. It does not
+transactionally validate each direct post-step learning write before that write
+lands. The writer already carries a HOW-only instruction, but prompt compliance
+alone did not prevent the historical pollution. If new non-skill content still
+appears after the Pulse contract is live, the next hardening step is a guarded
+learning-write workflow that classifies proposed content before committing it;
+do not add brittle date/ID keyword rejection in Go.

@@ -45,3 +45,43 @@ func TestPrepareToolDefinitionsForAgentBuildsConstructionIdentity(t *testing.T) 
 		t.Fatal("prepared definition lost its executor")
 	}
 }
+
+func TestPrepareToolDefinitionsForAgentCollapsesReboundToolNames(t *testing.T) {
+	bo := &BaseOrchestrator{
+		logger:         loggerv2.NewNoop(),
+		ToolCategories: map[string]string{"agent_browser": "workspace_browser"},
+	}
+	first := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "agent_browser",
+		Description: "generic browser binding",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		}),
+	}}
+	latest := first
+	latest.Function = &llmtypes.FunctionDefinition{
+		Name:        "agent_browser",
+		Description: "session-specific browser binding",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		}),
+	}
+	executor := func(context.Context, map[string]interface{}) (string, error) { return "ok", nil }
+
+	definitions, err := bo.prepareToolDefinitionsForAgent(
+		&agents.OrchestratorAgentConfig{},
+		[]llmtypes.Tool{first, latest},
+		map[string]interface{}{"agent_browser": executor},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(definitions) != 1 {
+		t.Fatalf("definitions = %#v", definitions)
+	}
+	if got := definitions[0].Description; got != "session-specific browser binding" {
+		t.Fatalf("description = %q, want latest binding", got)
+	}
+}

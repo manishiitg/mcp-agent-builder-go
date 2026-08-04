@@ -72,6 +72,20 @@ func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("default workflow review IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
+	stores := items[3].Message
+	for _, want := range []string{
+		"improve-learnings",
+		"every content-bearing Markdown file",
+		"read-write learning_objective",
+		"references are part of the skill",
+		"moving non-skill content behind a reference link is not a repair",
+		"do not emit the guides' legacy standalone module envelopes",
+		"do not mark stores_health",
+	} {
+		if !strings.Contains(stores, want) {
+			t.Fatalf("default stores lens missing skill-purity contract %q:\n%s", want, stores)
+		}
+	}
 }
 
 func TestParseBackgroundMessageSequenceRejectsDuplicateIDs(t *testing.T) {

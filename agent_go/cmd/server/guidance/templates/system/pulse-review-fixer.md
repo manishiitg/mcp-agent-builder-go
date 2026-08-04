@@ -73,6 +73,15 @@ thesis, relationship to the active experiment, and why incremental repair is
 insufficient. Reject maintenance- or instrumentation-only Advisor results.
 Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 
+The Stores turn must load `improve-learnings`, `improve-knowledge`, and
+`improve-database`. Its learning review covers the complete skill package, not
+only the root index or a sample of references, and audits every effective
+read-write `learning_objective`. References are part of the skill: only
+reusable execution HOW may remain anywhere under `learnings/_global/`.
+Relocating business facts, run state, owner values, strategy, incidents,
+decisions, provenance, or architecture history from `SKILL.md` into a reference
+does not fix the finding.
+
 **Verify before discovering.** The reviewer is the independent check on fixes it
 did not make. Before looking for anything new, take every `changed_unverified`
 finding this module owns whose `next_check` evidence has since arrived, and
@@ -175,6 +184,12 @@ throughout the pass and reconcile it with a final unfiltered
 `get_pulse_state(view="backlog")` read;
 old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
+
+For learning-content repairs, follow the practices reference's **Learning and
+skill purity repair** contract. Re-read the whole content-bearing skill package
+and changed step configs after mutation. A smaller `SKILL.md`, valid Markdown,
+or content moved into `references/` is not proof; semantic purity and correct
+objective/access pairing are the postcondition.
 Re-read `get_pulse_state(view="module")` and map each actionable finding to the
 fingerprint created from its `CONCERNS:` line. From `get_pulse_state(view="backlog")`,
 pass `issue.id` as `finding_id` and the fingerprint from that same item. IDs

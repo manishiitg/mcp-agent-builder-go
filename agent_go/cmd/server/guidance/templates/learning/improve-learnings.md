@@ -17,10 +17,12 @@ automatic completion notification, then validates and applies any
 bounded safe edit. Do not create a dedicated learning-maintenance agent or use
 `run_in_background` for this review.
 
-This checklist is one of three (learnings, knowledgebase, DB) the parent may
-load together in a single `stores_health` pass — see `post-run-monitor`. If so,
-this reviewer's output is one part of that combined packet, not a standalone
-result.
+This checklist is one of three (learnings, knowledgebase, DB) the parent loads
+together in the stores turn of the scheduled `workflow_review` sequence (or a
+legacy standalone `stores_health` pass) — see `post-run-monitor`. Inside
+`workflow_review`, use the fields below as the learning-lens checkpoint; do not
+emit the legacy `module: stores_health` envelope, return the final consolidated
+artifact, or mark module state from this turn.
 
 Return only this compact contract:
 
@@ -31,6 +33,17 @@ Return only this compact contract:
   versus inline detail, the number of reference files, and the largest two with
   their sizes. Then state whether `SKILL.md` is still functioning as an index.
   Fill this on every review, including a `clean` one.
+- `purity_manifest`: **required.** Enumerate every content-bearing Markdown
+  file under `learnings/_global/` (the root `SKILL.md` and every Markdown
+  reference), state whether it contains only reusable execution HOW, and list
+  every section that belongs in another store. Do not sample references and do
+  not treat moving non-skill content from `SKILL.md` into `references/` as a
+  repair.
+- `learning_objective_audit`: **required.** Account for every step whose
+  effective `learnings_access` is `read-write`. Classify its objective as
+  `valid_how`, `misconfigured`, or `missing_coverage`, with the step ID and
+  exact reason. Also identify objectives on read-only/disabled steps that
+  should be cleared so legacy defaults cannot silently re-enable writes.
 - `findings`: stable `finding_id`, `target_key`, severity, plain-language
   summary, exact problem, and why it matters
 - `evidence`: precise paths and relevant step ids
@@ -52,7 +65,29 @@ not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
 style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
 the consolidated log update.
 
-Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing or qualifying stale assumptions and surface consequential unresolved ones for Pulse's Assumptions challenged.
+Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing misplaced material from the complete skill package, not merely relocating it from `SKILL.md` to a reference. Surface consequential unresolved assumptions for Pulse's Assumptions challenged.
+
+## Skill-content purity contract
+
+The entire `learnings/_global/` package is a skill. `references/` is progressive
+disclosure for detailed skill instructions; it is not an archive or an escape
+hatch for content that fails the skill boundary. Classify every content block
+using this routing table:
+
+| Content | Canonical home | Skill treatment |
+|---|---|---|
+| Reusable procedure, selector strategy, auth/API/CLI/tool quirk, parsing/retry/recovery rule, or stable failure signature | `learnings/_global/` | Keep; concise index in `SKILL.md`, detail in a focused reference |
+| Business identity, entity fact, or durable subject-matter fact | `knowledgebase/context/` when user-supplied; `knowledgebase/notes/` when workflow-discovered | Remove from the skill; never copy user context or invent a fact |
+| Run output, current metric/value/status, action/result row, or time-varying observation | `db/db.sqlite` or run artifacts | Remove from the skill; never perform a speculative data mutation |
+| Owner goal, preference, cap, threshold, or safety constraint | `soul/soul.md` | Remove the duplicate from the skill; never change the owner value here |
+| Current workflow strategy, cadence, allocation, routing, or step behavior | `planning/plan.json` / `planning/step_config.json` | Remove from the skill; use the current plan as authority |
+| Incident narrative, dated provenance, action/run IDs, fix history, operator decision receipt, or forensic proof | Pulse review/finding/decision history and run evidence | Remove from the skill after the durable Pulse review retains the exact source pointer and evidence |
+| Platform architecture, schema ownership/history, or product documentation | Platform/workflow documentation or the authoritative DB contract | Keep at most the short operational instruction a runner must follow; remove history and rationale |
+
+A date, ID, handle, metric, or product name is not automatically invalid: it may
+be part of a stable executable instruction. Judge its role. The test is whether
+a future agent needs the content to perform the task, not whether it once helped
+explain why the rule was learned.
 
 ## Reconcile against unreviewed plan changes
 
@@ -85,19 +120,23 @@ This command maintains reusable HOW-to-run knowledge such as selectors, tool/API
 BOUNDARIES
 
 1. Return a concrete recommended instruction and optional focus for the Pulse Fixer; there is no separate learning-maintenance tool.
-2. Work on `learnings/_global/` only. Do not edit `planning/`, `evaluation/`, `reports/`, `db/`, `knowledgebase/`, or per-step `learnings/{step-id}/main.py` from this command. Never edit or delete `learnings/_global/_freshness.json` — it is a code-owned freshness ledger written by the runtime; read it, do not touch it.
+2. The reviewer is read-only everywhere. Its learning-content mutation scope recommendation is `learnings/_global/`; it may also recommend `update_step_config` changes for bad `learning_objective` / `learnings_access` settings and routed KB/DB follow-up through the matching Stores lens. Never recommend editing per-step `learnings/{step-id}/main.py` as content cleanup. Never edit or delete `learnings/_global/_freshness.json` — it is a code-owned freshness ledger written by the runtime; read it, do not touch it.
 3. If you discover stale per-step scripts, bad `learning_objective`, wrong `learnings_access`, or lock issues, record/recommend them for the parent Pulse Fixer or an explicit manual fix. Eval rubric, coverage, or scoring issues belong to `/improve-evaluation`, not here.
-4. Keep WHAT-the-workflow-discovered out of learnings. User-supplied runtime context belongs in `knowledgebase/context/`; workflow-discovered subject-matter facts belong in `knowledgebase/notes/` or `db/db.sqlite`, not `learnings/_global/`.
+4. Keep WHAT-the-workflow-discovered out of the entire skill package. User-supplied runtime context belongs in `knowledgebase/context/`; workflow-discovered subject-matter facts belong in `knowledgebase/notes/` or `db/db.sqlite`, not in either `SKILL.md` or its references.
 5. Enforce a lean index shape. `learnings/_global/SKILL.md` is an **index**: frontmatter, a short scope note, and links to focused files under `learnings/_global/references/`. Detailed selectors, API quirks, auth flows, file-format notes, retry patterns, and step-specific HOW guidance belong in reference files, not in the root `SKILL.md`. Keep it as lean as the content allows; there is no line quota to fill, and a mostly-links index of any length is healthier than a short one stuffed with detail.
 
-   **Anti-pattern to watch for in your own findings:** recommending an edit *inside* a detailed section of `SKILL.md` accepts that the detail belongs there and maintains the bloat. If a finding targets prose that should never have been in the index, the fix is to **move that section into a reference file and leave a link**, not to correct it in place. Check your own `recommended_fix` entries against this before returning them.
+   **Anti-pattern to watch for in your own findings:** recommending an edit *inside* a detailed section of `SKILL.md` accepts that the detail belongs there and maintains the bloat. If the prose is reusable HOW, move it into a reference and leave a link. If it is not skill content, remove it from the complete skill package and route it according to the purity table. Moving non-skill content into `references/` is laundering, not repair.
 
 READ FIRST
 
 1. Read `soul/soul.md` if present to understand the workflow objective and success criteria.
 2. Read `planning/plan.json` and `planning/step_config.json` if present. Use them to understand current steps, `learnings_access`, `learning_objective`, `lock_learnings`, and `lock_code` decisions.
 3. Read `builder/improve.html` if present. Carry unresolved learning/code findings, prior cleanup attempts, recent Pulse fixes or Goal Advisor actions, and recent plan changes into the instruction.
-4. Read `learnings/_global/SKILL.md` and relevant files under `learnings/_global/references/`. Do not blindly load every large reference file; use the index and file names to pick relevant files.
+4. Inventory the complete `learnings/_global/` tree. Read `SKILL.md` and every
+   content-bearing Markdown reference for the purity manifest. For unusually
+   large files, inspect them in bounded chunks or use headings/search to route
+   the reads, but do not sample away an entire file. Scripts and assets need
+   only structural inspection unless the Markdown content depends on them.
 5. Read `learnings/_global/_freshness.json` if present (the code-owned confirmation ledger). Its store-level `last_confirmed_run` says how recently a run reviewed the whole store; its `items` map gives each reference file's own `last_confirmed_run` and `confirm_count`, so you can target the specific stale files rather than re-scanning everything. This is the input to the freshness pass below.
 
 FRESHNESS PASS (confirmation recency)
@@ -120,6 +159,8 @@ Use `mode="targeted"` when the operation is known file hygiene:
 - compact bloated browser/API/file-format guidance
 - repair links between `SKILL.md` and references
 - remove or replace stale HOW guidance that no longer matches current step descriptions
+- remove incident history, run facts, decisions, strategy, constraints, or
+  other non-skill content from the whole skill package
 
 Use `mode="cross_step"` when improving learnings requires the plan or multiple step declarations:
 
@@ -135,6 +176,7 @@ REVIEW OUTPUT
 
 1. Build one concrete instruction. It must mention the objective from `soul.md` or `planning/plan.json`, the user's focus if provided, and any unresolved learning-related findings from `builder/improve.html`.
    - Always include this invariant in the instruction: keep `learnings/_global/SKILL.md` lean as an index/overview; move detailed HOW-to-run content into `learnings/_global/references/<topic>.md` and link those files from `SKILL.md`.
+   - Always include this purity invariant: references are part of the skill; remove non-HOW content from the entire package and route it to its authoritative store rather than moving it behind a link.
    - Always include this stale-content rule: compare learnings against current `planning/plan.json` step descriptions and `planning/step_config.json` learning objectives; remove or replace HOW guidance that belongs to old step behavior, obsolete selectors/API paths, removed dependencies, or previous descriptions.
 2. Return that instruction as `recommended_fix`; do not execute it.
 3. Name the exact files that would change, stale or duplicate HOW content to
@@ -142,3 +184,8 @@ REVIEW OUTPUT
    still lack matching content.
 4. Identify matching open findings only as evidence. The Pulse Fixer owns any
    `builder/improve.html` update or close-out.
+5. For every proposed removal, name the classification, authoritative
+   destination, whether that destination already contains the material, and
+   how the current durable Pulse review preserves the evidence. Never discard
+   the only copy of a user decision or unresolved fact, and never keep it in the
+   skill merely because routing requires a separate follow-up.
