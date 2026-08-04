@@ -841,6 +841,34 @@ const QUICK_SKILLS = [
 // to use the chat, shown instead of a bare "thinking…" so the wait is at
 // least a little useful. Live tool status (e.g. "Opening the file…") always
 // takes priority over these when it's available.
+// Tips are onboarding, and onboarding ends. They rotate every 7s in the
+// thinking indicator, which is genuinely useful for the first handful of turns
+// and pure noise afterwards — this family had seen 747 replies when the
+// distraction was reported. Count turns and stop once the UI is obviously
+// learned, falling back to a calm static line. Live tool status ("Quill is:
+// Reading the image…") still takes priority over both: that is real
+// information, not a tip.
+const HINT_FADE_AFTER_TURNS = 8
+
+function readTurnsSeen(key: string): number {
+  try {
+    return Number(window.localStorage.getItem(key) || '0') || 0
+  } catch {
+    return 0
+  }
+}
+
+function noteTurnSeen(key: string) {
+  try {
+    const n = readTurnsSeen(key)
+    // Stop writing once past the threshold — the answer cannot change back.
+    if (n <= HINT_FADE_AFTER_TURNS) window.localStorage.setItem(key, String(n + 1))
+  } catch { /* private mode / disabled storage must not break the chat */ }
+}
+
+const PARENT_HINTS_SEEN_KEY = 'sq-parent-turns-seen'
+const CHILD_HINTS_SEEN_KEY = 'sq-child-turns-seen'
+
 const PARENT_WAIT_HINTS = [
   'Tip: ask "How is my child doing so far?" anytime for an evidence-based read of their progress.',
   'Tip: once a test or guide is ready, use the "Give to child" button to hand it over.',
@@ -2270,12 +2298,18 @@ export default function LearningApp() {
   // Cycle a usable "how to use the chat" tip in the thinking indicator instead
   // of a bare "thinking…" — resets and restarts each time a new turn begins,
   // and only matters while there's no real live tool status to show instead.
+  // Read once at mount: flipping mid-session would swap the text under the
+  // parent while they are watching it.
+  const [showParentHints] = useState(() => readTurnsSeen(PARENT_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
+  useEffect(() => { if (sending) noteTurnSeen(PARENT_HINTS_SEEN_KEY) }, [sending])
   const [parentHintIndex, setParentHintIndex] = useState(0)
   useEffect(() => {
     if (!sending) { setParentHintIndex(0); return }
     const id = window.setInterval(() => setParentHintIndex((i) => (i + 1) % PARENT_WAIT_HINTS.length), 7000)
     return () => window.clearInterval(id)
   }, [sending])
+  const [showChildHints] = useState(() => readTurnsSeen(CHILD_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
+  useEffect(() => { if (childSending) noteTurnSeen(CHILD_HINTS_SEEN_KEY) }, [childSending])
   const [childHintIndex, setChildHintIndex] = useState(0)
   useEffect(() => {
     if (!childSending) { setChildHintIndex(0); return }
@@ -3360,7 +3394,7 @@ export default function LearningApp() {
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : PARENT_WAIT_HINTS[parentHintIndex]}</span>
+                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : showParentHints ? PARENT_WAIT_HINTS[parentHintIndex] : 'Working on it…'}</span>
                     </div>
                     <ToolCallSummary calls={liveToolCalls} />
                   </div>
@@ -4469,7 +4503,7 @@ export default function LearningApp() {
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : CHILD_WAIT_HINTS[childHintIndex]}</span>
+                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : showChildHints ? CHILD_WAIT_HINTS[childHintIndex] : 'Working on it…'}</span>
                       </div>
                       <ToolCallSummary calls={childLiveToolCalls} />
                     </div>
