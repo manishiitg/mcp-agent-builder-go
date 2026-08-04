@@ -2108,16 +2108,28 @@ func readPulseReviewView(ctx context.Context, workspacePath, reviewRunID, module
 	}
 	artifact, err := step_based_workflow.LoadPulseReviewArtifactForRun(ctx, workspacePath, reviewRunID, module)
 	if errors.Is(err, sql.ErrNoRows) {
-		// The reviewer is asynchronous, so "not saved yet" is an ordinary
-		// state, not a defect. Returning the raw driver string told the
-		// agent nothing it could act on — 10 of these in one run, across
-		// two Pulse sessions, each followed by a blind retry. Name the
-		// identity that missed and the two things that actually explain it.
+		// Absence is the expected answer here, not a fault. The review stage
+		// prompt (scheduler.go) tells a reviewer to reconcile "any already-saved
+		// SQLite result before discovery" so it does not launch a duplicate — on
+		// a fresh run that pre-check must miss, because the caller is the thing
+		// that will write the row.
+		//
+		// The previous wording offered "or this identity pair is wrong" as a
+		// co-equal explanation. ValidatePulseReviewIdentity ran immediately
+		// above and passed, so the code had already disproved that: the format
+		// is valid and the module is in the canonical registry. Naming it anyway
+		// sent reviewers hunting for a different id — 8 of these on 2026-08-04
+		// across 3 sessions, on identities that were correct and seconds old.
+		//
+		// So: state the normal case first, and do not offer a cause this
+		// function has already ruled out.
 		return "", fmt.Errorf(
-			"no saved Pulse review yet for review_run_id=%q module=%q. "+
-				"The reviewer persists its result only when it finishes, so either it is still running "+
-				"— resume from its completion notification rather than polling — or this identity pair is wrong. "+
-				"Use the review_run_id and module exactly as reported by the call_generic_agent completion notification",
+			"no Pulse review is saved for review_run_id=%q module=%q yet. This identity is well-formed and the module is valid — "+
+				"do not look for a different review_run_id. "+
+				"If you are the reviewer for this run, nothing is saved until you save it: this is the expected result of the "+
+				"pre-discovery check, so proceed with discovery and record your result. "+
+				"If you are waiting on another stage's reviewer, it has not finished — resume from its completion notification "+
+				"rather than polling",
 			reviewRunID, module,
 		)
 	}

@@ -199,14 +199,28 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 		t.Errorf(`view="review" did not return the saved reviewer Markdown: %s`, raw)
 	}
 
-	// A not-yet-saved review is still an ordinary state with an actionable message.
+	// A not-yet-saved review is the expected result of the pre-discovery check the
+	// review stage prompt mandates, so it must read as normal and must not send the
+	// caller looking for a different id — the identity was validated just above.
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
 		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleBugReview,
 	})
-	if err == nil || !strings.Contains(err.Error(), "no saved Pulse review yet") ||
-		!strings.Contains(err.Error(), "still running") {
-		t.Errorf("missing review rejection lost its explanation: %v", err)
+	if err == nil {
+		t.Fatal("missing review returned no error")
+	}
+	for _, want := range []string{
+		"no Pulse review is saved",
+		"do not look for a different review_run_id",
+		"proceed with discovery and record your result",
+		"resume from its completion notification",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing-review message omits %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "identity pair is wrong") {
+		t.Errorf("missing-review message still offers a cause ValidatePulseReviewIdentity ruled out: %v", err)
 	}
 }
 
