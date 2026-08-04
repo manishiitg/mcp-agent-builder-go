@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -420,7 +421,32 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	if result.Stdout != "" && len(result.Stdout) < 200 && strings.Contains(params.Command, "call_sub_agent") {
 		log.Printf("[SHELL_RESULT_DEBUG] call_sub_agent via shell: stdout_len=%d raw_resp_len=%d", len(result.Stdout), len(respBody))
 	}
+	result.Stderr += shellWorkingDirectoryHint(result, params.WorkingDirectory)
 	return result, nil
+}
+
+// shellWorkingDirectoryHint tells a failed command where it actually ran.
+//
+// The cwd is per-session — SetSessionWorkingDir points a workshop tool-agent at
+// its workflow folder and a step at its run execution folder — but the agent is
+// only ever shown workspace-rooted paths like "Workflow/build-in-public/...".
+// Nothing reported the difference, so an agent that prefixed its own workflow
+// path got `cd: Workflow/build-in-public: No such file or directory` from inside
+// Workflow/build-in-public, with no way to tell that from a missing folder. On
+// 2026-08-04 that cost six calls across the Pulse reviewer, the Pulse fixer, and
+// a dev step.
+//
+// Only failures carry the hint, so a working command pays nothing for it.
+func shellWorkingDirectoryHint(result ShellCommandResult, workingDirectory string) string {
+	workingDirectory = strings.TrimSpace(workingDirectory)
+	if result.ExitCode == 0 || workingDirectory == "" {
+		return ""
+	}
+	hint := fmt.Sprintf("\n[cwd] This command ran in %q. Paths are resolved against it, not the workspace docs root — do not prefix them with that directory again.", workingDirectory)
+	if strings.HasSuffix(result.Stderr, "\n") {
+		return strings.TrimPrefix(hint, "\n")
+	}
+	return hint
 }
 
 // isWorkflowStepShellRequest identifies shell calls owned by a workflow step
@@ -953,6 +979,9 @@ func blockAbsoluteHostPaths(command string, guard *FolderGuardConfig) error {
 		candidateLower := strings.ToLower(candidate)
 		for _, dir := range blockedDirs {
 			if candidateLower == dir || strings.HasPrefix(candidateLower, dir+"/") {
+				if hint := codingCLIToolResultSpillDenial(candidate); hint != "" {
+					return errors.New(hint)
+				}
 				roots := workspaceDocsRoots()
 				suggestion := closestWorkspaceRootHint(candidate, roots)
 				return fmt.Errorf(
@@ -966,6 +995,43 @@ func blockAbsoluteHostPaths(command string, guard *FolderGuardConfig) error {
 		}
 	}
 	return nil
+}
+
+// codingCLIToolResultSpillDenial recognizes the one host path an agent is
+// actively instructed to read, and replaces a useless denial with the only
+// recovery that works.
+//
+// When a tool result exceeds a coding CLI's token cap the CLI truncates it,
+// writes the full text under its own project directory
+// (~/.claude/projects/<slug>/<session>/tool-results/…), and tells the agent to
+// re-read it with offset and limit. That directory is outside every workspace
+// root, so the guard denies it — and the generic denial then says "use
+// workspace-relative paths", which cannot work: the file does not exist in the
+// workspace and never will.
+//
+// Observed on 2026-08-04: a 103,685-character shell result spilled at 09:05:53
+// and the read of that exact file was denied at 09:05:59. Three of the four host
+// path denials that day were this same dead end. Granting read access is not the
+// answer — the spill holds output this tool produced, so re-running the command
+// with narrower output costs one call and keeps the boundary intact.
+//
+// Returning "" means this is not a spill path and the generic denial applies.
+func codingCLIToolResultSpillDenial(candidate string) string {
+	slashed := filepath.ToSlash(candidate)
+	if !strings.Contains(slashed, "/tool-results/") && !strings.HasSuffix(slashed, "/tool-results") {
+		return ""
+	}
+	if !strings.Contains(slashed, "/.claude/projects/") && !strings.Contains(slashed, "/.codex/") && !strings.Contains(slashed, "/.cursor/") {
+		return ""
+	}
+	return fmt.Sprintf(
+		"access denied: %s is a truncated tool-result spill written by your coding CLI, outside every workspace root. "+
+			"It cannot be read, and no workspace-relative path points at it — do not look for one. "+
+			"The output was too large for one result, so re-run the original command producing less: "+
+			"filter with grep, take a slice with head/tail or sed -n '<start>,<end>p', select fields with jq/awk, "+
+			"or redirect the full output into a file under your working directory and read it back in pieces.",
+		candidate,
+	)
 }
 
 func isAllowedAbsoluteHostPath(candidate string, guard *FolderGuardConfig) bool {

@@ -171,7 +171,7 @@ CLI providers (`claude-code`, `codex-cli`, `cursor-cli`, `pi-cli`; legacy `agy-c
 Crucially, the **layer-2 allow-list is the single gate for the bridge too**, enforced in two spots in `mcpagent` — both reading the same `sessionToolAllowLists[sessionID]` map (populated by `SetToolAccess` → `codeexec.SetSessionToolAllowList`):
 
 1. **Discovery** — `agent/code_execution_tools.go` (`Respect toolAllowList … only include allowed custom tools in the index`): a blocked tool never appears in `get_api_spec`.
-2. **Execution** — `agent/codeexec/registry.go` `CallCustomToolWithSession`: a blocked tool's HTTP call returns `tool "<name>" is not available in the current workshop mode`.
+2. **Execution** — `agent/codeexec/registry.go` `CallCustomToolWithSession`: a blocked tool's HTTP call returns `tool_not_allowed: "<name>" is not in this session's allowed tool set`, followed by the names that *are* allowed. It deliberately does not name a cause: the registry only sees the allow-list map, and the previous wording ("not available in the current workshop mode") sent agents off to reason about modes that were never the reason.
 
 **Consequence:** adding a tool to `GetToolsForWorkshopMode` is sufficient for CLI agents — it makes the tool both *visible* in `get_api_spec` and *callable* via the bridge. Registration updates routing immediately; there is no separate public registry-refresh lifecycle.
 
@@ -179,7 +179,7 @@ Crucially, the **layer-2 allow-list is the single gate for the bridge too**, enf
 
 1. Is X **registered**? (in the `human_tools`/`workspace_*` pool and `enabled_custom_tools`/`PreparePhaseAgentTools`) — layer 1.
 2. Is X in **`GetToolsForWorkshopMode`** for the current mode? — layer 2. *(Most common cause.)*
-3. For CLI agents, don't trust the agent's self-report — have it call `get_api_spec` (visibility) or invoke the tool (execution). The error `not available in the current workshop mode` means layer 2 is blocking it.
+3. For CLI agents, don't trust the agent's self-report — have it call `get_api_spec` (visibility) or invoke the tool (execution). The error `tool_not_allowed:` means layer 2 is blocking it, and the message lists the surface the session does have.
 4. If X is a scheduled Pulse/workshop tool, add or update a `TestToolSetInvariants` assertion so the registered-tool pool and workshop allow-list cannot drift again.
 
 ---

@@ -1728,6 +1728,15 @@ func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
 		// claim a grant mcpagent already guarantees.
 		"get_workflow_command_guidance",
 
+		// Tool-surface discovery. The allow-list gates the code-execution bridge
+		// too, and it is checked before get_api_spec can reach its virtual-tool
+		// partition — so omitting it left every stage agent unable to find out
+		// which tools it actually has. That turns any denial into a guess: on
+		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
+		// surface and concluded its session was in the wrong workshop mode.
+		// Discovery grants no capability this list does not already grant.
+		"get_api_spec",
+
 		// Read-only workflow state.
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
@@ -1773,6 +1782,14 @@ func pulseFixerStageToolAgentAllowedToolNames() []string {
 		// and read_skill come from the common list every agent inherits; only the
 		// single writer gets mutate.
 		"mutate_workflow_db",
+
+		// Scheduler repair. pulse-fixer-practices.md gives this agent a
+		// "Scheduler and lifecycle repair" section, so withholding the schedule
+		// tools made its own instructions unfollowable — it burned four calls on
+		// update_schedule and reported the workflow unchanged. Creating and
+		// deleting schedules stay out: those reshape the run surface, which is a
+		// Workshop decision, not a bounded repair.
+		"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule",
 	)
 	return tools
 }
@@ -1828,6 +1845,15 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		// itself when it is an intrinsic identity tool, so the builder must not
 		// claim a grant mcpagent already guarantees.
 		"get_workflow_command_guidance",
+
+		// Tool-surface discovery. The allow-list gates the code-execution bridge
+		// too, and it is checked before get_api_spec can reach its virtual-tool
+		// partition — so omitting it left every stage agent unable to find out
+		// which tools it actually has. That turns any denial into a guess: on
+		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
+		// surface and concluded its session was in the wrong workshop mode.
+		// Discovery grants no capability this list does not already grant.
+		"get_api_spec",
 
 		// Read-only workflow state and report inspection.
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",

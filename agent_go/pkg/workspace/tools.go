@@ -132,7 +132,10 @@ func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, ar
 		if err != nil {
 			return "", err
 		}
-		return marshalResult(result)
+		// Only the agent-facing result is capped. Scripted steps call
+		// client.ExecuteShellCommand directly and parse stdout as schema-validated
+		// JSON, so they must keep every byte.
+		return marshalResult(capShellResultForAgent(result))
 	}
 
 	executors["read_image"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
