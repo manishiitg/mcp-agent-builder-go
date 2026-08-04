@@ -2,7 +2,11 @@
 
 ## Status
 
-Eight agent-contract defects, all fixed and re-verified 2026-08-04.
+Eight agent-contract defects were implemented and their targeted tests passed on
+2026-08-04. An independent code review later that day accepted fixes #1 and #8,
+accepted the core direction of #2, #4, and #7 with follow-ups, and found material
+gaps in #3, #5, and #6. The per-issue review notes below are part of the current
+status; this document must not be read as saying all eight are fully closed.
 
 | # | Where | Commit |
 |---|---|---|
@@ -14,6 +18,7 @@ Eight agent-contract defects, all fixed and re-verified 2026-08-04.
 | 6 | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault | `6f4737cc9` |
 | 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | `b4402bcef` |
 | 8 | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | see #8 below |
+| 9 | `cmd/server/pulse_worklist.go` + `pulse_finding_lifecycle.go` — one finding, four sequential rejections | `fdd54c089` |
 
 Still open, recorded below: the unbounded `stdoutBuf` in the workspace handler,
 the empty `tool=` field on some CLI payload markers, and the global activity
@@ -89,6 +94,11 @@ the allowed surface (sorted, capped at 30). It mirrors
 `Agent.unavailableToolsError`, which learned this lesson on 2026-08-01 for the
 `get_api_spec` path but never covered the bridge path.
 
+**Independent code review, 2026-08-04 — accepted.** The denial now describes
+the actual allow-list state without inventing a workshop mode, and the registry
+lookup path supports the distinction used by #8. No material issue was found in
+this fix.
+
 ---
 
 ## 2. A test fixture that read as the platform's shell
@@ -132,6 +142,16 @@ gone; the tests use the identically-named one in package `agent`.
 **Worth keeping:** a test-only helper in a production package is not a naming
 nit. It is a fact that will be believed by the next person auditing that subject.
 
+**Independent code review, 2026-08-04 — direction accepted; enforcement is
+module-local.** Moving the fixture out of the production-looking path resolves
+the misleading ownership signal. However,
+`TestNoProductionCodeImportsTheShellFixture` scans non-test files only inside the
+`mcpagent` module. Because `shellfixture` remains an exported Go package, a
+downstream production module can still import it and the guard will not fail.
+Either make the fixture structurally test-only, or add an architecture check
+covering the known downstream modules. This is an enforcement gap, not evidence
+of a current production caller.
+
 ---
 
 ## 3. Grants that withheld what the prompts promise
@@ -159,6 +179,15 @@ Workshop decision, not a bounded repair.
 Two drift guards in `workshop_allow_list_test.go`, verified failing without the
 grants. They join the existing `list_llm_capabilities` guard, which was written
 for the same drift in the same file.
+
+**Independent code review, 2026-08-04 — incomplete / safety regression.**
+Granting `get_api_spec`, schedule discovery, and bounded schedule updates matches
+the prompts. Granting `trigger_schedule` does not: it immediately executes a
+workflow and can cause external side effects, while the Fixer practices require
+approval for changes that alter such effects. The new test currently enshrines
+the unsafe grant. Remove `trigger_schedule` from the automatic Fixer surface or
+route it through an explicit approval gate; keep `list_schedules`,
+`get_schedule_runs`, and `update_schedule` if scheduler repair remains in scope.
 
 ---
 
@@ -196,6 +225,15 @@ agent could not tell which it had.
 `pwd` rather than assume. More importantly, `shellWorkingDirectoryHint` appends
 the effective cwd to stderr **on failure only** — so the truth travels with the
 failure even if the description drifts again. Successful commands pay nothing.
+
+**Independent code review, 2026-08-04 — core fix accepted; description still
+overpromises.** The effective-cwd hint is correct for commands that execute and
+return a failure. The description still says *any* failed command reports its
+directory, but Folder Guard, validation, and other pre-execution failures return
+before that hint is appended. It also says absolute paths under the docs root are
+accepted, although a session's granted paths can deny them. Reword both claims
+conditionally: executed non-zero commands report cwd, and docs-root paths are
+accepted only when allowed by the current session grants.
 
 ---
 
@@ -254,6 +292,17 @@ advice with the only recovery that works. **The boundary is unchanged** — the
 spill holds output this tool produced, so re-running narrower costs one call and
 does not widen the sandbox.
 
+**Independent code review, 2026-08-04 — incomplete.** The head/tail policy and
+agent-only placement are sound, but the 48,000-byte guarantee is applied to
+`stdout + stderr` *before* `marshalResult` JSON-encodes the result. Quotes,
+backslashes, control characters, and nested JSON expand during encoding, so the
+actual CLI payload can still exceed the intended cap. Enforce the budget against
+the final serialized payload (or derive stream budgets from repeated
+`json.Marshal` measurements), and add quote/backslash-heavy and nested-JSON
+tests. A smaller edge case also remains: when an operator configures a cap below
+the truncation marker length, the helper emits the whole marker and exceeds that
+configured cap.
+
 ---
 
 ## 6. A mandated pre-check answered as a fault
@@ -282,6 +331,15 @@ as an explanation the one thing it had just disproved.
 and record its result, keep the genuine waiting-on-another-stage case, and state
 outright that the identity is well-formed so no other id should be tried. The
 test now fails if `identity pair is wrong` returns.
+
+**Independent code review, 2026-08-04 — incomplete.** The prose is better, but
+the expected fresh-run miss still returns `fmt.Errorf`. It therefore remains a
+red failed tool call, produces the tool-error marker, and can still trigger
+failure handling or retries. `sql.ErrNoRows` for this mandated pre-check should
+return a successful structured state such as
+`{"found":false,"status":"not_saved_yet"}`. Reserve tool errors for invalid
+identity, malformed input, and database failures; update the test to assert a
+successful not-found result rather than merely checking the wording of an error.
 
 ---
 
@@ -333,6 +391,17 @@ wrapper. That is wrong: `server.go:4254` constructs `llmAgent` fresh per call, s
 nothing carries over. The duplicate is entirely within one assembly pass. The
 plausible story about state surviving across runs cost time that reading the two
 call sites would not have.
+
+**Independent code review, 2026-08-04 — functional fix accepted; implementation
+comment and regression boundary need correction.** Last-write-wins replacement
+in the compatibility wrapper matches the legacy map behavior while leaving
+mcpagent finalization strict. However, the comment in
+`pkg/agentwrapper/llm_agent.go` still claims the Chief of Staff resumes onto a
+wrapper that already carries delegation tools, contradicting the correct root
+cause recorded immediately above. Correct that comment and its test commentary.
+Also add a regression test that calls definition finalization after replacement;
+the current slice-length checks are useful but do not exercise the boundary that
+originally failed.
 
 ---
 
@@ -452,12 +521,73 @@ legible at the moment an agent reaches for the old name. Until then, a
 consolidation motivated by guessing produces a fresh generation of guesses.
 
 **What remains after the three fixes.** Discovery is closed: `get_api_spec` is
-granted, an unknown name says so, and a denial lists the real surface. What is
-*not* closed is repetition — `record_pulse_worklist` was rejected three times in
-one run with three different wrong shapes, which is
-[steps_never_learn_from_their_own_validation_failures.md](steps_never_learn_from_their_own_validation_failures.md)
-in a new place. And `record_pulse_result` at 18 failures is the largest single
-count in the scan and has not been analysed at all.
+granted, an unknown name says so, and a denial lists the real surface. What was
+*not* closed here is repetition within a single tool's own validation — see #9,
+which analyses `record_pulse_result` (18 failures, the largest single count in
+the scan) and fixes the part of that repetition caused by the validator itself.
+
+**Independent code review, 2026-08-04 — accepted.** The registry path now
+distinguishes a name that does not exist from a registered name withheld by the
+session allow-list. No new material issue was found in this fix. The separate
+schema-repetition and `record_pulse_result` investigations remain open exactly as
+described above.
+
+---
+
+## 9. `record_pulse_result`: four rejections to learn four facts about one finding
+
+**The `record_pulse_result` analysis promised above.** 18 failures, the largest
+single tool in the scan. Most are agents correctly told their disposition was
+malformed — a real `__bogus__` probe call, an invalid `external_owner`, missing
+`changed_files`. One finding, though, shows a distinct and fixable pattern.
+
+**Symptom.** Finding `PUL-70B1057E` took **four sequential rejections over 24
+minutes** (09:40–10:04, session `workshop-pulse-fixer-…-51af4f19-…`) to record:
+
+```text
+10:02:19  reviewer verification inconclusive for finding "PUL-70B1057E"
+          requires disposition "changed_unverified", got "awaiting_run"
+10:03:11  finding "PUL-70B1057E" disposition must carry the reviewer's
+          structured inconclusive proof with identical expected and observed evidence
+10:03:25  finding "PUL-70B1057E" inconclusive disposition next_check must
+          match the reviewer boundary "the first default/reddit run after 2026-08-04T02:00Z..."
+10:04:23  changed_unverified finding "PUL-70B1057E" requires changed_files
+          (got changed_files=missing): the exact workspace-relative files this fix changed
+```
+
+**Root cause.** `record_pulse_result` validates one finding's disposition
+through two stateless functions — `validateFindingDisposition` (structural
+shape: does this disposition value have the fields it requires) and
+`validateReviewerVerificationDispositions` (cross-check: does the submitted
+disposition actually match what the saved reviewer verdict says happened) —
+and both returned on the **first** violation they hit. Every check in both
+functions reads an independent field of the same disposition object; none of
+them depends on an earlier one having passed. The four errors above are not
+four separate mistakes discovered in sequence — they were all true at
+09:40:44, on the very first attempt, and the validator revealed them one at a
+time anyway.
+
+This is the same anti-pattern the codebase had already fixed once, a few
+functions away in the same file: the `result=changed` check merges
+`changed_files`/`verification`/`finding_dispositions` into one rejection
+naming the whole required set, specifically *"so a single retry can satisfy
+all three."* That fix never reached these two functions.
+
+**Fix.** Both functions now collect every violation and return one combined,
+numbered message when there is more than one — and read exactly as before
+when there is exactly one, so no existing rejection wording changed.
+`FormatPulseDispositionProblems` (exported from `step_based_workflow`) backs
+both, so structural and cross-check violations share one shape. Four tests,
+including both new tests verified failing against the old
+first-violation-only behavior before the fix landed.
+
+**What this does not fix.** The write path still runs DB-dependent checks
+(does the concern exist, is the referenced decision still open, does the
+attempt belong to this module) interleaved with the actual writes, inside the
+same per-disposition loop — a batch of five dispositions where #3 is invalid
+still aborts the whole batch, discarding #1, #2, #4, and #5's valid writes.
+Splitting "validate everything" from "write everything" there is a larger,
+transaction-sensitive change and is not attempted here.
 
 ---
 
