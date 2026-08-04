@@ -50,12 +50,18 @@ export const MicButton = forwardRef(function MicButton({
     return () => window.removeEventListener('keydown', onKey)
   }, [shortcutEnabled, disabled, toggle])
 
-  const busy = state === 'transcribing'
+  const preparing = state === 'preparing'
+  // Both non-interactive states show a spinner and refuse clicks. 'preparing'
+  // matters most: on a cold start it can last seconds while the model loads,
+  // and leaving the button looking idle invites repeat clicks.
+  const busy = state === 'transcribing' || preparing
   const label = state === 'recording'
     ? 'Stop recording'
-    : busy
-      ? 'Transcribing…'
-      : 'Speak your message (⌘⇧M)'
+    : preparing
+      ? 'Getting voice ready…'
+      : state === 'transcribing'
+        ? 'Transcribing…'
+        : 'Speak your message (⌘⇧M)'
 
   return (
     <span className="fl-mic-wrap">
@@ -77,6 +83,18 @@ export const MicButton = forwardRef(function MicButton({
           <span className="fl-mic-level" style={{ transform: `scale(${1 + level * 0.7})` }} aria-hidden="true" />
         )}
       </button>
+      {preparing && (
+        // Shown for the whole startup gap, which on a cold start is the model
+        // loading (seconds, occasionally much longer on first ever use). The
+        // absence of this was read as "nothing is working".
+        <span className="fl-mic-live-banner" role="status">
+          <Loader2 size={15} className="fl-mic-spin" aria-hidden="true" />
+          <span className="fl-mic-live-label">Starting</span>
+          <span className="fl-mic-live-text is-waiting">
+            Getting voice ready — this can take a moment the first time…
+          </span>
+        </span>
+      )}
       {state === 'recording' && (
         // A full-width banner above the WHOLE composer (see .fl-mic-live-banner —
         // anchored to .fl-composer, not this small wrap), not a tooltip easy to

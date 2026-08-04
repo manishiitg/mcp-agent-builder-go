@@ -19,6 +19,16 @@ func voiceStreamDebug() bool { return os.Getenv("SPARKQUILL_VOICE_DEBUG") == "1"
 
 var voiceChunkSeq atomic.Int64
 
+// One dictation at a time. The helper keeps a single utterance buffer, so two
+// overlapping sessions interleave their audio into one transcript — observed
+// live on 2026-08-04, when a cold-start model load left the mic button looking
+// idle, the parent clicked repeatedly, and six concurrent capture sessions
+// produced 541 chunks for 15 seconds of speech and a garbage transcript. The
+// client now blocks that (see MicState 'preparing'), but the invariant belongs
+// here too: this is the only place that can actually enforce it, and a second
+// client, a stale tab, or a retry would otherwise reintroduce it.
+var voiceStreamActive atomic.Bool
+
 // pcmStats reports loudness of a raw little-endian Float32 buffer, plus the
 // sample count — enough to tell silence from real speech, and to catch a
 // client sending the wrong sample rate or a truncated chunk.
@@ -71,15 +81,25 @@ func handleVoiceStreamStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "native voice helper not available", http.StatusServiceUnavailable)
 		return
 	}
+	// Claim the session BEFORE loading. The cold-start load is the long wait,
+	// and therefore precisely the window in which repeat clicks arrive — a
+	// guard taken after it would be useless for the case it exists to stop.
+	if !voiceStreamActive.CompareAndSwap(false, true) {
+		log.Printf("[voice-native] rejecting overlapping stream start")
+		http.Error(w, "a dictation session is already in progress", http.StatusConflict)
+		return
+	}
 	// load is idempotent in the helper and cheap once weights are cached; the
 	// first call downloads them, which is why this worker carries a long call
 	// timeout.
 	if _, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "load"}); err != nil {
+		voiceStreamActive.Store(false)
 		log.Printf("[voice-native] load failed: %v", err)
 		http.Error(w, "could not start the voice engine", http.StatusInternalServerError)
 		return
 	}
 	if _, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "start"}); err != nil {
+		voiceStreamActive.Store(false)
 		log.Printf("[voice-native] start failed: %v", err)
 		http.Error(w, "could not start dictation", http.StatusInternalServerError)
 		return
@@ -133,6 +153,9 @@ func handleVoiceStreamFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Released even when the transcription below fails: a stuck flag would
+	// wedge dictation for the rest of the process's life.
+	defer voiceStreamActive.Store(false)
 	resp, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "finish"})
 	if err != nil {
 		log.Printf("[voice-native] finish failed: %v", err)

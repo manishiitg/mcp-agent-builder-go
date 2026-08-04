@@ -2825,6 +2825,9 @@ export default function LearningApp() {
   // the next unrelated re-render.
   const [parentMicRecording, setParentMicRecording] = useState(false)
   const [childMicRecording, setChildMicRecording] = useState(false)
+  // Tracks 'preparing' as well as 'recording': the banner appears at the start
+  // of preparation, so space must be reserved from that moment or it covers
+  // the last message during the whole cold-start wait.
   // The listening banner's reserved space (see .fl-thread:has(...) in
   // learning-app.css) only grows how far the thread CAN scroll — nothing
   // scrolls it there on its own. scrollIntoView on the end marker (used
@@ -3382,7 +3385,7 @@ export default function LearningApp() {
               </button>
               <MicButton
                 ref={parentMicRef}
-                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording') }}
+                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording' || s === 'preparing') }}
                 onText={(text, autoSubmit) => {
                   if (autoSubmit) {
                     const cur = focusInputRef.current
@@ -4469,7 +4472,7 @@ export default function LearningApp() {
                 </button>
                 <MicButton
                   ref={childMicRef}
-                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording') }}
+                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording' || s === 'preparing') }}
                   onText={(text, autoSubmit) => {
                     if (autoSubmit) {
                       const cur = childInputRef.current
