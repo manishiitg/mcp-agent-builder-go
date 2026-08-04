@@ -5,9 +5,14 @@ tools. The inline system prompt now carries only a one-line-per-category
 cheat sheet; this skill is the deep reference with full signatures,
 parameters, when-to-use rules, and gotchas.
 
-If you need to confirm an exact parameter shape that isn't documented
-here, call `get_api_spec(tool_name="...")` — that
-returns the live JSON schema for the tool.
+If you need to confirm an exact parameter shape that isn't documented here
+and you are a coding CLI reaching tools through the api-bridge (code
+execution / agentic mode — see the "Coding-CLI bridge routing" section
+below), call `get_api_spec(tool_name="...")` — that returns the live JSON
+schema for the tool. `get_api_spec` is registered only in that mode; a
+native tool-calling session already receives every tool's full schema
+declared directly to the model and must not call it — the runtime has
+nothing to answer with, and the call fails as "not registered for session".
 
 ### Coding-CLI bridge routing
 
