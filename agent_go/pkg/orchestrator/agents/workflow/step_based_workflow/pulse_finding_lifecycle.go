@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -710,25 +711,47 @@ func resolvePulseFixAttemptTx(
 	return attemptID, nil
 }
 
+// validateFindingDisposition reports every structural problem with one
+// disposition, not just the first.
+//
+// It used to return on the first violation. On 2026-08-04 one finding
+// (PUL-70B1057E) took four sequential record_pulse_result rejections over 24
+// minutes to satisfy: wrong disposition value, then a verification proof that
+// didn't match the reviewer's evidence, then a next_check that didn't match the
+// reviewer's boundary text (all from validateReviewerVerificationDispositions,
+// which has the same fix below), and only after all three passed did this
+// function's own missing-changed_files check surface — a structural problem
+// that had been true the entire time but was never reached. Four round trips to
+// learn four facts a single rejection could have stated together, on ONE
+// finding.
+//
+// That anti-pattern already had one fix in this codebase: the result=changed
+// check three functions away in pulse_worklist.go merged three separate
+// "X is required" rejections into one message naming the whole required set.
+// This applies the same treatment here.
 func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	disposition = NormalizePulseFindingDisposition(disposition)
+	var problems []string
+	add := func(format string, args ...interface{}) { problems = append(problems, fmt.Sprintf(format, args...)) }
+
 	if disposition.Fingerprint == "" || disposition.FindingID == "" {
-		return fmt.Errorf("finding disposition requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_state(view=\"backlog\") item, where finding_id is issue.id",
+		add("requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_state(view=\"backlog\") item, where finding_id is issue.id",
 			pulseArrivalReport(pulseStringArrival("fingerprint", disposition.Fingerprint), pulseStringArrival("finding_id", disposition.FindingID)))
 	}
 	if disposition.Summary == "" {
-		return fmt.Errorf("finding %q disposition requires summary: one sentence stating what was done and what it means for this finding", disposition.FindingID)
+		add("requires summary: one sentence stating what was done and what it means for this finding")
 	}
-	if !pulseValueAllowed(disposition.Disposition, pulseFindingDispositionValues) {
-		return fmt.Errorf("finding %q has invalid disposition %q. Must be one of: %s",
-			disposition.FindingID, disposition.Disposition, pulseAllowed(pulseFindingDispositionValues))
+	dispositionKnown := pulseValueAllowed(disposition.Disposition, pulseFindingDispositionValues)
+	if !dispositionKnown {
+		add("has invalid disposition %q. Must be one of: %s", disposition.Disposition, pulseAllowed(pulseFindingDispositionValues))
 	}
 
 	passed, failed, inconclusive := 0, 0, 0
 	for index, verification := range disposition.Verification {
 		if strings.TrimSpace(verification.Check) == "" {
-			return fmt.Errorf("finding %q verification[%d] requires check naming what was run or inspected; each verification entry is {\"check\", \"verdict\", \"expected\", \"observed\", \"evidence\"} where check and verdict are required and verdict is one of: %s",
-				disposition.FindingID, index, pulseAllowed(pulseVerificationVerdictValues))
+			add("verification[%d] requires check naming what was run or inspected; each verification entry is {\"check\", \"verdict\", \"expected\", \"observed\", \"evidence\"} where check and verdict are required and verdict is one of: %s",
+				index, pulseAllowed(pulseVerificationVerdictValues))
+			continue
 		}
 		switch strings.TrimSpace(verification.Verdict) {
 		case VerificationPassed:
@@ -738,90 +761,109 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 		case VerificationInconclusive:
 			inconclusive++
 		default:
-			return fmt.Errorf("finding %q verification[%d] has invalid verdict %q. Must be one of: %s",
-				disposition.FindingID, index, verification.Verdict, pulseAllowed(pulseVerificationVerdictValues))
+			add("verification[%d] has invalid verdict %q. Must be one of: %s", index, verification.Verdict, pulseAllowed(pulseVerificationVerdictValues))
 		}
 	}
 	verdictCounts := fmt.Sprintf("passed=%d, failed=%d, inconclusive=%d", passed, failed, inconclusive)
-	switch disposition.Disposition {
-	case FindingDispositionFixedVerified:
-		if len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("fixed_verified finding %q requires changed_files (got %s): the exact workspace-relative files this fix changed. Use verified_no_change when a check proved the problem is absent without changing any file",
-				disposition.FindingID, pulseArrivalReport(
-					pulseListArrival("changed_files", disposition.ChangedFiles)))
-		}
-		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
-			return fmt.Errorf("fixed_verified finding %q requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
-				disposition.FindingID, len(disposition.BeforeRefs), len(disposition.AfterRefs))
-		}
-		if passed == 0 || failed > 0 || inconclusive > 0 {
-			return fmt.Errorf("fixed_verified finding %q requires at least one passed verification and no failed or inconclusive check (got %s). Use changed_unverified when the proof has not arrived yet, or failed when a check failed",
-				disposition.FindingID, verdictCounts)
-		}
-	case FindingDispositionChangedUnverified:
-		if len(disposition.ChangedFiles) == 0 {
-			return fmt.Errorf("changed_unverified finding %q requires changed_files (got %s): the exact workspace-relative files this fix changed. Use awaiting_run when nothing was changed and only a scheduled run can produce the evidence",
-				disposition.FindingID, pulseArrivalReport(
-					pulseListArrival("changed_files", disposition.ChangedFiles)))
-		}
-		if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
-			return fmt.Errorf("changed_unverified finding %q requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
-				disposition.FindingID, len(disposition.BeforeRefs), len(disposition.AfterRefs))
-		}
-		// next_check names the evidence that will settle this. Without it the
-		// next reviewer cannot tell whether the producing run has happened, so
-		// the finding is re-attempted instead of verified — rtslatency held one
-		// at seen_count 4, still awaiting_verification, because each pass
-		// re-fixed it rather than checking the run that had since occurred.
-		if disposition.NextCheck == "" {
-			return fmt.Errorf("changed_unverified finding %q requires next_check naming the run, table, or artifact whose arrival proves or disproves this fix", disposition.FindingID)
-		}
-		if inconclusive == 0 || failed > 0 {
-			return fmt.Errorf("changed_unverified finding %q requires at least one inconclusive verification and no failed check (got %s). A passed-only result is fixed_verified and any failed check makes this failed",
-				disposition.FindingID, verdictCounts)
-		}
-	case FindingDispositionVerifiedNoChange:
-		if passed == 0 || failed > 0 || inconclusive > 0 {
-			return fmt.Errorf("verified_no_change finding %q requires at least one passed verification and no failed or inconclusive check (got %s). verified_no_change means a check proved this is not (or is no longer) a problem without changing any file",
-				disposition.FindingID, verdictCounts)
-		}
-	case FindingDispositionFailed:
-		if len(disposition.Verification) > 0 && failed == 0 {
-			return fmt.Errorf("failed finding %q supplied %d verification entries but none with verdict %q (got %s); include the check that failed, or omit verification entirely when no check was run",
-				disposition.FindingID, len(disposition.Verification), VerificationFailed, verdictCounts)
-		}
-	case FindingDispositionAwaitingRun:
-		// Naming the evidence boundary is what separates waiting from stalling:
-		// without it nobody can tell whether the run that would resolve this has
-		// already happened.
-		if disposition.NextCheck == "" {
-			return fmt.Errorf("awaiting_run finding %q requires next_check naming the run or evidence that will resolve it", disposition.FindingID)
-		}
-		if len(disposition.ChangedFiles) > 0 {
-			return fmt.Errorf("awaiting_run finding %q changed files; a finding with a fix applied is changed_unverified, not awaiting_run", disposition.FindingID)
-		}
-	case FindingDispositionAwaitingUser:
-		// A finding cannot wait on a decision nobody was asked for. Requiring
-		// the question id here is what turns "awaiting_user" from a label into
-		// something the operator can actually act on.
-		if disposition.HumanInputID == "" {
-			return fmt.Errorf("awaiting_user finding %q requires human_input_id: create the decision with create_human_input_request first, or use blocked/proposal_only if no question is being asked", disposition.FindingID)
-		}
-	case FindingDispositionExternalAction:
-		if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
-			return fmt.Errorf("external_action_required finding %q requires all of external_owner, reason_code, and reopen_condition (got %s). external_owner must be one of: %s. reason_code is a stable slug such as missing_platform_tool, permission_boundary, vendor_issue, policy, or accepted_risk, and reopen_condition names the evidence or capability that would make this actionable again",
-				disposition.FindingID, pulseArrivalReport(
-					pulseStringArrival("external_owner", disposition.ExternalOwner),
-					pulseStringArrival("reason_code", disposition.ReasonCode),
-					pulseStringArrival("reopen_condition", disposition.ReopenCondition)),
-				pulseAllowed(pulseExternalOwnerValues))
-		}
-		if !pulseValueAllowed(disposition.ExternalOwner, pulseExternalOwnerValues) {
-			return fmt.Errorf("external_action_required finding %q has invalid external_owner %q. Must be one of: %s. Use \"platform\" for shared runtime, harness, bridge, or product-side issues; \"user\" for a decision only the operator can make; \"vendor\" for a third-party service; \"workflow_owner\" for another workflow's own configuration",
-				disposition.FindingID, disposition.ExternalOwner, pulseAllowed(pulseExternalOwnerValues))
+
+	// Type-specific rules only apply once the disposition value itself is
+	// known-good — checking them against an invalid value would report
+	// requirements for a type the agent may not have meant.
+	if dispositionKnown {
+		switch disposition.Disposition {
+		case FindingDispositionFixedVerified:
+			if len(disposition.ChangedFiles) == 0 {
+				add("fixed_verified requires changed_files (got %s): the exact workspace-relative files this fix changed. Use verified_no_change when a check proved the problem is absent without changing any file",
+					pulseArrivalReport(pulseListArrival("changed_files", disposition.ChangedFiles)))
+			}
+			if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
+				add("fixed_verified requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
+					len(disposition.BeforeRefs), len(disposition.AfterRefs))
+			}
+			if passed == 0 || failed > 0 || inconclusive > 0 {
+				add("fixed_verified requires at least one passed verification and no failed or inconclusive check (got %s). Use changed_unverified when the proof has not arrived yet, or failed when a check failed", verdictCounts)
+			}
+		case FindingDispositionChangedUnverified:
+			if len(disposition.ChangedFiles) == 0 {
+				add("changed_unverified requires changed_files (got %s): the exact workspace-relative files this fix changed. Use awaiting_run when nothing was changed and only a scheduled run can produce the evidence",
+					pulseArrivalReport(pulseListArrival("changed_files", disposition.ChangedFiles)))
+			}
+			if len(disposition.BeforeRefs) != len(disposition.AfterRefs) {
+				add("changed_unverified requires before_refs and after_refs as equal-length positional pairs (got before_refs=%d, after_refs=%d); supply the matching after_ref for each before_ref, or omit both arrays",
+					len(disposition.BeforeRefs), len(disposition.AfterRefs))
+			}
+			// next_check names the evidence that will settle this. Without it the
+			// next reviewer cannot tell whether the producing run has happened, so
+			// the finding is re-attempted instead of verified — rtslatency held one
+			// at seen_count 4, still awaiting_verification, because each pass
+			// re-fixed it rather than checking the run that had since occurred.
+			if disposition.NextCheck == "" {
+				add("changed_unverified requires next_check naming the run, table, or artifact whose arrival proves or disproves this fix")
+			}
+			if inconclusive == 0 || failed > 0 {
+				add("changed_unverified requires at least one inconclusive verification and no failed check (got %s). A passed-only result is fixed_verified and any failed check makes this failed", verdictCounts)
+			}
+		case FindingDispositionVerifiedNoChange:
+			if passed == 0 || failed > 0 || inconclusive > 0 {
+				add("verified_no_change requires at least one passed verification and no failed or inconclusive check (got %s). verified_no_change means a check proved this is not (or is no longer) a problem without changing any file", verdictCounts)
+			}
+		case FindingDispositionFailed:
+			if len(disposition.Verification) > 0 && failed == 0 {
+				add("failed supplied %d verification entries but none with verdict %q (got %s); include the check that failed, or omit verification entirely when no check was run",
+					len(disposition.Verification), VerificationFailed, verdictCounts)
+			}
+		case FindingDispositionAwaitingRun:
+			// Naming the evidence boundary is what separates waiting from stalling:
+			// without it nobody can tell whether the run that would resolve this has
+			// already happened.
+			if disposition.NextCheck == "" {
+				add("awaiting_run requires next_check naming the run or evidence that will resolve it")
+			}
+			if len(disposition.ChangedFiles) > 0 {
+				add("awaiting_run changed files; a finding with a fix applied is changed_unverified, not awaiting_run")
+			}
+		case FindingDispositionAwaitingUser:
+			// A finding cannot wait on a decision nobody was asked for. Requiring
+			// the question id here is what turns "awaiting_user" from a label into
+			// something the operator can actually act on.
+			if disposition.HumanInputID == "" {
+				add("awaiting_user requires human_input_id: create the decision with create_human_input_request first, or use blocked/proposal_only if no question is being asked")
+			}
+		case FindingDispositionExternalAction:
+			if disposition.ExternalOwner == "" || disposition.ReasonCode == "" || disposition.ReopenCondition == "" {
+				add("external_action_required requires all of external_owner, reason_code, and reopen_condition (got %s). external_owner must be one of: %s. reason_code is a stable slug such as missing_platform_tool, permission_boundary, vendor_issue, policy, or accepted_risk, and reopen_condition names the evidence or capability that would make this actionable again",
+					pulseArrivalReport(
+						pulseStringArrival("external_owner", disposition.ExternalOwner),
+						pulseStringArrival("reason_code", disposition.ReasonCode),
+						pulseStringArrival("reopen_condition", disposition.ReopenCondition)),
+					pulseAllowed(pulseExternalOwnerValues))
+			} else if !pulseValueAllowed(disposition.ExternalOwner, pulseExternalOwnerValues) {
+				add("external_action_required has invalid external_owner %q. Must be one of: %s. Use \"platform\" for shared runtime, harness, bridge, or product-side issues; \"user\" for a decision only the operator can make; \"vendor\" for a third-party service; \"workflow_owner\" for another workflow's own configuration",
+					disposition.ExternalOwner, pulseAllowed(pulseExternalOwnerValues))
+			}
 		}
 	}
-	return nil
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return FormatPulseDispositionProblems(disposition.FindingID, problems)
+}
+
+// FormatPulseDispositionProblems joins every violation for one finding into a
+// single numbered message, so one rejection can be fixed in one retry instead
+// of one violation per round trip. Exported for pulse_worklist.go's reviewer
+// cross-validation, which needs the identical combined-message shape.
+func FormatPulseDispositionProblems(findingID string, problems []string) error {
+	if len(problems) == 1 {
+		return fmt.Errorf("finding %q %s", findingID, problems[0])
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "finding %q has %d problems — fix all of them before retrying:", findingID, len(problems))
+	for i, problem := range problems {
+		fmt.Fprintf(&b, "\n%d) %s", i+1, problem)
+	}
+	return errors.New(b.String())
 }
 
 func lifecycleStatusForDisposition(disposition string) (status, eventType, resolvedBy string) {

@@ -40,6 +40,53 @@ func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t 
 	}
 }
 
+// The three cross-checks (disposition value, verification proof, next_check
+// boundary) are independent — nothing about the disposition value being wrong
+// depends on whether the next_check text also mismatches — so all of them must
+// be reported in one rejection.
+//
+// On 2026-08-04 finding PUL-70B1057E took three separate record_pulse_result
+// rejections to clear this function alone, because it returned on the first
+// mismatch and only revealed the next one after the caller fixed it: wrong
+// disposition value, then a verification proof that didn't match the
+// reviewer's evidence, then a next_check that didn't match the reviewer's
+// boundary text.
+func TestValidateReviewerVerificationDispositionsCombinesAllMismatches(t *testing.T) {
+	review := []step_based_workflow.PulseReviewVerificationResult{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		Verdict:   step_based_workflow.VerificationInconclusive,
+		Expected:  "widened selector pool applied",
+		Observed:  "selector pool unchanged",
+		NextCheck: "next default/reddit run after 2026-08-04T02:00Z",
+	}}
+	dispositions := []step_based_workflow.PulseFindingDisposition{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		// Wrong disposition value, a verification proof that doesn't match the
+		// reviewer's evidence, and a next_check that doesn't match the
+		// reviewer's boundary — three independent mismatches at once.
+		Disposition: step_based_workflow.FindingDispositionAwaitingRun,
+		Verification: []step_based_workflow.PulseFindingVerification{{
+			Verdict:  step_based_workflow.VerificationInconclusive,
+			Expected: "something else entirely",
+			Observed: "something else entirely",
+		}},
+		NextCheck: "a different boundary",
+	}}
+	err := validateReviewerVerificationDispositions(review, dispositions)
+	if err == nil {
+		t.Fatal("mismatched disposition accepted")
+	}
+	for _, want := range []string{
+		`requires disposition "changed_unverified", got "awaiting_run"`,
+		"must carry the reviewer's structured inconclusive proof",
+		"next_check must match the reviewer boundary",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejection %q is missing %q", err.Error(), want)
+		}
+	}
+}
+
 func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

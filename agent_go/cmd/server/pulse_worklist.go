@@ -2301,10 +2301,25 @@ func pulseFindingDispositionsFromToolArg(raw interface{}) ([]step_based_workflow
 	return dispositions, nil
 }
 
+// validateReviewerVerificationDispositions reports every mismatch between the
+// saved reviewer verdicts and the submitted dispositions in one pass, not one
+// mismatch per call.
+//
+// It used to return on the first mismatch within the first review. On
+// 2026-08-04 finding PUL-70B1057E took three separate record_pulse_result
+// rejections to get through this single function alone — wrong disposition
+// value, then a verification proof that didn't match the reviewer's evidence,
+// then a next_check that didn't match the reviewer's boundary text — because
+// each rejection only revealed the next check once the previous one was fixed.
+// All three checks read independent fields of the same matched disposition, so
+// none of them needs the others to have passed first; they can all run and all
+// report in one message. validateFindingDisposition got the same fix for the
+// structural checks that follow this one in the same call.
 func validateReviewerVerificationDispositions(
 	reviews []step_based_workflow.PulseReviewVerificationResult,
 	dispositions []step_based_workflow.PulseFindingDisposition,
 ) error {
+	var messages []string
 	for _, review := range reviews {
 		var matched *step_based_workflow.PulseFindingDisposition
 		for index := range dispositions {
@@ -2323,15 +2338,18 @@ func validateReviewerVerificationDispositions(
 			break
 		}
 		if matched == nil {
-			return fmt.Errorf("reviewer verification for finding %q (fingerprint %q) requires a matching finding_disposition before the module can be terminal", review.FindingID, review.Fingerprint)
+			messages = append(messages, fmt.Sprintf("reviewer verification for finding %q (fingerprint %q) requires a matching finding_disposition before the module can be terminal", review.FindingID, review.Fingerprint))
+			continue
 		}
+
+		var findingProblems []string
 		wantDisposition := map[string]string{
 			step_based_workflow.VerificationPassed:       step_based_workflow.FindingDispositionFixedVerified,
 			step_based_workflow.VerificationFailed:       step_based_workflow.FindingDispositionFailed,
 			step_based_workflow.VerificationInconclusive: step_based_workflow.FindingDispositionChangedUnverified,
 		}[review.Verdict]
 		if matched.Disposition != wantDisposition {
-			return fmt.Errorf("reviewer verification %s for finding %q requires disposition %q, got %q", review.Verdict, review.FindingID, wantDisposition, matched.Disposition)
+			findingProblems = append(findingProblems, fmt.Sprintf("reviewer verification %s requires disposition %q, got %q", review.Verdict, wantDisposition, matched.Disposition))
 		}
 		verificationMatched := false
 		for _, proof := range matched.Verification {
@@ -2341,13 +2359,22 @@ func validateReviewerVerificationDispositions(
 			}
 		}
 		if !verificationMatched {
-			return fmt.Errorf("finding %q disposition must carry the reviewer's structured %s proof with identical expected and observed evidence", review.FindingID, review.Verdict)
+			findingProblems = append(findingProblems, fmt.Sprintf("disposition must carry the reviewer's structured %s proof with identical expected and observed evidence", review.Verdict))
 		}
 		if review.Verdict == step_based_workflow.VerificationInconclusive && strings.TrimSpace(matched.NextCheck) != review.NextCheck {
-			return fmt.Errorf("finding %q inconclusive disposition next_check must match the reviewer boundary %q", review.FindingID, review.NextCheck)
+			findingProblems = append(findingProblems, fmt.Sprintf("inconclusive disposition next_check must match the reviewer boundary %q", review.NextCheck))
+		}
+		if len(findingProblems) > 0 {
+			messages = append(messages, step_based_workflow.FormatPulseDispositionProblems(review.FindingID, findingProblems).Error())
 		}
 	}
-	return nil
+	if len(messages) == 0 {
+		return nil
+	}
+	if len(messages) == 1 {
+		return errors.New(messages[0])
+	}
+	return fmt.Errorf("%d findings failed reviewer-verification cross-check:\n%s", len(messages), strings.Join(messages, "\n"))
 }
 
 // pulseDecisionFields is the complete decision contract in schema order. It
