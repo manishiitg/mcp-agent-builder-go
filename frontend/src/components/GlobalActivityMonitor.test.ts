@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import type { ActiveSessionInfo } from '../services/api-types'
-import { currentActiveSession, currentSessionId, headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
+import {
+  currentActiveSession,
+  currentSessionId,
+  headerStatusLabel,
+  statusTone,
+  visibleActivitySessions,
+} from '../utils/globalActivityMonitorStatus'
+
+function minimalSession(overrides: Partial<ActiveSessionInfo> = {}): ActiveSessionInfo {
+  return {
+    session_id: 'session-1',
+    observer_id: '',
+    agent_mode: 'workflow',
+    status: 'running',
+    display_status: 'busy',
+    workspace_path: 'Workflow/rtslatency',
+    workflow_name: 'rtslatency',
+    has_retained_tmux_session: false,
+    has_running_background_agents: false,
+    running_background_agent_count: 0,
+    created_at: new Date().toISOString(),
+    last_activity: new Date().toISOString(),
+    ...overrides,
+  } as ActiveSessionInfo
+}
 
 function retainedWorkflowWithRuntime(phase: 'running' | 'completed'): ActiveSessionInfo {
   return {
@@ -95,24 +119,6 @@ describe('currentSessionId', () => {
 })
 
 describe('currentActiveSession', () => {
-  function minimalSession(overrides: Partial<ActiveSessionInfo> = {}): ActiveSessionInfo {
-    return {
-      session_id: 'session-1',
-      observer_id: '',
-      agent_mode: 'workflow',
-      status: 'running',
-      display_status: 'busy',
-      workspace_path: 'Workflow/rtslatency',
-      workflow_name: 'rtslatency',
-      has_retained_tmux_session: false,
-      has_running_background_agents: false,
-      running_background_agent_count: 0,
-      created_at: new Date().toISOString(),
-      last_activity: new Date().toISOString(),
-      ...overrides,
-    } as ActiveSessionInfo
-  }
-
   it('resolves the matching session from the cache', () => {
     const cache = [minimalSession({ session_id: 'session-1' }), minimalSession({ session_id: 'session-2' })]
     expect(currentActiveSession(cache, 'session-1')?.session_id).toBe('session-1')
@@ -129,5 +135,56 @@ describe('currentActiveSession', () => {
   it('excludes an internal child session even if the id matches', () => {
     const cache = [minimalSession({ session_id: 'session-1', parent_session_id: 'parent-session' })]
     expect(currentActiveSession(cache, 'session-1')).toBeNull()
+  })
+})
+
+// PLAT-026: the current session used to be excluded by session_id alone, so
+// a sibling session for the SAME workflow (a background Pulse schedule, a
+// second observing tab) survived into the pill list while the header's
+// current-workflow selector also showed that workflow's status — the one
+// workflow rendered twice at once. These prove the exact scenario a review
+// caught: excluding by session_id only is not sufficient.
+describe('visibleActivitySessions', () => {
+  it('excludes a sibling session for the same workflow as the current one', () => {
+    const currentTabSession = minimalSession({ session_id: 'chat-tab-session', workflow_name: 'rtslatency' })
+    const backgroundPulseSession = minimalSession({ session_id: 'pulse-schedule-session', workflow_name: 'rtslatency' })
+    const otherWorkflowSession = minimalSession({ session_id: 'other-session', workflow_name: 'upwork' })
+
+    const visible = visibleActivitySessions(
+      [currentTabSession, backgroundPulseSession, otherWorkflowSession],
+      'chat-tab-session',
+      'rtslatency',
+    )
+
+    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
+  })
+
+  it('still excludes the current session by id when no workflow key is known', () => {
+    const currentTabSession = minimalSession({ session_id: 'chat-tab-session' })
+    const other = minimalSession({ session_id: 'other-session', workflow_name: 'upwork' })
+
+    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session', '')
+
+    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
+  })
+
+  it('does not exclude a same-named non-workflow session by accident', () => {
+    // An empty workflow key must never become a wildcard match against other
+    // sessions that also lack one.
+    const currentTabSession = minimalSession({ session_id: 'chat-tab-session', agent_mode: 'multi-agent', workflow_name: undefined })
+    const other = minimalSession({ session_id: 'other-session', agent_mode: 'multi-agent', workflow_name: undefined })
+
+    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session', '')
+
+    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
+  })
+
+  it('deduplicates two sibling sessions for the same non-current workflow, preferring the retained tmux', () => {
+    const plain = minimalSession({ session_id: 'plain-session', workflow_name: 'upwork', has_retained_tmux_session: false })
+    const retained = minimalSession({ session_id: 'retained-session', workflow_name: 'upwork', has_retained_tmux_session: true })
+
+    const visible = visibleActivitySessions([plain, retained], null, '')
+
+    expect(visible.map(s => s.session_id)).toEqual(['retained-session'])
   })
 })
