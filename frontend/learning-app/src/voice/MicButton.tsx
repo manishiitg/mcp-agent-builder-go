@@ -50,13 +50,23 @@ export const MicButton = forwardRef(function MicButton({
     return () => window.removeEventListener('keydown', onKey)
   }, [shortcutEnabled, disabled, toggle])
 
+  // Stopping the mic sends. Dictating and then pressing Enter was two actions
+  // for one intent — reported as "99% of the time I never change anything" —
+  // and the transcript the composer receives is the accurate batch pass, not
+  // the rough live preview. A wrong one is cheap to correct with another
+  // message; an extra keypress on every single dictation is not.
+  const stopOrStart = () => {
+    if (state === 'recording') stopAndSubmit()
+    else toggle()
+  }
+
   const preparing = state === 'preparing'
   // Both non-interactive states show a spinner and refuse clicks. 'preparing'
   // matters most: on a cold start it can last seconds while the model loads,
   // and leaving the button looking idle invites repeat clicks.
   const busy = state === 'transcribing' || preparing
   const label = state === 'recording'
-    ? 'Stop recording'
+    ? 'Stop and send'
     : preparing
       ? 'Getting voice ready…'
       : state === 'transcribing'
@@ -71,7 +81,7 @@ export const MicButton = forwardRef(function MicButton({
         aria-label={label}
         title={label}
         disabled={disabled || busy}
-        onClick={toggle}
+        onClick={stopOrStart}
       >
         {busy
           ? <Loader2 size={19} className="fl-mic-spin" />
