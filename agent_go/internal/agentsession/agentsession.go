@@ -73,8 +73,11 @@ type Config struct {
 	WorkingDir      string // scope root (Family/parent). "" -> process cwd
 	SystemPrompt    string // agent persona / instructions
 	Tools           []Tool // app-specific custom tools
-	Logger          loggerv2.Logger
-	MaxTurns        int // 0 -> provider default
+	// Skills are Anthropic-format skill bundles projected into the coding
+	// agent's native skill directory for this session.
+	Skills   []*llmtypes.Skill
+	Logger   loggerv2.Logger
+	MaxTurns int // 0 -> provider default
 	// SessionID, when set, makes turns RESUME the coding agent's own session
 	// (warm tmux/session resume) instead of cold-starting a fresh one. Use a
 	// stable id per conversation (e.g. the conversation id). Empty -> fresh
@@ -104,10 +107,9 @@ type Config struct {
 	// the model generates its reply (real token/chunk streaming, not just a
 	// cosmetic "working on it" status label) — via Turn.StreamingCallback,
 	// which only ever delivers content fragments (never tool-call/terminal
-	// chunks). Requires the provider's own streaming env var to be set for
-	// interactive/tmux sessions (e.g. CODEX_CLI_STREAM_TRANSCRIPT=1) — set once
-	// at process startup, not per-call. Nil is a no-op: the turn behaves exactly
-	// as before, reply available only once Ask returns.
+	// chunks). Registering this callback enables the provider adapter's transcript
+	// streaming option. Nil is a no-op: the turn behaves exactly as before,
+	// with the reply available only once Ask returns.
 	StreamCallback func(text string)
 	// Transport, when set, overrides the provider contract's declared process
 	// transport for this one session — llm.CodingAgentTransportStructured runs
@@ -136,6 +138,7 @@ func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
 	}
 	return mcpagent.AgentDefinition{
 		Instructions: cfg.SystemPrompt,
+		Skills:       cfg.Skills,
 		Tools: mcpagent.ToolSet{
 			Direct: directTools,
 			MCP:    []mcpagent.MCPToolSource{{Name: "exa-search"}},
@@ -168,6 +171,22 @@ type Session struct {
 	// rejected). In all of those the CLI has nothing to resume from, so
 	// truncating to the last message left the model with no history at all.
 	holdsPriorContext bool
+}
+
+// WarmSharedBridge starts the process-global executor/MCP bridge (see
+// ensureSharedBridge) if it has not started already, without creating a
+// coding-agent session. Call this once at process startup, before any HTTP
+// request is served, so MCP_API_URL/MCP_API_TOKEN are already set in the
+// process environment before other code paths — e.g. a workflow's tool
+// registry — read them via os.Getenv. Without this, whichever one runs first
+// wins the race: if a tool registry snapshots the env before the bridge sets
+// the token, that snapshot is typically cached and never re-reads the token.
+func WarmSharedBridge(logger loggerv2.Logger) error {
+	if logger == nil {
+		logger = loggerv2.NewNoop()
+	}
+	_, err := ensureSharedBridge(logger)
+	return err
 }
 
 // New builds a per-turn Session. Following the AgentWorks model, it reuses the

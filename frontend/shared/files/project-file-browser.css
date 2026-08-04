@@ -1,0 +1,13 @@
+.project-file-browser { overflow: hidden; border: 1px solid #e5e1d9; border-radius: 12px; background: #fffefa; }
+.project-file-summary { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e9e5dd; padding: 9px 11px; color: #918c83; background: #faf8f3; font-size: 8px; font-weight: 650; }
+.project-file-tree { margin: 0; padding: 0; list-style: none; }
+.project-file-tree .project-file-tree { border-top: 0; }
+.project-file-row { display: flex; width: 100%; min-width: 0; height: 35px; align-items: center; gap: 7px; border: 0; border-bottom: 1px solid #efede7; padding-right: 10px; color: #625e57; background: transparent; text-align: left; cursor: pointer; }
+.project-file-tree > li:last-child > .project-file-row { border-bottom-color: transparent; }
+.project-file-row:hover { color: #3e3a35; background: #f7f4ed; }
+.project-file-chevron { width: 13px; flex: 0 0 13px; color: #a09a91; transition: transform .15s ease; }
+.project-file-chevron.open { transform: rotate(90deg); }
+.project-file-icon { display: inline-flex; flex: 0 0 auto; color: #8b8278; }
+.project-file-icon.is-folder { color: #b5654d; }
+.project-file-name { min-width: 0; overflow: hidden; flex: 1; font-size: 9px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.project-file-size { flex: 0 0 auto; color: #aaa49a; font-size: 7px; font-variant-numeric: tabular-nums; }

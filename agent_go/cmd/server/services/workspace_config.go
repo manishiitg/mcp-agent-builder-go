@@ -107,10 +107,15 @@ func readWorkspaceFile(ctx context.Context, workspaceURL, filePath string) (stri
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return "", false, fmt.Errorf("failed to parse API response: %w", err)
 	}
+	// A missing file is a normal "not configured yet" state, not a failure. The
+	// workspace API reports it as HTTP 200 with success=true and an explanatory
+	// message/error, so this check must run regardless of Success — when it was
+	// nested under !Success it never fired, and callers got the misleading
+	// "failed to extract content" error below instead of a clean absent signal.
+	if strings.Contains(apiResp.Message, "File does not exist") || strings.Contains(apiResp.Error, "File not found") {
+		return "", false, nil
+	}
 	if !apiResp.Success {
-		if strings.Contains(apiResp.Message, "File does not exist") || strings.Contains(apiResp.Error, "File not found") {
-			return "", false, nil
-		}
 		return "", false, fmt.Errorf("workspace API error: %s", apiResp.Error)
 	}
 

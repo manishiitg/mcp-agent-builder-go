@@ -54,6 +54,10 @@ func TestResolveEffectiveDBAccessMakesEvaluationReadOnlyByDefault(t *testing.T) 
 	if got := resolveEffectiveDBAccess(configuredReadWrite, false, false); got != DBAccessReadWrite {
 		t.Fatalf("normal execution must preserve configured DB access, got %q", got)
 	}
+	configuredNone := &AgentConfigs{DBAccess: DBAccessNone}
+	if got := resolveEffectiveDBAccess(configuredNone, false, false); got != DBAccessNone {
+		t.Fatalf("normal execution must preserve disabled DB access, got %q", got)
+	}
 }
 
 func TestConfigureWorkflowDBSessionBlocksRawSQLiteForManagedAgents(t *testing.T) {
@@ -221,10 +225,12 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	tests := []struct {
 		name         string
 		access       string
+		wantQuery    bool
 		wantMutation bool
 	}{
-		{name: "read only", access: DBAccessRead, wantMutation: false},
-		{name: "read write", access: DBAccessReadWrite, wantMutation: true},
+		{name: "none", access: DBAccessNone, wantQuery: false, wantMutation: false},
+		{name: "read only", access: DBAccessRead, wantQuery: true, wantMutation: false},
+		{name: "read write", access: DBAccessReadWrite, wantQuery: true, wantMutation: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,14 +246,32 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 					names = append(names, definition.Function.Name)
 				}
 			}
-			if !slices.Contains(names, "query_workflow_db") || executors["query_workflow_db"] == nil {
-				t.Fatalf("db_access=%q missing query tool: tools=%v executors=%v", tt.access, names, executors)
+			gotQuery := slices.Contains(names, "query_workflow_db") && executors["query_workflow_db"] != nil
+			if gotQuery != tt.wantQuery {
+				t.Fatalf("db_access=%q query materialized=%v, want %v (tools=%v)", tt.access, gotQuery, tt.wantQuery, names)
 			}
 			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
 			if gotMutation != tt.wantMutation {
 				t.Fatalf("db_access=%q mutation materialized=%v, want %v (tools=%v)", tt.access, gotMutation, tt.wantMutation, names)
 			}
 		})
+	}
+}
+
+func TestExecutionFolderGuardWithDBNoneExcludesDatabase(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/video")
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/video-one"}
+	readPaths, writePaths := hcpo.setupExecutionFolderGuard("research", "research", KBAccessNone, LearningsAccessNone, DBAccessNone, &AgentConfigs{DBAccess: DBAccessNone})
+	dbPath := getDBPath("Workflow/video")
+	if slices.Contains(readPaths, dbPath) || slices.Contains(writePaths, dbPath) {
+		t.Fatalf("db_access=none exposed %q: read=%v write=%v", dbPath, readPaths, writePaths)
 	}
 }
 

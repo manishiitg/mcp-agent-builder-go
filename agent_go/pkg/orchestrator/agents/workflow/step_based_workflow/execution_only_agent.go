@@ -58,7 +58,8 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 | Execution folder | `+"`"+`{{.WorkspacePath}}/`+"`"+` |
 | Step folder (VOLATILE) | `+"`"+`{{.StepExecutionPath}}/`+"`"+` |
 | Downloads (user files) | `+"`"+`{{.WorkspacePath}}/Downloads/`+"`"+` |
-| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` |
+{{if ne .DBAccess "none"}}| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` |
+{{end}}
 {{if ne .KbAccess "none"}}| Knowledgebase (PERSISTENT, {{.KbAccessLabel}}) | `+"`"+`{{.KnowledgebasePath}}/`+"`"+` |
 {{end}}
 
@@ -73,7 +74,8 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 
 **Three persistent stores — do not confuse them. Only access a store when it appears in Allowed READ/WRITE or a dedicated prompt section grants access:**
 - **soul/soul.md** — workflow north star, and the ONLY place the overall goal is written down. Holds `+"`"+`## Objective`+"`"+` (what the workflow is for), `+"`"+`## Success Criteria`+"`"+` (what "done right" means for the whole workflow, not just your step), and sometimes `+"`"+`## Constraints`+"`"+` (owner-approved boundaries — limits, caps, budgets). Read it at step start: it is what lets you resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the point of the workflow. Treat it as READ-ONLY. **If a value in your step description contradicts a `+"`"+`## Constraints`+"`"+` entry, the constraint wins — it is the owner's decision and your description may be stale. Do not silently pick one: use the constraint and report the conflict with a `+"`"+`CONCERNS:`+"`"+` line.**
-{{if eq .DBDirectAccess "true"}}- **db/db.sqlite** — **workflow state and results for saved scripted code**. Use the absolute `+"`"+`$DB_PATH`+"`"+` supplied by the harness; never reconstruct or use a relative path. Respect the effective **{{.DBAccess}}** access mode. Never DROP/recreate a table or replace the whole table. Schema/contract per table is in `+"`db/README.md`"+`.
+{{if eq .DBAccess "none"}}- **db/** — unavailable to this step. Do not read, query, or mutate workflow database state.
+{{else if eq .DBDirectAccess "true"}}- **db/db.sqlite** — **workflow state and results for saved scripted code**. Use the absolute `+"`"+`$DB_PATH`+"`"+` supplied by the harness; never reconstruct or use a relative path. Respect the effective **{{.DBAccess}}** access mode. Never DROP/recreate a table or replace the whole table. Schema/contract per table is in `+"`db/README.md`"+`.
 {{else if eq .DBAccess "read"}}- **db/db.sqlite** — **READ-ONLY workflow evidence**. Use `+"`query_workflow_db(action=\"describe\")`"+` before querying unfamiliar tables, then use `+"`query_workflow_db(action=\"query\", sql=\"SELECT ...\")`"+` in a later call. You cannot mutate the database. Do not open `+"`db.sqlite`"+` with shell, Python, or a copied path.
 {{else}}- **db/db.sqlite** — **workflow state and results**. Use `+"`query_workflow_db`"+` for schema discovery and reads, and `+"`mutate_workflow_db`"+` for transactional INSERT/UPDATE/DELETE operations. Inspect unfamiliar schemas before constructing a dependent query. Prefer primary-key upserts; never DROP/recreate a table or replace the whole table. Do not open `+"`db.sqlite`"+` directly from shell or Python. Schema/contract per table is in `+"`db/README.md`"+`.
 {{end}}
@@ -93,7 +95,7 @@ cat knowledgebase/notes/company-acme.md
 {{end}}
 {{if .KBGuidanceBlock}}{{.KBGuidanceBlock}}{{end}}
 ## EXECUTION RULES
-{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}{{if eq .DBAccess "read"}}1. **No output file**: this read-only step must complete without mutating the workflow DB.{{else if eq .DBDirectAccess "true"}}1. **Output to the db**: this scripted step declares no output file — persist through the absolute `+"`"+`$DB_PATH`+"`"+`.{{else}}1. **Output to the db**: this step declares no output file — persist results with `+"`mutate_workflow_db`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required.{{end}}{{end}}
+{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}{{if eq .DBAccess "none"}}1. **No output declared**: complete without using workflow database state.{{else if eq .DBAccess "read"}}1. **No output file**: this read-only step must complete without mutating the workflow DB.{{else if eq .DBDirectAccess "true"}}1. **Output to the db**: this scripted step declares no output file — persist through the absolute `+"`"+`$DB_PATH`+"`"+`.{{else}}1. **Output to the db**: this step declares no output file — persist results with `+"`mutate_workflow_db`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required.{{end}}{{end}}
 {{if .UseCodeStyleRules}}2. Derive output paths from `+"`"+`os.environ['STEP_OUTPUT_DIR']`+"`"+` in code. E.g., `+"`"+`open(os.path.join(os.environ['STEP_OUTPUT_DIR'], '{{.StepContextOutput}}'), "w")`+"`"+`.
 3. **No env var fallbacks in Python**: always `+"`"+`os.environ['KEY']`+"`"+` — never `+"`"+`os.environ.get('KEY', 'default')`+"`"+`. Variables use `+"`"+`VAR_<NAME>`+"`"+`, secrets use `+"`"+`SECRET_<NAME>`+"`"+`. Missing var must raise KeyError, not silently use a hardcoded value.
 {{else}}2. Derive output paths from `+"`"+`$STEP_OUTPUT_DIR`+"`"+` in shell commands. E.g., `+"`"+`mkdir -p "$(dirname "$STEP_OUTPUT_DIR/{{.StepContextOutput}}")" && echo '...' > "$STEP_OUTPUT_DIR/{{.StepContextOutput}}"`+"`"+`.
@@ -192,7 +194,7 @@ You MUST incorporate it into this run. It takes priority over the default step d
 {{if .StepContextDependencies}}{{.StepContextDependencies}}{{else}}None{{end}}
 
 ### Output
-{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}{{if eq .DBAccess "read"}}- **No output file** — read-only DB access; do not persist database changes.{{else if eq .DBDirectAccess "true"}}- **No output file** — persist scripted results through `+"`"+`$DB_PATH`+"`"+`.{{else}}- **No output file** — persist results with `+"`mutate_workflow_db`"+`.{{end}}{{end}}
+{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}{{if eq .DBAccess "none"}}- **No output file** — database access is disabled.{{else if eq .DBAccess "read"}}- **No output file** — read-only DB access; do not persist database changes.{{else if eq .DBDirectAccess "true"}}- **No output file** — persist scripted results through `+"`"+`$DB_PATH`+"`"+`.{{else}}- **No output file** — persist results with `+"`mutate_workflow_db`"+`.{{end}}{{end}}
 
 {{if .ScriptedPriorContext}}{{.ScriptedPriorContext}}
 {{end}}### Execution Checklist
@@ -411,11 +413,11 @@ func (hctpeoa *WorkflowExecutionOnlyAgent) executionOnlySystemPromptProcessor(te
 		"StepNumber":                stepNumber,
 		"StepExecutionPath":         stepExecutionPath,
 		"PreviousStepsSummary":      previousStepsSummary,
-		"PlanPosition":              templateVars["PlanPosition"], // Where this step sits in the plan — steps cannot read planning/plan.json
-		"ValidationSchema":          validationSchema,             // Validation schema JSON string
+		"PlanPosition":              templateVars["PlanPosition"],            // Where this step sits in the plan — steps cannot read planning/plan.json
+		"ValidationSchema":          validationSchema,                        // Validation schema JSON string
 		"PriorValidationFailures":   templateVars["PriorValidationFailures"], // Unresolved prevalidation concerns from earlier runs of this step
-		"KnowledgebasePath":         knowledgebasePath,            // Knowledgebase folder path
-		"DBPath":                    dbPath,                       // DB folder path (always enabled)
+		"KnowledgebasePath":         knowledgebasePath,                       // Knowledgebase folder path
+		"DBPath":                    dbPath,                                  // DB folder path (always enabled)
 		"DBAccess":                  dbAccess,
 		"DBDirectAccess":            dbDirectAccess,
 		"KbAccess":                  templateVars["KbAccess"],                  // "read" | "write" | "read-write" | "none"

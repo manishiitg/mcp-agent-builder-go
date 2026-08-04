@@ -163,14 +163,18 @@ func resolveKnowledgebaseAccess(stepConfig *AgentConfigs, presetEnabled bool) st
 const (
 	DBAccessReadWrite = "read-write"
 	DBAccessRead      = "read"
+	DBAccessNone      = "none"
 )
 
 // resolveDBAccess returns the effective db/ access mode for a step. Empty / unknown →
-// "read-write" (default), so existing plans are unchanged. Only an explicit "read"
-// downgrades the step to read-only db.
+// "read-write" (default), so existing plans are unchanged. Explicit "read" and
+// "none" provide progressively narrower access.
 func resolveDBAccess(stepConfig *AgentConfigs) string {
-	if stepConfig != nil && stepConfig.DBAccess == DBAccessRead {
-		return DBAccessRead
+	if stepConfig != nil {
+		switch stepConfig.DBAccess {
+		case DBAccessRead, DBAccessNone:
+			return stepConfig.DBAccess
+		}
 	}
 	return DBAccessReadWrite
 }

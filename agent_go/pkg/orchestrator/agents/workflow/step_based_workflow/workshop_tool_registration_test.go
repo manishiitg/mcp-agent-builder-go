@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +122,55 @@ func TestRunningStatusToolsShareRapidPollGuard(t *testing.T) {
 	}
 	if third != statusPollSuppressed {
 		t.Fatalf("third unchanged cross-tool status response = %q, want compact suppression", third)
+	}
+}
+
+func TestQueryStepTerminalResponsesContainOnlyExecutionOutcome(t *testing.T) {
+	agent := newWorkshopDefinitionDraft()
+	workspacePath := t.TempDir()
+	base := &orchestrator.BaseOrchestrator{}
+	base.SetWorkspacePath(workspacePath)
+	registry := NewWorkshopStepRegistry()
+	registry.Register(&WorkshopStepExecution{
+		ID:     "exec-research-complete",
+		StepID: "research",
+		Status: WorkshopStepDone,
+		Result: "Research output is ready.",
+	})
+	registry.Register(&WorkshopStepExecution{
+		ID:     "exec-proposal-failed",
+		StepID: "proposal",
+		Status: WorkshopStepFailed,
+		Err:    errors.New("proposal validation failed"),
+	})
+	session := &WorkshopChatSession{
+		controller:   &StepBasedWorkflowOrchestrator{BaseOrchestrator: base},
+		StepRegistry: registry,
+		config:       &WorkshopConfig{WorkspacePath: workspacePath},
+	}
+
+	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
+	queryStep := agent.tools["query_step"].Execute
+	if queryStep == nil {
+		t.Fatal("query_step was not registered")
+	}
+
+	completed, err := queryStep(context.Background(), map[string]interface{}{"execution_id": "exec-research-complete"})
+	if err != nil {
+		t.Fatalf("query completed step: %v", err)
+	}
+	wantCompleted := "Step \"research\" completed.\nexecution_id: exec-research-complete\n\nResearch output is ready."
+	if completed != wantCompleted {
+		t.Fatalf("completed response = %q, want %q", completed, wantCompleted)
+	}
+
+	failed, err := queryStep(context.Background(), map[string]interface{}{"execution_id": "exec-proposal-failed"})
+	if err != nil {
+		t.Fatalf("query failed step: %v", err)
+	}
+	wantFailed := "Step \"proposal\" failed.\nexecution_id: exec-proposal-failed\nerror: proposal validation failed"
+	if failed != wantFailed {
+		t.Fatalf("failed response = %q, want %q", failed, wantFailed)
 	}
 }
 
