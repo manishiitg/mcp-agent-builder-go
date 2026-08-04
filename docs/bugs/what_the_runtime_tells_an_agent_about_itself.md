@@ -1,6 +1,15 @@
 # Bug Report: What the Runtime Tells an Agent About Itself
 
-## Status
+This document is organized as an **index of individual defect tickets**
+(#1–#9 below), in the spirit of `docs/bugs/README.md`'s one-file-per-defect
+convention. For now every ticket lives as a section inside this single file
+rather than its own file — that split has not yet been coordinated with other
+contributors to this archive. When it is, each numbered section can move to
+its own `docs/bugs/<slug>.md` without changing its content; this file then
+becomes a thin index pointing at them. Do not create those per-ticket files
+yet.
+
+## Index
 
 Eight agent-contract defects were implemented and their targeted tests passed on
 2026-08-04. An independent code review later that day accepted fixes #1 and #8,
@@ -8,17 +17,23 @@ accepted the core direction of #2, #4, and #7 with follow-ups, and found materia
 gaps in #3, #5, and #6. The per-issue review notes below are part of the current
 status; this document must not be read as saying all eight are fully closed.
 
-| # | Where | Commit |
-|---|---|---|
-| 1 | `mcpagent/agent/codeexec/registry.go` — denial named a cause it cannot know | `a2c225d` |
-| 2 | `mcpagent/agent/codeexec/shell.go` — test fixture posing as the platform shell | `a2c225d` |
-| 3 | `interactive_workshop_manager.go` — grants missing the tools the prompts promise | `7eef64150` |
-| 4 | `pkg/workspace/advanced_tools.go` — tool description asserted the wrong cwd | `7eef64150` |
-| 5 | `pkg/workspace/execute_shell_command.go` — no output cap; unreadable spill files | `7eef64150` |
-| 6 | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault | `6f4737cc9` |
-| 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | `b4402bcef` |
-| 8 | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | see #8 below |
-| 9 | `cmd/server/pulse_worklist.go` + `pulse_finding_lifecycle.go` — one finding, four sequential rejections | `fdd54c089` |
+| # | Where | Author | Commit |
+|---|---|---|---|
+| 1 | `mcpagent/agent/codeexec/registry.go` — denial named a cause it cannot know | Claude Code | `a2c225d` |
+| 2 | `mcpagent/agent/codeexec/shell.go` — test fixture posing as the platform shell | Claude Code | `a2c225d` |
+| 3 | `interactive_workshop_manager.go` — grants missing the tools the prompts promise | Claude Code | `7eef64150` |
+| 4 | `pkg/workspace/advanced_tools.go` — tool description asserted the wrong cwd | Claude Code | `7eef64150` |
+| 5 | `pkg/workspace/execute_shell_command.go` — no output cap; unreadable spill files | Claude Code | `7eef64150` |
+| 6 | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault | Claude Code | `6f4737cc9` |
+| 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | Claude Code | `b4402bcef` |
+| 8 | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | Claude Code | see #8 below |
+| 9 | `cmd/server/pulse_worklist.go` + `pulse_finding_lifecycle.go` — one finding, four sequential rejections | Claude Code | `fdd54c089` |
+| — | [Follow-up](#follow-up-the-global-header-can-hide-the-current-running-workflow): global header can hide the current running workflow | Claude Code | open, not fixed |
+
+Everything in this file to date was authored by **Claude Code**. Other
+contributors to this archive — for example **Codex** — should add their own
+name to the Author column and to any ticket they write, rather than leaving it
+implied.
 
 Still open, recorded below: the unbounded `stdoutBuf` in the workspace handler,
 the empty `tool=` field on some CLI payload markers, and the global activity
@@ -648,3 +663,9 @@ builder:  go test ./pkg/agentwrapper ./pkg/workspace ./cmd/server \
   subject, from the harness side rather than the description side.
 - [steps_never_learn_from_their_own_validation_failures.md](steps_never_learn_from_their_own_validation_failures.md)
   — the pattern behind the open `record_pulse_worklist` item.
+- [pulse_platform_issue_register.md](pulse_platform_issue_register.md) — a
+  sibling index-plus-tickets document (PLAT-NNN), already following the
+  structure this file is adopting. PLAT-018, fixed `c0ce81d86` (Claude Code),
+  is the dashboard-stage twin of #3/#8 here: a prompt that never named the
+  sanctioned tool, so the agent reached for `mutate_workflow_db` and was
+  correctly denied.
