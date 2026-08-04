@@ -1258,7 +1258,13 @@ export default function LearningApp() {
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
-  const [pendingConvUpdate, setPendingConvUpdate] = useState<StoredMsg[] | null>(null)
+  // Parent messages now apply as they arrive (WhatsApp, Pulse) instead of
+  // waiting behind a refresh banner — see the poller below. Two pieces make
+  // that safe: atBottomRef, so an ambient update never yanks the view out from
+  // under someone reading history, and newBelow, which tells them something
+  // landed off-screen instead of appending silently.
+  const atBottomRef = useRef(true)
+  const [newBelow, setNewBelow] = useState(false)
   // Messages the parent typed while a turn was still processing — sent one at
   // a time as the current turn finishes (see the drain effect). Shown as
   // "queued" bubbles so they know it's coming.
@@ -1807,8 +1813,16 @@ export default function LearningApp() {
           if (!d?.content) return
           const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
           const fresh = c.messages || []
+          // Only ever grows here: a shorter file means our optimistic local
+          // copy is ahead (the parent just sent something), never that
+          // messages vanished.
           if (fresh.length > parentMessages.length) {
-            setPendingConvUpdate(fresh)
+            setParentMessages(fresh.map(toParentMsg))
+            // Whatever remote turn produced this has clearly finished and
+            // persisted — drop its live indicator rather than let it linger.
+            setRemoteStatus('')
+            setRemoteToolCalls([])
+            if (!atBottomRef.current) setNewBelow(true)
           }
         })
         .catch(() => {})
@@ -1816,10 +1830,9 @@ export default function LearningApp() {
     return () => window.clearInterval(id)
   }, [screen, conversationId, sending, parentMessages.length])
 
-  // Clear any pending "new update" banner whenever the parent switches
-  // conversations or sends their own message — it only ever refers to the
-  // specific conversation/point in time it was detected for.
-  useEffect(() => { setPendingConvUpdate(null) }, [conversationId])
+  // Switching conversations resets the reading position, so any "new message
+  // below" marker refers to a thread that is no longer on screen.
+  useEffect(() => { setNewBelow(false); atBottomRef.current = true }, [conversationId])
 
   // sendingRef mirrors `sending` for the ambient effect below without being
   // in its dependency array — see childSendingRef's own comment for why.
@@ -2214,6 +2227,11 @@ export default function LearningApp() {
     // a scrollHeight from before the browser has laid all of it out, landing
     // short of the real bottom. rAF-deferring one frame lets layout settle
     // first so the target position is measured against the final height.
+    // `sending` forces the jump: the parent just hit send, so they mean to be
+    // at the bottom even if they had scrolled away. Otherwise follow only if
+    // they were already following — an arriving WhatsApp reply must not drag
+    // someone out of the history they are reading.
+    if (!atBottomRef.current && !sending) return
     const id = requestAnimationFrame(() => {
       threadEndRef.current?.scrollIntoView({ behavior: streamingReply ? 'auto' : 'smooth', block: 'end' })
     })
@@ -2421,11 +2439,10 @@ export default function LearningApp() {
     setParentMessages(next)
     setFocusInput('')
     setSuggestions([])
-    // Drop any pending "new update" banner — the parent's own send supersedes
-    // it, and applying the stale pre-send snapshot would wipe out the message
-    // they just typed (a real bug this caused). Their send + reply, and the
-    // next poll, bring things current anyway.
-    setPendingConvUpdate(null)
+    // Sending means the parent is at the live end of the thread by intent, so
+    // any "new message below" marker is stale and the view should follow again.
+    setNewBelow(false)
+    atBottomRef.current = true
     setSending(true)
     setLiveStatus('')
     setStreamingReply('')
@@ -2834,6 +2851,21 @@ export default function LearningApp() {
   // elsewhere for new messages) stops at the marker itself, before that
   // trailing padding, so it doesn't reach far enough here; scrollTop =
   // scrollHeight always reaches the true bottom, padding included.
+  // "Near" rather than exactly at the bottom: a couple of pixels of rounding,
+  // or a part-rendered final bubble, should still count as following along.
+  useEffect(() => {
+    const el = threadScrollRef.current
+    if (!el) return
+    const onScroll = () => {
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      atBottomRef.current = near
+      if (near) setNewBelow(false)
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [screen])
+
   useEffect(() => {
     if (!parentMicRecording) return
     const el = threadScrollRef.current
@@ -3148,29 +3180,19 @@ export default function LearningApp() {
               </div>
             </div>
 
-            {pendingConvUpdate && (
+            {newBelow && (
+              // The message is already applied — this only says it landed
+              // below the fold, so tapping scrolls rather than fetching.
               <button
                 type="button"
                 className="fl-new-update-banner"
                 onClick={() => {
-                  // Re-fetch the CURRENT file on tap rather than applying the
-                  // snapshot captured when the banner appeared — the snapshot
-                  // can be stale (e.g. the parent sent a message after it was
-                  // taken), and applying it would drop that message.
-                  setPendingConvUpdate(null)
-                  fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('conversations/parent.json')}`)
-                    .then((r) => r.json())
-                    .then((d) => {
-                      if (!d?.content) return
-                      const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
-                      setParentMessages((c.messages || []).map(toParentMsg))
-                      setRemoteStatus('')
-                      setRemoteToolCalls([])
-                    })
-                    .catch(() => {})
+                  setNewBelow(false)
+                  atBottomRef.current = true
+                  threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
                 }}
               >
-                <RefreshCw size={14} /> New update — tap to refresh
+                <RefreshCw size={14} /> New message — tap to jump to it
               </button>
             )}
             <div className="fl-thread" aria-label="Parent learning conversation" ref={threadScrollRef}>
