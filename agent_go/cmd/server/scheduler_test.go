@@ -1168,13 +1168,24 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		`get_pulse_state(view="backlog") without a module filter`,
 		"builder/improve.html",
 		"builder/card.health.html",
-		"8 unique canonical coverage data-module ids",
-		"all 5 outcome cells",
-		`data-source="sqlite" Current work summary`,
-		"Important now/Needs verification queues",
-		"sibling collapsed technical-details section",
+		"3 unique canonical coverage data-module ids",
+		"exactly 3 Latest Pulse cells",
+		`data-source="sqlite" Current work count strip`,
+		"Open/Fixing/Verify",
+		"no duplicated operational-detail sections",
 		"#pulse-agent-handoff[data-pulse-run-id]",
 		`command="dashboard"`,
+		// The prompt used to say "mark command=dashboard done" without naming a
+		// tool. On 2026-08-04 the dashboard stage rendered correctly, then
+		// reached for mutate_workflow_db to write pulse_final_command_state
+		// directly — a reasonable guess, and the wrong one, since that table is
+		// framework-owned and the session has no db_access=read-write grant. The
+		// stage never called the sanctioned command API, and
+		// reconcilePulseDashboardCommand then marked the whole stage failed even
+		// though the render was correct. The finalize step below already names
+		// record_pulse_result explicitly; this closes the same gap here.
+		`record_pulse_result(command="dashboard"`,
+		"never mutate_workflow_db or direct SQL for it",
 	} {
 		if !strings.Contains(dashboard, want) {
 			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
@@ -3977,4 +3988,32 @@ func pulseStepQueryByLabel(t *testing.T, steps []postRunMonitorStep, label strin
 	}
 	t.Fatalf("no %q stage in final steps", label)
 	return ""
+}
+
+// The dashboard stage used to say "mark command=dashboard done" without naming
+// a tool, unlike the finalize stage right below it, which spells out
+// record_pulse_result(command=...) explicitly. On 2026-08-04 rtslatency's
+// dashboard stage rendered builder/improve.html correctly, then reached for
+// mutate_workflow_db to write pulse_final_command_state directly — a
+// reasonable guess for "mark this row," and the wrong one: that table is
+// framework-owned bookkeeping, mutate_workflow_db correctly denied a session
+// without db_access=read-write, and the stage ended without ever calling the
+// sanctioned command API. reconcilePulseDashboardCommand then marked the
+// whole stage failed even though the render was correct.
+//
+// This test is deliberately independent of
+// TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer, whose detailed
+// per-stage assertions are currently unreachable dead code after a premature
+// return partway through that function (a concurrent, unrelated in-progress
+// edit — see the go vet "unreachable code" flag at this file's line 787).
+func TestPulseDashboardStagePromptNamesTheCommandTool(t *testing.T) {
+	dashboard := pulseStepQueryByLabel(t, postRunMonitorSteps(), "dashboard")
+	for _, want := range []string{
+		`record_pulse_result(command="dashboard"`,
+		"never mutate_workflow_db or direct SQL for it",
+	} {
+		if !strings.Contains(dashboard, want) {
+			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
+		}
+	}
 }
