@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -503,3 +505,104 @@ func TestCorrectAgentGeneratedDiff(t *testing.T) {
 }
 
 // Tests for removed functions have been removed since we're using the simplified approach
+
+// PLAT-023: on 2026-08-04, a stale-context patch failure against a 150KB file
+// cost 4 extra tool calls to recover — one to learn the match failed, more to
+// re-read the file and locate the real content by hand. The fallback matcher
+// already scans every candidate position computing mismatches; these tests
+// prove the closest position's real content now travels with the failure
+// instead of being discarded, and that it is actually enough to fix the diff
+// in one corrected retry — the acceptance boundary, not just "the failure is
+// well-formed."
+func largeFixtureFileContent(lines int) string {
+	rows := make([]string, lines)
+	for i := 0; i < lines; i++ {
+		rows[i] = fmt.Sprintf("line-%05d: some representative content for row %d", i, i)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func TestApplyAgentGeneratedDiffFallbackReportsBoundedContextOnLargeFileMismatch(t *testing.T) {
+	const totalLines = 3000
+	const targetLine = 2100 // deep enough into a large file that "just re-read it" is expensive
+
+	rows := strings.Split(largeFixtureFileContent(totalLines), "\n")
+	// The file's real content has drifted since the agent last read it: the
+	// target line changed; its neighbors did not. A single-line hunk cannot
+	// distinguish "close" from "anywhere else" — every non-matching position
+	// ties at exactly one mismatch — so the hunk carries two lines of real
+	// surrounding context on each side. Only the window anchored at
+	// targetLine-2 can match that surrounding context at all; everywhere else
+	// in the file, all five lines differ (the fixture's content is unique per
+	// row), which is the actual signal a "closest match" ranking needs.
+	original := rows[targetLine]
+	current := strings.Replace(original, fmt.Sprintf("row %d", targetLine), fmt.Sprintf("row %d v2", targetLine), 1)
+	rows[targetLine] = current
+	currentContent := strings.Join(rows, "\n")
+
+	hunkWithStaleTarget := func(target string) string {
+		return strings.Join([]string{rows[targetLine-2], rows[targetLine-1], target, rows[targetLine+1], rows[targetLine+2]}, "\n ")
+	}
+	staleDiff := fmt.Sprintf("--- a/large.txt\n+++ b/large.txt\n@@ -1,5 +1,5 @@\n %s\n+replaced\n", hunkWithStaleTarget(original))
+
+	_, err := applyAgentGeneratedDiffFallback(currentContent, staleDiff)
+	if err == nil {
+		t.Fatal("stale context was accepted instead of rejected — this must never silently apply an ambiguous hunk")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "Closest match: 1 of 5") {
+		t.Fatalf("hint does not report the true per-candidate mismatch count (must not be capped at the zero-tolerance threshold): %v", err)
+	}
+	if !strings.Contains(msg, current) {
+		t.Fatalf("hint does not contain the file's actual current content at the near-miss position:\n%s", msg)
+	}
+	if !strings.Contains(msg, fmt.Sprintf("file line %d", targetLine-1)) {
+		t.Fatalf("hint does not name the correct 1-based file line (%d):\n%s", targetLine-1, msg)
+	}
+	// Bounded: this file is 3000 lines; the hint must not become a second copy
+	// of it.
+	if len(msg) > 4000 {
+		t.Fatalf("hint is not bounded: %d bytes", len(msg))
+	}
+
+	// The actual acceptance boundary: the hint must contain enough to fix the
+	// diff in one corrected retry, not just explain the failure.
+	correctedDiff := fmt.Sprintf("--- a/large.txt\n+++ b/large.txt\n@@ -1,5 +1,5 @@\n %s\n+replaced\n", hunkWithStaleTarget(current))
+	result, err := applyAgentGeneratedDiffFallback(currentContent, correctedDiff)
+	if err != nil {
+		t.Fatalf("corrected diff built from the hint's own reported content still failed: %v", err)
+	}
+	if !strings.Contains(result, "replaced") {
+		t.Fatalf("corrected retry did not apply the intended change")
+	}
+}
+
+func TestApplyAgentGeneratedDiffFallbackHintStaysBoundedOnAPathologicallyLongLine(t *testing.T) {
+	rows := strings.Split(largeFixtureFileContent(50), "\n")
+	rows[10] = strings.Repeat("x", 10000) // one absurdly long current line
+	currentContent := strings.Join(rows, "\n")
+
+	staleDiff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-this line does not exist anywhere in the file\n+replacement\n"
+
+	_, err := applyAgentGeneratedDiffFallback(currentContent, staleDiff)
+	if err == nil {
+		t.Fatal("expected a mismatch error")
+	}
+	if len(err.Error()) > 4000 {
+		t.Fatalf("one long line blew up the hint instead of being truncated: %d bytes", len(err.Error()))
+	}
+}
+
+func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t *testing.T) {
+	currentContent := "only one line"
+	diffContent := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n line a\n line b\n line c\n"
+
+	_, err := applyAgentGeneratedDiffFallback(currentContent, diffContent)
+	if err == nil {
+		t.Fatal("expected an error when the file is shorter than the hunk")
+	}
+	if strings.Contains(err.Error(), "Closest match:") {
+		t.Fatalf("hint claims a closest match that cannot exist: %v", err)
+	}
+}
