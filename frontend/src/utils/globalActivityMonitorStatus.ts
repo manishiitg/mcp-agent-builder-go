@@ -2,9 +2,11 @@ import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-typ
 import {
   hasIdleAliveCodingAgent,
   hasLiveBackgroundAgents,
+  isVisibleActivitySession,
   normalizedActivityStatus,
 } from './activitySessions'
 import { runtimeNeedsUserInput, sessionRuntimeStatus } from './runtimeActivity'
+import { isInternalChildSession } from './workflowSessionKinds'
 
 function isWorkflowSession(session: ActiveSessionInfo): boolean {
   return session.agent_mode?.toLowerCase().includes('workflow') ?? false
@@ -39,6 +41,57 @@ export function headerStatusLabel(session: ActiveSessionInfo, workflow?: Running
   if ((status === 'completed' || status === 'idle') && hasIdleAliveCodingAgent(session)) return 'idle'
   if (status === 'completed' && isWorkflowSession(session)) return 'idle'
   return status || 'running'
+}
+
+// The narrow slice of a ChatTab this needs. Kept local instead of importing
+// the store's ChatTab type to avoid coupling this pure-logic module to
+// useChatStore.
+interface ActiveTabForCurrentSession {
+  sessionId: string | null
+  metadata?: { mode?: string }
+}
+
+/**
+ * Identifies which session, if any, the user is currently looking at, so a
+ * header component can render its live status.
+ *
+ * This must stay the single definition of "current session": before it
+ * existed, GlobalActivityMonitor computed this inline to exclude the current
+ * session from its pills, and the header's plain workflow-name selector had
+ * no equivalent — so a session could be visibly running while the header's
+ * live-status pills genuinely never showed it anywhere, on the theory that
+ * the plain selector already covered it. It never carried live status.
+ * Two independent inline copies of this same lookup is exactly the failure
+ * mode that produced that gap; callers must share this one.
+ */
+export function currentSessionId(
+  activeTabId: string | null,
+  chatTabs: Record<string, ActiveTabForCurrentSession>,
+  selectedModeCategory: string | null,
+  isOrganizationView: boolean,
+): string | null {
+  if (isOrganizationView || !activeTabId) return null
+  const activeTab = chatTabs[activeTabId]
+  if (!activeTab || activeTab.metadata?.mode !== selectedModeCategory) return null
+  return activeTab.sessionId ?? null
+}
+
+/**
+ * Resolves the full ActiveSessionInfo for currentSessionId(...), applying the
+ * same visibility rules GlobalActivityMonitor's pill list applies, so a
+ * session that would never render as a pill (internal child, not otherwise
+ * visible) also does not render a spurious status on the header selector.
+ */
+export function currentActiveSession(
+  activeSessionsCache: ActiveSessionInfo[],
+  sessionId: string | null,
+): ActiveSessionInfo | null {
+  if (!sessionId) return null
+  return activeSessionsCache.find(session =>
+    session.session_id === sessionId &&
+    !isInternalChildSession({ parentSessionId: session.parent_session_id, sessionKind: session.session_kind }) &&
+    isVisibleActivitySession(session)
+  ) ?? null
 }
 
 export function statusTone(

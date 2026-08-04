@@ -623,10 +623,36 @@ mismatches (8, plus 2 in `record_pulse_impact`) — `decisions[0] contains unkno
 field "decision"`, then `"selected"`, then `evidence: must be an array of
 strings, got a string`, all within single runs; this is
 [steps_never_learn_from_their_own_validation_failures.md](steps_never_learn_from_their_own_validation_failures.md)
-in a new place. `diff_patch_workspace_file` "could not find matching context
-lines" (6). `custom tool get_api_spec is not registered for session
-msgseq-iteration-0-job-search-…-step-4` (3) — a *registration* failure distinct
-from the allow-list one in #3.
+in a new place.
+
+**INVESTIGATED, closed without a code change — `diff_patch_workspace_file`
+"could not find matching context lines" (6).** The production handler
+(`workspace/handlers/diff_patch.go`) runs a four-layer fallback before
+surfacing this: auto-correct the diff → strict patch → exact-content fallback
+scan → repeat both with the original, uncorrected diff. Only after all four
+fail does the agent see this message, and the code explicitly refuses to
+guess rather than risk corrupting a structured file. The one occurrence with
+full evidence — a 150KB file, `reddit-scan-patterns.md` — succeeded after 4
+recovery calls, which is a real but bounded large-file recovery cost, not a
+runtime telling the agent something false. Confirmed working as intended;
+left unchanged.
+
+**PARTIALLY ADDRESSED, exact trigger unconfirmed — `custom tool get_api_spec
+is not registered for session msgseq-iteration-0-job-search-…-step-4` (3).**
+A registration failure distinct from the allow-list one in #3 — this session
+had a real virtual-tool registry entry, but `get_api_spec` genuinely was not
+in it, which is correct behavior for a non-code-execution-mode session
+(mcpagent's `agent.go:1790` excludes it there on purpose; native tool-calling
+sessions already get every schema declared to the model directly). Could not
+confirm this exact session hit that state via a guidance leak — its log
+evidence was rotated away by the server restart, and `workflow-tools.md`
+(the doc with the closest-matching defect) is gated to `workshop` mode while
+this session ran in `run` mode. Fixed the same-shape defect found along the
+way regardless: `workflow-tools.md`'s opening `get_api_spec` instruction was
+unscoped, and `workshop` mode supports both CLI and native providers, so a
+native-provider workshop session reading it would hit exactly this error.
+Commit `676c525d0` (Claude Code). The specific job-search session's root
+cause remains open.
 
 Correctly rejected and not defects: `query_workflow_db` SQL syntax (19),
 `agent_browser` JS eval (4), shell quoting `unexpected EOF`, and

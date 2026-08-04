@@ -10,7 +10,7 @@ import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
 import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
-import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
+import { currentSessionId as resolveCurrentSessionId, headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { isInternalChildSession } from '../utils/workflowSessionKinds'
 
 // This matches useChatStore's active-session cache TTL. A longer store TTL also
@@ -165,12 +165,12 @@ export const GlobalActivityMonitor: React.FC = () => {
     )
   }, [activeSessionsCache])
 
-  const currentSessionId = useMemo(() => {
-    if (showWorkflowsOverview || !activeTabId) return null
-    const activeTab = chatTabs[activeTabId]
-    if (!activeTab || activeTab.metadata?.mode !== selectedModeCategory) return null
-    return activeTab.sessionId ?? null
-  }, [activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview])
+  // Shared with ModePresetBar's current-workflow selector, so the two agree
+  // on which session is "current" — see globalActivityMonitorStatus.ts.
+  const currentSessionId = useMemo(
+    () => resolveCurrentSessionId(activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview),
+    [activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview],
+  )
   const visibleSessions = useMemo(() => {
     const filtered = activeSessions.filter(session => session.session_id !== currentSessionId)
 

@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Users, Settings, Copy, Keyboard, Bot, Building2, HelpCircle } from 'lucide-react'
+import { Workflow, Users, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
@@ -32,6 +32,7 @@ import {
   isWorkflowWalkthroughDismissed,
 } from '../utils/onboarding'
 import { openWorkflowPresetPage } from '../utils/workflowSessionRestore'
+import { currentActiveSession, currentSessionId, headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 
 const WorkflowsOverviewPopup = lazy(() => import('./WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPopup })))
 
@@ -199,6 +200,23 @@ export const ModePresetBar: React.FC = () => {
   const setSelectedFile = useWorkspaceStore(state => state.setSelectedFile)
   const setShowFileContent = useWorkspaceStore(state => state.setShowFileContent)
   const isOrganizationView = showWorkflowsOverview
+
+  // GlobalActivityMonitor deliberately excludes the current session from its
+  // pills so the same workflow doesn't render twice, but that left the one
+  // workflow the user is looking at as the one whose live state is least
+  // visible: the selector below only ever showed a static green dot, never
+  // the running/needs-input/idle state the pills carry for everything else.
+  // This mirrors GlobalActivityMonitor's own currentSessionId derivation so
+  // the two stay in agreement about which session is "current".
+  const activeSessionsCache = useChatStore(state => state.activeSessionsCache)
+  const activeTabId = useChatStore(state => state.activeTabId)
+  const chatTabs = useChatStore(state => state.chatTabs)
+  const currentSession = currentActiveSession(
+    activeSessionsCache,
+    currentSessionId(activeTabId, chatTabs, selectedModeCategory, isOrganizationView),
+  )
+  const currentSessionTone = currentSession ? statusTone(currentSession) : null
+  const currentSessionStatusLabel = currentSession ? headerStatusLabel(currentSession) : null
   const shouldShowScheduleHeader = selectedModeCategory === 'workflow' || isOrganizationView
   const shouldShowBotConnector = selectedModeCategory === 'multi-agent' || selectedModeCategory === 'workflow' || isOrganizationView
 
@@ -668,10 +686,19 @@ export const ModePresetBar: React.FC = () => {
                         <button
                           onClick={handlePresetDropdownToggle}
                           className="flex min-w-0 items-center gap-2 px-3 py-1 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+                          title={currentSessionStatusLabel ? `${activePreset?.label ?? ''} · ${currentSessionStatusLabel}` : undefined}
                         >
                           {activePreset ? (
                             <>
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              {currentSessionTone === 'needs-input'
+                                ? <AlertCircle className="w-3 h-3 shrink-0 text-amber-500 dark:text-amber-400" />
+                                : currentSessionTone === 'running' || currentSessionTone === 'background'
+                                  ? <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70 text-green-600 dark:text-green-400" />
+                                  : currentSessionTone === 'paused'
+                                    ? <Pause className="w-3 h-3 shrink-0 opacity-50" />
+                                    : currentSessionTone === 'idle'
+                                      ? <Clock className="w-3 h-3 shrink-0 opacity-50" />
+                                      : <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
                               <span className="block max-w-[190px] truncate whitespace-nowrap text-sm font-medium text-gray-700 dark:text-gray-300">
                                 {activePreset.label}
                               </span>
