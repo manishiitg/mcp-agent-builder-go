@@ -307,7 +307,16 @@ func (bo *BaseOrchestrator) prepareToolDefinitionsForAgent(
 		filteredTools, wrappedExecutors = bo.PrepareWorkspaceToolsWithFolderGuard(filteredTools, customToolExecutors)
 	}
 
+	// The workflow tool pool is assembled from several capability bundles. A
+	// tool can legitimately be re-bound later in that assembly (agent_browser is
+	// replaced with a session/runtime-specific executor), but the immutable
+	// AgentDefinition requires exactly one definition per name. Preserve the old
+	// registry semantics here: the latest binding replaces the earlier one while
+	// retaining its original position. mcpagent remains strict and will still
+	// reject duplicates from callers that bypass this builder-owned translation
+	// boundary.
 	definitions := make([]mcpagent.ToolDefinition, 0, len(filteredTools))
+	definitionIndexByName := make(map[string]int, len(filteredTools))
 	for _, tool := range filteredTools {
 		if executor, exists := wrappedExecutors[tool.Function.Name]; exists {
 			// Convert Parameters to map[string]interface{}
@@ -368,14 +377,21 @@ func (bo *BaseOrchestrator) prepareToolDefinitionsForAgent(
 					}
 				}
 
-				definitions = append(definitions, mcpagent.ToolDefinition{
+				definition := mcpagent.ToolDefinition{
 					Name:         tool.Function.Name,
 					Description:  tool.Function.Description,
 					InputSchema:  params,
 					Execute:      finalExecutor,
 					Timeout:      0,
 					DisplayGroup: toolCategory,
-				})
+				}
+				if index, exists := definitionIndexByName[definition.Name]; exists {
+					bo.GetLogger().Warn(fmt.Sprintf("Duplicate workflow tool %q resolved during agent definition assembly; using the latest binding", definition.Name))
+					definitions[index] = definition
+					continue
+				}
+				definitionIndexByName[definition.Name] = len(definitions)
+				definitions = append(definitions, definition)
 			} else {
 				bo.GetLogger().Warn(fmt.Sprintf("Warning: Failed to convert executor for tool %s", tool.Function.Name))
 			}
