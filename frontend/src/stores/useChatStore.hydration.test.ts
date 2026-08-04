@@ -100,6 +100,29 @@ describe('useChatStore hydration bootstrap', () => {
     expect(chatStore.useChatStore.getState().activeTabId).toBe(secondTab)
   })
 
+  it('keeps the Chief of Staff chat independent from a running schedule tab', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T09:30:00Z'))
+    const chatStore = await import('./useChatStore')
+    await chatStore.waitForChatStoreHydration()
+
+    const scheduleTabId = await chatStore.useChatStore.getState().createChatTab('Schedule', {
+      mode: 'multi-agent',
+      isViewOnly: true,
+      isScheduledRun: true,
+    })
+    const interactiveTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', {
+      mode: 'multi-agent',
+    })
+    const reusedInteractiveTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', {
+      mode: 'multi-agent',
+    })
+
+    expect(interactiveTabId).not.toBe(scheduleTabId)
+    expect(reusedInteractiveTabId).toBe(interactiveTabId)
+    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(2)
+  })
+
   it('restores the existing persisted chat-store envelope', async () => {
     const storage = createMemoryStorage()
     const createdAt = Date.now()

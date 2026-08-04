@@ -1928,13 +1928,22 @@ export const useChatStore = create<ChatState>()(
         const timestamp = Date.now()
         const mode = metadata?.mode || 'multi-agent'
 
-        // Single-tab invariant: multi-agent chat has exactly ONE tab
-        // (organization-assistant tabs are exempt). Any attempt to create
-        // another reuses the existing one, so no call site — New Chat, session
-        // restore, ChatInput, or rehydration — can ever fork a second tab.
-        if (mode === 'multi-agent' && !metadata?.isOrganizationAssistant) {
+        // Single-tab invariant: the interactive Chief of Staff lane has exactly
+        // ONE tab. Organization-assistant and read-only schedule/bot lanes are
+        // independent, so they must never be reused as the interactive chat.
+        if (
+          mode === 'multi-agent' &&
+          !metadata?.isOrganizationAssistant &&
+          !metadata?.isViewOnly &&
+          !metadata?.isScheduledRun &&
+          !metadata?.isBotRun
+        ) {
           const existing = Object.values(get().chatTabs).find(t =>
-            t.metadata?.mode === 'multi-agent' && !t.metadata?.isOrganizationAssistant
+            t.metadata?.mode === 'multi-agent' &&
+            !t.metadata?.isOrganizationAssistant &&
+            t.metadata?.isViewOnly !== true &&
+            t.metadata?.isScheduledRun !== true &&
+            t.metadata?.isBotRun !== true
           )
           if (existing) {
             // Restore binds the single tab to a specific backend session.
@@ -1947,9 +1956,19 @@ export const useChatStore = create<ChatState>()(
           }
         }
 
-        const tabId = mode === 'workflow' && metadata?.phaseId
+        const tabIdBase = mode === 'workflow' && metadata?.phaseId
           ? `phase_${metadata.phaseId}_${timestamp}`
           : `chat_${timestamp}`
+        // Two independent lanes (for example Schedule + Chief of Staff chat)
+        // can be created in the same millisecond. Preserve the readable ID
+        // shape while guaranteeing that the second tab cannot overwrite the
+        // first in the chatTabs record.
+        let tabId = tabIdBase
+        let tabIdSuffix = 1
+        while (get().chatTabs[tabId]) {
+          tabId = `${tabIdBase}_${tabIdSuffix}`
+          tabIdSuffix += 1
+        }
         
         // Generate session ID for the new tab if not provided
         let sessionIdForTab: string | null = null
