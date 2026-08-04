@@ -58,6 +58,12 @@ the UI as a green check until `frontend/src/utils/toolCallFormatting.ts` learned
 to read the harness envelope and stderr. Before changing anything in this area,
 confirm the failure is actually visible — otherwise a fix cannot be verified.
 
+## The agent-facing contract, part two (2026-08-04)
+
+| Document | What it establishes |
+|---|---|
+| [what_the_runtime_tells_an_agent_about_itself.md](what_the_runtime_tells_an_agent_about_itself.md) | Seven defects from one `grep '[TOOL_ERROR]'` over a 5h37m window (137 markers). Four sharpen the house pattern into something worse: **the runtime named a cause the code had evidence against** — a denial blaming "workshop mode" the registry has never heard of, a shell tool description asserting a working directory that was never true, a guard advising a workspace path for a file that cannot exist there, and a Pulse pre-check answered with an identity error the validator two lines above had just disproved. Also: a 100KB cap that turned out to live on a test fixture while the live path was uncapped, allow-lists withholding tools the prompts instruct agents to call, and a deliberate re-registration that became fatal when a map became a slice — which killed the Chief of Staff daily pass two days running. |
+
 ## Earlier incidents
 
 - [session_tool_registry_lifecycle_leak.md](session_tool_registry_lifecycle_leak.md)
