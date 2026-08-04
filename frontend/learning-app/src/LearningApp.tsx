@@ -3329,7 +3329,18 @@ export default function LearningApp() {
                   <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
                   <div className="fl-msg-col">
                     {streamingReply && (
-                      <div className="fl-bubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(streamingReply)} /></div>
+                      // Rendered as thinking, NOT as a reply bubble. What
+                      // streams here is the model working out loud — "I'll
+                      // first check which notes this refers to…" — which is
+                      // not the answer and is often contradicted by it. In a
+                      // .fl-bubble it was indistinguishable from a finished
+                      // message, so a parent read the plan as the response.
+                      <div className="fl-stream-think">
+                        <span className="fl-stream-think-label">Thinking</span>
+                        <div className="fl-stream-think-body is-streaming">
+                          <Markdown text={stabilizeStreamingMarkdown(streamingReply)} />
+                        </div>
+                      </div>
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
@@ -4433,7 +4444,12 @@ export default function LearningApp() {
                     <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                     <div className="fl-tbubble-col">
                       {childStreamingReply && (
-                        <div className="fl-tbubble is-streaming"><Markdown text={stabilizeStreamingMarkdown(childStreamingReply)} /></div>
+                        <div className="fl-stream-think">
+                          <span className="fl-stream-think-label">Thinking</span>
+                          <div className="fl-stream-think-body is-streaming">
+                            <Markdown text={stabilizeStreamingMarkdown(childStreamingReply)} />
+                          </div>
+                        </div>
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
