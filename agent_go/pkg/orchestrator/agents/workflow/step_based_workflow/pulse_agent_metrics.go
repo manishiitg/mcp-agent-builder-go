@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
@@ -121,10 +122,8 @@ func RecordPulseAgentMetric(ctx context.Context, workspacePath string, metric Pu
 		metric.ReasoningTokens = summary.Total.ReasoningTokens
 		metric.CacheReadTokens = summary.Total.CacheReadTokens
 		metric.CacheWriteTokens = summary.Total.CacheWriteTokens
-		metric.TotalCostUSD = summary.Total.TotalCostUSD
 		metric.Models = summary.ByModel
-		metric.UsageStatus = "captured"
-		metric.UsageError = ""
+		metric.TotalCostUSD, metric.UsageStatus, metric.UsageError = pricePulseAgentModels(metric.Models)
 	}
 
 	modelsJSON, err := json.Marshal(metric.Models)
@@ -168,6 +167,65 @@ func RecordPulseAgentMetric(ctx context.Context, workspacePath string, metric Pu
 		metric.UsageStatus, metric.UsageError, metric.RecordedAt,
 	)
 	return err
+}
+
+// pricePulseAgentModels applies the same immutable model pricing contract used
+// by execution and phase ledgers when the central observer captured tokens but
+// the CLI event did not carry a provider-side or adapter-side cost estimate.
+// Only the explicitly unpriced token slice is priced, so a mixed aggregate can
+// never double-charge calls that already carried cost.
+func pricePulseAgentModels(models map[string]*costledger.Aggregate) (float64, string, string) {
+	total := 0.0
+	remainingUnpriced := 0
+	for modelID, aggregate := range models {
+		if aggregate == nil {
+			continue
+		}
+		if aggregate.UnpricedCallCount > 0 {
+			usage := &orchestrator.ModelTokenUsage{
+				Provider:         aggregate.Provider,
+				InputTokens:      aggregate.UnpricedPromptTokens,
+				OutputTokens:     aggregate.UnpricedCompletionTokens,
+				ReasoningTokens:  aggregate.UnpricedReasoningTokens,
+				CacheReadTokens:  aggregate.UnpricedCacheReadTokens,
+				CacheWriteTokens: aggregate.UnpricedCacheWriteTokens,
+				CacheTokens:      aggregate.UnpricedCacheReadTokens + aggregate.UnpricedCacheWriteTokens,
+				LLMCallCount:     aggregate.UnpricedCallCount,
+			}
+			orchestrator.EnsureModelTokenUsagePricing(modelID, usage)
+			if usage.TotalCost > 0 {
+				aggregate.TotalCostUSD += usage.TotalCost
+				if isPulseSubscriptionProvider(aggregate.Provider) {
+					aggregate.SubscriptionShadowUSD += usage.TotalCost
+				} else {
+					aggregate.TokenEstimateCostUSD += usage.TotalCost
+				}
+				aggregate.InputCostUSD += usage.InputCost
+				aggregate.OutputCostUSD += usage.OutputCost
+				aggregate.ReasoningCostUSD += usage.ReasoningCost
+				aggregate.CacheReadCostUSD += usage.CacheReadCost
+				aggregate.CacheWriteCostUSD += usage.CacheWriteCost
+				aggregate.PricingModelID = usage.PricingModelID
+				aggregate.PricingVersion = usage.PricingVersion
+				aggregate.UnpricedCallCount = 0
+			}
+		}
+		remainingUnpriced += aggregate.UnpricedCallCount
+		total += aggregate.TotalCostUSD
+	}
+	if remainingUnpriced > 0 {
+		return total, "captured_unpriced", fmt.Sprintf("%d LLM call(s) captured token usage but have no matching price card", remainingUnpriced)
+	}
+	return total, "captured", ""
+}
+
+func isPulseSubscriptionProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude-code", "claude_code", "codex-cli", "codex_cli", "cursor-cli", "cursor_cli", "pi-cli", "pi_cli":
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadPulseAgentMetrics returns newest-first measurements. Empty filters match

@@ -13,7 +13,7 @@ import {
 import { agentApi } from '../../services/api'
 import type { EvaluationReportEntry, EvaluationReportsResponse } from '../../services/api-types'
 import { formatStartedAt } from '../../utils/duration'
-import { formatStepOutputContent, isFinalScoringPlaceholderText, parseEvaluationPlanDetails } from '../../utils/evaluationReport'
+import { formatEvaluationScore, formatStepOutputContent, isFinalScoringPlaceholderText, parseEvaluationPlanDetails } from '../../utils/evaluationReport'
 import ModalPortal from '../ui/ModalPortal'
 
 interface EvaluationPopupProps {
@@ -246,6 +246,7 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                                 const showReasoning = Boolean(step.reasoning && !isFinalScoringPlaceholderText(step.reasoning))
                                 const showEvidence = Boolean(step.evidence && !isFinalScoringPlaceholderText(step.evidence))
                                 const stepDetails = evalStepDetailsById.get(step.step_id)
+                                const scoreLabel = formatEvaluationScore(step)
 
                                 return (
                                   <div
@@ -278,6 +279,11 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                                           {step.skipped && (
                                             <span className="text-xs bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
                                               Skipped
+                                            </span>
+                                          )}
+                                          {scoreLabel && (
+                                            <span className="text-xs bg-purple-100 px-1.5 py-0.5 rounded font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                              Score {scoreLabel}
                                             </span>
                                           )}
                                         </div>

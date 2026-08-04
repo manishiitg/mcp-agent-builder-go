@@ -203,6 +203,48 @@ func diffPatchErrorPreview(diff string) string {
 	return diff[:maxPreviewBytes] + fmt.Sprintf("\n... truncated %d bytes ...", len(diff)-maxPreviewBytes)
 }
 
+// boundedContextMismatchHint reports the file content at the closest position
+// the fallback matcher actually found, so a failed hunk carries a corrected
+// retry's worth of evidence instead of only telling the caller to go read the
+// whole file again.
+//
+// The fallback matcher already scans every candidate position computing
+// mismatches — bestMatchIndex and minMismatches are that scan's own output,
+// discarded once no position met the zero-mismatch bar. On 2026-08-04 the one
+// occurrence with full evidence, a 150KB file, took 4 extra calls to recover:
+// one to learn the match failed, then more to re-read the file and locate the
+// real content by hand. That cost is what this closes — not by relaxing the
+// zero-mismatch rule that protects against corrupting a structured file, only
+// by not throwing away evidence the matcher already had.
+//
+// The window is capped at both the hunk's own expected line count (comparing
+// like-for-like — no reason to show more than what the hunk itself claimed)
+// and a hard byte budget, so one pathologically long line cannot make the
+// error message itself the next problem.
+func boundedContextMismatchHint(resultLines []string, bestMatchIndex, minMismatches, expectedLineCount int) string {
+	if bestMatchIndex < 0 || bestMatchIndex >= len(resultLines) {
+		return ""
+	}
+	const maxHintBytes = 2000
+	end := bestMatchIndex + expectedLineCount
+	if end > len(resultLines) {
+		end = len(resultLines)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Closest match: %d of %d expected lines differ, starting at file line %d. Current content there:\n",
+		minMismatches, expectedLineCount, bestMatchIndex+1)
+	for i := bestMatchIndex; i < end; i++ {
+		line := fmt.Sprintf("%6d| %s\n", i+1, resultLines[i])
+		if b.Len()+len(line) > maxHintBytes {
+			fmt.Fprintf(&b, "... truncated, %d more line(s) in this window ...\n", end-i)
+			break
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
 // normalizeLineEndings converts all line endings to LF for consistent patch processing
 func normalizeLineEndings(content string) string {
 	// Replace CRLF (\r\n) with LF (\n)
@@ -819,6 +861,7 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 		// Fuzzy match: find position with minimum mismatches
 
 		bestMatchIndex := -1
+		bestMatchCount := 0
 		exactMatchCount := 0
 
 		minMismatches := len(expectedLines) + 1
@@ -838,7 +881,17 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 
 					mismatches++
 
-					if mismatches > maxAllowedMismatches {
+					// Breaking at "worse than the best candidate found so far"
+					// (not at maxAllowedMismatches, which is 0) still finds every
+					// exact match and never changes whether the hunk applies —
+					// but it lets a candidate that is genuinely close (say, one
+					// line off in a twenty-line hunk) keep counting instead of
+					// being capped at exactly 1 like every other non-matching
+					// position. Capping every miss at 1 made bestMatchIndex
+					// effectively arbitrary — the first position scanned, not
+					// the closest one — which made a "here is the closest match"
+					// hint on failure meaningless. This is what makes it real.
+					if mismatches > minMismatches {
 
 						break
 
@@ -857,6 +910,11 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 				minMismatches = mismatches
 
 				bestMatchIndex = i
+				bestMatchCount = 1
+
+			} else if mismatches == minMismatches {
+
+				bestMatchCount++
 
 			}
 
@@ -924,7 +982,14 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 
 			fmt.Printf("❌ Could not find match for hunk — refusing to apply to prevent corruption\n")
 
-			return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file. Read the current file content with an available tool and retry with an accurate diff")
+			if bestMatchCount > 1 {
+				return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file. %d locations are equally close (%d of %d expected lines differ); refusing to recommend an arbitrary location. Read the current file content and retry with more unique context", bestMatchCount, minMismatches, len(expectedLines))
+			}
+			hint := boundedContextMismatchHint(resultLines, bestMatchIndex, minMismatches, len(expectedLines))
+			if hint == "" {
+				return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file (file has fewer lines than the hunk expects). Read the current file content with an available tool and retry with an accurate diff")
+			}
+			return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file. %sRetry with a diff whose context matches the content above exactly", hint)
 
 		}
 

@@ -2046,6 +2046,7 @@ export interface EvaluationStepScore {
   step_id: string;
   score?: number;
   max_score?: number;
+  score_captured?: boolean;
   reasoning?: string | null;
   evidence?: string | null;
   skipped?: boolean;

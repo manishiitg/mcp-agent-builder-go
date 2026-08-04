@@ -140,6 +140,21 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-boot p { margin: 0; font-size: var(--text-body); font-weight: 600; }
 .fl-thinking { display: inline-flex; align-items: center; gap: 8px; color: #5f708d; font-size: var(--text-secondary); }
 .fl-thinking img { display: block; }
+/* Live model output while a turn runs. Deliberately NOT bubble-shaped: what
+   streams here is the model reasoning out loud, not its answer, and rendering
+   it in .fl-bubble made a plan read as the finished reply. Muted, quoted, and
+   capped in height so a long ramble cannot push the composer off screen. */
+.fl-stream-think { margin: 2px 0 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+.fl-stream-think-label { display: block; margin-bottom: 3px; font-size: var(--text-caption); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #7c8aa3; }
+.fl-stream-think-body { max-height: 190px; overflow-y: auto; color: #5f708c; font-size: var(--text-secondary); line-height: 1.5; }
+/* The reply's own emphasis shouldn't make reasoning look authoritative. */
+.fl-stream-think-body strong { font-weight: 700; color: inherit; }
+.fl-stream-think-body p:first-child { margin-top: 0; }
+.fl-stream-think-body p:last-child { margin-bottom: 0; }
+.fl-stream-think-body.is-streaming::after { content: ''; display: inline-block; width: 6px; height: 13px; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: fl-cursor-blink 1s step-end infinite; }
+.learning-app[data-theme="dark"] .fl-stream-think-body { color: #9aa8bd; }
+.learning-app[data-theme="dark"] .fl-stream-think-label { color: #8fa0b8; }
+
 .fl-bubble.is-streaming::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: fl-cursor-blink 1s step-end infinite; }
 @keyframes fl-cursor-blink { 50% { opacity: 0; } }
 .fl-toolcard { display: inline-flex; align-items: center; gap: 8px; width: fit-content; padding: 9px 13px; border: 1px solid #ccebd8; border-radius: 12px; background: #eefaf1; color: #1f7a4d; font-size: var(--text-secondary); font-weight: 600; }

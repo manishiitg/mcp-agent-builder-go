@@ -223,6 +223,7 @@ func runPulseOnce(ctx context.Context, force bool) error {
 
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
+	defer markAgentTurnStart("pulse")()
 
 	messages := existing.Messages
 	for _, c := range pulseChecks(s) {

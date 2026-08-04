@@ -683,9 +683,7 @@ func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, con
 		return fmt.Errorf("read finding backlog: %w", err)
 	}
 	expected := map[string]int{"open": 0, "in_progress": 0, "in_review": 0}
-	issueStatuses := make(map[string]string, len(findings))
 	for _, finding := range findings {
-		issueStatuses[finding.Issue.ID] = finding.Issue.Status
 		switch finding.Issue.Status {
 		case "in_progress":
 			expected["in_progress"]++
@@ -715,33 +713,6 @@ func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, con
 		}
 		if got != want {
 			return fmt.Errorf("%s count is %d; SQLite has %d", status, got, want)
-		}
-	}
-	for _, queue := range pulseElementsWithClass(workSummary, "workqueue") {
-		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
-		items := pulseElementsWithClass(queue, "workitem")
-		expectedItems := expected["in_review"]
-		if queueName == "attention" {
-			expectedItems = expected["open"] + expected["in_progress"]
-		}
-		if expectedItems > 0 && len(items) == 0 {
-			return fmt.Errorf("%s queue is empty; SQLite has %d matching issues", queueName, expectedItems)
-		}
-		if expectedItems == 0 && len(items) > 0 {
-			return fmt.Errorf("%s queue has items; SQLite has none", queueName)
-		}
-		for _, item := range items {
-			issueID := strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id"))
-			status, exists := issueStatuses[issueID]
-			if !exists {
-				return fmt.Errorf("%s queue references unknown issue %q", queueName, issueID)
-			}
-			if queueName == "verification" && status != "in_review" {
-				return fmt.Errorf("verification queue issue %q has SQLite status %q", issueID, status)
-			}
-			if queueName == "attention" && status != "backlog" && status != "blocked" && status != "needs_input" && status != "in_progress" {
-				return fmt.Errorf("attention queue issue %q has SQLite status %q", issueID, status)
-			}
 		}
 	}
 	return nil
@@ -815,6 +786,9 @@ func validatePulseImproveHTMLContract(content string) error {
 	if err := validatePulseHTMLTagBalance(content); err != nil {
 		return err
 	}
+	if count := len(pulseLightweightSchemaRootPattern.FindAllString(content, -1)); count != 1 {
+		return fmt.Errorf("expected exactly one data-pulse-schema=\"4\" html root (found %d)", count)
+	}
 	document, err := htmlpkg.Parse(strings.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("parse HTML: %w", err)
@@ -851,18 +825,18 @@ func validatePulseImproveHTMLContract(content string) error {
 		seenCoverage[moduleID] = true
 	}
 
-	brief, err := requireSinglePulseElement(document, "brief", "Today's outcome brief")
+	brief, err := requireSinglePulseElement(document, "brief", "Latest Pulse brief")
 	if err != nil {
 		return err
 	}
 	briefGrids := pulseElementsWithClass(brief, "briefgrid")
 	if len(briefGrids) != 1 {
-		return fmt.Errorf("Today's outcome must contain exactly one .briefgrid (found %d)", len(briefGrids))
+		return fmt.Errorf("Latest Pulse must contain exactly one .briefgrid (found %d)", len(briefGrids))
 	}
 	briefItems := pulseDirectChildrenWithClass(briefGrids[0], "briefitem")
-	expectedBriefLabels := []string{"Outcome", "Goal progress", "Fixed today", "Open now", "Next Pulse"}
+	expectedBriefLabels := []string{"Outcome", "Goal movement", "Next"}
 	if len(briefItems) != len(expectedBriefLabels) {
-		return fmt.Errorf("Today's outcome must contain exactly %d brief cells (found %d)", len(expectedBriefLabels), len(briefItems))
+		return fmt.Errorf("Latest Pulse must contain exactly %d brief cells (found %d)", len(expectedBriefLabels), len(briefItems))
 	}
 	expectedBrief := make(map[string]bool, len(expectedBriefLabels))
 	for _, label := range expectedBriefLabels {
@@ -872,14 +846,14 @@ func validatePulseImproveHTMLContract(content string) error {
 	for _, item := range briefItems {
 		headings := pulseElementsWithClass(item, "k")
 		if len(headings) != 1 {
-			return fmt.Errorf("each Today's outcome cell must contain exactly one .k heading")
+			return fmt.Errorf("each Latest Pulse cell must contain exactly one .k heading")
 		}
 		label := normalizePulseHTMLText(pulseHTMLText(headings[0]))
 		if !expectedBrief[label] {
-			return fmt.Errorf("Today's outcome contains unknown cell heading %q", pulseHTMLText(headings[0]))
+			return fmt.Errorf("Latest Pulse contains unknown cell heading %q", pulseHTMLText(headings[0]))
 		}
 		if seenBrief[label] {
-			return fmt.Errorf("Today's outcome contains duplicate cell heading %q", pulseHTMLText(headings[0]))
+			return fmt.Errorf("Latest Pulse contains duplicate cell heading %q", pulseHTMLText(headings[0]))
 		}
 		seenBrief[label] = true
 	}
@@ -916,59 +890,24 @@ func validatePulseImproveHTMLContract(content string) error {
 			return fmt.Errorf("Current work data-status %q visible count must match data-count", status)
 		}
 	}
-	workQueues := pulseElementsWithClass(workSummary, "workqueue")
-	expectedQueues := map[string]bool{"attention": true, "verification": true}
-	if len(workQueues) != len(expectedQueues) {
-		return fmt.Errorf("Current work must contain exactly %d queues (found %d)", len(expectedQueues), len(workQueues))
-	}
-	seenQueues := make(map[string]bool, len(workQueues))
-	for _, queue := range workQueues {
-		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
-		if !expectedQueues[queueName] {
-			return fmt.Errorf("Current work contains unknown data-queue %q", queueName)
-		}
-		if seenQueues[queueName] {
-			return fmt.Errorf("Current work contains duplicate data-queue %q", queueName)
-		}
-		seenQueues[queueName] = true
-		items := pulseElementsWithClass(queue, "workitem")
-		if len(items) > 3 {
-			return fmt.Errorf("Current work queue %q must contain at most 3 items", queueName)
-		}
-		for _, item := range items {
-			if strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id")) == "" {
-				return fmt.Errorf("Current work queue %q item is missing data-issue-id", queueName)
-			}
-			titles := pulseDirectChildrenByTag(item, "b")
-			if len(titles) != 1 || strings.TrimSpace(pulseHTMLText(titles[0])) == "" {
-				return fmt.Errorf("Current work queue %q item must have one short title", queueName)
-			}
+	for _, retiredClass := range []string{"workqueue", "workitem", "technical", "filters", "modfields", "agentlog"} {
+		if len(pulseElementsWithClass(document, retiredClass)) > 0 {
+			return fmt.Errorf("Lightweight Pulse report must not contain .%s blocks", retiredClass)
 		}
 	}
-	if len(pulseElementsWithClass(document, "modfields")) > 0 || len(pulseElementsWithClass(document, "agentlog")) > 0 {
-		return fmt.Errorf("Current Pulse report must not contain reviewer field dumps or a visible Agent log")
+	activityEntries := pulseElementsWithClass(document, "entry")
+	activityCount := len(activityEntries) + len(pulseElementsWithClass(document, "run"))
+	if activityCount > pulseImproveArchiveMaxActiveItems {
+		return fmt.Errorf("Lightweight Pulse report must keep at most %d material Activity items (found %d)", pulseImproveArchiveMaxActiveItems, activityCount)
 	}
-	for _, entry := range pulseElementsWithClass(document, "entry") {
+	for _, entry := range activityEntries {
 		if pulseHTMLHasClass(entry, "open") {
 			return fmt.Errorf("Current Pulse report must not keep standing open-finding cards in Activity")
 		}
 	}
 
-	technical, err := requireSinglePulseElement(document, "technical", "collapsed technical details")
-	if err != nil {
-		return err
-	}
-	if technical.Data != "details" {
-		return fmt.Errorf(".technical must be a details element")
-	}
-	if technical.Parent == nil || technical.Parent != brief.Parent || workSummary.Parent != brief.Parent {
-		return fmt.Errorf("Today's outcome, Current work, and technical details must be sibling sections")
-	}
-	if len(pulseDirectChildrenByTag(technical, "summary")) != 1 {
-		return fmt.Errorf("technical details must contain exactly one direct summary")
-	}
-	if len(pulseDirectChildrenWithClass(technical, "techbody")) != 1 {
-		return fmt.Errorf("technical details must contain exactly one direct .techbody")
+	if brief.Parent == nil || workSummary.Parent != brief.Parent {
+		return fmt.Errorf("Latest Pulse and Current work must be sibling sections")
 	}
 
 	if _, err := requireSinglePulseElementByID(document, "pulse-agent-handoff"); err != nil {
@@ -2108,16 +2047,28 @@ func readPulseReviewView(ctx context.Context, workspacePath, reviewRunID, module
 	}
 	artifact, err := step_based_workflow.LoadPulseReviewArtifactForRun(ctx, workspacePath, reviewRunID, module)
 	if errors.Is(err, sql.ErrNoRows) {
-		// The reviewer is asynchronous, so "not saved yet" is an ordinary
-		// state, not a defect. Returning the raw driver string told the
-		// agent nothing it could act on — 10 of these in one run, across
-		// two Pulse sessions, each followed by a blind retry. Name the
-		// identity that missed and the two things that actually explain it.
+		// Absence is the expected answer here, not a fault. The review stage
+		// prompt (scheduler.go) tells a reviewer to reconcile "any already-saved
+		// SQLite result before discovery" so it does not launch a duplicate — on
+		// a fresh run that pre-check must miss, because the caller is the thing
+		// that will write the row.
+		//
+		// The previous wording offered "or this identity pair is wrong" as a
+		// co-equal explanation. ValidatePulseReviewIdentity ran immediately
+		// above and passed, so the code had already disproved that: the format
+		// is valid and the module is in the canonical registry. Naming it anyway
+		// sent reviewers hunting for a different id — 8 of these on 2026-08-04
+		// across 3 sessions, on identities that were correct and seconds old.
+		//
+		// So: state the normal case first, and do not offer a cause this
+		// function has already ruled out.
 		return "", fmt.Errorf(
-			"no saved Pulse review yet for review_run_id=%q module=%q. "+
-				"The reviewer persists its result only when it finishes, so either it is still running "+
-				"— resume from its completion notification rather than polling — or this identity pair is wrong. "+
-				"Use the review_run_id and module exactly as reported by the call_generic_agent completion notification",
+			"no Pulse review is saved for review_run_id=%q module=%q yet. This identity is well-formed and the module is valid — "+
+				"do not look for a different review_run_id. "+
+				"If you are the reviewer for this run, nothing is saved until you save it: this is the expected result of the "+
+				"pre-discovery check, so proceed with discovery and record your result. "+
+				"If you are waiting on another stage's reviewer, it has not finished — resume from its completion notification "+
+				"rather than polling",
 			reviewRunID, module,
 		)
 	}
@@ -2289,10 +2240,25 @@ func pulseFindingDispositionsFromToolArg(raw interface{}) ([]step_based_workflow
 	return dispositions, nil
 }
 
+// validateReviewerVerificationDispositions reports every mismatch between the
+// saved reviewer verdicts and the submitted dispositions in one pass, not one
+// mismatch per call.
+//
+// It used to return on the first mismatch within the first review. On
+// 2026-08-04 finding PUL-70B1057E took three separate record_pulse_result
+// rejections to get through this single function alone — wrong disposition
+// value, then a verification proof that didn't match the reviewer's evidence,
+// then a next_check that didn't match the reviewer's boundary text — because
+// each rejection only revealed the next check once the previous one was fixed.
+// All three checks read independent fields of the same matched disposition, so
+// none of them needs the others to have passed first; they can all run and all
+// report in one message. validateFindingDisposition got the same fix for the
+// structural checks that follow this one in the same call.
 func validateReviewerVerificationDispositions(
 	reviews []step_based_workflow.PulseReviewVerificationResult,
 	dispositions []step_based_workflow.PulseFindingDisposition,
 ) error {
+	var messages []string
 	for _, review := range reviews {
 		var matched *step_based_workflow.PulseFindingDisposition
 		for index := range dispositions {
@@ -2311,15 +2277,18 @@ func validateReviewerVerificationDispositions(
 			break
 		}
 		if matched == nil {
-			return fmt.Errorf("reviewer verification for finding %q (fingerprint %q) requires a matching finding_disposition before the module can be terminal", review.FindingID, review.Fingerprint)
+			messages = append(messages, fmt.Sprintf("reviewer verification for finding %q (fingerprint %q) requires a matching finding_disposition before the module can be terminal", review.FindingID, review.Fingerprint))
+			continue
 		}
+
+		var findingProblems []string
 		wantDisposition := map[string]string{
 			step_based_workflow.VerificationPassed:       step_based_workflow.FindingDispositionFixedVerified,
 			step_based_workflow.VerificationFailed:       step_based_workflow.FindingDispositionFailed,
 			step_based_workflow.VerificationInconclusive: step_based_workflow.FindingDispositionChangedUnverified,
 		}[review.Verdict]
 		if matched.Disposition != wantDisposition {
-			return fmt.Errorf("reviewer verification %s for finding %q requires disposition %q, got %q", review.Verdict, review.FindingID, wantDisposition, matched.Disposition)
+			findingProblems = append(findingProblems, fmt.Sprintf("reviewer verification %s requires disposition %q, got %q", review.Verdict, wantDisposition, matched.Disposition))
 		}
 		verificationMatched := false
 		for _, proof := range matched.Verification {
@@ -2329,13 +2298,22 @@ func validateReviewerVerificationDispositions(
 			}
 		}
 		if !verificationMatched {
-			return fmt.Errorf("finding %q disposition must carry the reviewer's structured %s proof with identical expected and observed evidence", review.FindingID, review.Verdict)
+			findingProblems = append(findingProblems, fmt.Sprintf("disposition must carry the reviewer's structured %s proof with identical expected and observed evidence", review.Verdict))
 		}
 		if review.Verdict == step_based_workflow.VerificationInconclusive && strings.TrimSpace(matched.NextCheck) != review.NextCheck {
-			return fmt.Errorf("finding %q inconclusive disposition next_check must match the reviewer boundary %q", review.FindingID, review.NextCheck)
+			findingProblems = append(findingProblems, fmt.Sprintf("inconclusive disposition next_check must match the reviewer boundary %q", review.NextCheck))
+		}
+		if len(findingProblems) > 0 {
+			messages = append(messages, step_based_workflow.FormatPulseDispositionProblems(review.FindingID, findingProblems).Error())
 		}
 	}
-	return nil
+	if len(messages) == 0 {
+		return nil
+	}
+	if len(messages) == 1 {
+		return errors.New(messages[0])
+	}
+	return fmt.Errorf("%d findings failed reviewer-verification cross-check:\n%s", len(messages), strings.Join(messages, "\n"))
 }
 
 // pulseDecisionFields is the complete decision contract in schema order. It

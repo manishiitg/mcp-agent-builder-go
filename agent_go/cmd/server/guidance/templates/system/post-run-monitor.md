@@ -18,7 +18,7 @@ the sole source for a machine action. Preserve its legacy recovery/Advisor state
 until replaced, but add no new state semantics. Project user-relevant outcomes
 without contradicting runtime state.
 
-When updating `builder/improve.html`, keep the first screen short and user-prioritized. Runloop renders pending **Needs your decision** requests above the HTML. The HTML then shows active **Assumptions challenged** only when consequential assumptions exist, followed by **Today's outcome**, a compact SQLite-derived **Current work** summary, goal progress, and recent material activity. Current work contains counts plus at most three important items and three fixes needing verification; the Pulse popup owns the full issue tracker. Signal tiles, cost/time, Maintenance Radar, and cadence may stay inside closed-by-default operator details, but raw evidence, standing finding cards, and reviewer field dumps never appear in visible HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative. Do not duplicate the full latest-run Bug/Goal narrative at the top if the same details already appear in Recent runs or the timeline.
+When updating `builder/improve.html`, keep it a lightweight published executive journal. Runloop renders pending **Needs your decision** requests above the HTML. The HTML shows the Bug/Goal verdicts, one status sentence, reviewer coverage, optional active **Assumptions challenged**, exactly three **Latest Pulse** cells (Outcome, Goal movement, Next), a SQLite-derived **Current work** count strip (Open, Fixing, Verify), and at most 12 material Activity cards. The Pulse popup owns issue titles, evidence, checks, attempts, history, technical/cost tiles, filters, and complete reviewer detail; never duplicate those sections in HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative.
 
 ## Timeout Recovery
 
@@ -586,7 +586,11 @@ Mark due on any of:
   `learning_objective` no longer matches the step; `lock_learnings` should be
   cleared because guidance is stale; mature stable learnings should be locked
   with evidence; a run discovered reusable HOW-to knowledge worth capturing;
-  selectors/API quirks changed.
+  selectors/API quirks changed; the complete skill package has no recorded
+  purity baseline; or `SKILL.md` / any reference contains business facts, run
+  results/current status, owner-value copies, current strategy, incident or
+  decision history, provenance, or platform architecture that is not required
+  as a runner-facing procedure.
 - **Knowledgebase**: KB notes or KB config are missing, duplicated, stale,
   contradictory, or no longer aligned with the plan.
 - **DB**: schema, table contracts, upsert rules, report SQL, eval consumers,
@@ -615,6 +619,14 @@ The Pulse Fixer applies bounded learning/step-config edits, bounded KB
 note/config changes, and bounded DB contract fixes directly (never speculative
 row migrations), each independently verified, using absolute workspace paths
 in reviewer prompts and evidence.
+
+For the learning dimension, review the complete skill package rather than a
+sample: the root `SKILL.md`, every content-bearing Markdown reference, and every
+effective `learnings_access="read-write"` objective. References are part of the
+skill. Detailed reusable HOW may move from the root into a reference; non-skill
+content must leave the entire package and be routed to its authoritative store.
+The Fixer must re-run the same semantic classification after editing. A lean
+index or valid Markdown shape alone is not proof of purity.
 
 Load `assumption-audit` for all three: reusable HOW must not preserve business
 policy, fixed strategy/architecture, or an unverified limitation as if it were

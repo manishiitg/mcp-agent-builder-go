@@ -105,3 +105,43 @@ func TestPulseAgentMetricsMakeMissingUsageExplicit(t *testing.T) {
 		t.Fatalf("missing ledger must not look like zero usage: %#v", metrics)
 	}
 }
+
+func TestPulseAgentMetricsPricesCapturedClaudeUsageWithCanonicalRateCard(t *testing.T) {
+	workspacePath := concernsWorkspace(t)
+	ledger, err := costledger.NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLedger: %v", err)
+	}
+	defer ledger.Close()
+	costledger.SetDefaultLedger(ledger)
+	t.Cleanup(func() { costledger.SetDefaultLedger(nil) })
+	if err := ledger.Append(costledger.Entry{
+		EventID:           "pulse-claude-unpriced",
+		IdempotencyKey:    "pulse-claude-unpriced",
+		Timestamp:         time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC),
+		ExecutionID:       "pulse-claude-unpriced",
+		Scope:             "pulse",
+		Provider:          "claude-code",
+		EffectiveProvider: "claude-code",
+		EffectiveModelID:  "claude-sonnet-5",
+		LLMCallCount:      1,
+		PromptTokens:      1_000_000,
+		CompletionTokens:  1_000_000,
+		BillingBasis:      "unpriced",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPulseAgentMetric(context.Background(), workspacePath, PulseAgentMetricRecord{
+		ExecutionID: "pulse-claude-unpriced", PulseRunID: "pulse-priced", Module: "strategy_auditor", Role: "reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := LoadPulseAgentMetrics(context.Background(), workspacePath, "pulse-priced", "strategy_auditor", "reviewer", -1)
+	if err != nil || len(metrics) != 1 {
+		t.Fatalf("metrics=%#v err=%v", metrics, err)
+	}
+	metric := metrics[0]
+	if metric.UsageStatus != "captured" || metric.TotalCostUSD <= 0 || metric.Models["claude-sonnet-5"].PricingVersion == "" {
+		t.Fatalf("Claude usage was not canonically priced: %#v", metric)
+	}
+}

@@ -480,3 +480,44 @@ func TestPulseImpactRejectionsNameTheContractTheyEnforce(t *testing.T) {
 		}
 	}
 }
+
+// A disposition with several independent problems must report all of them in
+// one rejection, not one problem per round trip.
+//
+// On 2026-08-04 finding PUL-70B1057E took four sequential record_pulse_result
+// rejections over 24 minutes to satisfy, because validateFindingDisposition and
+// validateReviewerVerificationDispositions each returned on the first
+// violation and only revealed the next one after the caller fixed it. The
+// individual field checks are independent of each other — nothing about a
+// missing summary depends on whether changed_files was also supplied — so all
+// of them can be evaluated and reported together.
+func TestFindingDispositionCombinesAllViolationsInOneRejection(t *testing.T) {
+	err := validateFindingDisposition(PulseFindingDisposition{
+		Fingerprint: "fp-1",
+		FindingID:   "PUL-MULTI",
+		Disposition: FindingDispositionChangedUnverified,
+		// Summary omitted, changed_files omitted, next_check omitted, and the
+		// verification carries an invalid verdict — four independent problems.
+		Verification: []PulseFindingVerification{{Check: "some check", Verdict: "maybe"}},
+	})
+	assertContainsAll(t, err, []string{
+		"requires summary",
+		"changed_unverified requires changed_files",
+		"changed_unverified requires next_check",
+		`invalid verdict "maybe"`,
+	})
+	if got := strings.Count(err.Error(), "\n1)"); got != 1 {
+		t.Fatalf("rejection is not numbered as a combined list: %s", err.Error())
+	}
+}
+
+// A disposition with exactly one problem must not read like a list of one.
+func TestFindingDispositionSingleViolationStaysUnnumbered(t *testing.T) {
+	disposition := validFixedVerifiedDisposition()
+	disposition.Summary = ""
+	err := validateFindingDisposition(disposition)
+	assertContainsAll(t, err, []string{`finding "PUL-1"`, "requires summary"})
+	if strings.Contains(err.Error(), "1)") {
+		t.Fatalf("single violation formatted as a numbered list: %s", err.Error())
+	}
+}

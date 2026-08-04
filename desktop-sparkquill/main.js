@@ -118,6 +118,23 @@ async function startServer() {
   })
 }
 
+// --- voice model lifecycle ---------------------------------------------------
+// The speech model costs 15-20s to load and ~600MB resident. Tie it to whether
+// the app is actually on screen: a parent who closes the window to the menu bar
+// is done for now, and one who reopens it is about to use it. A pure idle timer
+// did worse at both ends — it held the memory while the app sat in the
+// background, and still made the mic slow after any gap longer than the timeout.
+function voiceLifecycle(action) {
+  const req = http.request(
+    { host: '127.0.0.1', port: serverPort, path: `/api/voice/native/${action}`, method: 'POST' },
+    (res) => res.resume(),
+  )
+  // Best-effort: a window event must never surface an error, and the server
+  // may simply not be up yet.
+  req.on('error', () => {})
+  req.end()
+}
+
 function health(url) {
   return new Promise((resolve) => {
     const req = http.get(url, (res) => {
@@ -190,6 +207,10 @@ function createWindow() {
     mainWindow?.hide()
   })
   mainWindow.on('closed', () => { mainWindow = null })
+  // 'hide' fires for close-to-menu-bar (see the close handler above) and for
+  // Cmd-H; 'show' for the tray item, the Dock, and activate.
+  mainWindow.on('hide', () => voiceLifecycle('unload'))
+  mainWindow.on('show', () => voiceLifecycle('warm'))
 }
 
 // Reopen from the menu bar / Dock. The window is usually still alive and just

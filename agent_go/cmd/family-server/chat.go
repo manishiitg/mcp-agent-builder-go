@@ -408,6 +408,46 @@ func engineToProvider(engine string) (llm.Provider, bool) {
 // runtime uses process-global MCP env vars, so concurrent turns must not overlap.
 var agentTurnMu sync.Mutex
 
+// agentTurnHolder records who currently owns agentTurnMu, so a WhatsApp
+// message can be answered honestly the moment it arrives instead of going
+// silent. Measured live on 2026-08-04: six back-to-back Pulse turns held the
+// lock unbroken for eight minutes, and a parent's message sat 207s (another
+// waited 14 minutes) before it could start. A reply was always produced — but
+// silence for that long is indistinguishable from being ignored.
+//
+// Deliberately separate from agentTurnMu rather than derived from a TryLock:
+// the point is to report WHAT is running and for how long, which a lock alone
+// cannot say.
+var agentTurnHolder struct {
+	mu    sync.Mutex
+	kind  string // "pulse", "parent", "child"; empty when idle
+	since time.Time
+}
+
+// markAgentTurnStart records ownership; the returned func clears it. Call
+// immediately after acquiring agentTurnMu, deferring the result.
+func markAgentTurnStart(kind string) func() {
+	agentTurnHolder.mu.Lock()
+	agentTurnHolder.kind = kind
+	agentTurnHolder.since = time.Now()
+	agentTurnHolder.mu.Unlock()
+	return func() {
+		agentTurnHolder.mu.Lock()
+		agentTurnHolder.kind = ""
+		agentTurnHolder.mu.Unlock()
+	}
+}
+
+// agentTurnBusy reports what is running right now, if anything.
+func agentTurnBusy() (kind string, running time.Duration, busy bool) {
+	agentTurnHolder.mu.Lock()
+	defer agentTurnHolder.mu.Unlock()
+	if agentTurnHolder.kind == "" {
+		return "", 0, false
+	}
+	return agentTurnHolder.kind, time.Since(agentTurnHolder.since), true
+}
+
 // POST /api/parent/message — run one turn of the Parent Learning chat through
 // the selected engine, scoped to the Family/parent workspace folder.
 func handleParentMessage(w http.ResponseWriter, r *http.Request) {
@@ -523,6 +563,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	trace := newTurnTrace("parent", s.Engine)
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
+	defer markAgentTurnStart("parent")()
 	trace.locked()
 
 	sess, err := agentsession.New(ctx, agentsession.Config{

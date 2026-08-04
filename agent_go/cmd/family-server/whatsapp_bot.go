@@ -845,6 +845,23 @@ func extractWhatsAppMessageText(m *waProto.Message) string {
 	if m.ExtendedTextMessage != nil && m.ExtendedTextMessage.Text != nil {
 		return strings.TrimSpace(*m.ExtendedTextMessage.Text)
 	}
+	// A CAPTION is the message text too. Attaching several photos and typing
+	// underneath is the normal way to send "here are her answers, what do you
+	// think?" — WhatsApp delivers that as an ImageMessage carrying Caption, not
+	// as a separate text message. Reading only Conversation/ExtendedTextMessage
+	// silently dropped it: the handler saw empty text, filed the photos, and
+	// returned without running a turn. Observed live on 2026-08-04 — fourteen
+	// photos landed in inbox/ and the question written with them was never
+	// answered, with nothing logged to say why.
+	if m.ImageMessage != nil {
+		return strings.TrimSpace(m.ImageMessage.GetCaption())
+	}
+	if m.VideoMessage != nil {
+		return strings.TrimSpace(m.VideoMessage.GetCaption())
+	}
+	if m.DocumentMessage != nil {
+		return strings.TrimSpace(m.DocumentMessage.GetCaption())
+	}
 	return ""
 }
 
@@ -1073,6 +1090,12 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 				w.noteUpload(savedPath)
 			}
 			acct.react(info.Chat, info.Sender, info.ID, "👀")
+			log.Printf("[whatsapp] media with no text — filed, no turn started")
+		} else {
+			// Nothing usable at all. Worth a line: this is the path a message
+			// type we do not understand yet falls down, and it is otherwise
+			// completely silent — which is how dropped captions went unnoticed.
+			log.Printf("[whatsapp] message %s had no text we could read — ignored", info.ID)
 		}
 		return
 	}
@@ -1096,6 +1119,14 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	// turn runs long, layer on ⏳ ("still working"). Cleared when the reply is
 	// sent; swapped to ⚠️ if the turn fails. Mirrors AgentWorks' reaction ack.
 	acct.react(info.Chat, info.Sender, info.ID, "👀")
+	// A reaction is easy to miss when the wait is minutes rather than seconds.
+	// If something is ALREADY running, say so in words up front: measured on
+	// 2026-08-04, a parent's message sat 207s behind back-to-back Pulse check-ins
+	// (another waited 14 minutes) before its turn could even start. The reply
+	// always arrived; the silence beforehand is what read as "no response".
+	if notice := whatsappBusyNotice(agentTurnBusy()); notice != "" {
+		_ = acct.sendTextWithRetry(info.Chat, notice, 1, 10*time.Second, "busy notice")
+	}
 	longRunDone := make(chan struct{})
 	go func() {
 		select {
@@ -1122,6 +1153,44 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	// SOMETHING is wrong rather than a reply that silently never arrives.
 	if err := acct.sendTextWithRetry(info.Chat, reply, 3, 30*time.Second, "reply"); err != nil {
 		acct.react(info.Chat, info.Sender, info.ID, "⚠️")
+	}
+}
+
+// busyNoticeGap keeps a burst of messages from earning a notice each. One
+// heads-up is information; three is noise on top of an already-slow reply.
+const busyNoticeGap = 5 * time.Minute
+
+var lastBusyNotice struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+// whatsappBusyNotice returns what to tell the sender about an in-progress turn,
+// or "" to stay quiet. Takes agentTurnBusy's results directly so the caller
+// reads as one statement.
+func whatsappBusyNotice(kind string, running time.Duration, busy bool) string {
+	if !busy {
+		return ""
+	}
+	// Something that just started will likely finish before a notice would even
+	// be useful; below this the reaction already covers it.
+	if running < 5*time.Second {
+		return ""
+	}
+	lastBusyNotice.mu.Lock()
+	defer lastBusyNotice.mu.Unlock()
+	if time.Since(lastBusyNotice.at) < busyNoticeGap {
+		return ""
+	}
+	lastBusyNotice.at = time.Now()
+
+	switch kind {
+	case "pulse":
+		return "Quick heads-up — I'm in the middle of a check-in right now, so this one will take a few minutes. I'll reply as soon as it finishes."
+	case "child":
+		return "I'm helping with an activity right now — I'll get to this straight after."
+	default:
+		return "I'm still finishing something else — I'll reply to this right after."
 	}
 }
 

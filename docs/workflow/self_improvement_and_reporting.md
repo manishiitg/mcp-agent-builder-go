@@ -58,21 +58,14 @@ goal evidence.
 
 Pulse's durable memory is **SQLite**, including module results, reviews, findings,
 attempts, verification, finalization, interventions, and comparable goal observations.
-`builder/improve.html` is the required generated dashboard and publishable history, not
-the lifecycle database:
-- **Verdict pills** (Bug, Goal), stamped with the run they're as-of.
-- **Goal card** — each success criterion's Met/Short/At-risk + evidence.
-- **Decision cards** — each fix (harden/replan) the loop applied.
-- **Material strategy decision cards** — visually distinct decision entries with `Why now`,
-  evidence, change, expected impact, files touched, and remaining risk/gap, so material
-  replans/report/eval/cadence changes do not look like routine Pulse notes.
-- **Self-verification** — on a later run the loop *confirms the last unconfirmed Decision*:
-  `ok` (cite before→after), `bad` (regressed → reopen a finding), or `flat` (path not hit →
-  stays pending). So "I fixed X last run → re-check X" is built in.
-- **Open findings** — structured SQLite lifecycle records that persist until attempt-scoped proof closes them.
-- **Human input requests** — structured question cards with status, options/default, and evidence; notifications may point to them, but email is not the source of truth.
+`builder/improve.html` is the required lightweight executive journal and
+publishable history, not the lifecycle database. It contains Bug/Goal verdicts,
+one status sentence, reviewer coverage, optional assumptions, exactly three
+Latest Pulse cells, Open/Fixing/Verify counts, and at most 12 material Activity
+cards. Complete findings, checks, fix attempts, verification, questions, and
+review evidence remain in SQLite and are rendered by the Pulse popup.
 
-See `review-improve-log.md` for the log's structure and the confirm-Decision rules.
+See `review-improve-log.md` for the journal structure and archive rules.
 
 Pulse also maintains compact **dashboard cards** in the workflow workspace:
 - the Dashboard stage overwrites `builder/card.health.html` after module and Fixer outcomes are known;

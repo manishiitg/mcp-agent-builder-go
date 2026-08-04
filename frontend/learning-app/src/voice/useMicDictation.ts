@@ -9,7 +9,14 @@ import {
   type PcmCapture,
 } from './nativePcm'
 
-export type MicState = 'idle' | 'recording' | 'transcribing'
+// 'preparing' covers the gap between clicking the mic and audio actually
+// flowing — opening the device, and on a cold start loading/downloading the
+// model, which is measured in seconds. It exists because without it that gap
+// looked identical to "nothing happened": state stayed 'idle', so every
+// impatient re-click passed toggle()'s guard and began ANOTHER capture
+// session, all feeding one shared helper. Observed live: six concurrent
+// sessions interleaving audio into one utterance and wrecking the transcript.
+export type MicState = 'idle' | 'preparing' | 'recording' | 'transcribing'
 
 // How often to refresh the live preview while recording, as a backstop for
 // continuous speech with no natural pause (see PAUSE_DETECT_MS below, which
@@ -257,6 +264,9 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
   }
 
   const start = async () => {
+    // Claim the mic BEFORE any await, so a second click cannot slip past
+    // toggle()'s idle check while this one is still opening.
+    setState('preparing')
     setError(null)
     setLiveText('')
     setWarmingUp(false)
@@ -412,9 +422,14 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
       setError('Could not use the microphone. Check permission for this app.')
       teardown()
       setState('idle')
+      nativeRef.current = false
     }
   }
 
+  // Only these two transitions are user-initiated. 'preparing' and
+  // 'transcribing' deliberately ignore clicks: both are short, neither is
+  // safely interruptible, and treating them as idle is what produced the
+  // concurrent-session bug.
   const toggle = () => { if (state === 'recording') stop(); else if (state === 'idle') start() }
 
   // Enter, pressed while recording: stop, transcribe, and send directly —

@@ -61,6 +61,15 @@ type voiceWorker struct {
 	// (~96s measured), which would otherwise trip the 30s default and get the
 	// process killed mid-download, forever.
 	callTimeout time.Duration
+	// Per-worker override for voiceWorkerIdleTimeout.
+	idleTimeout time.Duration
+}
+
+func (w *voiceWorker) idleAfter() time.Duration {
+	if w.idleTimeout > 0 {
+		return w.idleTimeout
+	}
+	return voiceWorkerIdleTimeout
 }
 
 func (w *voiceWorker) timeout() time.Duration {
@@ -176,7 +185,7 @@ func (w *voiceWorker) callLocked(ctx context.Context, req map[string]any) (map[s
 	// worker only unloads after a real gap in use, not a fixed wall-clock
 	// window from when it started.
 	if w.idle != nil {
-		w.idle.Reset(voiceWorkerIdleTimeout)
+		w.idle.Reset(w.idleAfter())
 	}
 	if model, ok := req["model"].(string); ok {
 		if w.warm == nil {
@@ -250,10 +259,10 @@ func (w *voiceWorker) ensureStartedLocked() error {
 	w.cmd = cmd
 	w.stdin = stdin
 	w.reader = bufio.NewReader(stdout)
-	w.idle = time.AfterFunc(voiceWorkerIdleTimeout, func() {
+	w.idle = time.AfterFunc(w.idleAfter(), func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		log.Printf("[%s] worker idle for %s, unloading", w.name, voiceWorkerIdleTimeout)
+		log.Printf("[%s] worker idle for %s, unloading", w.name, w.idleAfter())
 		w.stopLocked()
 	})
 
@@ -286,6 +295,18 @@ func (w *voiceWorker) ensureStartedLocked() error {
 // *exec.Cmd is not safe in Go (a second call errors with "Wait was already
 // called"), so exactly one place — the reaper — owns that. Safe to call when
 // nothing is running.
+// Stop unloads the worker now, releasing the model's memory. Used when the
+// app goes to the background — see voice_native.go's lifecycle endpoints.
+func (w *voiceWorker) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cmd == nil {
+		return
+	}
+	log.Printf("[%s] unloading on request", w.name)
+	w.stopLocked()
+}
+
 func (w *voiceWorker) stopLocked() {
 	if w.idle != nil {
 		w.idle.Stop()

@@ -8,6 +8,7 @@ import { activateTab } from '../../utils/activateTab'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { executionTreeRuntimeStatus } from '../../utils/runtimeActivity'
+import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
 
 // ---------------------------------------------------------------------------
 // WorkflowTabItem — per-tab component with narrow store subscriptions
@@ -235,32 +236,23 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
     })
   }, [activeTabId, activeWorkflowTabs, closeTab])
 
-  // Convert a read-only scheduled/bot run tab into an interactive Workflow
-  // Builder chat: strip the view-only/scheduled metadata, rename it, and focus.
+  // Make the scheduled/bot conversation interactive without changing its
+  // identity. The backend routes the next message to this session's retained
+  // live tmux first; if the pane is gone, it resumes the same native coding-CLI
+  // conversation. Rotating the session ID here would incorrectly fork away
+  // from both the tmux and its conversation context.
   const handleMakeInteractive = useCallback((tabId: string) => {
     const chatStore = useChatStore.getState()
     const tab = chatStore.getTab(tabId)
     if (!tab) return
 
-    chatStore.setTabMetadata(tabId, {
-      mode: 'workflow',
-      phaseId: 'workflow-builder',
-      phaseName: 'Automation Builder',
-      presetQueryId: tab.metadata?.presetQueryId,
-      isViewOnly: false,
-      isScheduledRun: false,
-      scheduledJobName: undefined,
-      isBotRun: false,
-      botPlatform: undefined,
-      readOnlyRestoredAt: undefined,
-    })
     useChatStore.setState((state) => {
       const current = state.chatTabs[tabId]
       if (!current) return state
       return {
         chatTabs: {
           ...state.chatTabs,
-          [tabId]: { ...current, name: 'Automation Builder' },
+          [tabId]: convertObservedWorkflowTabToInteractive(current),
         },
       }
     })

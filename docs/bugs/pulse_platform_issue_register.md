@@ -8,6 +8,15 @@ Pulse Fixer cannot repair. It is not evidence that every historical finding is
 still reproducible on the latest binary: items marked **reverify** have an
 implementation change but no post-change producing run yet.
 
+The 2026-08-04 RTS Latency run supplied the first broad post-change runtime
+reverification. It proved several fixes, but also reopened PLAT-009, showed that
+PLAT-010 is incomplete at the projected lifecycle boundary, and exposed two new
+platform issues in finalization authority and Pulse-agent cost accounting.
+Follow-up UI/runtime inspection added PLAT-020 (scheduled-session continuation)
+and PLAT-021 (proposal/decision projection). See the dated sections below.
+The subsequent tool-error review added PLAT-022 through PLAT-026 and assigned
+that independent batch to Claude Code.
+
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
 documents remain authoritative where linked.
@@ -23,6 +32,72 @@ has a first-class platform issue and linkage table.
 A finding belongs here only when the failed boundary is owned by the workflow
 runtime, scheduler, bridge, tool contract, shared persistence, or shared UI—not
 by the workflow plan or its data.
+
+## Two-agent repair board
+
+This file is the read-mostly platform index. Each issue has a canonical ticket
+fragment under `docs/bugs/pulse_platform/` so **Codex** and **Claude Code** can
+repair different boundaries concurrently without editing one large document.
+
+Rules:
+
+1. Every implementation ticket has one platform key, one narrow acceptance
+   boundary, and exactly one assigned agent: `Codex`, `Claude Code`, or
+   `Unassigned`.
+2. An agent changes the assigned agent and state in the ticket fragment to
+   `in_progress` before editing code and lists the main files it expects to
+   touch. The other agent may review that work but does not implement the same
+   ticket unless ownership is explicitly handed off. The shared index does not
+   need editing at claim time.
+3. A broad platform issue may have multiple suffix tickets (`PLAT-003-A`,
+   `PLAT-003-B`) when its API, runtime, UI, or migration boundaries can be fixed
+   independently. Do not combine unrelated PLAT keys into one coding task.
+4. `implemented` means focused tests pass. `runtime_reverify` means the code is
+   complete but a real producing workflow/Pulse run is still required. `done`
+   requires both where runtime evidence is part of acceptance.
+5. Each fragment records its evidence, acceptance boundary, and test command.
+   The index is synchronized once at handoff, review, or completion—not on every
+   working update. Create another incident document only when large raw
+   evidence would make the ticket fragment unreadable.
+
+### Active ownership lanes
+
+| Ticket | Boundary | Assigned agent | State | Primary files |
+|---|---|---|---|---|
+| [PLAT-001-A](pulse_platform/plat-001.md) | Reverify keyed human-input propagation | Claude Code | `runtime_reverify` | workflow orchestration/handoff |
+| [PLAT-002-A](pulse_platform/plat-002.md) | Reverify canonical nested tool-failure status | Claude Code | `runtime_reverify` | tool bridge and terminal status |
+| [PLAT-003-A](pulse_platform/plat-003.md) | Reverify reachable workflow DB capability | Claude Code | `runtime_reverify` | DB capability materialization |
+| [PLAT-005-A](pulse_platform/plat-005.md) | Reverify multi-name API-spec lookup | Claude Code | `runtime_reverify` | mcpagent API bridge |
+| [PLAT-006-A](pulse_platform/plat-006.md) | Reverify workflow-step shell cwd | Claude Code | `runtime_reverify` | step session/bridge cwd |
+| [PLAT-007-A](pulse_platform/plat-007.md) | Exercise workflow image verification E2E | Claude Code | `runtime_e2e_reverify` | media tool path/model routing |
+| [PLAT-009-A](pulse_platform/plat-009.md) | Merge grouped cost shards for an iteration-only query | Codex | `runtime_reverify` | `token_usage_store.go` |
+| [PLAT-010-A](pulse_platform/plat-010.md) | Finish partially migrated finding-event identities | Codex | `runtime_reverify` | `pulse_finding_lifecycle.go` |
+| [PLAT-011-A](pulse_platform/plat-011.md) | Complete non-tier LLM-role UI acceptance | Claude Code | `ui_acceptance_pending` | LLM configuration API/UI |
+| [PLAT-012-A](pulse_platform/plat-012.md) | Reverify dependent-artifact changelog coverage | Claude Code | `runtime_reverify` | managed mutation changelog |
+| [PLAT-014-A](pulse_platform/plat-014.md) | Reverify reviewer skill delivery on Tectonicus | Claude Code | `partial_runtime_reverify` | guidance and skill delivery |
+| [PLAT-015-A](pulse_platform/plat-015.md) | Persist an explicit skipped-evaluation sentinel | Codex | `runtime_reverify` | `evaluation_execution.go`, `evaluation_types.go` |
+| [PLAT-016-A](pulse_platform/plat-016.md) | Preserve legitimate numeric zero evaluation scores | Codex | `runtime_reverify` | `evaluation_types.go` |
+| [PLAT-017-A](pulse_platform/plat-017.md) | Reproduce scheduler-success versus run-metadata mismatch | Unassigned | `blocked_on_reproduction` | scheduler and run-metadata finalization |
+| [PLAT-018-A](pulse_platform/plat-018.md) | Use validated dashboard artifact as final-command proof | Codex | `runtime_reverify` | `pulse_final_commands.go` |
+| [PLAT-019-A](pulse_platform/plat-019.md) | Price only unpriced Pulse-agent usage | Codex | `runtime_reverify` | `pulse_agent_metrics.go`, `costledger/ledger.go` |
+| [PLAT-020-A](pulse_platform/plat-020.md) | Keep converted scheduled chat on the same session/tmux | Codex | `runtime_reverify` | `WorkflowChatTabs.tsx`, retained-input routing |
+| [PLAT-021-A](pulse_platform/plat-021.md) | Separate proposals from answerable user decisions | Codex | `ui_reverify` | `pulseFindingPresentation.ts`, `PulseWorkspace.tsx` |
+| [PLAT-022-A](pulse_platform/plat-022.md) | Restore `get_api_spec` registration in the affected message-sequence session | Claude Code | `assigned` | registration path / workflow-phase tool setup |
+| [PLAT-023-A](pulse_platform/plat-023.md) | Make large-file diff context failure recoverable without unsafe fuzzy apply | Claude Code + Codex follow-up | `implemented` | `workspace/handlers/diff_patch.go` |
+| [PLAT-026-A](pulse_platform/plat-026.md) | Keep selected running workflow visible exactly once | Claude Code | `implemented` | `GlobalActivityMonitor.tsx` |
+| [PLAT-024-A](pulse_platform/plat-024.md) | Populate missing tool names in canonical error markers | Claude Code + Codex follow-up | `implemented` | mcpagent/provider logging |
+| [PLAT-025-A](pulse_platform/plat-025.md) | Bound workspace-shell stdout memory without corrupting scripted JSON | Claude Code | `queued` | `workspace/handlers/shell.go` |
+
+Assignment reserves the lane; it does not claim that work has started. An agent
+sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
+and PLAT-013 remain unassigned because they are already runtime verified.
+PLAT-017 remains unassigned because it needs a fresh reproduction before a
+correct implementation boundary can be chosen.
+
+For new work, create the smallest independent fragment and add one link here.
+Claude Code should claim its currently active tickets in their fragment rather
+than relying on chat-only coordination; that makes ownership survive restarts
+and handoffs without creating an index-edit conflict with Codex.
 
 ## Evidence collection
 
@@ -56,20 +131,29 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-001 Human-input propagation | P0 | Upwork | **implementation fixed; runtime reverify** |
 | PLAT-002 Tool-failure status precedence | P0 | Upwork, Build-in-public, Social Media | **canonical CLI/runtime fix implemented; runtime reverify** |
 | PLAT-003 Workflow DB tool exposure | P0 | Build-in-public, Instagram, RTS Latency | **implemented on current main; runtime reverify** |
-| PLAT-004 Scheduler completion detection | P0 | RTS Latency | **fixed; linked finding needs reverify** |
+| PLAT-004 Scheduler completion detection | P0 | RTS Latency | **runtime verified 2026-08-04** |
 | PLAT-005 `get_api_spec` multi-name contract | P1 | RTS Latency | **fixed in mcpagent; runtime reverify** |
 | PLAT-006 Workflow-step shell cwd contract | P1 | RTS Latency | **reverify** implemented fix |
 | PLAT-007 Workflow image verification | P1 | Instagram | implemented; runtime/E2E reverify |
-| PLAT-008 Phase cost pricing | P1 | Build-in-public | **implemented; runtime reverify** |
-| PLAT-009 `get_cost_summary` run resolution | P1 | Build-in-public, Social Media | **implemented; runtime reverify** |
-| PLAT-010 Finding identity split | P1 | RTS Latency | **implemented with migration; runtime reverify** |
-| PLAT-011 LLM role visibility | P2 | Build-in-public | **implemented; runtime reverify** |
-| PLAT-012 Changelog mutation coverage | P2 | LinkedIn | **implemented; runtime reverify** |
-| PLAT-013 Legacy regular-step editing | P1 | RTS Latency | **reverify** implemented fix |
-| PLAT-014 Reviewer reference loading | P1 | RTS Latency, Tectonicus | **reverify** after `read_skill` migration |
-| PLAT-015 Evaluation skipped-sentinel handling | P1 | Social Media | **open; implementation required** |
-| PLAT-016 Evaluation report drops real zero scores | P1 | Social Media | **open; implementation required** |
+| PLAT-008 Phase cost pricing | P1 | Build-in-public, RTS Latency | **core pricing runtime verified; see PLAT-019** |
+| PLAT-009 `get_cost_summary` run resolution | P1 | Build-in-public, Social Media, RTS Latency | **implementation repaired; runtime reverify** |
+| PLAT-010 Finding identity split | P1 | RTS Latency | **implementation completed; runtime reverify** |
+| PLAT-011 LLM role visibility | P2 | Build-in-public, RTS Latency | **runtime evidence positive; full UI acceptance pending** |
+| PLAT-012 Changelog mutation coverage | P2 | LinkedIn, RTS Latency | **plan mutation verified; learning-tree boundary still reverify** |
+| PLAT-013 Legacy regular-step editing | P1 | RTS Latency | **runtime verified 2026-08-04** |
+| PLAT-014 Reviewer reference loading | P1 | RTS Latency, Tectonicus | **RTS runtime verified; Tectonicus reverify remains** |
+| PLAT-015 Evaluation skipped-sentinel handling | P1 | Social Media | **implementation fixed; runtime reverify** |
+| PLAT-016 Evaluation report drops real zero scores | P1 | Social Media | **implementation fixed; runtime reverify** |
 | PLAT-017 Scheduler success leaves workflow metadata running | P1 | Social Media | **open; distinct from PLAT-004** |
+| PLAT-018 Pulse finalizer cannot record dashboard completion | P1 | RTS Latency | **implementation fixed; runtime reverify** |
+| PLAT-019 Pulse agent metrics remain unpriced | P1 | RTS Latency | **implementation fixed; runtime reverify** |
+| PLAT-020 Converted scheduled chat must retain its session/tmux | P0 | RTS Latency | **implementation corrected; UI/runtime reverify** |
+| PLAT-021 Proposals masquerade as pending user decisions | P1 | RTS Latency | **implementation fixed; UI reverify** |
+| PLAT-022 `get_api_spec` absent from one workflow-phase session | P1 | Job Search | **assigned to Claude Code** |
+| PLAT-023 Diff patch context recovery on large files | P1 | Tool-error logs | **implemented 2026-08-04 (large-file fixtures + corrected-retry round trip); nearest-candidate counting is accurate and tied near-matches refuse an arbitrary hint; runtime reverify remains** |
+| PLAT-024 Tool-error marker omits tool name | P2 | Cross-workflow logs | **implemented 2026-08-04 (mcpagent d1eca1f + Codex follow-up); identity is recovered before per-tool failure classification, with a narrow envelope fallback and explicit "unknown"; runtime reverify remains** |
+| PLAT-025 Workspace shell stdout buffer is unbounded | P1 | Platform availability | **queued for Claude Code** |
+| PLAT-026 Selected running workflow hidden from global activity | P1 | RTS Latency | **implemented 2026-08-04 (a first pass missed the same-workflow-sibling case per Codex review; corrected — see ticket); runtime reverify remains** |
 
 The two tool-error findings below are one family, not two independent repair
 projects. The database-tool symptoms across three workflows are also one shared
@@ -94,405 +178,154 @@ disagreed afterward. That is a terminal metadata/provenance reconciliation
 defect and is tracked separately as PLAT-017 rather than being treated as a
 PLAT-004 regression.
 
-## Detailed issues
+### RTS Latency runtime reverification — 2026-08-04
 
-### PLAT-001 — `run_full_workflow` drops keyed human input
+Run identity:
 
-- **Priority:** P0
-- **Owner:** workflow orchestration/handoff
-- **Source finding:** `HARNESS-RUN-FULL-WORKFLOW-HUMAN-INPUT-LOSS`
-- **Source database:** `Workflow/upwork/db/db.sqlite`
-- **Recorded state:** `external_action_required`, severity `high`
-- **Problem:** a human-input override supplied to `run_full_workflow` did not
-  appear in the target child step's opening prompt.
-- **Impact:** run-specific safety or scope constraints can be silently ignored
-  while the workflow continues and reports success.
-- **Evidence:** the saved scheduler conversation contains the two-feed
-  override; the child `search-find-and-shortlist` session does not; its raw
-  artifact shows that `most_recent` was scraped anyway.
-- **Implementation (2026-08-03):** `run_full_workflow` now parses
-  `human_inputs` strictly, rejects malformed and unknown step IDs before
-  launch, copies the map into immutable execution/batch contexts, and derives
-  one isolated context per dispatched step. The keyed value reaches regular,
-  message-sequence, todo, and human-input steps without leaking to siblings;
-  an explicit `execute_step(human_input=...)` remains higher priority.
-- **Verification:** focused tests cover both MCP-decoded map shapes, fail-closed
-  parsing, unknown IDs, two distinct child values, sibling isolation, map-copy
-  isolation, and explicit single-step precedence. A real scheduled full-run
-  replay remains required before closing the Upwork finding.
-- **Current workaround:** compare each producing child's prompt and raw
-  provenance with the requested override.
-- **Acceptance:** an E2E passes distinct keyed values to at least two child
-  steps and proves each child sees only its intended value; missing or unknown
-  keys fail before execution.
+```text
+workflow run: 33798848-0ed7-4132-821c-e05592e3ec4e
+pulse_run_id: schedule-cron--42eca39a_1785810615371091000
+workflow:     08:00:15–09:37:00 IST (96.75 minutes)
+reviewers:    09:40:06–10:14:05 IST
+fixer:        10:14:05–10:48:22 IST
+```
 
-### PLAT-002 — nested tool failures remain semantically successful
+**The new reviewer/Fixer topology worked.** Gate started exactly two independent
+reviewers with concurrency enabled: `workflow_review` and `strategy_auditor`.
+Their executions overlapped. `workflow_review` used the new multi-turn sequence
+(7 LLM calls); Strategy Auditor remained an independent lens. Goal Advisor was
+skipped on its own recorded boundary. The reviewer barrier waited for both, then
+one consolidated Fixer ran. `pulse_agent_metrics.role` correctly distinguishes
+`reviewer` from `fixer`.
 
-- **Priority:** P0
-- **Owner:** tool bridge, timing telemetry, and terminal status
-- **Source findings:** `HARNESS-NESTED-ERROR-STATUS-PRECEDENCE` (Upwork) and
-  `HARNESS-TOOL-ENVELOPE-ISERROR-2026-08-03` (Build-in-public), plus
-  `HARNESS-TIMING-EMBEDDED-TOOL-ERROR` (Social Media, observed before the
-  canonical implementation landed)
-- **Problem:** the outer transport succeeds while the nested tool payload says
-  `ERROR`, carries a non-zero nested exit code, or reports an HTTP failure.
-  Stored traces still set `IsError=false` and `errored_count=0`.
-- **Impact:** retries, alerts, validation, reviewers, and terminal status can
-  treat a real failed operation as clean.
-- **Important distinction:**
-  [tool_failures_invisible_in_backend_logs.md](tool_failures_invisible_in_backend_logs.md)
-  fixed visibility with `[TOOL_ERROR]` logs and red UI rendering. It did not by
-  itself make the canonical runtime/timing result an error.
-- **Implementation (2026-08-03):** `mcpagent/toolerr` now has a narrow canonical
-  classifier separate from the broad log-only suspect detector. The CLI stream
-  adapter emits `ToolCallErrorEvent` instead of `ToolCallEndEvent` for nested
-  failure envelopes, and saved CLI conversation history sets `IsError=true`.
-  Sequential and parallel in-process tool paths use the same classifier.
-  Problem-reporting/query tools are excluded from payload promotion so a
-  returned domain row such as `status=failed` is not confused with transport
-  failure.
-- **Verification:** fixtures pass for nested `ERROR`, non-zero shell exit,
-  permission denial, HTTP 4xx, `success=false`, and MCP `isError`; negative
-  controls pass for prose discussing errors and historical failed DB rows. The
-  real post-build timing artifact still needs to prove `errored_count` changes.
-- **Current workaround:** agents and reviewers parse nested stdout/content and
-  apply explicit error precedence themselves.
-- **Acceptance:** fixtures for nested `ERROR`, HTTP failure, permission denial,
-  and non-zero shell exit all set canonical error state, increment error counts,
-  and prevent an unrecovered parent execution from being clean. Text merely
-  discussing an error remains a success.
+**Verification-before-discovery worked.** The workflow reviewer processed 14
+allowlisted attempt/finding tuples across 12 awaiting-verification findings:
+13 passed, 1 failed, and 0 were inconclusive. The failed finding was reopened
+and the Fixer repaired the plan-level source it named. Runtime evidence closed
+the prior DB-persistence, DB-probe, variable-read, KB reachability, language/
+`stt_routing`, digest-freshness, and scheduler-completion findings. In
+particular, both collectors persisted 2026-08-04 rows through the sanctioned
+`$MCP_CUSTOM` DB route, and the full scheduled workflow reached every required
+step before success was recorded.
 
-### PLAT-003 — granted DB access does not produce a reachable DB tool
+**The Fixer made real, audited changes.** It corrected the `audio_status`
+contract conflict, added the mandatory `source=voice` gate, repaired workflow
+root derivation, made declared production log-group configuration observable,
+and changed the report's DB instructions from direct `sqlite3` access to the
+sanctioned route. Ten managed plan mutations appear in
+`planning/changelog/changelog-2026-08-04-04-18-12.json`. It also recorded three
+impact interventions and ten goal observations. Five behavioral changes remain
+correctly `awaiting_verification`; only the next producing workflow run can
+settle them.
 
-- **Priority:** P0
-- **Owner:** workflow-step capability materialization/API bridge
-- **Source finding:** `HARNESS-DBTOOL-NOT-EXPOSED-EXEC-2026-08-03`
-- **Primary source database:** `Workflow/build-in-public/db/db.sqlite`
-- **Related evidence:** Instagram `route-design-plan`; RTS collectors denied
-  direct SQLite and unable to discover the sanctioned DB path; Social Media
-  standalone Pulse Fixer `manual-fixer--20260803T164745Z-1785775665916620000`
-  spent 27 minutes, then its approved one-row normalization was denied with
-  effective `db_access=""`.
-- **Problem:** steps with `db_access=read-write` cannot resolve
-  `query_workflow_db`/`mutate_workflow_db` as callable tools. The same tools may
-  exist behind an undocumented raw `$MCP_CUSTOM` curl route.
-- **Impact:** the permission contract and actual capability disagree. Agents
-  burn failed calls, abandon persistence, or publish a false claim that the DB
-  capability does not exist.
-- **Current implementation:** managed DB tools are already capability-derived
-  from trusted `db_access`, even when a step has a narrower explicit custom-tool
-  list. `read` materializes query only; `read-write` materializes query and
-  mutation. Direct SQLite/WAL/SHM paths remain blocked for managed agentic
-  sessions, while the mutation executor independently fails closed without an
-  explicit read-write grant.
-- **Verification (2026-08-03):** the real stdio MCP bridge → custom executor →
-  workspace HTTP API → WAL-mode SQLite E2E passes for query and mutation.
-  Focused capability tests pass for read-only/read-write exposure and for
-  read-only/no-grant mutation denial. The three source findings should be moved
-  to platform reverify rather than prompting another workflow-level repair.
-- **Fixer follow-up (2026-08-03):** isolated workshop stage tools already used
-  the child MCP session directly, but `execute_shell_command` inherited the
-  parent workshop's MCP URL. A Fixer calling the managed DB tool through the
-  shell bridge was therefore authorized as the wrong session. Workshop stage
-  sessions now override the bridge URL/session in their trusted shell env. A
-  Pulse Fixer also receives an explicit read-write DB capability and must pass
-  a pre-provider capability check covering DB write scope, logical grant,
-  child-session bridge routing, and both query/mutation tool executors. Missing
-  capability fails before the expensive LLM run; mutation remains fail-closed.
-- **Current workaround:** raw `$MCP_CUSTOM/query_workflow_db` and
-  `$MCP_CUSTOM/mutate_workflow_db` calls when their exact API is known.
-- **Acceptance:** real workflow-step bridge E2E tests for read-only and
-  read-write grants prove the matching tools are discoverable and callable;
-  no-grant and read-only mutation attempts fail closed.
+**PLAT-009 failed its runtime acceptance and is reopened.** At 09:51:07 IST,
+`get_cost_summary(workspace_path="Workflow/rtslatency")` first tried the retired
+`runs/iteration-0/token_usage.json`, then enumerated only
+`costs/execution/__ungrouped__`. It did not select the authoritative
+`costs/execution/dev/2026-08-04.json` shard. The reviewer consequently reported
+that all nine scheduled step rows and `claude-sonnet-5` were absent, while the
+authoritative dev ledger contains them. This is post-change current-binary
+evidence, not a stale pre-fix observation.
 
-### PLAT-004 — scheduler success can precede actual workflow completion
+**PLAT-010 is only partially repaired.** Migration has produced one canonical
+`pulse_finding_details` row and one `run_concerns` row for
+`HARNESS-REFDOC-REVIEW-ARTIFACT-DRIFT`, but `pulse_finding_events` still carries
+ordinary `external_action_required` events under both the old and canonical
+fingerprints. The projected backlog shown to the reviewer therefore still
+presents two lifecycle items, and the Fixer explicitly reconciled both halves.
+Preserving history is correct; preserving the old events as live lifecycle
+events rather than explicit identity-merge history is not.
 
-- **Priority:** P0
-- **Owner:** scheduler/background execution completion barrier
-- **Legacy source:** RTS Latency `run_concerns`, `bug_review`,
-  `external_action_required`, seen twice
-- **Linked Social Media findings:** `HARNESS-PULSE-RUN-STATUS-MISMATCH` and
-  `HARNESS-SCHEDULER-CHILD-STATUS`. These are two observations of the same
-  scheduler/workflow terminal-state reconciliation boundary, not two repair
-  projects. They were emitted by the pre-rebuild runtime.
-- **Problem:** `schedule-runs.json` recorded a dev run as success after 84.6
-  seconds even though the pipeline ended at `step-daily-latency-report` and
-  later security, cost, digest, and checkpoint work never completed.
-- **Impact:** Pulse reviews incomplete evidence, finalization may start early,
-  and missed producing steps are reported as a healthy run.
-- **Resolution:** fixed by commit `f69de7b6c` ("Stop the reconciler calling an
-  in-flight run successful"). The reconciler no longer treats a temporarily
-  `completed` workshop turn as completion of the multi-turn schedule. Only the
-  scheduler's own completed turn loop can record success; an abandoned run is
-  eventually recorded as interrupted/error. The normal scheduler path also
-  waits on the consolidated runtime state, which includes foreground work,
-  tracked child executions, background agents, and tmux activity.
-- **Verification:** scheduler reconciliation and workshop-idle regression tests
-  pass on current main. RTS Latency needs one uninterrupted post-fix scheduled
-  run to close its historical finding.
-- **Acceptance:** the scheduler cannot emit terminal success until every
-  required child has an authoritative terminal completion; a lost/truncated
-  child yields failed or timed-out status with its identity and last evidence.
+**PLAT-008's core arithmetic worked, but a separate accounting boundary did
+not.** The phase and execution ledgers now stamp `pricing_model_id`,
+`pricing_version`, fresh/cache token components, and non-zero totals for both
+`claude-opus-5` and `claude-sonnet-5`. However, the three corresponding
+`pulse_agent_metrics` rows have `usage_status=captured`, model usage populated,
+and `total_cost_usd=0`; their embedded model objects report
+`unpriced_call_count` for every call. That inconsistency is PLAT-019 rather than
+a reopening of the phase-ledger arithmetic in PLAT-008.
 
-### PLAT-005 — `get_api_spec` does not honor its multi-name input
+**PLAT-012 is only partly exercised.** Every managed plan edit emitted a typed
+changelog entry with target, actor, dependency class, and before/after refs.
+The run also changed `learnings/_global/references/*.md`, but this pass does not
+prove the runtime-learning-turn tree-hash path because those edits were made by
+the Fixer rather than the dedicated learning turn. Keep that half in reverify.
 
-- **Priority:** P1
-- **Owner:** API bridge tool-spec lookup
-- **Source finding:** `HARNESS-GET-API-SPEC-ARRAY`
-- **Source database:** `Workflow/rtslatency/db/db.sqlite`
-- **Problem:** an array of valid tool names is coerced into one literal unknown
-  name instead of returning several specs.
-- **Impact:** an agent concludes that working tools do not exist and can publish
-  that false diagnosis downstream.
-- **Resolution:** fixed in mcpagent commit `ea60eb2` ("Stop get_api_spec failing
-  on shape and routing"). `tool_name` accepts one string, a decoded JSON array,
-  or a coding-CLI-serialized JSON-array string; canonical tool names are sorted,
-  resolved, and authorized independently of the compatibility-only
-  `server_name` field.
-- **Verification (2026-08-03):** array, serialized-array, mixed known/unknown,
-  custom/MCP routing, and unavailable-server tests pass. The RTS finding is
-  historical evidence and should move to platform reverify on the rebuilt
-  binary.
-- **Current workaround:** one lookup call per tool name.
-- **Acceptance:** string and string-array inputs return the same canonical specs;
-  mixed known/unknown input identifies only the unknown names without hiding
-  the known results.
+**Run-quality note, not yet separate platform keys.** The Fixer recovered from
+several avoidable tool failures: one absolute-path Folder Guard denial, one
+failed assertion while rewriting, one protected evaluation-plan diff attempt,
+and several schema-probing failures against `record_pulse_result` /
+`record_pulse_impact`. These did not invalidate its terminal results, but they
+are evidence that the prompt/schema ergonomics still waste calls. Do not count
+them as workflow defects without first proving a shared contract problem.
 
-### PLAT-006 — workflow-step shell cwd disagreed with its contract
+### Platform repair pass — 2026-08-04
 
-- **Priority:** P1
-- **Owner:** workflow step session/bridge context
-- **Legacy source:** RTS Latency `step-daily-latency-collect-dev-voice` finding,
-  currently `awaiting_verification`
-- **Incident:**
-  [workflow_step_shell_working_directory.md](workflow_step_shell_working_directory.md)
-- **Problem:** a dedicated child shell ran from the run execution folder while
-  some prompts/skills claimed docs-root cwd; the earlier inverse failure also
-  existed when dedicated sessions lost their run cwd.
-- **Current state:** code now assigns a workflow-step run cwd directly and
-  fails closed when it is absent. The remaining finding must be replayed on the
-  rebuilt runtime to distinguish stale guidance from a runtime regression.
-- **Acceptance:** regular, message-sequence, todo, reviewer, and Fixer session
-  tests state their cwd contract explicitly and observe exactly that directory.
-  Guidance contains no contradictory relative-path examples.
+This pass repaired the current-binary defects above without restarting the
+backend. Verification is focused/unit-level until the next real Pulse or
+schedule-to-chat producer exercises each boundary:
 
-### PLAT-007 — image verification cannot reliably read workflow images
+- PLAT-009 now treats an iteration-only run such as `iteration-0` as the parent
+  of its grouped ledger shards, enumerates every group/date shard, and merges
+  only matching child run keys. Explicit `iteration-0/dev` queries remain
+  exact. Tests prove dev+production merge and reject another iteration.
+- PLAT-010 now finishes interrupted historical migrations: events left under
+  an old fingerprint are moved to the canonical finding ID/fingerprint, with
+  colliding tuples retained as explicit `identity_merge` history rather than a
+  second live case.
+- PLAT-015 persists a skipped step as `skipped: true` with explicit
+  reason/evidence through JSON and SQLite. The PLAT-016 audit found the earlier
+  repair incomplete beyond the workflow serializer: server projection could
+  still omit zero, fractional values were truncated, and missing scores lacked
+  an explicit presence bit. Workflow, SQLite, API, and UI now use
+  `score_captured`; preserve fractional values; and display genuine zero.
+- PLAT-018 now uses the scheduler's successful dashboard artifact validation
+  as the command's proof and marks only `dashboard=done`. It does not grant the
+  agent general DB write authority and does not infer success for backup,
+  publish, or notify.
+- PLAT-019 reprices only the unpriced slice of each captured model aggregate
+  with the same immutable model rate card used by phase/execution ledgers.
+  Mixed priced/unpriced aggregates cannot double-charge; genuinely unknown
+  models remain explicit as `captured_unpriced` with a reason.
+- PLAT-020 now retains the scheduled conversation's session ID when it becomes
+  interactive. A live retained tmux receives the message directly; if the pane
+  is gone, the backend resumes the same native coding-CLI conversation. It does
+  not fork the chat or discard its context.
+- PLAT-021 separates informational proposals from answer-blocked decisions.
+  A finding appears under **Your decisions** only when it carries a linked
+  `human_input_id`; a missing link is Pulse-owned repair work, and a
+  `proposal_recorded` item appears under **Proposed improvements** instead.
+- PLAT-017 was deliberately not changed. The retained Social Media
+  `run_metadata.json` now has a terminal `failed` state, so the historical
+  scheduler-success/metadata-running contradiction cannot be reproduced from
+  the current artifact. Capture a fresh current-binary mismatch before
+  changing shared scheduler terminal-state ownership.
 
-- **Priority:** P1
-- **Owner:** media tool path normalization and model selection
-- **Legacy source:** Instagram `route-build-carousel`, currently
-  `awaiting_verification`
-- **Problem:** `read_image` rejected existing absolute workflow paths as
-  relative because it expected a `_users/default/...` layout. Earlier runtime
-  evidence also showed a retired default vision model returning 404.
-- **Impact:** image-producing workflows can pass only renderer provenance and
-  hashes, not direct visual/OCR verification.
-- **Current state:** implementation exists for absolute workspace-path
-  normalization, rejection of relative/out-of-workspace paths, and dynamic
-  provider/model discovery via `list_llm_capabilities`. The focused workspace
-  unit tests pass. This item is not awaiting implementation; it is awaiting a
-  rebuilt-runtime E2E against an actual workflow image so the linked finding
-  can be verified and closed.
-- **Acceptance:** an E2E creates an image under a real workflow execution
-  folder, reads it by the exact absolute and workflow-qualified paths, and uses
-  a supported configured model. A bad path and unavailable model produce
-  distinct actionable errors.
+Focused verification passed:
 
-### PLAT-008 — phase costs omit input and can use the wrong rate card
+```text
+go test ./agent_go/pkg/costledger ./agent_go/pkg/orchestrator ./agent_go/pkg/orchestrator/agents/workflow/step_based_workflow ./agent_go/cmd/server \
+  -run 'TestReadRunAcrossDates|TestFindingIdentityMigration|TestReconcilePulseDashboard|TestPulseAgentMetrics|TestPhasePricingUses' -count=1
+npm test -- --run src/components/workflow/pulseFindingPresentation.test.ts
+npx tsc -b --pretty false
+```
 
-- **Priority:** P1
-- **Owner:** cost observer/phase ledger pricing
-- **Source finding:** `HARNESS-PHASE-COST-PRICING-2026-08-03`
-- **Source database:** `Workflow/build-in-public/db/db.sqlite`
-- **Problem:** phase rows omitted input cost and one Opus row used Sonnet output
-  and cached-input rates.
-- **Impact:** historical and daily spend is materially understated and changes
-  without a workload change.
-- **Implementation (2026-08-03):** Claude transcript usage now reports total
-  prompt input (fresh + cache create + cache read), while retaining the raw
-  cache components. Phase persistence carries cache read/write separately,
-  recalculates every component from the effective model, and stamps
-  `pricing_model_id` plus `pricing_version`. Claude Opus 5 and Sonnet 5 golden
-  cases prove distinct input/output/cache-read/cache-write rates and totals.
-- **Acceptance:** one immutable model identity selects one versioned rate card;
-  input, output, reasoning, cache-read, and cache-write components reconcile to
-  the total. Golden tests cover both Opus and Sonnet on adjacent dates.
+## Ticket files
 
-### PLAT-009 — `get_cost_summary` loses grouped and historical run spend
+The fragment is canonical for current ownership, implementation notes,
+verification evidence, and acceptance. This index supplies cross-ticket
+priority and historical run context.
 
-- **Priority:** P1
-- **Owner:** cost-query projection
-- **Source finding:** `HARNESS-COSTSUMMARY-RUNFOLDER-2026-08-03`
-- **Source database:** `Workflow/build-in-public/db/db.sqlite`
-- **Linked Social Media finding:** `HARNESS-EXEC-COST-RUN-FOLDER`
-  (observed before the current implementation landed)
-- **Problem:** grouped run folders are looked up through a legacy
-  `runs/.../token_usage.json` path even when the authoritative execution ledger
-  has the data, and an ungrouped query omits spend recorded on another date.
-- **Impact:** the tool reports missing evidence or only part of the true run
-  cost.
-- **Current workaround:** read and sum `costs/execution/<group>/<date>.json`.
-- **Implementation (2026-08-03):** the query now resolves the run's scope and
-  group, enumerates every authoritative daily shard, selects only the requested
-  run projection, and merges each shard once. Current and historical runs use
-  the same path; the retired `runs/.../token_usage.json` lookup is migration
-  input only.
-- **Acceptance:** query results reconcile to authoritative cost events across
-  dates, groups, models, and execution IDs without double-counting aggregate
-  and per-step views.
-
-### PLAT-010 — one logical finding can have two lifecycle fingerprints
-
-- **Priority:** P1
-- **Owner:** Pulse finding identity/deduplication
-- **Source finding:** `HARNESS-FINDING-FINGERPRINT-SPLIT`
-- **Source database:** `Workflow/rtslatency/db/db.sqlite`
-- **Problem:** two rows share finding ID
-  `HARNESS-REFDOC-REVIEW-ARTIFACT-DRIFT` but have different fingerprints and
-  split recurrence counts.
-- **Impact:** closing one row leaves its twin open; Gate and reviewers keep
-  rediscovering an issue already handled.
-- **Current workaround:** reconcile every row with the same finding ID and
-  semantic behavior together.
-- **Implementation (2026-08-03):** structured `finding_id` is now the
-  workflow-global lifecycle identity; reviewer module and wording no longer
-  participate. Schema startup canonicalizes old single rows and merges twins,
-  sums recurrence, moves attempts/verifications, preserves colliding events as
-  explicit identity-merge events, and enforces one case-insensitive finding ID.
-- **Acceptance:** one stable platform issue can link several observations and
-  fingerprints, while one workflow lifecycle row cannot claim the same
-  finding ID twice. Migration merges existing twins without deleting events.
-
-### PLAT-011 — model configuration hides non-tier roles
-
-- **Priority:** P2
-- **Owner:** LLM configuration API/UI
-- **Source finding:** `HARNESS-GETLLMCONFIG-ROLES-HIDDEN-2026-08-03`
-- **Source database:** `Workflow/build-in-public/db/db.sqlite`
-- **Problem:** `get_llm_config` shows high/medium/low execution tiers but omits
-  builder, maintenance, Pulse, and Chief-of-Staff roles.
-- **Impact:** the operator cannot see the role responsible for major review or
-  maintenance spend.
-- **Implementation (2026-08-03):** `get_llm_config` resolves and renders
-  Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff
-  with provider/model, reasoning effort, inheritance source, and override
-  status. Provider profiles expand through the same provider-owned defaults as
-  runtime; an explicit but missing Chief-of-Staff role is honestly shown as
-  unconfigured rather than assigned an invented fallback.
-- **Acceptance:** resolved configuration returns every effective role, source
-  of inheritance, provider/model, reasoning level, and override status.
-
-### PLAT-012 — changelog coverage excludes material dependent artifacts
-
-- **Priority:** P2
-- **Owner:** managed mutation audit/changelog
-- **Source finding:** `HARNESS-CHANGELOG-COVERAGE-001`
-- **Source database:** `Workflow/linkedin/db/db.sqlite`
-- **Problem:** evaluation-plan and learning mutations were absent from the
-  canonical changelog Artifact Review uses.
-- **Impact:** a grading-contract or runtime-guidance change can escape dependent
-  artifact review.
-- **Implementation (2026-08-03):** every managed changelog entry is completed
-  with a canonical target, before/after SHA-256 refs, actor, and dependency
-  class. Evaluation-plan edits already use the managed tool; runtime learning
-  turns now hash the complete `learnings/_global` tree (including references)
-  before and after the serialized write turn and append a typed mutation event
-  whenever the tree changes, even if the turn itself later reports an error.
-- **Acceptance:** every sanctioned material mutation emits one typed changelog
-  event with target, before/after references, actor, and dependency class.
-
-### PLAT-013 — legacy regular steps lacked a semantics-preserving edit path
-
-- **Priority:** P1
-- **Owner:** plan/step editing API
-- **Source finding:** `HARNESS-LEGACY-REGULAR-DESC-EDIT`
-- **Source database:** `Workflow/rtslatency/db/db.sqlite`
-- **Current state:** **reverify**. The editing path has since been changed, but
-  the stored platform finding has not observed a successful repair on both RTS
-  voice collector steps.
-- **Acceptance:** edit the description of a fixture and one real legacy
-  agentic `regular` step without changing its type, schedule, model, tools, or
-  other persisted fields; read it back and run plan validation.
-
-### PLAT-014 — reviewer prompts named unavailable reference documents
-
-- **Priority:** P1
-- **Owner:** reviewer reference/skill delivery
-- **Source finding:** `HARNESS-REFDOC-REVIEW-ARTIFACT-DRIFT`; legacy copies in
-  RTS Latency and Tectonicus, plus a Tectonicus Goal Advisor variant
-- **Current state:** **reverify**. Reviewer guidance has migrated from
-  `get_reference_doc(kind=...)` to attached skills loaded with `read_skill`.
-- **Impact:** old reviewers started without their required method and silently
-  substituted a different checklist.
-- **Acceptance:** each scheduled and slash-command reviewer loads every named
-  skill/reference in its isolated stage session; no retired
-  `get_reference_doc` instruction remains on a live path.
-
-### PLAT-015 — evaluation harness mishandles skipped-result sentinels
-
-- **Priority:** P1
-- **Owner:** evaluation execution/result collection
-- **Source finding:** `HARNESS-EVAL-RESULTS-SKIPPED-SENTINEL`
-- **Source database:** `Workflow/social-media/db/db.sqlite`
-- **Recorded state:** `external_action_required`
-- **Problem:** the evaluation harness's skipped-result sentinel behavior does
-  not preserve the workflow evaluation contract. A workflow evaluation-plan
-  edit cannot repair how the shared harness recognizes and serializes a
-  skipped result.
-- **Impact:** a legitimately unavailable or skipped evaluation can be
-  misclassified, dropped, or made indistinguishable from a malformed result.
-- **Current state:** open. No matching implementation was identified in this
-  register; unlike the linked pre-rebuild findings above, this is not marked
-  reverify merely because it appeared on an old binary.
-- **Acceptance:** explicit completed, skipped, unavailable, and failed fixtures
-  retain distinct terminal states through execution, persistence, report
-  projection, and Pulse review. A skipped sentinel cannot become success or
-  disappear.
-
-### PLAT-016 — evaluation report serialization drops a real zero score
-
-- **Priority:** P1
-- **Owner:** evaluation result/report serializer
-- **Source finding:** `HARNESS-EVAL-REPORT-ZERO-SCORE`
-- **Source database:** `Workflow/social-media/db/db.sqlite`
-- **Recorded state:** `external_action_required`
-- **Problem:** a real numeric score of `0` is treated like an absent value and
-  omitted from `evaluation_report.json`.
-- **Impact:** the worst valid evaluation result can disappear, making reports,
-  trend calculations, and Pulse evidence falsely incomplete or healthier than
-  the producing evaluator actually reported.
-- **Current state:** open. No implementation or post-change verification is
-  recorded here.
-- **Acceptance:** table-driven serialization covers `0`, positive, negative,
-  fractional, `null`, unavailable, and missing values. Numeric zero survives
-  unchanged through persisted result, report JSON, API projection, and UI.
-
-### PLAT-017 — scheduler success leaves durable workflow metadata running
-
-- **Priority:** P1
-- **Owner:** scheduler/workflow terminal-state persistence and reconciliation
-- **Source findings:** `HARNESS-PULSE-RUN-STATUS-MISMATCH` and
-  `HARNESS-SCHEDULER-CHILD-STATUS`
-- **Source database:** `Workflow/social-media/db/db.sqlite`
-- **Recorded state:** `external_action_required`; the two IDs describe one
-  terminal-state boundary and must not become two repair projects
-- **Problem:** the discovery children completed and the scheduler reported
-  success, while `runs/iteration-0/default/run_metadata.json` remained
-  `status=running`.
-- **Distinction from PLAT-004:** PLAT-004 prevented success while required work
-  was still running. PLAT-017 concerns stale durable workflow metadata after
-  genuine completion.
-- **Impact:** Pulse and later consumers cannot choose one authoritative run
-  status; the same completed run can appear successful in schedule history and
-  active/incomplete in workflow evidence.
-- **Current state:** open. Reproduce on the current binary before choosing
-  whether scheduler completion must finalize run metadata directly or a shared
-  reconciler must atomically persist both terminal projections.
-- **Acceptance:** after one completed, failed, canceled, and interrupted
-  scheduled fixture, scheduler history and `run_metadata` agree on terminal
-  state, completion time, and owning execution identity. A partial write is
-  retried or surfaced as failure rather than leaving contradictory success.
-
+| Ticket | Ticket | Ticket | Ticket |
+|---|---|---|---|
+| [PLAT-001](pulse_platform/plat-001.md) | [PLAT-002](pulse_platform/plat-002.md) | [PLAT-003](pulse_platform/plat-003.md) | [PLAT-004](pulse_platform/plat-004.md) |
+| [PLAT-005](pulse_platform/plat-005.md) | [PLAT-006](pulse_platform/plat-006.md) | [PLAT-007](pulse_platform/plat-007.md) | [PLAT-008](pulse_platform/plat-008.md) |
+| [PLAT-009](pulse_platform/plat-009.md) | [PLAT-010](pulse_platform/plat-010.md) | [PLAT-011](pulse_platform/plat-011.md) | [PLAT-012](pulse_platform/plat-012.md) |
+| [PLAT-013](pulse_platform/plat-013.md) | [PLAT-014](pulse_platform/plat-014.md) | [PLAT-015](pulse_platform/plat-015.md) | [PLAT-016](pulse_platform/plat-016.md) |
+| [PLAT-017](pulse_platform/plat-017.md) | [PLAT-018](pulse_platform/plat-018.md) | [PLAT-019](pulse_platform/plat-019.md) | [PLAT-020](pulse_platform/plat-020.md) |
+| [PLAT-021](pulse_platform/plat-021.md) |  |  |  |
+| [PLAT-022](pulse_platform/plat-022.md) | [PLAT-023](pulse_platform/plat-023.md) | [PLAT-024](pulse_platform/plat-024.md) | [PLAT-025](pulse_platform/plat-025.md) |
+| [PLAT-026](pulse_platform/plat-026.md) |  |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
@@ -538,12 +371,21 @@ After a platform fix ships:
 1. PLAT-001 human-input propagation — implementation complete; real full-run reverify pending.
 2. PLAT-002 canonical tool-error precedence — implementation and focused tests complete; persisted runtime evidence pending.
 3. PLAT-003 DB capability exposure — already implemented and bridge/capability tests pass; source workflows need post-build reverify.
-4. PLAT-004 scheduler completion barrier — fixed in `f69de7b6c`; RTS scheduled-run reverify pending.
-5. Add the platform issue/link lifecycle so the backlog stops duplicating them.
-6. Reverify PLAT-006, PLAT-013, and PLAT-014 on the rebuilt runtime.
-7. Reproduce and repair PLAT-015, PLAT-016, and PLAT-017 on the current binary.
-8. Repair/query-test the remaining P1 observability and media defects.
-9. Address the P2 configuration and changelog completeness gaps.
+4. PLAT-004 scheduler completion barrier — runtime verified by the full
+   2026-08-04 RTS scheduled run; retain regression coverage.
+5. Reverify the corrected PLAT-020 same-session schedule-to-chat handoff first:
+   the session ID must remain stable and the message must reach the retained or
+   resumed tmux exactly once.
+6. Reverify completed PLAT-009, PLAT-010, PLAT-018, PLAT-019, and PLAT-021 on
+   the next applicable RTS Pulse pass/UI open.
+7. Add the platform issue/link lifecycle so the backlog stops duplicating them.
+8. Reverify PLAT-006 and the remaining Tectonicus half of PLAT-014; PLAT-013 is
+   runtime verified on RTS Latency.
+9. Reverify PLAT-015 and PLAT-016 with a producing Social Media evaluation;
+   reproduce PLAT-017 on the current binary before changing terminal-state
+   ownership.
+10. Repair/query-test the remaining P1 observability and media defects.
+11. Address the P2 configuration and changelog completeness gaps.
 
 The first four are ordered ahead of cost and UI completeness because they can
 change what a workflow does while still allowing it to report success.

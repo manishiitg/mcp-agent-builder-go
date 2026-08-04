@@ -159,11 +159,13 @@ type StepOutputContent struct {
 type EvaluationStepScore struct {
 	StepID string `json:"step_id"`
 	// Score has no omitempty: a genuine score of exactly 0 (a confirmed total
-	// failure — a real, legitimate value) must serialize as "score": 0, not
-	// silently vanish and become indistinguishable from "no score captured".
-	// MaxScore keeps omitempty: a legitimate max_score is never actually 0.
-	Score         int                `json:"score"`
-	MaxScore      int                `json:"max_score,omitempty"`
+	// failure — a real, legitimate value) must serialize as "score": 0. The
+	// explicit ScoreCaptured bit distinguishes that value from a report stub
+	// whose source output contained no score. Scores are float64 because JSON
+	// evaluations may legitimately use fractional values.
+	Score         float64            `json:"score"`
+	MaxScore      float64            `json:"max_score,omitempty"`
+	ScoreCaptured bool               `json:"score_captured"`
 	Reasoning     string             `json:"reasoning"`
 	Evidence      string             `json:"evidence"`
 	Skipped       bool               `json:"skipped,omitempty"`

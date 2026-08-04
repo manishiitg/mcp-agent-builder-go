@@ -670,16 +670,43 @@ func (w *LLMAgentWrapper) RegisterCustomTool(name, description string, parameter
 	return w.RegisterCustomToolWithTimeout(name, description, parameters, execute, 0, category)
 }
 
+// RegisterCustomToolWithTimeout records a tool on the pre-finalize definition.
+//
+// Re-registering a name replaces the earlier entry rather than adding a second
+// one. This wrapper exists to convert legacy incremental assembly into one
+// immutable definition, and that assembly registered into a map keyed by tool
+// name — re-registration was idempotent, last-write-wins. Accumulating a slice
+// instead silently made it fatal: mcpagent's finalizeDefinition rejects a
+// duplicate name, so the whole agent fails to construct.
+//
+// That is not hypothetical. The Chief of Staff daily pass resumes the previous
+// run's thread (maybeResumeLatestMultiAgentThread) and re-registers delegation
+// tools onto a wrapper that already carries them, so every run after the first
+// died before step 1 with `duplicate direct tool name "delegate"` — 2026-08-03
+// 09:01:00 and 2026-08-04 09:00:18, the whole scheduled pass lost both days.
+//
+// A replacement is logged: last-write-wins is right for re-assembly, but two
+// genuinely different tools claiming one name is a bug worth seeing.
 func (w *LLMAgentWrapper) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, category string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.ensureDefinitionMutable(); err != nil {
 		return err
 	}
-	w.definition.Tools.Direct = append(w.definition.Tools.Direct, mcpagent.ToolDefinition{
+	tool := mcpagent.ToolDefinition{
 		Name: name, Description: description, InputSchema: parameters,
 		Execute: execute, Timeout: timeout, DisplayGroup: category,
-	})
+	}
+	for i, existing := range w.definition.Tools.Direct {
+		if existing.Name == name {
+			if w.logger != nil {
+				w.logger.Debug(fmt.Sprintf("Re-registered custom tool %q; replacing the earlier definition", name))
+			}
+			w.definition.Tools.Direct[i] = tool
+			return nil
+		}
+	}
+	w.definition.Tools.Direct = append(w.definition.Tools.Direct, tool)
 	return nil
 }
 

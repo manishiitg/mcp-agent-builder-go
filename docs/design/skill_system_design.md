@@ -1,118 +1,233 @@
-# Skill system — current state and design
+# Skill system — current state and narrow product-skill design
 
 **Date:** 2026-08-04
-**Status:** design, not implemented
-**Scope:** shared AgentWorks code (`agent_go/pkg/skills`, `step_based_workflow`) + `workspace/`. Consumed by AgentWorks, Sparkquill, and Video Studio.
 
-## Why this doc
+**Status:** D1 implemented, verified, and pushed to `main` in `43d74f14e`; Video Studio adoption remains pending
 
-Wiring per-stage skills for Video Studio surfaced what looked like a broken skill architecture. On investigation most of it is sound, and the real gaps are narrow. This records what is actually true so the next change is small and correct instead of a rewrite.
+**Scope:** AgentWorks skill resolution, ordinary workflow steps, and prepackaged products such as Video Studio.
 
-## What already exists (verified)
+> Video Studio currently lives in the separate `feature/video-product` worktree. Its main chat already attaches embedded skill definitions directly. The unresolved case is a Video Studio stage executed through the ordinary AgentWorks workflow-step runner.
 
-**One resolver, two origins.** `skills.LoadAttachable(workspaceAPIURL, names) []*llmtypes.Skill` turns skill *names* into full skill *definitions*. Per name (`pkg/skills/runtime_loader.go:95`):
+## Decision
 
-```go
-func loadOneAttachable(workspaceAPIURL, folderName string) (*llmtypes.Skill, error) {
-	if skill := builtinAttachableSkill(folderName); skill != nil {
-		return skill, nil                              // builtin: no disk, no network
-	}
-	parsed, err := GetSkill(workspaceAPIURL, folderName) // fallback: workspace registry
-	...
-	skill.SupportingFiles = loadSkillSupportingFiles(workspaceAPIURL, folderName)
+There was one genuine missing capability:
+
+> A prepackaged product cannot currently make one of its embedded skills resolvable by an ordinary workflow step's `enabled_skills` name without copying that skill into the workspace or editing the shared AgentWorks builtin switch.
+
+D1 solves it with a small **flat builtin/product skill registry**. It deliberately does not combine the fix with nested skill names, recursive discovery, skill inheritance, Workflow Builder changes, or a migration of existing workflows.
+
+## What a workflow step accepts today
+
+A step does not accept “npx skills”. It accepts a list of **skill names**:
+
+```json
+{
+  "agent_configs": {
+    "enabled_skills": ["agent-browser", "ffmpeg"]
+  }
 }
 ```
 
-Builtin wins; workspace is the fallback. Supporting files (`scripts/`, `references/`, `assets/`) come along, so adapters that project skills to disk get the whole bundle.
+For each name, `skills.LoadAttachable` resolves a complete `llmtypes.Skill` bundle from one of two runtime origins:
 
-**Every consumer goes through it.** Chat (`cmd/server/server.go:4998`), delegation (`cmd/server/delegation.go:331`), and — importantly — workflow **step** agents (`step_based_workflow/supplementary_prompts.go:45`, resolving a step's `enabled_skills`). Step agents attach real definitions via `BaseAgent.ApplyIdentity`, not prompt text.
+1. A builtin known by AgentWorks. Today the only hardcoded builtin is `agent-browser`.
+2. A folder in the workspace at `skills/<name>/SKILL.md`, including readable text files under `references/`, `scripts/`, and `assets/`.
 
-**mcpagent materialises them.** `SkillProjector.ProjectSkills(workdir, skills)` writes each skill into the provider's own working directory (`.claude/skills/` for claude-code, `.agents/skills/` otherwise). `llmtypes.Skill` carries `Content` plus `SupportingFiles []SkillFile{RelPath, Content []byte}`, so a skill is a folder represented as data.
+`npx` is only one installation mechanism that can put a skill into the workspace. A workspace skill may instead have been imported, copied, generated, or installed by another mechanism. Once the folder exists, step execution does not invoke `npx`.
 
-**Builtins already bypass disk.** `builtinAttachableSkill` serves a skill by name from a hardcoded registry. Its contract is explicit (`pkg/skills/builtin_browser_skills.go:5`): *"Builtin names must not exist on disk — a disk copy would be shadowed at attach time and could carry contradictory guidance."*
+Two additional identity skills may be attached independently of `enabled_skills`:
 
-### Consequences worth stating plainly
+- AgentWorks' workflow reference skill;
+- the workflow's `learnings/_global/` pointer when global learnings are enabled.
 
-- Shipping a skill inside a product binary and referencing it from `enabled_skills` **already works**. It needs no workspace file, no `npx`, no GitHub.
-- There is **no** "definitions vs names" split. Names are the interface; definitions are the resolved form.
-- `SelectedSkills` (workshop preset) and `enabled_skills` (step-level, "overrides preset if specified") are both name lists feeding the same resolver.
+Those are runtime identity attachments, not members of the step's configured skill-name list.
 
-## The actual gaps
+## How this reaches coding agents
 
-**1. The builtin registry has no registration API.** `builtinAttachableSkill` is a hardcoded `switch` in the shared package. A product cannot contribute its own builtins without editing shared code, so Video Studio's embedded pipeline skills have no supported way in. *This is the only gap blocking Video Studio.*
+Coding agents do not resolve AgentWorks skill names themselves. AgentWorks and mcpagent prepare the skill bundle first:
 
-**2. The namespace is flat, with one vestigial exception.** `DiscoverSkills` (`pkg/skills/discovery.go:222`) lists `skills/*/` and recurses into exactly one folder — literally named `custom` — one level deep, naming those skills `custom/<name>`. Nothing in the codebase writes to `custom/`; only the reader knows it exists. Deeper trees (`skills/pipelines/cinematic/research-director/`) are silently skipped: `pipelines` is treated as a skill folder, has no `SKILL.md`, and is dropped.
+```text
+step_config.json
+  enabled_skills: ["ffmpeg"]
+             |
+             v
+AgentWorks LoadAttachable("ffmpeg")
+             |
+             v
+llmtypes.Skill { name, description, SKILL.md body, supporting files }
+             |
+             v
+mcpagent agent identity
+             |
+             v
+provider projects the bundle into its isolated working directory
+```
 
-**3. No layering.** Every skill is peer-level, so there is nowhere to express "shared by all pipelines" vs "specific to this pipeline". OpenMontage already solves this with `meta/` (cross-cutting), `core/` (technical), `pipelines/<pipeline>/<role>-director` — and its reuse comes precisely from that split.
+Provider projection currently uses:
 
-**4. Products inherit skills they never use.** `workspace/skill_sync.go:26` hardcodes `{Source: "anthropics/skills@skill-creator"}` and installs it into whatever `--docs-dir` the sidecar is given. Video Studio's launcher points that at `~/VideoStudio`, so a video product ships a skill-authoring skill. The installer is also `npx`-only and silently no-ops when `npx` is absent (`workspace/skill_sync.go:35`), so system skills are best-effort in any environment without node.
+- Claude Code: `.claude/skills/<name>/`
+- Codex CLI: `.agents/skills/<name>/`
+- Cursor CLI: `.cursor/skills/<name>/`
+- Pi CLI: `.pi/skills/<name>/`
+- API transports: system-prompt listing plus mcpagent's transport-neutral skill-reading path; no native CLI folder is required.
 
-**5. Naming.** The generic builtin registry lives in a file called `builtin_browser_skills.go`, which reads as browser-specific and hides a general mechanism.
+This projection is load-bearing for workflow and background agents because they can run from isolated temporary directories. A skill located elsewhere on the host filesystem is not automatically visible to the coding CLI.
 
-## Design
+## Three different selection paths
 
-### D1 — Builtin skill registration (unblocks Video Studio)
+These paths must remain distinct.
 
-Replace the hardcoded switch with a registry a product can add to at init:
+### 1. Workflow Builder
+
+Workflow-level `selected_skills` gives the workshop/builder agent its selected workspace capabilities. It is not inherited by execution steps.
+
+### 2. Ordinary workflow step
+
+Step-level `enabled_skills` is the only configurable skill-name list used by that execution step. The no-cascade rule is intentional and covered by tests.
+
+### 3. Product-owned main agent
+
+A product can already pass complete `[]*llmtypes.Skill` definitions directly in its agent-session configuration. Video Studio's main chat currently does this with `builtinSkills()` and therefore does not need the new registry.
+
+## The genuine gap D1 closes
+
+Video Studio renders its stages as ordinary AgentWorks workflow steps. Its pipeline model already has:
+
+```go
+type PipelineStage struct {
+    // ...
+    Skills []string
+}
+```
+
+and its step-config renderer already translates a non-empty list to:
+
+```json
+{
+  "enabled_skills": ["cinematic-research-director"]
+}
+```
+
+However, `enabled_skills` contains names, while Video Studio's product skills are embedded definitions. Before D1, the shared resolver had no supported way for a product to contribute those definitions: it knew only its hardcoded builtin switch and workspace folders. `RegisterBuiltin` now provides that missing startup boundary.
+
+All current cinematic stages also have empty `Skills` lists, so no stage-specific product skill is attached today. Adding the registry alone is insufficient: Video Studio must subsequently assign the intended names to its stages.
+
+## D1 — flat builtin/product skill registration
+
+Replace the browser-specific hardcoded switch with a small shared registry. Existing callers continue calling `LoadAttachable` by name.
+
+Illustrative API:
 
 ```go
 // pkg/skills
-func RegisterBuiltin(skill *llmtypes.Skill)   // panics on duplicate name
-func builtinAttachableSkill(name string) *llmtypes.Skill  // reads the registry
+func RegisterBuiltin(skill *llmtypes.Skill) error
 ```
 
-Products register at package init:
+A product registers its embedded definitions during startup:
 
 ```go
-// internal/videoproduct
-//go:embed skills/...
-var skillFiles embed.FS
-
-func init() {
-    for _, s := range parseEmbeddedSkills() { skills.RegisterBuiltin(s) }
+for _, skill := range parseEmbeddedSkills() {
+    if err := skills.RegisterBuiltin(skill); err != nil {
+        return err
+    }
 }
 ```
 
-`enabled_skills: ["cinematic-research-director"]` then resolves with no disk write and no installer. Keeps the existing "builtins must not exist on disk" invariant — now enforceable, since registration is explicit.
+Then a stage continues using the existing persisted format:
 
-Additive: existing hardcoded builtins move into the registry at init; every current caller is unchanged.
+```json
+{
+  "enabled_skills": ["cinematic-research-director"]
+}
+```
 
-### D2 — Layered naming
+### Implementation status (2026-08-04)
 
-Adopt OpenMontage's layering as the naming convention:
+Implemented in `agent_go/pkg/skills/builtin_skills.go` and pushed to `main` in commit `43d74f14e`:
 
-| Layer | Name shape | Example | Owner |
-|---|---|---|---|
-| meta | `meta/<name>` | `meta/checkpoint-protocol` | shared |
-| core | `core/<name>` | `core/ffmpeg` | shared |
-| pipeline | `pipelines/<pipeline>/<role>` | `pipelines/cinematic/research-director` | product |
+- exported `RegisterBuiltin(*llmtypes.Skill) error` startup API;
+- the existing `agent-browser` definition now registers through the same catalog;
+- lowercase/hyphenated identity validation;
+- duplicate registration rejection;
+- concurrency-safe lookup and registration;
+- defensive cloning of paths, metadata, supporting-file entries, and supporting-file bytes;
+- the existing builtin-first `LoadAttachable` resolution path is preserved.
 
-Requires D3. Until then, flat prefixed names (`cinematic-research-director`) are the compatible subset — the layering is then a convention, recoverable later by renaming.
+The focused package, race-detector, workflow-step skill, server skill, and complete `agent_go` test suites pass. This completes the shared AgentWorks capability. Video Studio still needs to register its embedded definitions during startup and populate the desired `PipelineStage.Skills` values before a real stage consumes them.
 
-### D3 — Nested discovery
+### Registry requirements
 
-Replace the `custom` special case with a bounded recursive walk: any folder containing `SKILL.md` is a skill, named by its path relative to `skills/`. Cap depth (3 is enough for `pipelines/<pipeline>/<role>`) to keep listing cheap.
+- Keep names flat, lowercase, and hyphenated. Do not use `/` in skill identities.
+- Reject nil skills, empty/invalid names, and duplicate builtin registrations.
+- Clone registered and returned definitions so callers cannot mutate shared registry state.
+- Make registration concurrency-safe and finish it during application startup.
+- Return an error to the product startup path rather than panicking inside the shared library.
+- Preserve the existing `agent-browser` definition and resolution behavior exactly.
+- Keep builtin-first resolution for backward compatibility.
+- Do not expose registry mutation to agents or workflow configuration tools.
 
-`GetSkill` already handles this — it does `path.Join(SkillsBasePath, folderName, SkillFileName)`, so a slashed name reads correctly today. Only *discovery* is the constraint. `custom/<name>` keeps working unchanged, since it is just one case of the general rule.
+## Explicitly deferred ideas
 
-### D4 — System skills become opt-in
+### Slash-based layered names
 
-`workspace/skill_sync.go` should take its skill list from configuration rather than a hardcoded slice, so a product declares what it wants. Video Studio would declare none. Low priority — `skill-creator` is inert — but it removes a confusing artifact and the silent `npx` dependency.
+Do not introduce names such as `pipelines/cinematic/research-director` now. Skill names are currently documented as lowercase plus hyphens, provider projection sanitizes `/`, API routes assume one path segment, and persisted configuration and folder guards also consume the name. A slash identity would not remain stable end to end.
 
-## Migration
+If products need organization in the UI, represent `product`, `layer`, `pipeline`, and `role` as catalog metadata while keeping a stable flat runtime ID such as `cinematic-research-director`.
 
-1. **D1** — registry + move existing builtins into it. No behaviour change; unblocks Video Studio immediately.
-2. Video Studio registers its pipeline skills as builtins and sets `enabled_skills` per stage. Flat names (D2 subset).
-3. **D3** — nested discovery, then rename to layered names.
-4. **D4** — config-driven system skills.
+### Recursive workspace discovery
 
-## Blast radius
+Recursive discovery is not needed for embedded product skills. Supporting nested workspace identities would require coordinated changes to discovery, reads, CRUD routes, frontend operations, folder guards, projection, and migrations. It is not merely a discovery-loop change.
 
-- **D1** additive; existing callers untouched. Risk: duplicate registration between a builtin and a disk skill — mitigated by panicking on duplicate names, which surfaces the existing "must not exist on disk" invariant at startup instead of silently shadowing.
-- **D3** changes what `DiscoverSkills` returns for nested folders that previously produced nothing. Anything today relying on nested folders being *ignored* would change — none found.
-- **D2** renames are visible in stored step configs (`enabled_skills` values), so migrate names and configs together.
-- **D4** touches `workspace/`, shared by every product using the sidecar.
+### Skill inheritance
 
-## What this does not change
+Do not make workflow-selected skills cascade into steps. The current separation prevents a builder's broad capability set from silently reaching every execution agent. Products and workflows should assign step skills explicitly.
 
-The resolver, the name-based interface, `ApplyIdentity`, and mcpagent's projector all stay as they are. They already work; the gaps are registration, namespace shape, and defaults.
+### System-skill installation defaults
+
+Making startup-installed system skills configurable is reasonable but independent. If pursued, AgentWorks must retain its existing default; a prepackaged product may explicitly choose a different set or none. Missing `npx` currently produces a warning rather than a true silent no-op.
+
+## Effect on existing workflows and Workflow Builder
+
+D1 is intended to be additive:
+
+- existing `enabled_skills` arrays remain unchanged;
+- existing workspace skill folders resolve as before;
+- `agent-browser` resolves as before;
+- Workflow Builder discovery, installation, and `selected_skills` behavior remain unchanged;
+- no existing workflow migration is required;
+- mcpagent and coding-agent projection remain unchanged;
+- only products that register new builtins gain additional resolvable names.
+
+Video Studio changes only when it both registers a product skill and assigns that name to a stage's `Skills` list.
+
+## Verification and remaining product proof
+
+Verified in the shared implementation:
+
+1. Existing `agent-browser` builtin resolution remains available through the registry.
+2. Existing workspace skills still resolve with supporting text files.
+3. An ordinary workflow step with no `enabled_skills` receives no newly selected product skill.
+4. Workflow-level `selected_skills` still do not cascade into steps.
+5. A registered product skill resolves through the same `LoadAttachable` call used by a workflow step without contacting the workspace.
+6. Duplicate and invalid builtin registrations fail clearly.
+7. Registry input and output are defensively cloned, including supporting-file bytes.
+8. Concurrent registry access passes the race detector.
+
+Remaining product-level acceptance proof:
+
+1. Video Studio registers its four embedded skill definitions during startup.
+2. The intended `PipelineStage.Skills` names are populated explicitly.
+3. A real isolated Video Studio stage reads an assigned skill and supporting reference through Claude Code's normal projected skill directory.
+
+## Non-goals
+
+This change is not a general skill-system rewrite. It does not change:
+
+- what a skill contains;
+- how users install workspace skills;
+- how Workflow Builder selects skills;
+- the step `enabled_skills` schema;
+- how mcpagent represents skills;
+- how coding providers project native skill folders;
+- the workflow-learnings skill pointer;
+- skill invocation semantics inside Claude Code, Codex, Cursor, or Pi.

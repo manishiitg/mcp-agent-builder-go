@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"io"
@@ -18,6 +19,16 @@ import (
 func voiceStreamDebug() bool { return os.Getenv("SPARKQUILL_VOICE_DEBUG") == "1" }
 
 var voiceChunkSeq atomic.Int64
+
+// One dictation at a time. The helper keeps a single utterance buffer, so two
+// overlapping sessions interleave their audio into one transcript — observed
+// live on 2026-08-04, when a cold-start model load left the mic button looking
+// idle, the parent clicked repeatedly, and six concurrent capture sessions
+// produced 541 chunks for 15 seconds of speech and a garbage transcript. The
+// client now blocks that (see MicState 'preparing'), but the invariant belongs
+// here too: this is the only place that can actually enforce it, and a second
+// client, a stale tab, or a retry would otherwise reintroduce it.
+var voiceStreamActive atomic.Bool
 
 // pcmStats reports loudness of a raw little-endian Float32 buffer, plus the
 // sample count — enough to tell silence from real speech, and to catch a
@@ -71,15 +82,25 @@ func handleVoiceStreamStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "native voice helper not available", http.StatusServiceUnavailable)
 		return
 	}
+	// Claim the session BEFORE loading. The cold-start load is the long wait,
+	// and therefore precisely the window in which repeat clicks arrive — a
+	// guard taken after it would be useless for the case it exists to stop.
+	if !voiceStreamActive.CompareAndSwap(false, true) {
+		log.Printf("[voice-native] rejecting overlapping stream start")
+		http.Error(w, "a dictation session is already in progress", http.StatusConflict)
+		return
+	}
 	// load is idempotent in the helper and cheap once weights are cached; the
 	// first call downloads them, which is why this worker carries a long call
 	// timeout.
 	if _, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "load"}); err != nil {
+		voiceStreamActive.Store(false)
 		log.Printf("[voice-native] load failed: %v", err)
 		http.Error(w, "could not start the voice engine", http.StatusInternalServerError)
 		return
 	}
 	if _, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "start"}); err != nil {
+		voiceStreamActive.Store(false)
 		log.Printf("[voice-native] start failed: %v", err)
 		http.Error(w, "could not start dictation", http.StatusInternalServerError)
 		return
@@ -87,6 +108,47 @@ func handleVoiceStreamStart(w http.ResponseWriter, r *http.Request) {
 	voiceChunkSeq.Store(0)
 	log.Printf("[voice-native] stream start (helper=%s)", nativeVoiceHelperPath())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// The model costs 15-20s to load and ~600MB resident, so its lifetime is tied
+// to whether the app is actually on screen rather than to a timer. The desktop
+// shell calls these when the window is hidden to the menu bar and shown again
+// (see desktop-sparkquill/main.js) — a timer alone either wasted memory while
+// the app sat in the background, or made the mic slow after a gap.
+func handleVoiceNativeWarm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !nativeVoiceAvailable() {
+		writeJSON(w, http.StatusOK, map[string]any{"warm": false})
+		return
+	}
+	// Returns immediately: the caller is a window event, and nothing should
+	// wait on a 20s load.
+	go func() {
+		started := time.Now()
+		if err := warmNativeVoice(context.Background()); err != nil {
+			log.Printf("[voice-native] warm on foreground failed: %v", err)
+			return
+		}
+		log.Printf("[voice-native] warm and ready in %s", time.Since(started).Round(time.Millisecond))
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"warming": true})
+}
+
+func handleVoiceNativeUnload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Never mid-dictation: that would kill the utterance the user is speaking.
+	if voiceStreamActive.Load() {
+		writeJSON(w, http.StatusOK, map[string]any{"unloaded": false, "reason": "dictation in progress"})
+		return
+	}
+	sharedNativeVoiceWorker.Stop()
+	writeJSON(w, http.StatusOK, map[string]any{"unloaded": true})
 }
 
 func handleVoiceStreamChunk(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +195,9 @@ func handleVoiceStreamFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Released even when the transcription below fails: a stuck flag would
+	// wedge dictation for the rest of the process's life.
+	defer voiceStreamActive.Store(false)
 	resp, err := sharedNativeVoiceWorker.call(r.Context(), map[string]any{"cmd": "finish"})
 	if err != nil {
 		log.Printf("[voice-native] finish failed: %v", err)

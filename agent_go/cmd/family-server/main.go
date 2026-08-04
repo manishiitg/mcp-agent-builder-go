@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
 )
@@ -137,6 +138,8 @@ func main() {
 	mux.HandleFunc("/api/voice/stream/start", handleVoiceStreamStart)
 	mux.HandleFunc("/api/voice/stream/chunk", handleVoiceStreamChunk)
 	mux.HandleFunc("/api/voice/stream/finish", handleVoiceStreamFinish)
+	mux.HandleFunc("/api/voice/native/warm", handleVoiceNativeWarm)
+	mux.HandleFunc("/api/voice/native/unload", handleVoiceNativeUnload)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
@@ -202,6 +205,19 @@ func main() {
 			if err := warmParakeet(context.Background()); err != nil {
 				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
 			}
+		}()
+	}
+	// Same idea for the native helper, where it matters more: its model load
+	// is 15-17s (measured), so without this the first mic click of a session
+	// pays all of it while the parent waits on a "Getting voice ready" banner.
+	if nativeVoiceAvailable() {
+		go func() {
+			started := time.Now()
+			if err := warmNativeVoice(context.Background()); err != nil {
+				log.Printf("[voice-native] background warm-up failed: %v", err)
+				return
+			}
+			log.Printf("[voice-native] warm and ready in %s", time.Since(started).Round(time.Millisecond))
 		}()
 	}
 

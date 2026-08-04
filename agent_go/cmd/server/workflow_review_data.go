@@ -27,11 +27,16 @@ type StepOutputContent struct {
 }
 
 type EvaluationStepScore struct {
-	StepID        string             `json:"step_id"`
-	Score         int                `json:"score,omitempty"`
-	MaxScore      int                `json:"max_score,omitempty"`
+	StepID   string  `json:"step_id"`
+	Score    float64 `json:"score"`
+	MaxScore float64 `json:"max_score,omitempty"`
+	// Pointer preserves the difference between a new report's explicit false
+	// (source output had no score) and a legacy report where the field did not
+	// exist. The frontend can safely apply compatibility inference only to nil.
+	ScoreCaptured *bool              `json:"score_captured,omitempty"`
 	Reasoning     string             `json:"reasoning"`
 	Evidence      string             `json:"evidence"`
+	Skipped       bool               `json:"skipped,omitempty"`
 	ContextOutput string             `json:"context_output,omitempty"`
 	OutputContent *StepOutputContent `json:"output_content,omitempty"`
 }

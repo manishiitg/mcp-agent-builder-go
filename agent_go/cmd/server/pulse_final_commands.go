@@ -376,18 +376,17 @@ func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath,
 	return result.RowsAffected()
 }
 
-// reconcilePulseDashboardCommand requires the dedicated dashboard stage to
-// record a successful terminal outcome. It resolves only that command when the
-// stage ended silently and returns an error so the scheduler reports a partial
-// Pulse instead of treating missing proof as success.
+// reconcilePulseDashboardCommand runs only after the dedicated dashboard stage
+// became idle cleanly and validatePulseDashboardArtifact proved the new
+// projection. That backend proof is sufficient to mark dashboard done even if
+// the agent forgot to call record_pulse_result itself.
 //
 // The dashboard has its own stage, so the blanket
 // finalizeUnresolvedPulseFinalCommands is wrong here: it would mark
-// backup/publish/notify failed before their stage has even started. A dashboard
-// stage that ends cleanly without self-reporting is treated as failed rather
-// than assumed successful — the same rule the finalizer applies, since a silent
-// stage is exactly how a page write goes unnoticed. Only "done" is success:
-// the dashboard is mandatory and cannot truthfully skip its per-pass render.
+// backup/publish/notify failed before their stage has even started. This is not
+// an assumption of success: the caller has already checked the artifact
+// contract and read-back boundary. The finalizer commands do not have an
+// equivalent deterministic artifact proof, so they must still self-report.
 func reconcilePulseDashboardCommand(ctx context.Context, workspacePath, pulseRunID string) error {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
@@ -410,10 +409,10 @@ func reconcilePulseDashboardCommand(ctx context.Context, workspacePath, pulseRun
 	}
 	if currentStatus == "waiting" || currentStatus == "running" {
 		if _, markErr := markPulseFinalCommandStateInDB(ctx, db, normalized, pulseFinalCommandDashboard, pulseRunID,
-			"failed", "Dashboard stage ended without recording its outcome"); markErr != nil {
+			"done", "Dashboard artifact rendered and validated by the scheduler"); markErr != nil {
 			return markErr
 		}
-		return fmt.Errorf("dashboard stage ended without recording a done outcome")
+		return nil
 	}
 	return fmt.Errorf("dashboard command ended with non-success status %q", currentStatus)
 }

@@ -667,6 +667,34 @@ const QUICK_SKILLS = [
 // to use the chat, shown instead of a bare "thinking…" so the wait is at
 // least a little useful. Live tool status (e.g. "Opening the file…") always
 // takes priority over these when it's available.
+// Tips are onboarding, and onboarding ends. They rotate every 7s in the
+// thinking indicator, which is genuinely useful for the first handful of turns
+// and pure noise afterwards — this family had seen 747 replies when the
+// distraction was reported. Count turns and stop once the UI is obviously
+// learned, falling back to a calm static line. Live tool status ("Quill is:
+// Reading the image…") still takes priority over both: that is real
+// information, not a tip.
+const HINT_FADE_AFTER_TURNS = 8
+
+function readTurnsSeen(key: string): number {
+  try {
+    return Number(window.localStorage.getItem(key) || '0') || 0
+  } catch {
+    return 0
+  }
+}
+
+function noteTurnSeen(key: string) {
+  try {
+    const n = readTurnsSeen(key)
+    // Stop writing once past the threshold — the answer cannot change back.
+    if (n <= HINT_FADE_AFTER_TURNS) window.localStorage.setItem(key, String(n + 1))
+  } catch { /* private mode / disabled storage must not break the chat */ }
+}
+
+const PARENT_HINTS_SEEN_KEY = 'sq-parent-turns-seen'
+const CHILD_HINTS_SEEN_KEY = 'sq-child-turns-seen'
+
 const PARENT_WAIT_HINTS = [
   'Tip: ask "How is my child doing so far?" anytime for an evidence-based read of their progress.',
   'Tip: once a test or guide is ready, use the "Give to child" button to hand it over.',
@@ -1084,7 +1112,13 @@ export default function LearningApp() {
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
-  const [pendingConvUpdate, setPendingConvUpdate] = useState<StoredMsg[] | null>(null)
+  // Parent messages now apply as they arrive (WhatsApp, Pulse) instead of
+  // waiting behind a refresh banner — see the poller below. Two pieces make
+  // that safe: atBottomRef, so an ambient update never yanks the view out from
+  // under someone reading history, and newBelow, which tells them something
+  // landed off-screen instead of appending silently.
+  const atBottomRef = useRef(true)
+  const [newBelow, setNewBelow] = useState(false)
   // Messages the parent typed while a turn was still processing — sent one at
   // a time as the current turn finishes (see the drain effect). Shown as
   // "queued" bubbles so they know it's coming.
@@ -1101,7 +1135,12 @@ export default function LearningApp() {
   // parentConversationID). No multi-conversation list, so the id is fixed.
   const conversationId = 'parent'
   const resumedRef = useRef(false)
-  const childResumedRef = useRef(false)
+  // Which activity's conversation is currently loaded into childMessages.
+  // Keyed by dir rather than a plain "have we resumed once" flag: the bound
+  // activity CHANGES underneath the child whenever the parent runs
+  // open_activity, and a once-ever guard left the previous activity's chat on
+  // screen under the new activity's name.
+  const loadedActivityDirRef = useRef<string | null>(null)
   const childMessages = useChildChatStore((s) => s.childMessages)
   const childRenderGroups = groupConsecutivePhotos(childMessages)
   const setChildMessages = useChildChatStore((s) => s.setChildMessages)
@@ -1633,8 +1672,16 @@ export default function LearningApp() {
           if (!d?.content) return
           const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
           const fresh = c.messages || []
+          // Only ever grows here: a shorter file means our optimistic local
+          // copy is ahead (the parent just sent something), never that
+          // messages vanished.
           if (fresh.length > parentMessages.length) {
-            setPendingConvUpdate(fresh)
+            setParentMessages(fresh.map(toParentMsg))
+            // Whatever remote turn produced this has clearly finished and
+            // persisted — drop its live indicator rather than let it linger.
+            setRemoteStatus('')
+            setRemoteToolCalls([])
+            if (!atBottomRef.current) setNewBelow(true)
           }
         })
         .catch(() => {})
@@ -1642,10 +1689,9 @@ export default function LearningApp() {
     return () => window.clearInterval(id)
   }, [screen, conversationId, sending, parentMessages.length])
 
-  // Clear any pending "new update" banner whenever the parent switches
-  // conversations or sends their own message — it only ever refers to the
-  // specific conversation/point in time it was detected for.
-  useEffect(() => { setPendingConvUpdate(null) }, [conversationId])
+  // Switching conversations resets the reading position, so any "new message
+  // below" marker refers to a thread that is no longer on screen.
+  useEffect(() => { setNewBelow(false); atBottomRef.current = true }, [conversationId])
 
   // sendingRef mirrors `sending` for the ambient effect below without being
   // in its dependency array — see childSendingRef's own comment for why.
@@ -1913,17 +1959,28 @@ export default function LearningApp() {
       .then((act: Activity | null) => {
         if (cancelled) return
         setChildActivity(act)
-        if (!act || childResumedRef.current || useChildChatStore.getState().childMessages.length > 0) return
-        childResumedRef.current = true
+        if (!act) return
+        // Reload whenever the bound activity changes, not just once ever.
+        // Skipped mid-turn: replacing the thread under an in-flight send would
+        // drop the optimistic message and the reply being streamed into it.
+        if (loadedActivityDirRef.current === act.dir) return
+        if (useChildChatStore.getState().childSending) return
+        loadedActivityDirRef.current = act.dir
         fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${act.dir}/conversation.json`)}`)
           .then((r2) => r2.json())
           .then((dd) => {
-            if (!dd?.content) return
-            const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
-            const loaded = (c.messages || []).map(toParentMsg)
-            setChildMessages(loaded)
+            // A newer activity may have been bound while this was in flight;
+            // applying a stale one would recreate the bug this fixes.
+            if (loadedActivityDirRef.current !== act.dir) return
+            const c = dd?.content ? (JSON.parse(dd.content) as { messages?: StoredMsg[] }) : { messages: [] }
+            // Replaces rather than merges — a brand-new activity has no
+            // conversation file yet, and must start empty rather than
+            // inheriting whatever was on screen.
+            setChildMessages((c.messages || []).map(toParentMsg))
+            setChildRemoteStatus('')
+            setChildRemoteToolCalls([])
           })
-          .catch(() => {})
+          .catch(() => { if (loadedActivityDirRef.current === act.dir) setChildMessages([]) })
       })
       .catch(() => { if (!cancelled) setChildActivity(null) })
     return () => { cancelled = true }
@@ -2040,6 +2097,11 @@ export default function LearningApp() {
     // a scrollHeight from before the browser has laid all of it out, landing
     // short of the real bottom. rAF-deferring one frame lets layout settle
     // first so the target position is measured against the final height.
+    // `sending` forces the jump: the parent just hit send, so they mean to be
+    // at the bottom even if they had scrolled away. Otherwise follow only if
+    // they were already following — an arriving WhatsApp reply must not drag
+    // someone out of the history they are reading.
+    if (!atBottomRef.current && !sending) return
     const id = requestAnimationFrame(() => {
       threadEndRef.current?.scrollIntoView({ behavior: streamingReply ? 'auto' : 'smooth', block: 'end' })
     })
@@ -2062,12 +2124,18 @@ export default function LearningApp() {
   // Cycle a usable "how to use the chat" tip in the thinking indicator instead
   // of a bare "thinking…" — resets and restarts each time a new turn begins,
   // and only matters while there's no real live tool status to show instead.
+  // Read once at mount: flipping mid-session would swap the text under the
+  // parent while they are watching it.
+  const [showParentHints] = useState(() => readTurnsSeen(PARENT_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
+  useEffect(() => { if (sending) noteTurnSeen(PARENT_HINTS_SEEN_KEY) }, [sending])
   const [parentHintIndex, setParentHintIndex] = useState(0)
   useEffect(() => {
     if (!sending) { setParentHintIndex(0); return }
     const id = window.setInterval(() => setParentHintIndex((i) => (i + 1) % PARENT_WAIT_HINTS.length), 7000)
     return () => window.clearInterval(id)
   }, [sending])
+  const [showChildHints] = useState(() => readTurnsSeen(CHILD_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
+  useEffect(() => { if (childSending) noteTurnSeen(CHILD_HINTS_SEEN_KEY) }, [childSending])
   const [childHintIndex, setChildHintIndex] = useState(0)
   useEffect(() => {
     if (!childSending) { setChildHintIndex(0); return }
@@ -2247,11 +2315,10 @@ export default function LearningApp() {
     setParentMessages(next)
     setFocusInput('')
     setSuggestions([])
-    // Drop any pending "new update" banner — the parent's own send supersedes
-    // it, and applying the stale pre-send snapshot would wipe out the message
-    // they just typed (a real bug this caused). Their send + reply, and the
-    // next poll, bring things current anyway.
-    setPendingConvUpdate(null)
+    // Sending means the parent is at the live end of the thread by intent, so
+    // any "new message below" marker is stale and the view should follow again.
+    setNewBelow(false)
+    atBottomRef.current = true
     setSending(true)
     setLiveStatus('')
     setStreamingReply('')
@@ -2651,12 +2718,30 @@ export default function LearningApp() {
   // the next unrelated re-render.
   const [parentMicRecording, setParentMicRecording] = useState(false)
   const [childMicRecording, setChildMicRecording] = useState(false)
+  // Tracks 'preparing' as well as 'recording': the banner appears at the start
+  // of preparation, so space must be reserved from that moment or it covers
+  // the last message during the whole cold-start wait.
   // The listening banner's reserved space (see .fl-thread:has(...) in
   // learning-app.css) only grows how far the thread CAN scroll — nothing
   // scrolls it there on its own. scrollIntoView on the end marker (used
   // elsewhere for new messages) stops at the marker itself, before that
   // trailing padding, so it doesn't reach far enough here; scrollTop =
   // scrollHeight always reaches the true bottom, padding included.
+  // "Near" rather than exactly at the bottom: a couple of pixels of rounding,
+  // or a part-rendered final bubble, should still count as following along.
+  useEffect(() => {
+    const el = threadScrollRef.current
+    if (!el) return
+    const onScroll = () => {
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      atBottomRef.current = near
+      if (near) setNewBelow(false)
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [screen])
+
   useEffect(() => {
     if (!parentMicRecording) return
     const el = threadScrollRef.current
@@ -2971,29 +3056,19 @@ export default function LearningApp() {
               </div>
             </div>
 
-            {pendingConvUpdate && (
+            {newBelow && (
+              // The message is already applied — this only says it landed
+              // below the fold, so tapping scrolls rather than fetching.
               <button
                 type="button"
                 className="fl-new-update-banner"
                 onClick={() => {
-                  // Re-fetch the CURRENT file on tap rather than applying the
-                  // snapshot captured when the banner appeared — the snapshot
-                  // can be stale (e.g. the parent sent a message after it was
-                  // taken), and applying it would drop that message.
-                  setPendingConvUpdate(null)
-                  fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('conversations/parent.json')}`)
-                    .then((r) => r.json())
-                    .then((d) => {
-                      if (!d?.content) return
-                      const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
-                      setParentMessages((c.messages || []).map(toParentMsg))
-                      setRemoteStatus('')
-                      setRemoteToolCalls([])
-                    })
-                    .catch(() => {})
+                  setNewBelow(false)
+                  atBottomRef.current = true
+                  threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
                 }}
               >
-                <RefreshCw size={14} /> New update — tap to refresh
+                <RefreshCw size={14} /> New message — tap to jump to it
               </button>
             )}
             <div className="fl-thread" aria-label="Parent learning conversation" ref={threadScrollRef}>
@@ -3130,11 +3205,22 @@ export default function LearningApp() {
                   <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
                   <div className="fl-msg-col">
                     {streamingReply && (
-                      <div className="fl-bubble is-streaming"><Markdown text={stabilizeSharedStreamingMarkdown(streamingReply)} /></div>
+                      // Rendered as thinking, NOT as a reply bubble. What
+                      // streams here is the model working out loud — "I'll
+                      // first check which notes this refers to…" — which is
+                      // not the answer and is often contradicted by it. In a
+                      // .fl-bubble it was indistinguishable from a finished
+                      // message, so a parent read the plan as the response.
+                      <div className="fl-stream-think">
+                        <span className="fl-stream-think-label">Thinking</span>
+                        <div className="fl-stream-think-body is-streaming">
+                          <Markdown text={stabilizeSharedStreamingMarkdown(streamingReply)} />
+                        </div>
+                      </div>
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : PARENT_WAIT_HINTS[parentHintIndex]}</span>
+                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : showParentHints ? PARENT_WAIT_HINTS[parentHintIndex] : 'Working on it…'}</span>
                     </div>
                     <ToolCallSummary calls={liveToolCalls} />
                   </div>
@@ -3208,7 +3294,7 @@ export default function LearningApp() {
               </button>
               <MicButton
                 ref={parentMicRef}
-                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording') }}
+                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording' || s === 'preparing') }}
                 onText={(text, autoSubmit) => {
                   if (autoSubmit) {
                     const cur = focusInputRef.current
@@ -4234,11 +4320,16 @@ export default function LearningApp() {
                     <span className="fl-tmsg-avatar"><Sun size={20} /></span>
                     <div className="fl-tbubble-col">
                       {childStreamingReply && (
-                        <div className="fl-tbubble is-streaming"><Markdown text={stabilizeSharedStreamingMarkdown(childStreamingReply)} /></div>
+                        <div className="fl-stream-think">
+                          <span className="fl-stream-think-label">Thinking</span>
+                          <div className="fl-stream-think-body is-streaming">
+                            <Markdown text={stabilizeSharedStreamingMarkdown(childStreamingReply)} />
+                          </div>
+                        </div>
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : CHILD_WAIT_HINTS[childHintIndex]}</span>
+                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : showChildHints ? CHILD_WAIT_HINTS[childHintIndex] : 'Working on it…'}</span>
                       </div>
                       <ToolCallSummary calls={childLiveToolCalls} />
                     </div>
@@ -4295,7 +4386,7 @@ export default function LearningApp() {
                 </button>
                 <MicButton
                   ref={childMicRef}
-                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording') }}
+                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording' || s === 'preparing') }}
                   onText={(text, autoSubmit) => {
                     if (autoSubmit) {
                       const cur = childInputRef.current

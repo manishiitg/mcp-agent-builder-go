@@ -5,7 +5,8 @@
 **Last updated:** 2026-08-02
 **Repositories:** `mcpagent`, `mcp-agent-builder-go`
 **Related:** `docs/bugs/custom_tool_category_as_agent_addressing.md`,
-`docs/bugs/mcp_startup_retry_and_double_construction.md`
+`docs/bugs/mcp_startup_retry_and_double_construction.md`,
+`docs/refactor/canonical_agent_definition_construction.md`
 
 ## Implementation status
 
@@ -48,6 +49,9 @@ Open builder lifecycle follow-up (confirmed 2026-08-02):
   `docs/bugs/mcp_startup_retry_and_double_construction.md`.
 - The public API golden tests do not cover construction count; a builder
   lifecycle regression test is required before this follow-up can be closed.
+- The proposed builder-wide migration that closes this follow-up without
+  inventing another public agent-spec type is documented in
+  [canonical_agent_definition_construction.md](canonical_agent_definition_construction.md).
 
 Verified on the current working tree (2026-08-02):
 

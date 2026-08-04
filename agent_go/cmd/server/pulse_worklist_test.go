@@ -40,6 +40,53 @@ func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t 
 	}
 }
 
+// The three cross-checks (disposition value, verification proof, next_check
+// boundary) are independent — nothing about the disposition value being wrong
+// depends on whether the next_check text also mismatches — so all of them must
+// be reported in one rejection.
+//
+// On 2026-08-04 finding PUL-70B1057E took three separate record_pulse_result
+// rejections to clear this function alone, because it returned on the first
+// mismatch and only revealed the next one after the caller fixed it: wrong
+// disposition value, then a verification proof that didn't match the
+// reviewer's evidence, then a next_check that didn't match the reviewer's
+// boundary text.
+func TestValidateReviewerVerificationDispositionsCombinesAllMismatches(t *testing.T) {
+	review := []step_based_workflow.PulseReviewVerificationResult{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		Verdict:   step_based_workflow.VerificationInconclusive,
+		Expected:  "widened selector pool applied",
+		Observed:  "selector pool unchanged",
+		NextCheck: "next default/reddit run after 2026-08-04T02:00Z",
+	}}
+	dispositions := []step_based_workflow.PulseFindingDisposition{{
+		FindingID: "PUL-70B1057E", Fingerprint: "fp-70b1",
+		// Wrong disposition value, a verification proof that doesn't match the
+		// reviewer's evidence, and a next_check that doesn't match the
+		// reviewer's boundary — three independent mismatches at once.
+		Disposition: step_based_workflow.FindingDispositionAwaitingRun,
+		Verification: []step_based_workflow.PulseFindingVerification{{
+			Verdict:  step_based_workflow.VerificationInconclusive,
+			Expected: "something else entirely",
+			Observed: "something else entirely",
+		}},
+		NextCheck: "a different boundary",
+	}}
+	err := validateReviewerVerificationDispositions(review, dispositions)
+	if err == nil {
+		t.Fatal("mismatched disposition accepted")
+	}
+	for _, want := range []string{
+		`requires disposition "changed_unverified", got "awaiting_run"`,
+		"must carry the reviewer's structured inconclusive proof",
+		"next_check must match the reviewer boundary",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejection %q is missing %q", err.Error(), want)
+		}
+	}
+}
+
 func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -760,14 +807,14 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 	t.Run("rejects missing outcome cell", func(t *testing.T) {
 		missing := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "missing-cell"),
-			`<div class="briefitem"><div class="k">Next Pulse</div><p>Later.</p></div>`,
+			`<div class="briefitem"><div class="k">Next</div><p>Later.</p></div>`,
 			``,
 			1,
 		)
 		workspaceState.mu.Lock()
 		workspaceState.files[htmlPath] = missing
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "exactly 5 brief cells") {
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "exactly 3 brief cells") {
 			t.Fatalf("missing outcome cell error = %v", err)
 		}
 	})
@@ -799,8 +846,23 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		workspaceState.mu.Lock()
 		workspaceState.files[htmlPath] = withDump
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "field dumps") {
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), ".modfields") {
 			t.Fatalf("reviewer dump error = %v", err)
+		}
+	})
+
+	t.Run("caps active material history at twelve items", func(t *testing.T) {
+		withExcessHistory := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "excess-history"),
+			`<div id="pulse-agent-handoff"`,
+			strings.Repeat(`<article class="entry resolved" data-date="2026-08-04"></article>`, 13)+`<div id="pulse-agent-handoff"`,
+			1,
+		)
+		workspaceState.mu.Lock()
+		workspaceState.files[htmlPath] = withExcessHistory
+		workspaceState.mu.Unlock()
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "at most 12 material Activity items") {
+			t.Fatalf("excess Activity history error = %v", err)
 		}
 	})
 
@@ -825,23 +887,17 @@ func pulseImproveHTMLFixture(pulseRunID, marker string) string {
 	for _, module := range pulsemodules.All {
 		coverage.WriteString(`<div class="covitem ok" data-module="` + module.ID + `"><span class="dot"></span><span class="cl">` + module.Label + `</span></div>`)
 	}
-	return `<html><body><div class="coverage">` + coverage.String() + `</div>` +
-		`<div class="brief"><div class="brief-h">Today's outcome</div><div class="briefgrid">` +
+	return `<html data-pulse-schema="4"><body><div class="coverage">` + coverage.String() + `</div>` +
+		`<div class="brief"><div class="brief-h">Latest Pulse</div><div class="briefgrid">` +
 		`<div class="briefitem"><div class="k">Outcome</div><p>Complete.</p></div>` +
-		`<div class="briefitem"><div class="k">Goal progress</div><p>On track.</p></div>` +
-		`<div class="briefitem"><div class="k">Fixed today</div><p>Nothing fixed.</p></div>` +
-		`<div class="briefitem"><div class="k">Open now</div><p>Nothing open.</p></div>` +
-		`<div class="briefitem"><div class="k">Next Pulse</div><p>Later.</p></div>` +
+		`<div class="briefitem"><div class="k">Goal movement</div><p>On track.</p></div>` +
+		`<div class="briefitem"><div class="k">Next</div><p>Later.</p></div>` +
 		`</div></div>` +
 		`<section class="worksummary" data-source="sqlite"><div class="workstats">` +
 		`<div class="workstat" data-status="open" data-count="0"><b>0</b><span>Open</span></div>` +
 		`<div class="workstat" data-status="in_progress" data-count="0"><b>0</b><span>Fixing</span></div>` +
 		`<div class="workstat" data-status="in_review" data-count="0"><b>0</b><span>Verify</span></div>` +
-		`</div><div class="workqueues">` +
-		`<div class="workqueue" data-queue="attention"><p class="workempty">Nothing open.</p></div>` +
-		`<div class="workqueue" data-queue="verification"><p class="workempty">Nothing to verify.</p></div>` +
 		`</div></section>` +
-		`<details class="technical"><summary>Technical details</summary><div class="techbody">Details.</div></details>` +
 		`<div id="pulse-agent-handoff" data-pulse-run-id="` + pulseRunID + `" hidden>` + marker + `</div>` +
 		`</body></html>`
 }
@@ -863,7 +919,6 @@ func TestValidatePulseDashboardFindingCountsMatchesSQLiteProjection(t *testing.T
 	}
 	html := pulseImproveHTMLFixture("pulse-1", "counts")
 	html = strings.Replace(html, `data-status="open" data-count="0"><b>0</b>`, `data-status="open" data-count="1"><b>1</b>`, 1)
-	html = strings.Replace(html, `<p class="workempty">Nothing open.</p>`, `<div class="workitem" data-issue-id="`+findings[0].Issue.ID+`"><b>`+findings[0].Issue.Title+`</b><p>Pulse will inspect it.</p></div>`, 1)
 	if err := validatePulseDashboardFindingCounts(context.Background(), workspacePath, html); err != nil {
 		t.Fatalf("matching Current work projection rejected: %v", err)
 	}
@@ -1100,8 +1155,8 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 	}
 }
 
-func TestReconcilePulseDashboardCommandRequiresDone(t *testing.T) {
-	t.Run("silent running stage becomes failed without touching later commands", func(t *testing.T) {
+func TestReconcilePulseDashboardCommandUsesValidatedArtifactProof(t *testing.T) {
+	t.Run("validated running stage becomes done without touching later commands", func(t *testing.T) {
 		ctx := context.Background()
 		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 		workspacePath := "Workflow/dashboard-silent"
@@ -1112,8 +1167,8 @@ func TestReconcilePulseDashboardCommandRequiresDone(t *testing.T) {
 		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
 			t.Fatalf("mark dashboard running: %v", err)
 		}
-		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "without recording a done outcome") {
-			t.Fatalf("silent dashboard reconciliation error = %v", err)
+		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err != nil {
+			t.Fatalf("validated dashboard reconciliation error = %v", err)
 		}
 		states, err := getPulseFinalCommandStates(ctx, workspacePath)
 		if err != nil {
@@ -1121,8 +1176,8 @@ func TestReconcilePulseDashboardCommandRequiresDone(t *testing.T) {
 		}
 		for _, state := range states {
 			if state.Command == pulseFinalCommandDashboard {
-				if state.Status != "failed" {
-					t.Fatalf("dashboard status = %q, want failed", state.Status)
+				if state.Status != "done" {
+					t.Fatalf("dashboard status = %q, want done", state.Status)
 				}
 			} else if state.Status != "waiting" {
 				t.Fatalf("later command %q status = %q, want waiting", state.Command, state.Status)
