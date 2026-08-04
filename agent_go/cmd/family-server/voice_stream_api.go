@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"io"
@@ -107,6 +108,47 @@ func handleVoiceStreamStart(w http.ResponseWriter, r *http.Request) {
 	voiceChunkSeq.Store(0)
 	log.Printf("[voice-native] stream start (helper=%s)", nativeVoiceHelperPath())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// The model costs 15-20s to load and ~600MB resident, so its lifetime is tied
+// to whether the app is actually on screen rather than to a timer. The desktop
+// shell calls these when the window is hidden to the menu bar and shown again
+// (see desktop-sparkquill/main.js) — a timer alone either wasted memory while
+// the app sat in the background, or made the mic slow after a gap.
+func handleVoiceNativeWarm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !nativeVoiceAvailable() {
+		writeJSON(w, http.StatusOK, map[string]any{"warm": false})
+		return
+	}
+	// Returns immediately: the caller is a window event, and nothing should
+	// wait on a 20s load.
+	go func() {
+		started := time.Now()
+		if err := warmNativeVoice(context.Background()); err != nil {
+			log.Printf("[voice-native] warm on foreground failed: %v", err)
+			return
+		}
+		log.Printf("[voice-native] warm and ready in %s", time.Since(started).Round(time.Millisecond))
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"warming": true})
+}
+
+func handleVoiceNativeUnload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Never mid-dictation: that would kill the utterance the user is speaking.
+	if voiceStreamActive.Load() {
+		writeJSON(w, http.StatusOK, map[string]any{"unloaded": false, "reason": "dictation in progress"})
+		return
+	}
+	sharedNativeVoiceWorker.Stop()
+	writeJSON(w, http.StatusOK, map[string]any{"unloaded": true})
 }
 
 func handleVoiceStreamChunk(w http.ResponseWriter, r *http.Request) {

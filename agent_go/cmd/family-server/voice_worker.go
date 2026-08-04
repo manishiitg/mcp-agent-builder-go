@@ -295,6 +295,18 @@ func (w *voiceWorker) ensureStartedLocked() error {
 // *exec.Cmd is not safe in Go (a second call errors with "Wait was already
 // called"), so exactly one place — the reaper — owns that. Safe to call when
 // nothing is running.
+// Stop unloads the worker now, releasing the model's memory. Used when the
+// app goes to the background — see voice_native.go's lifecycle endpoints.
+func (w *voiceWorker) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cmd == nil {
+		return
+	}
+	log.Printf("[%s] unloading on request", w.name)
+	w.stopLocked()
+}
+
 func (w *voiceWorker) stopLocked() {
 	if w.idle != nil {
 		w.idle.Stop()

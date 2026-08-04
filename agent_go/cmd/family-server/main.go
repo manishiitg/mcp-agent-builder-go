@@ -138,6 +138,8 @@ func main() {
 	mux.HandleFunc("/api/voice/stream/start", handleVoiceStreamStart)
 	mux.HandleFunc("/api/voice/stream/chunk", handleVoiceStreamChunk)
 	mux.HandleFunc("/api/voice/stream/finish", handleVoiceStreamFinish)
+	mux.HandleFunc("/api/voice/native/warm", handleVoiceNativeWarm)
+	mux.HandleFunc("/api/voice/native/unload", handleVoiceNativeUnload)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
