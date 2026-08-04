@@ -217,6 +217,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// Serialize on the shared agent-turn lock (parent + child share global MCP env).
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
+	defer markAgentTurnStart("child")()
 	trace.locked()
 
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
