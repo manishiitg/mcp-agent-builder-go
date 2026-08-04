@@ -41,8 +41,8 @@ func TestPersistEvalResultsToDBWritesRealVerdicts(t *testing.T) {
 		TargetRunFolder: "iteration-202",
 		GeneratedAt:     "2026-07-28T00:00:00Z",
 		StepScores: []*EvaluationStepScore{
-			{StepID: "eval-workflow-success", Score: 0, MaxScore: 10, Reasoning: "Score 0.0/10.", Evidence: "see output_content.json"},
-			{StepID: "eval-content-quality", Score: 10, MaxScore: 10, Reasoning: "All checks passed.", Evidence: "see output_content.json"},
+			{StepID: "eval-workflow-success", Score: 0, MaxScore: 10, ScoreCaptured: true, Reasoning: "Score 0.0/10.", Evidence: "see output_content.json"},
+			{StepID: "eval-content-quality", Score: 10, MaxScore: 10, ScoreCaptured: true, Reasoning: "All checks passed.", Evidence: "see output_content.json"},
 		},
 	}
 	if err := hcpo.persistEvalResultsToDB(ctx, report); err != nil {

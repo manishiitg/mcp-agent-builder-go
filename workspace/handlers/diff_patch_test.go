@@ -594,6 +594,42 @@ func TestApplyAgentGeneratedDiffFallbackHintStaysBoundedOnAPathologicallyLongLin
 	}
 }
 
+func TestApplyAgentGeneratedDiffFallbackDoesNotRecommendAnArbitraryTiedNearMatch(t *testing.T) {
+	currentContent := strings.Join([]string{
+		"first section",
+		"shared before",
+		"current value A",
+		"shared after",
+		"separator",
+		"second section",
+		"shared before",
+		"current value B",
+		"shared after",
+	}, "\n")
+	staleDiff := strings.Join([]string{
+		"--- a/f.txt",
+		"+++ b/f.txt",
+		"@@ -1,3 +1,3 @@",
+		" shared before",
+		"-stale value",
+		"+replacement",
+		" shared after",
+		"",
+	}, "\n")
+
+	_, err := applyAgentGeneratedDiffFallback(currentContent, staleDiff)
+	if err == nil {
+		t.Fatal("expected a mismatch error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "2 locations are equally close") {
+		t.Fatalf("tied nearest matches were not reported as ambiguous: %s", msg)
+	}
+	if strings.Contains(msg, "Current content there:") {
+		t.Fatalf("an arbitrary tied location was presented as the closest retry target: %s", msg)
+	}
+}
+
 func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t *testing.T) {
 	currentContent := "only one line"
 	diffContent := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n line a\n line b\n line c\n"

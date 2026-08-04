@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	pulseImproveArchiveRetentionDays = 15
+	pulseImproveArchiveRetentionDays  = 15
+	pulseImproveArchiveMaxActiveItems = 12
 )
 
 type pulseImproveArchiveAssessment struct {
@@ -22,6 +23,7 @@ type pulseImproveArchiveAssessment struct {
 	ArchivableEntries int
 	ExpiredEntries    int
 	RecentRunRows     int
+	ExcessActiveItems int
 }
 
 func assessPulseImproveArchive(content string) pulseImproveArchiveAssessment {
@@ -43,7 +45,12 @@ func assessPulseImproveArchiveAt(content string, now time.Time) pulseImproveArch
 	for {
 		switch tokenizer.Next() {
 		case html.ErrorToken:
-			assessment.Due = assessment.ExpiredEntries > 0
+			activeItems := assessment.TimelineEntries + assessment.RecentRunRows
+			if activeItems > pulseImproveArchiveMaxActiveItems {
+				assessment.ExcessActiveItems = activeItems - pulseImproveArchiveMaxActiveItems
+			}
+			assessment.Due = assessment.ExpiredEntries > 0 ||
+				(assessment.ExcessActiveItems > 0 && assessment.ArchivableEntries+assessment.RecentRunRows > 0)
 			return assessment
 		case html.EndTagToken:
 			if handoffDepth > 0 {
@@ -160,7 +167,8 @@ func pulseImproveArchiveAssessmentForWorkspace(ctx context.Context, workspacePat
 }
 
 func (assessment pulseImproveArchiveAssessment) triggerSummary() string {
-	return fmt.Sprintf("%d eligible dated items older than %d days", assessment.ExpiredEntries, pulseImproveArchiveRetentionDays)
+	return fmt.Sprintf("%d eligible dated items older than %d days; %d items above the %d-item active journal cap",
+		assessment.ExpiredEntries, pulseImproveArchiveRetentionDays, assessment.ExcessActiveItems, pulseImproveArchiveMaxActiveItems)
 }
 
 func postRunMonitorArchiveStep(assessment pulseImproveArchiveAssessment) postRunMonitorStep {

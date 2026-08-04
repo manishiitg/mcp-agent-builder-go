@@ -100,7 +100,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		wants []string
 	}{
 		"pulse-archive": {
-			wants: []string{"latest 15 calendar days", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
+			wants: []string{"newest 12 material dated", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
 		},
 		"pulse-gate": {
 			wants: []string{
@@ -542,22 +542,22 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if err != nil {
 		t.Fatalf("render review-improve-log: %v", err)
 	}
-	if !strings.Contains(reviewLog, "Every important `.briefitem` and `.tile` needs a visible freshness label") {
+	if !strings.Contains(reviewLog, "Every important brief cell needs visible freshness") {
 		t.Fatal("review-improve-log missing visible freshness contract")
 	}
 	for _, want := range []string{
 		"Needs your decision",
 		"Assumptions challenged",
-		"Today's outcome",
+		"Latest Pulse",
 		"Current work: a projection, not another backlog",
 		`get_pulse_state(view="backlog")`,
-		"Needs verification",
-		"at most three",
-		`<details class="technical">`,
+		"Open / Fixing / Verify counts only",
+		"Keep at most three active assumptions",
+		"Operational detail stays in Pulse",
 		"Hidden agent handoff projection",
 		`#pulse-agent-handoff`,
 		"scheduler conditionally sends a dedicated archive turn",
-		"newest **20** material timeline cards",
+		"newest **12** material Activity cards",
 		"Stage complete active and archive HTML documents",
 		`href="improve-archive/YYYY-MM.html"`,
 		"**Goal:**",
@@ -579,10 +579,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if err != nil {
 		t.Fatalf("render review-improve-log-skeleton: %v", err)
 	}
-	if !strings.Contains(skeleton, `class="asof"`) || !strings.Contains(skeleton, ".tile .asof") {
-		t.Fatal("review-improve-log-skeleton missing visible tile freshness markup")
-	}
-	for _, want := range []string{`data-pulse-schema="3"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `data-queue="verification"`, `class="technical"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Today's outcome`} {
+	for _, want := range []string{`data-pulse-schema="4"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Latest Pulse`, `Goal movement`} {
 		if !strings.Contains(skeleton, want) {
 			t.Fatalf("review-improve-log-skeleton missing stable verdict markup %q", want)
 		}
@@ -592,6 +589,11 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	}
 	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `class="entry open"`) || strings.Contains(skeleton, `class="modfields"`) {
 		t.Fatal("review-improve-log-skeleton must not duplicate Goal, standing issue cards, or reviewer field dumps")
+	}
+	for _, retired := range []string{`class="technical"`, `class="filters"`, `class="workqueue"`, `class="workitem"`} {
+		if strings.Contains(skeleton, retired) {
+			t.Fatalf("review-improve-log-skeleton still contains retired operational block %q", retired)
+		}
 	}
 	for _, want := range []string{`data-pulse-section="improvements" data-module="goal_advisor"`, `data-status="answered"`, `Question + answer`} {
 		if !strings.Contains(skeleton, want) {

@@ -1,6 +1,6 @@
 # Auto-Improvement Framework
 
-Pulse gives the workflow durable evidence, bounded maintenance, strategic review, and an audit trail. It is **one system running at several agent-selected cadences** over a SQLite-backed lifecycle and impact ledger, all sharing the same **Bug / Goal** vocabulary. `builder/improve.html` remains the generated, publishable dashboard; it is not the operational source of truth.
+Pulse gives the workflow durable evidence, bounded maintenance, strategic review, and an audit trail. It is **one system running at several agent-selected cadences** over a SQLite-backed lifecycle and impact ledger, all sharing the same **Bug / Goal** vocabulary. `builder/improve.html` is the generated, lightweight published executive journal; it is not the operational source of truth.
 
 - **Pulse Gate:** reads retained evidence and decides which review modules are due, with explicit evidence/cooldowns rather than assuming a successful run proves correctness.
 - **Read-only reviewers:** one ordered Workflow Review checks operational lenses; independent Strategy Auditor and Goal Advisor agents check in-strategy effectiveness and out-of-strategy headroom.
@@ -22,7 +22,7 @@ They are orthogonal — a run can be Bug-broken while Goal-on-target, or Bug-cle
 
 - `soul/soul.md`: stable intent only — objective, success criteria, optional explicit user-approved constraints, and optional notification preferences. Architecture and agent assumptions are revisable and do not belong here. It stays Markdown; there is no `soul.html`.
 - `db/db.sqlite`: authoritative Pulse finding, attempt, verification, review-artifact, module-result, finalizer, intervention, and longitudinal-impact state.
-- `builder/improve.html`: the **generated Pulse dashboard and publishable history** — a compact, newest-first HTML projection with outcome, current work, recent history, and technical handoff. It remains required, but reviewers and the Fixer must read SQLite for lifecycle truth. See `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` for the render contract.
+- `builder/improve.html`: the **generated Pulse executive journal and publishable history** — Bug/Goal verdicts, one status sentence, reviewer coverage, optional assumptions, three Latest Pulse cells, Open/Fixing/Verify counts, and at most 12 material Activity cards. It remains required, but reviewers and the Fixer read SQLite for lifecycle truth and the Pulse popup owns complete operational detail. See `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])` for the render contract.
 - `builder/improve-archive/YYYY-MM.html`: monthly archive files for old resolved findings and routine entries. Read only the archive files referenced by the active log's archive index or an unresolved id.
 - `builder/card.health.html`: the compact per-run dashboard card the final dashboard/notify step overwrites each run (final post-Pulse status + headline/detail in `data-*` attributes). Goal / Ikigai itself remains in `soul/soul.md`; run verdicts and progress are time-stamped in Pulse history.
 - `route_selection.json`: which route a run took (so the monitor judges only that path).
@@ -72,6 +72,6 @@ Each module may return multiple findings. Pulse keeps all material findings, but
 
 ## Pulse Log Retention
 
-`builder/improve.html` must stay readable for users and cheap for scheduled agents to load. When it has **more than 20 timeline entries** and at least one older resolved entry is safe to move, move older **resolved** findings, superseded decisions, and routine run rows into a monthly archive `builder/improve-archive/YYYY-MM.html`, leaving a one-row entry in the archive index (date range, count, any still-unresolved ids). Byte size and line count do not trigger archiving.
+`builder/improve.html` must stay readable for users and cheap for scheduled agents to load. Keep at most **12 material Activity cards** active. Move safe older resolved outcomes, superseded decisions, and routine run rows into a monthly archive `builder/improve-archive/YYYY-MM.html`; unresolved and undated history is never moved automatically. Byte size, line count, and token budgets do not trigger archiving.
 
 **Never archive** open findings, user rules, active advisor experiments, current notes, or the latest few entries — the active Pulse should always answer "what's the state of this workflow right now, and what still needs attention." Archiving is append-preserving: move old detail, leave an index row, and never rewrite the meaning of an old decision.

@@ -861,6 +861,7 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 		// Fuzzy match: find position with minimum mismatches
 
 		bestMatchIndex := -1
+		bestMatchCount := 0
 		exactMatchCount := 0
 
 		minMismatches := len(expectedLines) + 1
@@ -890,7 +891,7 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 					// effectively arbitrary — the first position scanned, not
 					// the closest one — which made a "here is the closest match"
 					// hint on failure meaningless. This is what makes it real.
-					if mismatches >= minMismatches {
+					if mismatches > minMismatches {
 
 						break
 
@@ -909,6 +910,11 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 				minMismatches = mismatches
 
 				bestMatchIndex = i
+				bestMatchCount = 1
+
+			} else if mismatches == minMismatches {
+
+				bestMatchCount++
 
 			}
 
@@ -976,6 +982,9 @@ func applyAgentGeneratedDiffFallback(currentContent, diffContent string) (string
 
 			fmt.Printf("❌ Could not find match for hunk — refusing to apply to prevent corruption\n")
 
+			if bestMatchCount > 1 {
+				return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file. %d locations are equally close (%d of %d expected lines differ); refusing to recommend an arbitrary location. Read the current file content and retry with more unique context", bestMatchCount, minMismatches, len(expectedLines))
+			}
 			hint := boundedContextMismatchHint(resultLines, bestMatchIndex, minMismatches, len(expectedLines))
 			if hint == "" {
 				return "", fmt.Errorf("patch hunk failed to apply: could not find matching context lines in the file (file has fewer lines than the hunk expects). Read the current file content with an available tool and retry with an accurate diff")

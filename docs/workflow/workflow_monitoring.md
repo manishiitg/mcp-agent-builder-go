@@ -9,7 +9,7 @@ It is worth keeping. The workflow UI still exposes execution logs, cost analysis
 There are three practical scopes:
 
 ### 1. Workflow-level views
-- **Pulse**: a database-native popup for current health, decisions, findings, reviews, fixes, verification, finalization, and longitudinal goal impact; `builder/improve.html` remains the generated dashboard/publishable history
+- **Pulse**: a database-native popup for current health, decisions, findings, reviews, fixes, verification, finalization, and longitudinal goal impact; `builder/improve.html` remains the lightweight published executive journal
 - **Costs**: aggregated token and USD usage across run folders
 - **Evaluation reports**: benchmark-style scoring across runs, with single-run drill-down
 - **Learnings**: current persisted learning state, including the global workflow skill
@@ -26,7 +26,7 @@ There are three practical scopes:
 
 The Pulse popup is the primary in-app monitoring surface. It reads structured SQLite projections and presents the workflow goal/success criteria, pending user decisions, current findings, lifecycle history, reviewer evidence, fix attempts, verification, final-command status, and goal impact over time. Full reviewer Markdown is available as supporting evidence, not used as the layout or lifecycle model.
 
-`builder/improve.html` remains a separate required artifact: the Dashboard stage generates the compact, publishable, archive-linked Pulse report after review and fixing. The popup does not scrape or duplicate HTML snippets from that file. Every workflow is judged on two independent axes, each stamped with the run it is based on:
+`builder/improve.html` remains a separate required artifact: the Dashboard stage generates a lightweight, publishable, archive-linked executive journal after review and fixing. It contains the verdict/status summary, three Latest Pulse cells, Current work counts, and material history; the popup owns complete operational details and does not scrape HTML snippets from that file. Every workflow is judged on two independent axes, each stamped with the run it is based on:
 
 - **Bug** — did it run correctly (errors, skipped steps, missing/empty artifacts, regressions)? Fixed by hardening.
 - **Goal** — is it achieving its success criteria (eval scores and outcome metrics vs `soul.md`)? Fixed by refining or replanning.

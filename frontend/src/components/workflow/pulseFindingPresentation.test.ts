@@ -63,8 +63,23 @@ describe('Pulse finding presentation', () => {
   it('separates decisions, platform gaps, and workflow evidence', () => {
     expect(pulseFindingPresentation(finding({
       status: 'acknowledged',
-      events: [{ event_type: 'awaiting_user', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
+      events: [{
+        event_type: 'awaiting_user',
+        summary: '',
+        metadata: { human_input_id: 'decision-1' },
+        recorded_at: '2026-08-02T10:00:00Z',
+      }],
     })).queue).toBe('decisions')
+
+    expect(pulseFindingPresentation(finding({
+      status: 'acknowledged',
+      events: [{ event_type: 'proposal_recorded', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
+    })).queue).toBe('proposals')
+
+    expect(pulseFindingPresentation(finding({
+      status: 'acknowledged',
+      events: [{ event_type: 'awaiting_user', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
+    }))).toMatchObject({ queue: 'needs_action', label: 'Decision request missing' })
 
     expect(pulseFindingPresentation(finding({
       status: 'external_action_required',

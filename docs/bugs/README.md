@@ -3,9 +3,13 @@
 Each file is one investigated defect: symptom, evidence, root cause, and what was
 changed. They are written to be re-read by someone who was not there.
 
-Cross-workflow Pulse findings that require shared runtime work are consolidated
-in [pulse_platform_issue_register.md](pulse_platform_issue_register.md). It is a
-triage register, not a replacement for the individual incident reports below.
+Cross-workflow Pulse findings that require shared runtime work are indexed in
+[pulse_platform_issue_register.md](pulse_platform_issue_register.md). Canonical
+per-ticket status, evidence, ownership, and acceptance live in the fragmented
+files under [`pulse_platform/`](pulse_platform/). This lets Codex and Claude
+Code work separate tickets concurrently without editing one large register.
+The incident reports below remain deep investigations where their raw evidence
+is useful; they are not the active ticket-status source.
 
 ## The agent-facing contract (2026-08-01 → 02)
 

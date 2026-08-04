@@ -14,6 +14,7 @@ export type PulseFindingQueue =
   | 'needs_action'
   | 'waiting_proof'
   | 'decisions'
+  | 'proposals'
   | 'platform'
   | 'resolved'
   | 'workflow_reported'
@@ -129,19 +130,25 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
   if (finding.status === 'acknowledged') {
     const reason = acknowledgedReason(finding)
     if (reason === 'awaiting_user') {
+      const hasDecisionRequest = finding.events.some((event) => (
+        typeof event.metadata?.human_input_id === 'string'
+        && event.metadata.human_input_id.trim().length > 0
+      ))
       return {
-        label: 'Your decision needed',
-        queue: 'decisions',
-        tone: 'decision',
-        nextAction: finding.resolution_note?.trim() || 'Choose the requested option before Pulse continues.',
+        label: hasDecisionRequest ? 'Your decision needed' : 'Decision request missing',
+        queue: hasDecisionRequest ? 'decisions' : 'needs_action',
+        tone: hasDecisionRequest ? 'decision' : 'danger',
+        nextAction: finding.resolution_note?.trim() || (hasDecisionRequest
+          ? 'Choose the requested option before Pulse continues.'
+          : 'Pulse must create and link an answerable decision before waiting on you.'),
       }
     }
     if (reason === 'proposal') {
       return {
         label: 'Proposed improvement',
-        queue: 'decisions',
-        tone: 'decision',
-        nextAction: finding.resolution_note?.trim() || 'Review this proposal before Pulse changes strategy, policy, or success criteria.',
+        queue: 'proposals',
+        tone: 'info',
+        nextAction: finding.resolution_note?.trim() || 'This is an idea for consideration; it is not blocked on your approval.',
       }
     }
     if (reason === 'blocked') {
@@ -171,6 +178,7 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
   const diagnosed = finding.fix_attempts.length > 0
     || finding.events.some((event) => !['filed', 'rediscovered'].includes(event.event_type))
     || presentation.queue === 'decisions'
+    || presentation.queue === 'proposals'
     || presentation.queue === 'platform'
     || presentation.queue === 'resolved'
   const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)

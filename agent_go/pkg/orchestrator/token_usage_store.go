@@ -217,28 +217,61 @@ func (s *tokenUsageFileStore) readRunAcrossDates(ctx context.Context, iterationF
 	s.ensureRunMigrated(ctx, iterationFolder)
 
 	scope, runFolder := NormalizeCostScopeAndRunFolder(iterationFolder)
-	dirPath := filepath.Join(s.workspacePath, "costs", string(scope), ExtractGroupFolderFromRunFolder(runFolder))
-	names, err := s.listFiles(ctx, dirPath)
-	if err != nil {
-		return emptyTokenUsageFile()
+	groupFolders := []string{ExtractGroupFolderFromRunFolder(runFolder)}
+	matchGroupedChildren := !strings.Contains(strings.Trim(runFolder, "/"), "/")
+	if matchGroupedChildren {
+		// A scheduler normally knows only the iteration (for example
+		// "iteration-0") while the authoritative ledgers are sharded by the
+		// producing group (for example dev/ and production/). Looking only in
+		// __ungrouped__ makes a perfectly valid scheduled run appear to have no
+		// cost evidence. Discover every group shard and merge only child run keys
+		// belonging to the requested iteration.
+		root := filepath.Join(s.workspacePath, "costs", string(scope))
+		if names, err := s.listFiles(ctx, root); err == nil {
+			seen := map[string]bool{groupFolders[0]: true}
+			for _, name := range names {
+				name = filepath.Base(strings.TrimSpace(name))
+				if name == "" || filepath.Ext(name) == ".json" || seen[name] {
+					continue
+				}
+				seen[name] = true
+				groupFolders = append(groupFolders, name)
+			}
+			sort.Strings(groupFolders)
+		}
 	}
-	sort.Strings(names)
 	var merged *TokenUsageFile
-	for _, name := range names {
-		name = filepath.Base(strings.TrimSpace(name))
-		if filepath.Ext(name) != ".json" {
+	for _, groupFolder := range groupFolders {
+		dirPath := filepath.Join(s.workspacePath, "costs", string(scope), groupFolder)
+		names, err := s.listFiles(ctx, dirPath)
+		if err != nil {
 			continue
 		}
-		content, readErr := s.readFile(ctx, filepath.Join(dirPath, name))
-		if readErr != nil || strings.TrimSpace(content) == "" {
-			continue
+		sort.Strings(names)
+		for _, name := range names {
+			name = filepath.Base(strings.TrimSpace(name))
+			if filepath.Ext(name) != ".json" {
+				continue
+			}
+			content, readErr := s.readFile(ctx, filepath.Join(dirPath, name))
+			if readErr != nil || strings.TrimSpace(content) == "" {
+				continue
+			}
+			daily, parseErr := s.parseDailyGroupTokenUsageFile(content)
+			if parseErr != nil {
+				s.warnf(fmt.Sprintf("⚠️ Failed to parse daily token usage file %s: %v", filepath.Join(dirPath, name), parseErr))
+				continue
+			}
+			for storedRunFolder, tokenFile := range daily.RunFolders {
+				matches := storedRunFolder == runFolder
+				if matchGroupedChildren && strings.HasPrefix(storedRunFolder, strings.TrimRight(runFolder, "/")+"/") {
+					matches = true
+				}
+				if matches {
+					merged = MergeTokenUsageFiles(merged, tokenFile)
+				}
+			}
 		}
-		daily, parseErr := s.parseDailyGroupTokenUsageFile(content)
-		if parseErr != nil {
-			s.warnf(fmt.Sprintf("⚠️ Failed to parse daily token usage file %s: %v", filepath.Join(dirPath, name), parseErr))
-			continue
-		}
-		merged = MergeTokenUsageFiles(merged, daily.RunFolders[runFolder])
 	}
 	if merged == nil {
 		return emptyTokenUsageFile()

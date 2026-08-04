@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -26,8 +27,9 @@ const evalResultsSchema = `CREATE TABLE IF NOT EXISTS eval_results (
 	run_folder TEXT NOT NULL,
 	group_name TEXT NOT NULL DEFAULT '',
 	step_id TEXT NOT NULL,
-	score INTEGER NOT NULL DEFAULT 0,
-	max_score INTEGER NOT NULL DEFAULT 0,
+	score REAL NOT NULL DEFAULT 0,
+	max_score REAL NOT NULL DEFAULT 0,
+	score_captured INTEGER NOT NULL DEFAULT 0,
 	reasoning TEXT NOT NULL DEFAULT '',
 	evidence TEXT NOT NULL DEFAULT '',
 	skipped INTEGER NOT NULL DEFAULT 0,
@@ -65,6 +67,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) persistEvalResultsToDB(ctx context.Co
 	if _, err := db.ExecContext(ctx, evalResultsSchema); err != nil {
 		return err
 	}
+	if err := ensureEvalResultsScoreCapturedColumn(ctx, db); err != nil {
+		return err
+	}
 
 	// The report is rebuilt wholesale every eval run, so a re-run against the same
 	// run_folder must replace its rows rather than let stale step ids accumulate
@@ -83,13 +88,45 @@ func (hcpo *StepBasedWorkflowOrchestrator) persistEvalResultsToDB(ctx context.Co
 		if score.Skipped {
 			skipped = 1
 		}
+		scoreCaptured := 0
+		if score.ScoreCaptured {
+			scoreCaptured = 1
+		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO eval_results
-			(run_folder, group_name, step_id, score, max_score, reasoning, evidence, skipped, generated_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runFolder, groupName, score.StepID, score.Score, score.MaxScore, score.Reasoning, score.Evidence, skipped, report.GeneratedAt, now,
+			(run_folder, group_name, step_id, score, max_score, score_captured, reasoning, evidence, skipped, generated_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runFolder, groupName, score.StepID, score.Score, score.MaxScore, scoreCaptured, score.Reasoning, score.Evidence, skipped, report.GeneratedAt, now,
 		); err != nil {
 			return fmt.Errorf("insert eval_results row for step %q: %w", score.StepID, err)
 		}
 	}
 	return nil
+}
+
+func ensureEvalResultsScoreCapturedColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(eval_results)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "score_captured" {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE eval_results ADD COLUMN score_captured INTEGER NOT NULL DEFAULT 0`)
+	return err
 }

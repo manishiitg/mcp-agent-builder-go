@@ -230,8 +230,11 @@ The system needs one immutable operational ledger and code-owned projections.
 
 ### 5. Agent-authored HTML is both a report and a state carrier
 
-`builder/improve.html` is valuable as a human-readable view. It should not be an
-operational source of truth or a recovery mechanism.
+`builder/improve.html` is valuable as a human-readable published journal. Since
+workflow contract v1.0.19 it is deliberately lightweight: three summary cells,
+three lifecycle counts, and at most 12 material Activity cards. It is not an
+operational source of truth or a recovery mechanism; the Pulse popup renders
+the complete SQLite-backed tracker.
 
 Requiring an LLM to:
 

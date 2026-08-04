@@ -295,6 +295,9 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 	if err := migrateDuplicatePulseFindingIdentities(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateOrphanedPulseFindingEvents(ctx, db); err != nil {
+		return err
+	}
 	for _, ddl := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_attempts_module_run ON pulse_fix_attempts(module, pulse_run_id, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_findings_fingerprint ON pulse_fix_attempt_findings(fingerprint, attempt_id)`,
@@ -442,6 +445,59 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 			if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// migrateOrphanedPulseFindingEvents finishes identity migrations that were
+// interrupted after the canonical detail/concern row moved but before every
+// historical event moved. Those orphan events used to be projected as a
+// second live lifecycle item even though the canonical finding itself was
+// already unique.
+func migrateOrphanedPulseFindingEvents(ctx context.Context, db pulseFindingLifecycleDB) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT e.fingerprint, d.fingerprint
+		FROM pulse_finding_events e
+		JOIN pulse_finding_details d ON lower(d.finding_id)=lower(e.finding_id)
+		WHERE e.finding_id<>'' AND e.fingerprint<>d.fingerprint
+		ORDER BY e.fingerprint`)
+	if err != nil {
+		return err
+	}
+	type eventMove struct{ old, target string }
+	var moves []eventMove
+	for rows.Next() {
+		var move eventMove
+		if err := rows.Scan(&move.old, &move.target); err != nil {
+			rows.Close()
+			return err
+		}
+		moves = append(moves, move)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, move := range moves {
+		// A duplicate event tuple is retained as explicit migration history. It
+		// must not remain under the old fingerprint, where backlog projection can
+		// mistake it for another actionable case.
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_finding_events
+			(fingerprint,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at)
+			SELECT ?,e.finding_id,e.pulse_run_id,e.attempt_id,e.event_type||':identity_merge:'||substr(e.fingerprint,1,8),e.summary,e.metadata_json,e.recorded_at
+			FROM pulse_finding_events e WHERE e.fingerprint=? AND EXISTS (
+				SELECT 1 FROM pulse_finding_events t WHERE t.fingerprint=? AND t.pulse_run_id=e.pulse_run_id AND t.attempt_id=e.attempt_id AND t.event_type=e.event_type
+			)`, move.target, move.old, move.target); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_finding_events
+			(fingerprint,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at)
+			SELECT ?,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at
+			FROM pulse_finding_events WHERE fingerprint=?`, move.target, move.old); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM pulse_finding_events WHERE fingerprint=?`, move.old); err != nil {
+			return err
 		}
 	}
 	return nil

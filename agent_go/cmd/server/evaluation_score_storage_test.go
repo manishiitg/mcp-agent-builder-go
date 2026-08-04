@@ -139,3 +139,36 @@ func testEvaluationReport(runFolder, generatedAt string) EvaluationReport {
 		}},
 	}
 }
+
+func TestEvaluationReportAPIProjectionPreservesZeroAndFractionalScores(t *testing.T) {
+	captured := true
+	missing := false
+	report := EvaluationReport{StepScores: []EvaluationStepScore{
+		{StepID: "zero", Score: 0, MaxScore: 10, ScoreCaptured: &captured},
+		{StepID: "fractional", Score: 7.5, MaxScore: 10, ScoreCaptured: &captured},
+		{StepID: "missing", Score: 0, ScoreCaptured: &missing},
+		{StepID: "legacy", Score: 8, MaxScore: 10},
+	}}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal API report: %v", err)
+	}
+	var decoded struct {
+		StepScores []map[string]interface{} `json:"step_scores"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode API report: %v", err)
+	}
+	if decoded.StepScores[0]["score"] != float64(0) || decoded.StepScores[0]["score_captured"] != true {
+		t.Fatalf("zero score lost in API projection: %s", raw)
+	}
+	if decoded.StepScores[1]["score"] != 7.5 {
+		t.Fatalf("fractional score changed in API projection: %s", raw)
+	}
+	if decoded.StepScores[2]["score_captured"] != false {
+		t.Fatalf("missing score is not explicit in API projection: %s", raw)
+	}
+	if _, exists := decoded.StepScores[3]["score_captured"]; exists {
+		t.Fatalf("legacy report absence was changed into explicit false: %s", raw)
+	}
+}

@@ -64,6 +64,19 @@ func TestAssessPulseImproveArchiveIgnoresByteAndLineCounts(t *testing.T) {
 	}
 }
 
+func TestAssessPulseImproveArchiveCapsActiveMaterialHistoryAtTwelve(t *testing.T) {
+	twelve := strings.Repeat(`<article class="entry resolved" data-date="2026-07-21"></article>`, 12)
+	assessment := assessPulseImproveArchiveAt(twelve, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	if assessment.Due || assessment.ExcessActiveItems != 0 {
+		t.Fatalf("twelve material items should remain active: %+v", assessment)
+	}
+
+	assessment = assessPulseImproveArchiveAt(twelve+`<article class="entry resolved" data-date="2026-07-21"></article>`, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	if !assessment.Due || assessment.ExcessActiveItems != 1 {
+		t.Fatalf("thirteenth safe material item should trigger compaction: %+v", assessment)
+	}
+}
+
 func TestAssessPulseImproveArchiveIgnoresAgentHandoffAndNeedsCandidates(t *testing.T) {
 	content := `<html><body><section id = 'pulse-agent-handoff'>` +
 		strings.Repeat(`<article class="entry decision" data-date="2020-01-01"></article>`, 25) +
@@ -102,8 +115,8 @@ func TestPostRunMonitorArchiveStepPreservesCurrentTruthAndStagesWrites(t *testin
 	}
 	contract := string(raw)
 	for _, want := range []string{
-		"canonical current explanatory view",
-		"latest 15 calendar days",
+		"lightweight published executive journal",
+		"newest 12 material dated",
 		"strictly older than 15 calendar days",
 		"undated history is never",
 		"builder/improve-archive/YYYY-MM.html",

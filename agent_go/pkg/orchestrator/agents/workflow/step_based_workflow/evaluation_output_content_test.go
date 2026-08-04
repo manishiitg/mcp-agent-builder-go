@@ -168,11 +168,11 @@ func TestExtractEvalVerdictFromOutputContentUsesRealProductionShape(t *testing.T
 	}
 	extractEvalVerdictFromOutputContent(score)
 
-	if score.Score != 0 {
-		t.Fatalf("Score = %d, want 0", score.Score)
+	if score.Score != 0 || !score.ScoreCaptured {
+		t.Fatalf("Score = %v captured=%v, want captured zero", score.Score, score.ScoreCaptured)
 	}
 	if score.MaxScore != 10 {
-		t.Fatalf("MaxScore = %d, want 10", score.MaxScore)
+		t.Fatalf("MaxScore = %v, want 10", score.MaxScore)
 	}
 	if score.Reasoning == "" || score.Reasoning == "No score captured — this eval step produced no output_content, or output_content had no score field." {
 		t.Fatalf("Reasoning not extracted from pass_fail_reason, got %q", score.Reasoning)
@@ -195,7 +195,7 @@ func TestExtractEvalVerdictFromOutputContentPrefersExplicitReasoningAndEvidence(
 	extractEvalVerdictFromOutputContent(score)
 
 	if score.Score != 8 || score.MaxScore != 10 {
-		t.Fatalf("Score/MaxScore = %d/%d, want 8/10", score.Score, score.MaxScore)
+		t.Fatalf("Score/MaxScore = %v/%v, want 8/10", score.Score, score.MaxScore)
 	}
 	if score.Reasoning != "8 of 10 checks passed." {
 		t.Fatalf("Reasoning = %q, want the explicit reasoning field", score.Reasoning)
@@ -216,8 +216,8 @@ func TestExtractEvalVerdictFromOutputContentLeavesStubWhenNoScoreField(t *testin
 	}
 	extractEvalVerdictFromOutputContent(score)
 
-	if score.Score != 0 || score.MaxScore != 0 {
-		t.Fatalf("Score/MaxScore = %d/%d, want untouched 0/0 (no score field present)", score.Score, score.MaxScore)
+	if score.Score != 0 || score.MaxScore != 0 || score.ScoreCaptured {
+		t.Fatalf("Score/MaxScore = %v/%v captured=%v, want uncaptured 0/0", score.Score, score.MaxScore, score.ScoreCaptured)
 	}
 	if score.Reasoning != "No score captured — this eval step produced no output_content, or output_content had no score field." {
 		t.Fatalf("Reasoning stub was overwritten despite no score field being present: %q", score.Reasoning)
@@ -234,7 +234,7 @@ func TestExtractEvalVerdictFromOutputContentIgnoresNonJSONOutput(t *testing.T) {
 	score := &EvaluationStepScore{OutputContent: buildStepOutputContent("output.txt", "plain result, not json")}
 	extractEvalVerdictFromOutputContent(score) // must not panic
 	if score.Score != 0 || score.Evidence != "" {
-		t.Fatalf("non-JSON output should leave score fields untouched, got Score=%d Evidence=%q", score.Score, score.Evidence)
+		t.Fatalf("non-JSON output should leave score fields untouched, got Score=%v Evidence=%q", score.Score, score.Evidence)
 	}
 }
 
@@ -248,11 +248,12 @@ func TestExtractEvalVerdictFromOutputContentIgnoresNonJSONOutput(t *testing.T) {
 // remove. A real score of 0 must always serialize.
 func TestEvaluationStepScoreSerializesGenuineZeroScore(t *testing.T) {
 	score := &EvaluationStepScore{
-		StepID:    "eval-workflow-success",
-		Score:     0,
-		MaxScore:  10,
-		Reasoning: "Score 0.0/10. Confirmed failing on real evidence.",
-		Evidence:  "see output_content.json",
+		StepID:        "eval-workflow-success",
+		Score:         0,
+		MaxScore:      10,
+		ScoreCaptured: true,
+		Reasoning:     "Score 0.0/10. Confirmed failing on real evidence.",
+		Evidence:      "see output_content.json",
 	}
 	raw, err := json.Marshal(score)
 	if err != nil {
@@ -268,6 +269,17 @@ func TestEvaluationStepScoreSerializesGenuineZeroScore(t *testing.T) {
 	}
 	if got != float64(0) {
 		t.Fatalf("expected score 0, got %v", got)
+	}
+	if decoded["score_captured"] != true {
+		t.Fatalf("expected score_captured=true for genuine zero, got %s", raw)
+	}
+}
+
+func TestExtractEvalVerdictPreservesFractionalScore(t *testing.T) {
+	score := &EvaluationStepScore{OutputContent: buildStepOutputContent("output_content.json", `{"score":7.5,"max_score":10}`)}
+	extractEvalVerdictFromOutputContent(score)
+	if score.Score != 7.5 || score.MaxScore != 10 || !score.ScoreCaptured {
+		t.Fatalf("fractional score = %v/%v captured=%v, want 7.5/10 captured", score.Score, score.MaxScore, score.ScoreCaptured)
 	}
 }
 

@@ -683,9 +683,7 @@ func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, con
 		return fmt.Errorf("read finding backlog: %w", err)
 	}
 	expected := map[string]int{"open": 0, "in_progress": 0, "in_review": 0}
-	issueStatuses := make(map[string]string, len(findings))
 	for _, finding := range findings {
-		issueStatuses[finding.Issue.ID] = finding.Issue.Status
 		switch finding.Issue.Status {
 		case "in_progress":
 			expected["in_progress"]++
@@ -715,33 +713,6 @@ func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, con
 		}
 		if got != want {
 			return fmt.Errorf("%s count is %d; SQLite has %d", status, got, want)
-		}
-	}
-	for _, queue := range pulseElementsWithClass(workSummary, "workqueue") {
-		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
-		items := pulseElementsWithClass(queue, "workitem")
-		expectedItems := expected["in_review"]
-		if queueName == "attention" {
-			expectedItems = expected["open"] + expected["in_progress"]
-		}
-		if expectedItems > 0 && len(items) == 0 {
-			return fmt.Errorf("%s queue is empty; SQLite has %d matching issues", queueName, expectedItems)
-		}
-		if expectedItems == 0 && len(items) > 0 {
-			return fmt.Errorf("%s queue has items; SQLite has none", queueName)
-		}
-		for _, item := range items {
-			issueID := strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id"))
-			status, exists := issueStatuses[issueID]
-			if !exists {
-				return fmt.Errorf("%s queue references unknown issue %q", queueName, issueID)
-			}
-			if queueName == "verification" && status != "in_review" {
-				return fmt.Errorf("verification queue issue %q has SQLite status %q", issueID, status)
-			}
-			if queueName == "attention" && status != "backlog" && status != "blocked" && status != "needs_input" && status != "in_progress" {
-				return fmt.Errorf("attention queue issue %q has SQLite status %q", issueID, status)
-			}
 		}
 	}
 	return nil
@@ -815,6 +786,9 @@ func validatePulseImproveHTMLContract(content string) error {
 	if err := validatePulseHTMLTagBalance(content); err != nil {
 		return err
 	}
+	if count := len(pulseLightweightSchemaRootPattern.FindAllString(content, -1)); count != 1 {
+		return fmt.Errorf("expected exactly one data-pulse-schema=\"4\" html root (found %d)", count)
+	}
 	document, err := htmlpkg.Parse(strings.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("parse HTML: %w", err)
@@ -851,18 +825,18 @@ func validatePulseImproveHTMLContract(content string) error {
 		seenCoverage[moduleID] = true
 	}
 
-	brief, err := requireSinglePulseElement(document, "brief", "Today's outcome brief")
+	brief, err := requireSinglePulseElement(document, "brief", "Latest Pulse brief")
 	if err != nil {
 		return err
 	}
 	briefGrids := pulseElementsWithClass(brief, "briefgrid")
 	if len(briefGrids) != 1 {
-		return fmt.Errorf("Today's outcome must contain exactly one .briefgrid (found %d)", len(briefGrids))
+		return fmt.Errorf("Latest Pulse must contain exactly one .briefgrid (found %d)", len(briefGrids))
 	}
 	briefItems := pulseDirectChildrenWithClass(briefGrids[0], "briefitem")
-	expectedBriefLabels := []string{"Outcome", "Goal progress", "Fixed today", "Open now", "Next Pulse"}
+	expectedBriefLabels := []string{"Outcome", "Goal movement", "Next"}
 	if len(briefItems) != len(expectedBriefLabels) {
-		return fmt.Errorf("Today's outcome must contain exactly %d brief cells (found %d)", len(expectedBriefLabels), len(briefItems))
+		return fmt.Errorf("Latest Pulse must contain exactly %d brief cells (found %d)", len(expectedBriefLabels), len(briefItems))
 	}
 	expectedBrief := make(map[string]bool, len(expectedBriefLabels))
 	for _, label := range expectedBriefLabels {
@@ -872,14 +846,14 @@ func validatePulseImproveHTMLContract(content string) error {
 	for _, item := range briefItems {
 		headings := pulseElementsWithClass(item, "k")
 		if len(headings) != 1 {
-			return fmt.Errorf("each Today's outcome cell must contain exactly one .k heading")
+			return fmt.Errorf("each Latest Pulse cell must contain exactly one .k heading")
 		}
 		label := normalizePulseHTMLText(pulseHTMLText(headings[0]))
 		if !expectedBrief[label] {
-			return fmt.Errorf("Today's outcome contains unknown cell heading %q", pulseHTMLText(headings[0]))
+			return fmt.Errorf("Latest Pulse contains unknown cell heading %q", pulseHTMLText(headings[0]))
 		}
 		if seenBrief[label] {
-			return fmt.Errorf("Today's outcome contains duplicate cell heading %q", pulseHTMLText(headings[0]))
+			return fmt.Errorf("Latest Pulse contains duplicate cell heading %q", pulseHTMLText(headings[0]))
 		}
 		seenBrief[label] = true
 	}
@@ -916,59 +890,24 @@ func validatePulseImproveHTMLContract(content string) error {
 			return fmt.Errorf("Current work data-status %q visible count must match data-count", status)
 		}
 	}
-	workQueues := pulseElementsWithClass(workSummary, "workqueue")
-	expectedQueues := map[string]bool{"attention": true, "verification": true}
-	if len(workQueues) != len(expectedQueues) {
-		return fmt.Errorf("Current work must contain exactly %d queues (found %d)", len(expectedQueues), len(workQueues))
-	}
-	seenQueues := make(map[string]bool, len(workQueues))
-	for _, queue := range workQueues {
-		queueName := strings.TrimSpace(pulseHTMLAttribute(queue, "data-queue"))
-		if !expectedQueues[queueName] {
-			return fmt.Errorf("Current work contains unknown data-queue %q", queueName)
-		}
-		if seenQueues[queueName] {
-			return fmt.Errorf("Current work contains duplicate data-queue %q", queueName)
-		}
-		seenQueues[queueName] = true
-		items := pulseElementsWithClass(queue, "workitem")
-		if len(items) > 3 {
-			return fmt.Errorf("Current work queue %q must contain at most 3 items", queueName)
-		}
-		for _, item := range items {
-			if strings.TrimSpace(pulseHTMLAttribute(item, "data-issue-id")) == "" {
-				return fmt.Errorf("Current work queue %q item is missing data-issue-id", queueName)
-			}
-			titles := pulseDirectChildrenByTag(item, "b")
-			if len(titles) != 1 || strings.TrimSpace(pulseHTMLText(titles[0])) == "" {
-				return fmt.Errorf("Current work queue %q item must have one short title", queueName)
-			}
+	for _, retiredClass := range []string{"workqueue", "workitem", "technical", "filters", "modfields", "agentlog"} {
+		if len(pulseElementsWithClass(document, retiredClass)) > 0 {
+			return fmt.Errorf("Lightweight Pulse report must not contain .%s blocks", retiredClass)
 		}
 	}
-	if len(pulseElementsWithClass(document, "modfields")) > 0 || len(pulseElementsWithClass(document, "agentlog")) > 0 {
-		return fmt.Errorf("Current Pulse report must not contain reviewer field dumps or a visible Agent log")
+	activityEntries := pulseElementsWithClass(document, "entry")
+	activityCount := len(activityEntries) + len(pulseElementsWithClass(document, "run"))
+	if activityCount > pulseImproveArchiveMaxActiveItems {
+		return fmt.Errorf("Lightweight Pulse report must keep at most %d material Activity items (found %d)", pulseImproveArchiveMaxActiveItems, activityCount)
 	}
-	for _, entry := range pulseElementsWithClass(document, "entry") {
+	for _, entry := range activityEntries {
 		if pulseHTMLHasClass(entry, "open") {
 			return fmt.Errorf("Current Pulse report must not keep standing open-finding cards in Activity")
 		}
 	}
 
-	technical, err := requireSinglePulseElement(document, "technical", "collapsed technical details")
-	if err != nil {
-		return err
-	}
-	if technical.Data != "details" {
-		return fmt.Errorf(".technical must be a details element")
-	}
-	if technical.Parent == nil || technical.Parent != brief.Parent || workSummary.Parent != brief.Parent {
-		return fmt.Errorf("Today's outcome, Current work, and technical details must be sibling sections")
-	}
-	if len(pulseDirectChildrenByTag(technical, "summary")) != 1 {
-		return fmt.Errorf("technical details must contain exactly one direct summary")
-	}
-	if len(pulseDirectChildrenWithClass(technical, "techbody")) != 1 {
-		return fmt.Errorf("technical details must contain exactly one direct .techbody")
+	if brief.Parent == nil || workSummary.Parent != brief.Parent {
+		return fmt.Errorf("Latest Pulse and Current work must be sibling sections")
 	}
 
 	if _, err := requireSinglePulseElementByID(document, "pulse-agent-handoff"); err != nil {

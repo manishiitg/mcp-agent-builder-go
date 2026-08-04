@@ -73,21 +73,46 @@ type Entry struct {
 
 // Aggregate is the rolled-up token + cost total for a date/model bucket.
 type Aggregate struct {
-	PromptTokens          int     `json:"prompt_tokens"`
-	CompletionTokens      int     `json:"completion_tokens"`
-	ReasoningTokens       int     `json:"reasoning_tokens"`
-	CacheReadTokens       int     `json:"cache_read_tokens"`
-	CacheWriteTokens      int     `json:"cache_write_tokens"`
-	TotalCostUSD          float64 `json:"total_cost_usd"`
-	CallCount             int     `json:"call_count"`
-	AccountingEventCount  int     `json:"accounting_event_count"`
-	UnpricedCallCount     int     `json:"unpriced_call_count"`
-	ProviderActualCostUSD float64 `json:"provider_actual_cost_usd"`
-	TokenEstimateCostUSD  float64 `json:"token_estimate_cost_usd"`
-	SubscriptionShadowUSD float64 `json:"subscription_shadow_cost_usd"`
+	Provider                 string  `json:"provider,omitempty"`
+	PricingModelID           string  `json:"pricing_model_id,omitempty"`
+	PricingVersion           string  `json:"pricing_version,omitempty"`
+	PromptTokens             int     `json:"prompt_tokens"`
+	CompletionTokens         int     `json:"completion_tokens"`
+	ReasoningTokens          int     `json:"reasoning_tokens"`
+	CacheReadTokens          int     `json:"cache_read_tokens"`
+	CacheWriteTokens         int     `json:"cache_write_tokens"`
+	TotalCostUSD             float64 `json:"total_cost_usd"`
+	CallCount                int     `json:"call_count"`
+	AccountingEventCount     int     `json:"accounting_event_count"`
+	UnpricedCallCount        int     `json:"unpriced_call_count"`
+	ProviderActualCostUSD    float64 `json:"provider_actual_cost_usd"`
+	TokenEstimateCostUSD     float64 `json:"token_estimate_cost_usd"`
+	SubscriptionShadowUSD    float64 `json:"subscription_shadow_cost_usd"`
+	InputCostUSD             float64 `json:"input_cost_usd,omitempty"`
+	OutputCostUSD            float64 `json:"output_cost_usd,omitempty"`
+	ReasoningCostUSD         float64 `json:"reasoning_cost_usd,omitempty"`
+	CacheReadCostUSD         float64 `json:"cache_read_cost_usd,omitempty"`
+	CacheWriteCostUSD        float64 `json:"cache_write_cost_usd,omitempty"`
+	UnpricedPromptTokens     int     `json:"unpriced_prompt_tokens,omitempty"`
+	UnpricedCompletionTokens int     `json:"unpriced_completion_tokens,omitempty"`
+	UnpricedReasoningTokens  int     `json:"unpriced_reasoning_tokens,omitempty"`
+	UnpricedCacheReadTokens  int     `json:"unpriced_cache_read_tokens,omitempty"`
+	UnpricedCacheWriteTokens int     `json:"unpriced_cache_write_tokens,omitempty"`
 }
 
 func (a *Aggregate) add(e Entry) {
+	provider := e.EffectiveProvider
+	if provider == "" {
+		provider = e.Provider
+	}
+	if a.Provider == "" {
+		a.Provider = provider
+	} else if provider != "" && a.Provider != provider {
+		// Mixed-provider totals cannot safely inherit one provider identity. A
+		// per-model aggregate normally stays single-provider; the overall total
+		// is intentionally left blank when providers differ.
+		a.Provider = ""
+	}
 	a.PromptTokens += e.PromptTokens
 	a.CompletionTokens += e.CompletionTokens
 	a.ReasoningTokens += e.ReasoningTokens
@@ -98,6 +123,11 @@ func (a *Aggregate) add(e Entry) {
 	a.AccountingEventCount++
 	if e.LLMCallCount > 0 && e.BillingBasis == "unpriced" {
 		a.UnpricedCallCount += e.LLMCallCount
+		a.UnpricedPromptTokens += e.PromptTokens
+		a.UnpricedCompletionTokens += e.CompletionTokens
+		a.UnpricedReasoningTokens += e.ReasoningTokens
+		a.UnpricedCacheReadTokens += e.CacheReadTokens
+		a.UnpricedCacheWriteTokens += e.CacheWriteTokens
 	}
 	switch e.BillingBasis {
 	case "provider_actual":

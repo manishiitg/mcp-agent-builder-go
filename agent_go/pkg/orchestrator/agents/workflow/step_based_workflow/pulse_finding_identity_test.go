@@ -73,3 +73,40 @@ func TestFindingIdentityMigrationMergesTwinsAndPreservesEvents(t *testing.T) {
 		t.Fatalf("after migration concerns=%d seen=%d events=%d, want 1/4/2", concerns, seen, events)
 	}
 }
+
+func TestFindingIdentityMigrationMovesEventsLeftByPartialMigration(t *testing.T) {
+	ctx := context.Background()
+	workspace := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, workspace, "pulse-1", "", "bug_review", ConcernPhaseReview,
+		structuredFindingSummary("HARNESS-PARTIAL-1", "canonical wording")); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openRunConcernsDB(ctx, workspace, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	var canonical string
+	if err := db.QueryRowContext(ctx, `SELECT fingerprint FROM pulse_finding_details WHERE finding_id='HARNESS-PARTIAL-1'`).Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	const orphan = "old-fingerprint-left-after-partial-migration"
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint,finding_id,pulse_run_id,event_type,summary,recorded_at)
+		VALUES (?, 'HARNESS-PARTIAL-1', 'pulse-0', 'external_action_required', 'old lifecycle event', '2026-08-01T00:00:00Z')`, orphan); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var orphanEvents, canonicalEvents int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events WHERE fingerprint=?`, orphan).Scan(&orphanEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events WHERE fingerprint=?`, canonical).Scan(&canonicalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if orphanEvents != 0 || canonicalEvents < 2 {
+		t.Fatalf("orphan events=%d canonical events=%d, want 0 and at least 2", orphanEvents, canonicalEvents)
+	}
+}

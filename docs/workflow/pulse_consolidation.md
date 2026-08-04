@@ -84,10 +84,10 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
 5. **One ordered finalizer.** dashboard → backup → publish → notify, each recording
    its own live/final status. The scheduler marks anything left running as failed.
 
-The dedicated Dashboard stage still owns `builder/improve.html`. That file remains
-the full generated Pulse dashboard, archive-linked time-series report, and
-publishable artifact. Moving reviewer evidence and lifecycle state into SQLite
-does not retire or replace it.
+The dedicated Dashboard stage still owns `builder/improve.html`. That file is
+the lightweight published executive journal and archive-linked material history,
+while the Pulse popup owns the complete operational tracker. Moving reviewer
+evidence and lifecycle state into SQLite does not retire the publishable artifact.
 
 Workflow contract v1.0.17 non-destructively imports recognized historical
 `pulse/reviews/**/*.md` into `pulse_review_log` and keeps the source files during

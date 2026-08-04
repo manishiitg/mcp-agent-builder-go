@@ -30,6 +30,23 @@ export const hasStepOutputContent = (step?: EvaluationStepScore | null): boolean
   return formatStepOutputContent(step?.output_content).trim().length > 0
 }
 
+export const hasCapturedEvaluationScore = (step?: EvaluationStepScore | null): boolean => {
+  if (!step || step.skipped || typeof step.score !== 'number') return false
+  if (typeof step.score_captured === 'boolean') return step.score_captured
+  // Compatibility for reports written before score_captured existed. The old
+  // missing-score stub is stronger evidence than the legacy default score=0.
+  return !(step.reasoning || '').startsWith('No score captured')
+}
+
+export const formatEvaluationScore = (step?: EvaluationStepScore | null): string => {
+  if (!hasCapturedEvaluationScore(step)) return ''
+  const score = Number(step!.score)
+  const maxScore = step?.max_score
+  return typeof maxScore === 'number' && maxScore > 0
+    ? `${score}/${maxScore}`
+    : String(score)
+}
+
 export const isFinalScoringPlaceholderText = (text?: string | null): boolean => {
   const normalized = (text || '').trim()
   return normalized === FINAL_SCORING_DISABLED_REASONING || normalized === OUTPUT_CONTENT_EVIDENCE

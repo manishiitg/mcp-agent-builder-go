@@ -97,6 +97,7 @@ const FOCUS_TITLES: Record<PulseFocus, string> = {
   needs_action: 'Pulse to fix',
   waiting_proof: 'Waiting on a run',
   decisions: 'Your decisions',
+  proposals: 'Proposed improvements',
   platform: 'Platform team',
   resolved: 'Resolved',
   workflow_reported: 'Workflow evidence',
@@ -107,6 +108,7 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   needs_action: 'Issues Pulse can diagnose, repair, or reopen',
   waiting_proof: 'Fixes that need evidence from a future workflow run',
   decisions: 'Items that cannot continue without your approval or direction',
+  proposals: 'Ideas Pulse recommends considering; these are not waiting for your answer',
   platform: 'Diagnosed work that must be fixed outside this workflow',
   resolved: 'Verified fixes and legitimate no-change closures',
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
@@ -273,6 +275,7 @@ export function PulseWorkspace({
       needs_action: 0,
       waiting_proof: 0,
       decisions: 0,
+      proposals: 0,
       platform: 0,
       resolved: 0,
       workflow_reported: 0,
@@ -316,9 +319,10 @@ export function PulseWorkspace({
             needs_action: 6,
             waiting_proof: 5,
             decisions: 4,
-            platform: 3,
-            workflow_reported: 2,
-            resolved: 1,
+            proposals: 3,
+            platform: 2,
+            workflow_reported: 1,
+            resolved: 0,
           }
           const priority = rank[pulseFindingPresentation(b).queue] - rank[pulseFindingPresentation(a).queue]
           return priority || (b.last_seen_at || '').localeCompare(a.last_seen_at || '')
@@ -447,6 +451,8 @@ export function PulseWorkspace({
               <span className="px-1.5">·</span>
               <span className="font-medium text-foreground">You:</span> {queueCounts.decisions} decision{queueCounts.decisions === 1 ? '' : 's'}
               <span className="px-1.5">·</span>
+              <span className="font-medium text-foreground">Ideas:</span> {queueCounts.proposals} proposal{queueCounts.proposals === 1 ? '' : 's'}
+              <span className="px-1.5">·</span>
               <span className="font-medium text-foreground">Next run:</span> {queueCounts.waiting_proof} verification{queueCounts.waiting_proof === 1 ? '' : 's'}
             </div>
           </div>
@@ -524,7 +530,7 @@ export function PulseWorkspace({
       {/* One lifecycle queue per card. These totals are mutually exclusive, so
           the operator can read the actual workload without double-counting a
           repair as open, fixing, and awaiting verification at the same time. */}
-      <section className="grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6">
+      <section className="grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-7">
         <Metric
           label="Pulse to fix"
           focus="needs_action"
@@ -551,6 +557,15 @@ export function PulseWorkspace({
           value={queueCounts.decisions}
           detail="approval or direction needed"
           tone="border-fuchsia-500/25 bg-fuchsia-500/5 text-fuchsia-700 dark:text-fuchsia-300"
+        />
+        <Metric
+          label="Proposed improvements"
+          focus="proposals"
+          activeFocus={focus}
+          onFocus={setFocus}
+          value={queueCounts.proposals}
+          detail="ideas, no answer required"
+          tone="border-blue-500/25 bg-blue-500/5 text-blue-700 dark:text-blue-300"
         />
         <Metric
           label="Platform team"

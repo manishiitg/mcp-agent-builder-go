@@ -4508,7 +4508,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if strings.HasPrefix(execID, "bg-") {
 					return fmt.Sprintf("Background task %q completed.\n\n%s", stepID, result), nil
 				}
-				return fmt.Sprintf("Step %q completed.\nexecution_id: %s\n\n%s\n\n**Next actions (do these now):**\n1. Review the result against the step's success criteria\n2. Read shared workflow guidance: 'cat learnings/_global/SKILL.md'. If this is a scripted step, also inspect 'cat learnings/%s/main.py'.\n3. Check learning metadata: 'cat learnings/%s/.learning_metadata.json'. If the Workshop user decides this step should stop writing SKILL.md, set lock_learnings=true intentionally with review_notes. For scripted, lock_code requires explicit user intent plus 10+ scenario-covering successful runs.\n4. Note the highest-priority optimization from Post-Execution Step Review.\n5. If output looks wrong, investigate with debug_step(%q) and fix the root cause before re-running.", stepID, execID, result, stepID, stepID, stepID), nil
+				return fmt.Sprintf("Step %q completed.\nexecution_id: %s\n\n%s", stepID, execID, result), nil
 			case WorkshopStepFailed:
 				if isGenericAgent || isPulseReviewer {
 					return fmt.Sprintf("%s failed.\nexecution_id: %s\nerror: %v", executionLabel, execID, execErr), nil
@@ -4516,7 +4516,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if strings.HasPrefix(execID, "bg-") {
 					return fmt.Sprintf("Background task %q failed: %v", stepID, execErr), nil
 				}
-				return fmt.Sprintf("Step %q failed.\nexecution_id: %s\nerror: %v\n\n**Next**: Investigate the failure. Call debug_step(%q) for detailed execution insights, then fix the root cause (description, validation, context deps) before re-running.", stepID, execID, execErr, stepID), nil
+				return fmt.Sprintf("Step %q failed.\nexecution_id: %s\nerror: %v", stepID, execID, execErr), nil
 			case WorkshopStepCancelled:
 				return fmt.Sprintf("%s was cancelled.\nexecution_id: %s", executionLabel, execID), nil
 			default:

@@ -94,7 +94,7 @@ func TestEnrichEvaluationReportWithStepOutputsExtractsRealVerdict(t *testing.T) 
 		t.Fatal("expected OutputContent to be populated from the real file")
 	}
 	if score.MaxScore != 10 {
-		t.Fatalf("MaxScore = %d, want 10 (real verdict must reach the report through the actual pipeline call, not just the leaf function)", score.MaxScore)
+		t.Fatalf("MaxScore = %v, want 10 (real verdict must reach the report through the actual pipeline call, not just the leaf function)", score.MaxScore)
 	}
 	if score.Reasoning == "No score captured — this eval step produced no output_content, or output_content had no score field." {
 		t.Fatal("Reasoning still shows the stub — extraction was not wired into enrichEvaluationReportWithStepOutputs")

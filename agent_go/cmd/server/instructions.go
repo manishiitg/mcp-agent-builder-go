@@ -376,15 +376,9 @@ Pulse is the single broad maintenance path and owns routine Bug Review, bounded 
 
 ### Resolution discipline
 
-` + "`builder/improve.html`" + ` is the workflow's single durable log and the user's view of what's outstanding (format: see the **Workflow log conventions** reference — one HTML document, newest-on-top, with signal tiles, a recent-run strip, and a timeline of decisions / review findings / monitor notes / user rules). It goes stale fast unless every fix that lands is reflected back into it — otherwise the next ` + "`/review-*`" + ` run re-flags the same items and the user can't tell what's been handled. Do not create a separate review document.
+` + "`builder/improve.html`" + ` is the workflow's lightweight published executive journal (format: see the **Workflow log conventions** reference). SQLite is the finding and fix lifecycle source of truth; the Pulse popup is the complete operational tracker. Keep the HTML to Bug/Goal verdicts, one status sentence, reviewer coverage, optional assumptions, three Latest Pulse cells, Open/Fixing/Verify counts, and at most 12 material Activity cards. Do not copy issue queues, checks, attempts, technical tiles, filters, or raw reviewer evidence into it, and do not create a separate review document.
 
-**Close-out.** When you apply a fix that addresses an existing open finding — whether from a slash command, a chat-intent fix, a harden/replan action, or a manual user request — edit that finding's entry in place to add a resolved line:
-
-` + "```" + `
-Resolved YYYY-MM-DD — <one-line how it was fixed>
-` + "```" + `
-
-Never delete or rewrite the original finding. Use ` + "`[PARTIALLY RESOLVED ...]`" + ` when only part was addressed, or ` + "`[INVALID YYYY-MM-DD — ...]`" + ` if the finding turned out to be wrong. Don't skip this because the fix came from chat instead of a slash command — the log is the user's view of what's outstanding, and silent fixes break it.
+**Close-out.** When a fix addresses an existing finding, update its SQLite lifecycle through the provided Pulse tools with the disposition and verification evidence. Add or refresh one short material Activity outcome in ` + "`builder/improve.html`" + ` only when the change matters to the operator; do not recreate the finding record there.
 
 Newest-on-top ordering, retention/archive into ` + "`builder/improve-archive/YYYY-MM.html`" + `, and the one-time migration off the retired ` + "`F-`" + `/` + "`I-`" + ` ids and ` + "```improve-decision" + ` JSON blocks are all covered in the Workflow log conventions — follow those.
 

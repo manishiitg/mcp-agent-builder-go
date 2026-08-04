@@ -271,6 +271,7 @@ func extractEvalVerdictFromOutputContent(score *EvaluationStepScore) {
 	scoreFound := false
 	if v, ok := evalNumberFromAny(obj["score"]); ok {
 		score.Score = v
+		score.ScoreCaptured = true
 		scoreFound = true
 	}
 	if v, ok := evalNumberFromAny(obj["max_score"]); ok {
@@ -295,17 +296,17 @@ func extractEvalVerdictFromOutputContent(score *EvaluationStepScore) {
 	}
 }
 
-// evalNumberFromAny narrows a decoded JSON value to an int score. JSON
-// numbers decode as float64, so this truncates — EvaluationStepScore.Score
-// is an int contract, and real eval steps write whole-number scores under
-// the "score" key itself (a separate fractional metric under a different
-// key, if a step has one, is left alone and simply not read here).
-func evalNumberFromAny(v interface{}) (int, bool) {
+// evalNumberFromAny preserves the JSON number exactly enough for report and
+// SQLite projection. Evaluation plans are allowed to use fractional scores;
+// converting a decoded float64 to int silently changed a valid 7.5 into 7.
+func evalNumberFromAny(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
-		return int(n), true
-	case int:
 		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
 	}
 	return 0, false
 }
