@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,10 +26,32 @@ import (
 // The default 30s would kill the process mid-download and never recover.
 const nativeVoiceCallTimeout = 6 * time.Minute
 
+// nativeVoiceIdleTimeout is far longer than the Python worker's 15 minutes.
+// Reloading costs 15-17s of CoreML model load (measured live: "worker started"
+// to "stream start"), which is paid in full the next time the mic is clicked —
+// so a 15-minute timeout meant a parent who dictates a few times an hour waits
+// 15s nearly every time. The tradeoff is one resident ~600MB process while the
+// app is open, which is the right trade for a desktop app whose whole point is
+// that talking to it is instant. warmNativeVoice below removes the first wait
+// of a session too.
+const nativeVoiceIdleTimeout = 3 * time.Hour
+
 var sharedNativeVoiceWorker = &voiceWorker{
 	name:        "voice-native",
 	launch:      nativeVoiceWorkerCmd,
 	callTimeout: nativeVoiceCallTimeout,
+	idleTimeout: nativeVoiceIdleTimeout,
+}
+
+// warmNativeVoice loads the model before anyone asks for it, so the first mic
+// click of a session doesn't pay for it. Safe to call when the helper is
+// missing: it simply reports that and returns.
+func warmNativeVoice(ctx context.Context) error {
+	if !nativeVoiceAvailable() {
+		return fmt.Errorf("native voice helper not available")
+	}
+	_, err := sharedNativeVoiceWorker.call(ctx, map[string]any{"cmd": "load"})
+	return err
 }
 
 // nativeVoiceHelperPath resolves the helper binary, or "" when unavailable.
