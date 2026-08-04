@@ -2,7 +2,7 @@
 
 ## Status
 
-Seven defects, all fixed 2026-08-04.
+Eight agent-contract defects, all fixed and re-verified 2026-08-04.
 
 | # | Where | Commit |
 |---|---|---|
@@ -12,10 +12,14 @@ Seven defects, all fixed 2026-08-04.
 | 4 | `pkg/workspace/advanced_tools.go` — tool description asserted the wrong cwd | `7eef64150` |
 | 5 | `pkg/workspace/execute_shell_command.go` — no output cap; unreadable spill files | `7eef64150` |
 | 6 | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault | `6f4737cc9` |
-| 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | see below |
+| 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | `b4402bcef` |
+| 8 | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | see #8 below |
 
-Not fixed, recorded below: the unbounded `stdoutBuf` in the workspace handler,
-and the empty `tool=` field on 35 of 90 CLI payload markers.
+Still open, recorded below: the unbounded `stdoutBuf` in the workspace handler,
+the empty `tool=` field on some CLI payload markers, and the global activity
+header hiding the currently selected workflow's running state. The last item is
+a user-facing runtime-visibility follow-up, not one of the eight agent-contract
+defects above.
 
 ## How these were found
 
@@ -45,7 +49,7 @@ was invisible before it existed.
 ## The shared shape
 
 `docs/bugs/README.md` already names the family: **one fact, two sources, and
-nothing checking they agree.** Four of these seven sharpen it into something more
+nothing checking they agree.** Four of these eight sharpen it into something more
 specific and more damaging:
 
 > **The runtime told the agent a cause the code had evidence against — and in two
@@ -332,19 +336,144 @@ call sites would not have.
 
 ---
 
+## Follow-up: the global header can hide the current running workflow
+
+**Status: open / observing; not claimed fixed.**
+
+On 2026-08-04 the RTS Latency main agent was visibly active and its terminal was
+streaming, but RTS Latency did not appear as a running pill in the global activity
+header. The header showed other work (`build-in-public`, Upwork, and an idle Org
+Pulse schedule) while the current workflow selector showed only the plain
+`rts-latency` name.
+
+This part is deterministic in the frontend: `GlobalActivityMonitor.tsx` removes
+the current session before building its pills:
+
+```ts
+const filtered = activeSessions.filter(
+  session => session.session_id !== currentSessionId,
+)
+```
+
+That avoids rendering the same workflow twice, but the current workflow selector
+does not carry the monitor's spinner/clock/needs-input status. The result is that
+the one workflow the user is looking at can be the one whose live state is least
+visible. `@active` and the header can therefore answer slightly different
+questions.
+
+There may also have been an earlier session-registration delay: the user reported
+RTS Latency absent before the live inspection, while it was later observable as
+active. That second cause is not proven, so it must not be folded into the
+deterministic current-session filter or marked repaired.
+
+The durable fix should be one of:
+
+1. keep excluding the current session from monitor pills, but render the same
+   status icon and tooltip on the current workflow selector; or
+2. include the current session in the monitor and visually deduplicate the plain
+   selector.
+
+Until one is implemented and exercised with a real current workflow plus at
+least two other active sessions, keep this item open.
+
+---
+
+## 8. Why the Pulse tools started failing the night the surface shrank
+
+**Not a defect of its own — the case that explains most of the counts above, and
+the reason #1 and #3 mattered.**
+
+The Pulse agent surface was rewritten five times on 2026-08-03 — 13:15, 14:23,
+18:56, **20:15**, 23:26 — with `0d56c1b18` at 20:15 consolidating it **from eight
+tools to four**. Among the names it removed:
+
+```text
+get_pulse_module_state          get_pulse_finding_backlog
+start_pulse_fix_attempt         mark_pulse_module_result
+mark_pulse_final_command_result
+```
+
+The consolidation is correct and should stay. Its own commit message explains
+why it happened: the surface *"was larger than the number of concepts in it and
+gave the agent no rule to derive from, so it guessed across the gaps"* — naming
+`close_pulse_fix_attempt`, `complete_pulse_fix_attempt`, `consume_human_input`,
+`resolve_human_input` and `update_human_input` as invented, none of them real.
+
+**The guessing did not stop. It moved to new names.** On 2026-08-04 one Pulse
+Gate session (`schedule-cron--51af4f19_…`) called six tools in a row:
+
+```text
+mark_final_command        mark_pulse_command (x2)
+pulse_command_state       record_pulse_command
+set_pulse_command_state   update_final_command_state
+```
+
+**None of the six exist anywhere in the codebase.** Every one is a fuzzy
+reconstruction of the removed `mark_pulse_final_command_result`. The same session
+produced 6 of the 8 `record_pulse_worklist` schema failures — `decision`,
+`selected`, `evidence` as a string instead of an array.
+
+**Why it could not recover.** Three things, each of which is a finding above:
+
+1. **A removed tool and a withheld tool were indistinguishable.** The allow-list
+   check runs *before* name resolution, so a name that exists nowhere returned
+   `not available in the current workshop mode` (#1) — which reads as a
+   permissions problem and invites trying a variant, which is exactly what
+   happened six times. **Fixed here**: `toolNameExists` probes every registry
+   partition — session custom, session virtual, global custom, global virtual,
+   and MCP routing — and an unknown name now returns
+
+   ```text
+   tool_not_found: no tool named "mark_pulse_final_command_result" is registered
+   for this session, under any name partition. It does not exist — it was never
+   registered, or it was removed or renamed. Guessing a variant of this name will
+   NOT work; every variant fails the same way. Use a name from the list below, or
+   do the task without it. Allowed here: ...
+   ```
+
+   A registered-but-withheld tool keeps the `tool_not_allowed:` wording, so the
+   two cases are no longer one message.
+2. **It could not look up the real surface.** `get_api_spec` was withheld from
+   every stage surface (#3).
+3. **The declared schema was never the problem.** `record_pulse_worklist`
+   declares `required: [module, due, reason]` with a full description. The agent
+   simply never got to see it.
+
+**What was checked and cleared.** The guidance templates and skills contain
+**zero** references to any of the five removed tool names — the docs were updated
+correctly with the consolidation. The stale names come from the model's own
+context, which points at resumed Pulse threads carrying earlier turns where those
+tools worked. That last step is consistent with the scheduled-session resume
+behaviour but is **not proven**.
+
+**The general rule.** Shrinking a tool surface is a change agents cannot observe.
+Removing a tool is only half the work; the other half is making the removal
+legible at the moment an agent reaches for the old name. Until then, a
+consolidation motivated by guessing produces a fresh generation of guesses.
+
+**What remains after the three fixes.** Discovery is closed: `get_api_spec` is
+granted, an unknown name says so, and a denial lists the real surface. What is
+*not* closed is repetition — `record_pulse_worklist` was rejected three times in
+one run with three different wrong shapes, which is
+[steps_never_learn_from_their_own_validation_failures.md](steps_never_learn_from_their_own_validation_failures.md)
+in a new place. And `record_pulse_result` at 18 failures is the largest single
+count in the scan and has not been analysed at all.
+
+---
+
 ## Open items
 
-**The workspace handler's `stdoutBuf` is still unbounded.** A runaway command can
+**OPEN — the workspace handler's `stdoutBuf` is still unbounded.** A runaway command can
 balloon server memory before anything downstream sees it. A generous guard would
 close it, but silent truncation there would corrupt a scripted step, so it needs
 its own decision. Availability concern, not an agent-facing one.
 
-**35 of 90 `[TOOL_ERROR] CLI tool payload failure` markers carry an empty
+**OPEN — 35 of the sampled 90 `[TOOL_ERROR] CLI tool payload failure` markers carry an empty
 `tool=`.** The tool name is only recoverable by regexing the inner JSON envelope.
 The marker made these findable but not attributable, which is what made the counts
 at the top of this document laborious to produce.
 
-**Still unfixed from the scan, with counts:** `record_pulse_worklist` schema
+**OPEN / agent-contract follow-ups from the scan:** `record_pulse_worklist` schema
 mismatches (8, plus 2 in `record_pulse_impact`) — `decisions[0] contains unknown
 field "decision"`, then `"selected"`, then `evidence: must be an array of
 strings, got a string`, all within single runs; this is
@@ -368,6 +497,16 @@ Correctly rejected and not defects: `query_workflow_db` SQL syntax (19),
 | 4 | 4, incl. both newline cases and the two silence cases |
 | 5 | 7, incl. the four real rejected sizes asserted under the cap; 2 for the spill denial |
 | 6 | rewritten assertion, fails if the disproved cause returns |
+| 7 | 3 in `llm_agent_tool_registration_test.go`: replacement, surrounding-tool preservation, and post-finalize rejection; verified failing without the fix ("definition carries 2 direct tools [delegate delegate]") |
+| 8 | 2 — an unknown name must read as gone, a withheld one must still read as denied |
+
+Re-run on 2026-08-04:
+
+```text
+mcpagent: go test ./agent/codeexec/... -count=1                         PASS
+builder:  go test ./pkg/agentwrapper ./pkg/workspace ./cmd/server \
+          -run 'ReRegister|WorkshopStageTool|PulseFixerStageTool|Shell|PulseStateViews' -count=1  PASS
+```
 
 ## Related
 
