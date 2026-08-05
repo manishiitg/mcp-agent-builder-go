@@ -121,9 +121,11 @@ decision:
   the current plan needs an inside-the-strategy audit; independently mark
   `goal_advisor` due when its blank-sheet opportunity cadence, current
   goal/headroom evidence, decision, or experiment checkpoint requires it
-- user judgment is genuinely required: route it to a due module whose Pulse
-  Fixer can use `create_human_input_request`; Gate itself does not create the
-  question
+- user judgment is genuinely required: route it to a due module whose Fixer can
+  use `create_human_input_request`; Gate itself does not create the question.
+  Strategy Auditor and Goal Advisor must classify each recommendation as
+  `decision_required`, `evidence_wait`, `fixer_handoff`, or `none`;
+  `proposal_only` is valid only for `evidence_wait` with an exact `next_check`
 - already resolved, superseded, or informational: record a compact reviewed/no
   action disposition with the evidence
 
@@ -162,15 +164,16 @@ Gate does not launch reviewers or call mutation tools, plan modification tools, 
 
 Gate must record exactly one decision for each module. A partial worklist is invalid because omitted modules would otherwise disappear silently.
 
-## Three Independent Review Agents And One Consolidated Writer
+## Independent Strategy Review And One Sequenced Operational Writer
 
-The scheduler sends at most three read-only stages—Workflow Review, Strategy
-Auditor, and Goal Advisor—with a shared dated `review_run_id`, runs them in one
-bounded parallel batch, and preserves
-canonical module order in the collected results. Only after every selected
-review stage reaches a terminal stage outcome does it send one consolidated
-Fixer stage for the pass. Review stages never mutate or mark module state. The
-Fixer is the only writer and records every due module's result.
+The scheduler first runs at most two independent read-only stages—Strategy
+Auditor and Goal Advisor—with a shared dated `review_run_id` in one bounded
+parallel batch. After they finish, selected Engineering/LLM-Ops lanes run in one
+agent conversation: ordered review turns, one consolidation checkpoint persisted
+before mutation, and one bounded Fixer turn. A residual Fixer runs only when an
+independent module or failed operational sequence remains non-terminal.
+Independent review stages never mutate or mark module state; the operational
+sequence mutates only in its final Fixer turn.
 
 1. Read `get_pulse_state` views `module` and `backlog`, the durable
    Gate/worklist, current-run module results, and saved SQLite reviewer records. If every due module already has a
@@ -181,14 +184,14 @@ Fixer is the only writer and records every due module's result.
    partial fix. A `changed_unverified` result is resumed only when its named
    next valid evidence boundary has arrived; until
    then preserve it without reapplying the change or claiming it is fixed.
-2. Run the selected Engineering and LLM/Ops perspectives in one shared
-   read-only reviewer session,
-   while Strategy Auditor and Goal Advisor remain independent read-only agents
-   in the same bounded parallel batch. No independent reviewer waits for or consumes another reviewer's
-   conclusion. A reviewer that cannot trust its evidence returns an execution
+2. Run Strategy Auditor and Goal Advisor as independent read-only agents in one
+   bounded parallel batch. No independent reviewer waits for or consumes the
+   other's conclusion. After that batch finishes, run the selected Engineering
+   and LLM/Ops perspectives in one shared agent sequence whose review and
+   consolidation turns remain read-only and whose final Fixer turn is the only
+   operational mutation point. A reviewer that cannot trust its evidence returns an execution
    problem or `insufficient_evidence` with an exact next-check boundary; it does
-   not defer another reviewer. The scheduler waits for every selected review
-   stage before starting the consolidated Fixer.
+   not defer another reviewer.
    Before starting a reviewer, reconcile that module's complete active backlog
    against saved reviewer records and lifecycle events. Classify each candidate
    as existing unchanged, existing with new evidence, reopened, or genuinely
@@ -200,12 +203,14 @@ Fixer is the only writer and records every due module's result.
    implementation, and store integrity are conditionally loaded Engineering
    evidence packs, not separately scheduled reviewers. The backend places only
    due Engineering/Ops perspectives into one continuous context, then adds one
-   consolidation turn. A skipped lane does not run. Launch the shared reviewer
+   consolidation checkpoint and one Fixer turn. The review is persisted before
+   mutation. A skipped lane does not run. Launch the shared operational agent
    only when at least one operational lane is due. If every module is skipped,
    launch no reviewer and no Fixer; Dashboard and Finalizer still run. Never combine
    reviewers in one shell command or use `run_in_background`, background curl,
    `&`, or `wait`.
-   The shared Markdown report is indexed under every selected perspective.
+   The shared Markdown report is indexed under every selected perspective before
+   the Fixer turn starts.
    When both are selected, every trackable finding carries one backend-validated
    Engineering-or-Ops attribution; the lifecycle files it only under that owner.
    This keeps future Gate cadence independent.
@@ -249,7 +254,7 @@ Fixer is the only writer and records every due module's result.
    Do not give a reviewer `html-output`, the Pulse skeleton, CSS migration, or
    card-formatting work. Reviewers may read only the matching semantic regions
    of `builder/improve.html`; the later Dashboard stage owns presentation.
-4. Reviewer agents only inspect and advise. The parent ends its turn after each
+4. Independent Strategy/Goal reviewer agents only inspect and advise. The parent ends its turn after each
    asynchronous start and resumes from the automatic completion notification;
    it must not use sleep, `list_executions`, `query_step`, or a polling loop.
    The backend saves each complete human-readable Markdown result directly in
@@ -263,8 +268,8 @@ Fixer is the only writer and records every due module's result.
    different thesis, its relationship to the active strategy experiment, and
    why incremental repair is insufficient. Maintenance or instrumentation alone
    is never a valid Goal Advisor result.
-6. After all selected reviewers return, the consolidated Fixer builds one
-   structured Fix queue
+6. After the independent reviewers return, the shared operational agent builds
+   one structured Fix queue after its review checkpoint
    retaining every finding id, target key, severity, evidence pointer,
    recommended action, verification, and user-judgment flag. Do not repeat
    narrative reviewer prose in later reasoning.
@@ -285,10 +290,11 @@ Fixer is the only writer and records every due module's result.
    alternatives, impact, evidence, and safe default; mark only the affected
    modules blocked and do not mutate that target. Do not ask the user to resolve
    an operational conflict that the evidence and precedence rules decide.
-   Then start exactly one `call_generic_agent` with `role="fixer"`,
-   `module="pulse_fixer"`, the shared run identities, and the due module list.
-   Record its `execution_id`, end the current turn, and resume only from the
-   automatic completion notification.
+   The operational sequence already runs as one `call_generic_agent` with
+   `role="fixer"`, `module="workflow_review"`, the exact `review_lanes`, and the
+   shared run identities. Start a residual `module="pulse_fixer"` agent only if
+   an independent Strategy/Goal result or failed operational sequence leaves a
+   due module non-terminal.
    Reviewer Markdown stays immutable evidence. Reviewers never mutate workflow
    state, and the Fixer creates no HTML recovery ledger.
 7. The Fixer applies bounded repair bundles sequentially with normal direct

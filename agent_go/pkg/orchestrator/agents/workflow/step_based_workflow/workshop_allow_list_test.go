@@ -75,20 +75,19 @@ func TestStageToolAgentsCanDiscoverTheirOwnToolSurface(t *testing.T) {
 	}
 }
 
-// The Pulse Fixer's practices doc gives it a "Scheduler and lifecycle repair"
-// section. An instruction the grant does not cover is an instruction the agent
-// burns calls failing to follow.
-func TestPulseFixerCanActOnItsSchedulerRepairInstructions(t *testing.T) {
+// The Fixer uses the Workshop writer profile, including every schedule repair
+// tool. Product/lifecycle rules govern when it may use them; a second capability
+// subset would only recreate the drift this invariant prevents.
+func TestPulseFixerCanActOnAllWorkshopRepairInstructions(t *testing.T) {
 	tools := pulseFixerStageToolAgentAllowedToolNames()
-	for _, tool := range []string{"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule"} {
+	for _, tool := range []string{
+		"create_plan", "add_scripted_step", "delete_plan_steps",
+		"create_schedule", "delete_schedule", "trigger_schedule",
+		"install_skill", "set_workflow_llm_config", "run_full_evaluation",
+		"mutate_workflow_db", "record_pulse_result",
+	} {
 		if !containsToolName(tools, tool) {
-			t.Errorf("pulse-fixer-practices.md instructs scheduler repair but %q is withheld", tool)
-		}
-	}
-	// Reshaping the run surface stays a Workshop decision, not a bounded repair.
-	for _, tool := range []string{"create_schedule", "delete_schedule"} {
-		if containsToolName(tools, tool) {
-			t.Errorf("%q widens the Fixer beyond bounded repair", tool)
+			t.Errorf("Workshop grants %q but the Pulse Fixer withholds it", tool)
 		}
 	}
 }

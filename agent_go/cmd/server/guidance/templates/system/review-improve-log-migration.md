@@ -37,7 +37,7 @@ Missing `#pulse-bug-verdict` or `#pulse-goal-verdict` alone does **not** require
 
 1. Read the old file in full.
 2. Load `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}])` and write the skeleton fresh: header + verdict pills, one status headline, the three-cell Latest Pulse brief, the `<!-- LOG ENTRIES: newest first -->` anchor, hidden recovery marker, and archive section. Omit skeleton instructions and example comments from the saved HTML. Goal remains in `soul/soul.md`, rendered by Runloop's Goal tab.
-3. Carry only still-relevant material decisions, issue transitions, fixes, and runs forward as timeline cards (newest first, at most 6 active). Preserve standing issue cards and older history in the matching monthly archive rather than copying them into the active timeline.
+3. Carry still-relevant material decisions, issue transitions, fixes, and runs forward as a concise newest-first timeline. Preserve important active history; archive only genuinely safe resolved history in the matching monthly archive rather than deleting it to meet an item count.
 4. Delete any legacy `.md` (`execute_shell_command`) so nothing is duplicated.
 
 After this one rewrite the file is in skeleton format; from then on refresh the compact projection and prepend only material lifecycle events. The structured JSON schema and the dual `F-/I-` id system are retired.

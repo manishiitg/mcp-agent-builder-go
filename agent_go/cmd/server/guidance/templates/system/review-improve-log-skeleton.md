@@ -7,9 +7,11 @@ filtering.
 
 Copy the structure and CSS, fill real values, and omit these instructions and
 example comments from the saved file. Keep exactly one
-`<!-- LOG ENTRIES: newest first -->` anchor. Keep at most 6 material Activity
-cards active and archive older safe history by month. Do not impose a byte,
-character, or token budget.
+`<!-- LOG ENTRIES: newest first -->` anchor. Keep Activity concise through
+editorial judgment: retain important active history, avoid duplicate standing
+state, and archive only genuinely safe resolved history by month. Never omit or
+fail the dashboard just to hit an item count. Do not impose a byte, character,
+or token budget.
 
 ```html
 <!doctype html>

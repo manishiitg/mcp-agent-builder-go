@@ -2058,6 +2058,13 @@ the current decision record.
 
 **Status: adopted by operator decision, over the measurement below.**
 
+**2026-08-05 evolution:** the single-writer principle remains, but the
+Engineering/Ops reviewer and its bounded Fixer now share one ordered agent
+sequence. Strategy Auditor and Goal Advisor still run independently first. A
+separate `pulse_fixer` is residual recovery for unfinished independent modules
+or a failed operational sequence, not an unconditional second full pass. The
+history below explains the single-writer decision that this newer shape retains.
+
 This section has been reversed twice in one day, so read the whole thing before
 touching it.
 
@@ -2527,9 +2534,8 @@ the workflow's goal does not improve.
 
 ### Gate-selected perspectives: shared Engineering/Ops, independent product reviewers
 
-**Implementation status (2026-08-03): implemented and pushed to `main` in
-`561fa2ce`; independently gated lanes implemented 2026-08-05.** The
-Engineering and LLM/Ops reuse one shared reviewer agent, while
+**Implementation status (2026-08-05): implemented locally, verification in
+progress.** Engineering and LLM/Ops reuse one shared review-and-fix agent, while
 `strategy_auditor` and `goal_advisor` remain independent agents. Workflow Review
 is not one oversized prompt and is not six separately spawned agents. The
 backend now accepts `message_sequence` on background executor agents and on
@@ -2554,19 +2560,30 @@ Historical artifact-named modules (`bug_review`, `artifact_review`,
 Review. They remain readable evidence identities but are never scheduled.
 
 If Engineering or Ops is due, the scheduled sequence is opening evidence/backlog
-collection, one turn for each selected perspective in canonical order, then
-semantic deduplication and final review. A skipped perspective is absent rather
+collection, one turn for each selected perspective in canonical order,
+semantic deduplication and persisted final review, then one bounded Fixer turn
+in the same conversation and tool session. A skipped perspective is absent rather
 than receiving a no-op turn. In a two-perspective pass, every tracked concern
 names exactly one selected owner in a backend-validated marker. Strategy Auditor
 and Goal Advisor remain independent agents and never consume another reviewer's
 conclusion before forming their own.
 
-Only the final turn receives the trusted completion marker. A failed turn stops
+Only the final Fixer turn receives the trusted completion marker. A failed turn stops
 the sequence immediately, and `workflow_review` is rejected at launch if the
 scheduled caller omits the exact non-empty `review_lanes`; it cannot silently
 regress to the old all-lenses shape. Independent work still uses separate agents and runs in
 parallel. Ordered turns are only for lenses that intentionally share evidence
 and reasoning state.
+
+Advisor recommendations have an explicit route. `decision_required` creates a
+linked pending question (`strategy-proposal-*` for Strategy Auditor,
+`plan-proposal-*` for Goal Advisor). `evidence_wait` is the only valid
+`proposal_only` path and must name an exact `next_check`. `fixer_handoff` routes
+a truth-preserving technical prerequisite into the normal repair lifecycle.
+The lifecycle validator rejects an advisor `proposal_only` with no evidence
+boundary and rejects an advisor decision owned by the wrong source or ID
+namespace. This closes the Social Media failure where two real Auditor
+recommendations were recorded but neither became a decision nor a repair.
 
 ### Longitudinal impact: did repeated Pulse work advance the goal?
 
@@ -2943,7 +2960,7 @@ destination stores.
 
 ### Fixer contract
 
-The one consolidated Fixer:
+The operational sequence's Fixer turn, and the residual Fixer when needed:
 
 1. classifies meaning before changing files or rows;
 2. preserves exact source evidence in Pulse and never discards the only copy;

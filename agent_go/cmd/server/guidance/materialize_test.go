@@ -169,32 +169,28 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	}
 }
 
-// The standalone Fixer is the single writer for a pass, so it must see the whole
-// backlog before choosing an order. Scoping by module produced the failure this
-// change addresses: two focused runs on 2026-08-02 both landed on stores_health
-// while six operator answers and five recurring deliver-briefing concerns —
-// neither of which needs a reviewer first — went untouched for six days.
-func TestStandalonePulseFixerWorksTheWholeBacklog(t *testing.T) {
-	raw, err := os.ReadFile("templates/improve/pulse-fixer.md")
+func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
+	raw, err := os.ReadFile("templates/improve/engineering-review.md")
 	if err != nil {
-		t.Fatalf("read pulse-fixer template: %v", err)
+		t.Fatalf("read engineering-review template: %v", err)
 	}
 	prompt := string(raw)
 	for _, want := range []string{
-		"whole active backlog across every module",
-		"query_workflow_db",
-		"seen_count",
-		"answered",
-		"Full-backlog drain contract",
-		"starting manifest",
-		`get_pulse_state(view="backlog")`,
+		"one agent conversation",
+		`module="workflow_review"`,
+		`role="fixer"`,
+		`review_lanes=["workflow_review","llm_ops_review"]`,
+		"Engineering → LLM/Ops → consolidation → Fixer",
+		"Do not pass `pulse_run_id`, `review_run_id`, or `message_sequence`",
 	} {
 		if !strings.Contains(prompt, want) {
-			t.Errorf("pulse-fixer prompt is missing %q — the Fixer cannot size or prioritize the backlog without it", want)
+			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)
 		}
 	}
-	if strings.Contains(prompt, "for the\n   selected owning modules") {
-		t.Errorf("pulse-fixer still scopes the backlog to selected modules")
+	for _, forbidden := range []string{"STANDALONE PULSE FIXER", "begin_pulse_fixer_run(workspace_path"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Errorf("engineering-review retained obsolete standalone Fixer contract %q", forbidden)
+		}
 	}
 }
 

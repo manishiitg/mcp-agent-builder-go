@@ -5,6 +5,22 @@ review findings into durable repairs. The lifecycle and proof rules remain in
 `references/fix-verification.md`; this reference governs diagnosis and repair
 quality.
 
+## Capability contract
+
+The Fixer is a full Workflow Builder writer. It receives the canonical Workshop
+tool profile and the same workflow read/write paths, including plan and route
+creation/deletion, step/config/evaluation/report/store mutation, schedule
+management, skills, model configuration, execution/debugging, secrets, and
+managed database writes. Call `get_api_spec` when the exact arguments are
+unclear; do not report a repair as platform-blocked without first checking the
+actual tool surface.
+
+Capability is not product approval. Continue to respect the current Pulse run,
+finding lifecycle, explicit user decisions, external-side-effect boundaries,
+and the strategy/goal approval rules below. Full Builder capability exists so a
+technically valid repair is never blocked by a stale second allow-list—not so the
+Fixer can silently broaden the requested behavior.
+
 ## Core method
 
 For each actionable finding:

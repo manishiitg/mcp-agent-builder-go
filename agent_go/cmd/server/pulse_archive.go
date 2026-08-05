@@ -10,10 +10,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const (
-	pulseImproveArchiveRetentionDays  = 15
-	pulseImproveArchiveMaxActiveItems = 6
-)
+const pulseImproveArchiveRetentionDays = 15
 
 type pulseImproveArchiveAssessment struct {
 	Due               bool
@@ -23,7 +20,6 @@ type pulseImproveArchiveAssessment struct {
 	ArchivableEntries int
 	ExpiredEntries    int
 	RecentRunRows     int
-	ExcessActiveItems int
 }
 
 func assessPulseImproveArchive(content string) pulseImproveArchiveAssessment {
@@ -45,12 +41,10 @@ func assessPulseImproveArchiveAt(content string, now time.Time) pulseImproveArch
 	for {
 		switch tokenizer.Next() {
 		case html.ErrorToken:
-			activeItems := assessment.TimelineEntries + assessment.RecentRunRows
-			if activeItems > pulseImproveArchiveMaxActiveItems {
-				assessment.ExcessActiveItems = activeItems - pulseImproveArchiveMaxActiveItems
-			}
-			assessment.Due = assessment.ExpiredEntries > 0 ||
-				(assessment.ExcessActiveItems > 0 && assessment.ArchivableEntries+assessment.RecentRunRows > 0)
+			// Activity length is an editorial decision for the dashboard agent, not a
+			// correctness condition. Only old, safely archivable history makes a
+			// dedicated archive pass due.
+			assessment.Due = assessment.ExpiredEntries > 0
 			return assessment
 		case html.EndTagToken:
 			if handoffDepth > 0 {
@@ -167,8 +161,8 @@ func pulseImproveArchiveAssessmentForWorkspace(ctx context.Context, workspacePat
 }
 
 func (assessment pulseImproveArchiveAssessment) triggerSummary() string {
-	return fmt.Sprintf("%d eligible dated items older than %d days; %d items above the %d-item active journal cap",
-		assessment.ExpiredEntries, pulseImproveArchiveRetentionDays, assessment.ExcessActiveItems, pulseImproveArchiveMaxActiveItems)
+	return fmt.Sprintf("%d eligible dated items older than %d days",
+		assessment.ExpiredEntries, pulseImproveArchiveRetentionDays)
 }
 
 func postRunMonitorArchiveStep(assessment pulseImproveArchiveAssessment) postRunMonitorStep {

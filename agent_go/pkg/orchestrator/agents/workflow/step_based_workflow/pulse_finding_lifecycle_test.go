@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 func filedReviewConcern(t *testing.T, workspacePath, pulseRunID, module, text string) RunConcern {
@@ -560,6 +562,97 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 	if err := RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
 		[]PulseFindingDisposition{disposition}, ""); err != nil {
 		t.Fatalf("a genuine pending decision was rejected: %v", err)
+	}
+}
+
+func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-advisor-routing"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.StrategyAuditorID,
+		"current allocation over-concentrates on reciprocal engagement")
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+
+	proposal := PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint,
+		FindingID:   "STRATEGY-1",
+		Disposition: FindingDispositionProposalOnly,
+		Summary:     "Reserve more allocation for reach-bearing tactics.",
+	}
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+		[]PulseFindingDisposition{proposal}, ""); err == nil || !strings.Contains(err.Error(), "without next_check") {
+		t.Fatalf("actionable advisor proposal was silently parked without a decision: %v", err)
+	}
+
+	proposal.NextCheck = "after three completed outcome-bearing runs, compare follower growth with the current baseline"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+		[]PulseFindingDisposition{proposal}, ""); err != nil {
+		t.Fatalf("evidence-waiting advisor proposal was rejected: %v", err)
+	}
+}
+
+func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-goal-decision"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.GoalAdvisorID,
+		"a new distribution channel could materially increase reach")
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, source, status) VALUES
+		('plan-proposal-new-channel', 'strategy_auditor', 'pending'),
+		('strategy-proposal-new-channel', 'goal_advisor', 'pending'),
+		('plan-proposal-owned-channel', 'goal_advisor', 'pending')`); err != nil {
+		t.Fatalf("seed decisions: %v", err)
+	}
+
+	disposition := PulseFindingDisposition{
+		Fingerprint:  concern.Fingerprint,
+		FindingID:    "GOAL-1",
+		Disposition:  FindingDispositionAwaitingUser,
+		Summary:      "Ask whether to test a new distribution channel.",
+		HumanInputID: "plan-proposal-new-channel",
+	}
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `source "strategy_auditor"`) {
+		t.Fatalf("Goal Advisor accepted another module's decision: %v", err)
+	}
+
+	disposition.HumanInputID = "strategy-proposal-new-channel"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `must start with "plan-proposal-"`) {
+		t.Fatalf("Goal Advisor accepted the wrong decision id namespace: %v", err)
+	}
+
+	disposition.HumanInputID = "plan-proposal-owned-channel"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err != nil {
+		t.Fatalf("Goal Advisor's real pending decision was rejected: %v", err)
 	}
 }
 

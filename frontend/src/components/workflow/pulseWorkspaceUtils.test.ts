@@ -54,12 +54,28 @@ describe('Pulse workspace model', () => {
   })
 
   it('summarizes module lifecycle state and keeps the latest review', () => {
+    const blocked = finding('bug_review', 'acknowledged')
+    blocked.events = [{
+      event_type: 'blocked',
+      summary: 'No safe repair path.',
+      recorded_at: '2026-07-31T09:00:00Z',
+    }]
+    const awaitingUser = finding('bug_review', 'acknowledged')
+    awaitingUser.events = [{
+      event_type: 'awaiting_user',
+      summary: 'Decision requested.',
+      metadata: { human_input_id: 'decision-1' },
+      recorded_at: '2026-07-31T09:00:00Z',
+    }]
     const summaries = buildPulseWorkspaceModuleSummaries(
       definitions,
       [
         finding('bug_review', 'open', 3),
         finding('bug_review', 'fixing'),
         finding('bug_review', 'awaiting_verification'),
+        finding('bug_review', 'awaiting_run'),
+        blocked,
+        awaitingUser,
         finding('bug_review', 'resolved'),
         finding('bug_review', 'external_action_required', 5),
       ],
@@ -70,10 +86,13 @@ describe('Pulse workspace model', () => {
     )
 
     expect(summaries[0]).toMatchObject({
-      findings: 5,
+      findings: 8,
       active: 1,
       fixing: 1,
       awaitingVerification: 1,
+      awaitingRun: 1,
+      awaitingUser: 1,
+      blocked: 1,
       closed: 1,
       externalAction: 1,
       recurring: 1,

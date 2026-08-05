@@ -10,17 +10,16 @@ Preserve:
   labels;
 - every unresolved material decision transition still needed in the executive
   journal;
-- the newest 6 material dated Activity cards or run rows, even when some are
-  older than 15 calendar days;
+- every material Activity card or run row still needed to understand the
+  workflow's present state, even when some are older than 15 calendar days;
 - every item without a valid `data-date="YYYY-MM-DD"` (undated history is never
   archived automatically);
 - the current Agent handoff and all evidence still needed by a later Pulse.
 
 Move only resolved findings, superseded confirmed decisions, and routine run
-rows into `builder/improve-archive/YYYY-MM.html` when they are either outside
-the newest 6 material dated items or strictly older than 15 calendar days by
-their `data-date`. Age or position alone never makes an open or pending item safe
-to move. Each archive is a
+rows into `builder/improve-archive/YYYY-MM.html` when they are strictly older
+than 15 calendar days by their `data-date` and no longer help explain the
+present state. Age alone never makes an open or pending item safe to move. Each archive is a
 complete renderable HTML document, never a fragment. Merge an existing month
 without duplicates and keep entries newest first. Add or update one compact
 Archive Index link (`href="improve-archive/YYYY-MM.html"`) in the active page

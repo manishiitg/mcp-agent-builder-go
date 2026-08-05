@@ -113,6 +113,27 @@ func TestParseBackgroundMessageSequenceRunsOnlySelectedWorkflowReviewLanes(t *te
 	}
 }
 
+func TestParseBackgroundMessageSequenceContinuesOperationalReviewIntoFixer(t *testing.T) {
+	items, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"role":         "fixer",
+		"module":       "workflow_review",
+		"review_lanes": []interface{}{"workflow_review"},
+	})
+	if err != nil {
+		t.Fatalf("parse combined review/fixer sequence: %v", err)
+	}
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if want := []string{"engineering", "consolidate", "fix"}; !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("combined sequence IDs = %#v, want %#v", gotIDs, want)
+	}
+	if !strings.Contains(items[len(items)-1].Message, "same conversation") || !strings.Contains(items[len(items)-1].Message, "record_pulse_result") {
+		t.Fatalf("combined Fixer turn lacks continuation/lifecycle contract: %s", items[len(items)-1].Message)
+	}
+}
+
 func TestParseBackgroundMessageSequenceRejectsUnknownWorkflowReviewLane(t *testing.T) {
 	_, err := parseBackgroundMessageSequence(map[string]interface{}{
 		"role":         "reviewer",
@@ -193,6 +214,24 @@ func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T)
 	}
 	if template["Instruction"] != "stale" {
 		t.Fatalf("caller template was mutated: %#v", template)
+	}
+}
+
+func TestExecuteBackgroundMessageSequenceObserverCheckpointsBeforeNextTurn(t *testing.T) {
+	agent := &recordingBackgroundSequenceAgent{}
+	var checkpoints []string
+	_, err := executeBackgroundMessageSequenceObserved(context.Background(), agent, nil, "open", []backgroundMessageSequenceItem{
+		{ID: "consolidate", Message: "review"},
+		{ID: "fix", Message: "repair"},
+	}, func(turn backgroundMessageSequenceItem, result string) error {
+		checkpoints = append(checkpoints, turn.ID+":"+result)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("execute observed sequence: %v", err)
+	}
+	if want := []string{"opening:result:open", "consolidate:result:review", "fix:result:repair"}; !reflect.DeepEqual(checkpoints, want) {
+		t.Fatalf("checkpoints = %#v, want %#v", checkpoints, want)
 	}
 }
 

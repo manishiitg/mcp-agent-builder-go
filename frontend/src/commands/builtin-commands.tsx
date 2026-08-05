@@ -208,15 +208,16 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'pulse-fixer',
-    description: 'Apply and verify safe fixes from the existing Pulse backlog',
+    command: 'engineering-review',
+    description: 'Review Engineering and Ops, then apply and verify safe fixes in one sequence',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
     requiredWorkshopMode: 'workshop',
     source: 'builtin',
     execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'pulse-fixer')
+      const runFolder = ctx.getWorkflowStore().selectedRunFolder
+      submitGuidedWorkflowCommand(ctx, 'engineering-review', { runFolder })
     }
   },
   {

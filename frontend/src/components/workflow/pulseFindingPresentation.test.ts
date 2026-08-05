@@ -106,6 +106,11 @@ describe('Pulse finding presentation', () => {
     })).queue).toBe('platform')
 
     expect(pulseFindingPresentation(finding({
+      status: 'acknowledged',
+      events: [{ event_type: 'blocked', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
+    }))).toMatchObject({ queue: 'blocked', label: 'Blocked · no available action' })
+
+    expect(pulseFindingPresentation(finding({
       phase: 'prevalidation',
       step_id: 'collect-data',
     })).queue).toBe('workflow_reported')

@@ -764,7 +764,10 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	for _, want := range []string{
 		`selected_lanes=["workflow_review","llm_ops_review"]`,
 		`review_lanes=["workflow_review","llm_ops_review"]`,
-		"one ordered turn for each selected lane plus one consolidation turn",
+		`role="fixer"`,
+		"one ordered review turn for each selected lane",
+		"one bounded Fixer turn in the same agent",
+		"consolidation checkpoint persisted before mutation",
 		"Omitted lanes must not run",
 		"same agent, MCP session, folder guard, isolated workspace, and conversation history",
 	} {
@@ -1179,7 +1182,8 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"builder/card.health.html",
 		"Visible HTML contains only the two verdicts",
 		"exactly 3 Latest Pulse cells",
-		"at most 6 material Activity transitions",
+		"Use editorial judgment: retain important active history",
+		"Never omit or fail the dashboard just to hit an item count",
 		"Do not render reviewer coverage",
 		`data-pulse-schema="5"`,
 		"no duplicated operational-detail sections",
@@ -2228,7 +2232,9 @@ func TestPostRunMonitorDoesNotPrependWorkflowVersionUpgradeForCurrentManifest(t 
 		"PULSE MODULE — WORKFLOW REVIEW",
 		"GATE-SELECTED LANES",
 		`review_lanes=["workflow_review","llm_ops_review"]`,
-		"one ordered turn for each selected lane plus one consolidation turn",
+		"one ordered review turn for each selected lane",
+		"a consolidation checkpoint persisted before mutation",
+		"one bounded Fixer turn",
 		"Omitted lanes must not run",
 	} {
 		if !strings.Contains(steps[1].query, want) {
@@ -2285,7 +2291,8 @@ func TestPostRunMonitorPrependsLightweightPulseReportUpgradeForVersion118Manifes
 		"exactly three Latest Pulse cells",
 		"Current work count strip",
 		"Remove Current work issue-title queues",
-		"Keep at most 12 material Activity cards",
+		"Keep material Activity history concise through editorial judgment",
+		"Never omit history merely to meet an item count",
 		"Do not impose a byte, character, or token budget",
 		`workflow.json "version" to "1.0.19"`,
 	} {
@@ -2314,7 +2321,8 @@ func TestPostRunMonitorPrependsExecutivePulseJournalUpgradeForVersion119Manifest
 		`data-pulse-schema="5"`,
 		"exactly three Latest Pulse cells",
 		"Remove visible reviewer coverage",
-		"Keep at most six material Activity cards",
+		"Use editorial judgment: retain important active history",
+		"Never omit history merely to meet an item count",
 		"Do not impose a byte, character, or token budget",
 		`workflow.json "version" to "1.0.20"`,
 	} {
@@ -2415,7 +2423,20 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("selected labels = %#v, want %#v", got, want)
 	}
-	for index, module := range []string{pulseModuleWorkflowReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
+	workflowQuery := steps[0].query
+	for _, required := range []string{
+		`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`,
+		`module="workflow_review"`,
+		`role="fixer"`,
+		"exactly one call_generic_agent",
+		"review-and-fix",
+	} {
+		if !strings.Contains(workflowQuery, required) {
+			t.Fatalf("combined operational reviewer/fixer protocol missing %q: %s", required, workflowQuery)
+		}
+	}
+	for index, module := range []string{pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
+		index++
 		query := steps[index].query
 		for _, required := range []string{
 			`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`,
@@ -2430,7 +2451,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 		}
 	}
 	fixer := steps[len(steps)-3].query
-	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, `references/pulse-fixer-practices.md`, `references/fix-verification.md`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
+	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, "work only due modules that are still non-terminal", "preserve terminal results", "record_pulse_result exactly once for every still-unresolved due module"} {
 		if !strings.Contains(fixer, required) {
 			t.Fatalf("consolidated Fixer prompt missing %q: %s", required, fixer)
 		}

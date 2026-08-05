@@ -15,13 +15,29 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'pulse-fixer', 'goal-advisor']) {
+    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['review-speed', 'review-cost', 'llm-ops-review']) {
+    for (const retiredCommand of ['review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
+  })
+
+  it('routes Engineering Review to the single review-and-fix sequence', () => {
+    const command = findCommand('engineering-review', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'prioritize failed evaluation writes',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
+    } as CommandContext)
+
+    expect(submitted).toContain('kind="engineering-review"')
+    expect(submitted).toContain('iteration-9/default')
+    expect(submitted).toContain('prioritize failed evaluation writes')
   })
 
   it('routes the unified Ops Review command to the canonical backend guidance', () => {

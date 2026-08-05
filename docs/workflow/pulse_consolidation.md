@@ -1,6 +1,6 @@
 # Pulse: current architecture and decision map
 
-> **Status (2026-08-03): canonical current design and rationale.** Read
+> **Status (2026-08-05): canonical current design and rationale.** Read
 > **Current architecture** and **Current decisions** for the system that should
 > exist now. The sections under **Historical migration record** preserve why the
 > system changed; they are not implementation instructions. Executable agent
@@ -41,22 +41,32 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    next-check condition, and Gate mutates nothing. Historical operational IDs
    remain accepted as aliases and are projected into `workflow_review`; current
    passes never schedule them separately.
-2. **Three independent read-only agents.** `workflow_review` is one continuous
-   agent context with ordered checkpoints for correctness/QA, plan and artifact
-   drift, reports/evals, stores, and cost/model/tool/runtime operations. It loads
-   shared plan, run, goal, lifecycle, and cost evidence once and semantically
-   deduplicates findings across those lenses. `strategy_auditor` separately asks
-   what is missing or ineffective inside the selected strategy.
+2. **Two independent read-only product agents.** `strategy_auditor` asks what is
+   missing or ineffective inside the selected strategy.
    `goal_advisor` separately performs the less-frequent blank-sheet search for a
    materially different approach. None consumes another reviewer's conclusion.
-   All due agents may run concurrently (maximum three), and the scheduler waits
-   at one barrier before starting the Fixer.
-3. **Single Pulse Fixer.** The parent turn is the **only writer**. It consolidates
-   findings, resolves conflicts by a fixed precedence, applies bounded safe fixes
+   When both are due they run concurrently, and the scheduler waits for them
+   before starting operational mutation.
+3. **One operational review-and-fix sequence.** `workflow_review` is one
+   continuous agent context with ordered checkpoints for correctness/QA, plan
+   and artifact drift, reports/evals, stores, and cost/model/tool/runtime
+   operations. It loads shared plan, run, goal, lifecycle, and cost evidence
+   once, semantically deduplicates findings, persists that consolidated review,
+   and then continues into one bounded Fixer turn in the same conversation and
+   tool session. The final turn resolves conflicts, applies bounded safe fixes
    sequentially, and verifies each against the single `fix-verification` contract
    (a successful write is never proof; a fix stays `changed_unverified` until a
-   real run/eval/report confirms it). Strategy/LLM changes remain proposal-only
-   behind the human-input approval flow.
+   real run/eval/report confirms it). A residual `pulse_fixer` agent runs only
+   when Strategy/Goal outputs or a failed operational sequence leave a due
+   module non-terminal.
+
+   Advisor routing is explicit and machine-backed. An actionable
+   `strategy_auditor` or `goal_advisor` recommendation creates a linked pending
+   approve/reject/defer decision. `proposal_only` is accepted for those modules
+   only with a concrete `next_check` evidence boundary. A truth-preserving
+   technical prerequisite goes to the Fixer rather than becoming a strategy
+   question. Material strategy or goal changes are never applied without the
+   exact recorded approval.
    SQLite is authoritative for the per-finding lifecycle: `run_concerns` files
    and deduplicates findings, `pulse_fix_attempts` plus
    `pulse_fix_attempt_findings` record the mutation boundary,
@@ -102,6 +112,10 @@ Standalone Pulse-module slash commands use the same path. `/bug-review`,
 canonical module to `call_generic_agent`; Go generates manual run identities,
 stores the full Markdown in `pulse_review_log`, and indexes `CONCERNS:` into the
 finding lifecycle before the parent updates `builder/improve.html`.
+`/engineering-review` is the only user-facing mutation command: it launches the
+same Engineering → LLM/Ops → consolidation → Fixer sequence used by scheduled
+Pulse. The former standalone `/pulse-fixer` command is retired so manual and
+scheduled maintenance cannot drift into two Fixer workflows.
 `/goal-advisor` calls the native Advisor → Critic → Finalizer pipeline directly;
 that pipeline persists its complete result and remaining concerns the same way.
 
@@ -153,23 +167,45 @@ reviewers may run concurrently; the one Fixer starts only after their barrier.
 Engineering normally creates issues and repairs, not product proposals.
 
 The scheduler passes compact `review_lanes` identities; the backend owns their
-ordered Engineering/Ops messages and consolidation for `role=reviewer,
-module=workflow_review`. Pulse reviewer launcher sessions carry
+ordered Engineering/Ops messages, persisted consolidation checkpoint, and
+bounded Fixer turn for `role=fixer, module=workflow_review`. Pulse reviewer launcher sessions carry
 an explicit `parent_session_id` and `session_kind=pulse_reviewer`. Refresh
 recovery and the global activity monitor keep those internal children out of
 the top-level chat list, remove child tabs persisted by older frontends without
 stopping their runtimes, and retain the Pulse parent as the selected session.
 
-### One writer and one finding lifecycle (2026-08-01 to 2026-08-03)
+### One sequenced operational writer and one finding lifecycle (2026-08-01 to 2026-08-05)
 
-There is one consolidated Fixer, not one Fixer per reviewer. Reviewers are
-read-only. The Fixer reconciles semantically duplicate findings, applies bounded
-changes sequentially, and records attempt-scoped proof. SQLite is authoritative
+Engineering/LLM-Ops review and bounded fixing share one agent conversation:
+selected review turns, a persisted pre-mutation consolidation checkpoint, then
+the Fixer turn. Strategy Auditor and Goal Advisor remain independent read-only
+agents; a residual Fixer runs only for their non-terminal lifecycle work or
+operational recovery. The writer reconciles semantically duplicate findings,
+applies bounded changes sequentially, and records attempt-scoped proof. SQLite is authoritative
 for findings, attempts, verification, review artifacts, module outcomes, and
 final-command status. `builder/improve.html` is still required, but it is a
 generated user-facing dashboard and publishable time-series artifact, not the
 database for closing or reopening findings. The Pulse popup reads structured
 SQLite projections and exposes raw reviewer Markdown only as supporting detail.
+
+The same rule applies to manual maintenance. `/engineering-review` runs the
+combined sequence; `/pulse-fixer` no longer exists. The internal residual
+`pulse_fixer` stage identity remains a recovery mechanism only and is not a
+second normal Fixer or a slash command.
+
+The Fixer is a full Workflow Builder writer: its tool allow-list is derived
+directly from the canonical Workshop profile rather than copied into a smaller
+Pulse-specific subset, and its folder guard uses the same Workshop write paths.
+This includes plan/route add-delete, schedules, skills, LLM configuration,
+execution/debugging, reports/evals, secrets, and managed DB/store mutation.
+Pulse-run identity, finding lifecycle, external-side-effect rules, and explicit
+strategy/goal approvals still govern when those tools may be used.
+
+Direct shell/file writes to protected plan artifacts remain denied. In
+particular, `update_evaluation_plan` receives a scoped in-process capability for
+exactly `evaluation/evaluation_plan.json` (plus the existing managed
+planning/changelog capability); it does not unlock sibling evaluation files or
+leak authority back into the session.
 
 ### Verification has two valid timings (2026-08-01)
 

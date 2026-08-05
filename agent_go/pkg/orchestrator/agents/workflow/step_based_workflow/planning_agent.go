@@ -5150,8 +5150,9 @@ func registerPlanModificationTools(
 
 func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Context, string, string) error) func(context.Context, string, string) error {
 	planningPath := normalizePathForWorkspaceAPI("planning", workspacePath)
+	evaluationPlanPath := normalizePathForWorkspaceAPI(evaluationPlanRelPath, workspacePath)
 	return func(ctx context.Context, path, content string) error {
-		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath), path, content)
+		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath, evaluationPlanPath), path, content)
 	}
 }
 

@@ -62,6 +62,7 @@ improve-report
 | `/review-artifact-drift` | Builder, Optimizer | Audit whether learnings, code, KB, db, reports, and eval wiring drifted from recent plan changes; persist the review and open concerns into Pulse SQLite state. |
 | `/bug-review` | Workshop | Run Pulse QA/logic review and persist the full review plus trackable concerns for the Pulse popup. |
 | `/ops-review` | Workshop | Agentically review cost, timing, tool/runtime reliability, model routing, setup, and plan-design hygiene; persist the full review plus trackable concerns. |
+| `/engineering-review` | Workshop | Run Engineering and LLM/Ops review, consolidate the findings, then apply and verify bounded fixes in one agent sequence. |
 | `/strategy-auditor` | Workshop | Diagnose plan-versus-goal strategy using cross-run evidence and persist the review plus trackable concerns. |
 | `/goal-advisor` | Workshop | Run the native Advisor → Critic → Finalizer pipeline and persist the complete result plus remaining open concerns. |
 | `/improve-knowledge` | Builder, Optimizer | Improve knowledgebase notes with targeted cleanup or cross-step consolidation. |

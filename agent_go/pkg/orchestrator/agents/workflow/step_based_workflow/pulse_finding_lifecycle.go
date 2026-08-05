@@ -981,6 +981,11 @@ func RecordPulseFindingDispositionsTx(
 		if err := validateFindingDisposition(disposition); err != nil {
 			return err
 		}
+		if (module == pulsemodules.StrategyAuditorID || module == pulsemodules.GoalAdvisorID) &&
+			disposition.Disposition == FindingDispositionProposalOnly && disposition.NextCheck == "" {
+			return fmt.Errorf("%s finding %q cannot use proposal_only without next_check: proposal_only is reserved for a recommendation waiting on a named future evidence boundary; create a pending human decision and use awaiting_user for an actionable strategy/goal change, or route a safe technical prerequisite to the Fixer",
+				module, disposition.FindingID)
+		}
 		fingerprint := disposition.Fingerprint
 		findingID := disposition.FindingID
 		attemptID := disposition.AttemptID
@@ -997,10 +1002,10 @@ func RecordPulseFindingDispositionsTx(
 		// evidence: an already-answered or invented question would leave the
 		// finding parked on a decision the operator can never make.
 		if disposition.Disposition == FindingDispositionAwaitingUser {
-			var inputStatus string
+			var inputStatus, inputSource string
 			err := db.QueryRowContext(ctx,
-				`SELECT status FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
-			).Scan(&inputStatus)
+				`SELECT status, COALESCE(source, '') FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
+			).Scan(&inputStatus, &inputSource)
 			if err != nil {
 				if err == sql.ErrNoRows {
 					return fmt.Errorf("awaiting_user finding %q references human input %q, which does not exist", findingID, disposition.HumanInputID)
@@ -1009,6 +1014,23 @@ func RecordPulseFindingDispositionsTx(
 			}
 			if inputStatus != "pending" {
 				return fmt.Errorf("awaiting_user finding %q references human input %q with status %q; a finding can only wait on a pending decision", findingID, disposition.HumanInputID, inputStatus)
+			}
+			expectedSource, expectedPrefix := "", ""
+			switch module {
+			case pulsemodules.StrategyAuditorID:
+				expectedSource, expectedPrefix = pulsemodules.StrategyAuditorID, "strategy-proposal-"
+			case pulsemodules.GoalAdvisorID:
+				expectedSource, expectedPrefix = pulsemodules.GoalAdvisorID, "plan-proposal-"
+			}
+			if expectedSource != "" {
+				if strings.TrimSpace(inputSource) != expectedSource {
+					return fmt.Errorf("awaiting_user %s finding %q references human input %q with source %q; create the decision with source=%q so the UI preserves who asked",
+						module, findingID, disposition.HumanInputID, inputSource, expectedSource)
+				}
+				if !strings.HasPrefix(disposition.HumanInputID, expectedPrefix) {
+					return fmt.Errorf("awaiting_user %s finding %q references human input %q; decision ids for this module must start with %q",
+						module, findingID, disposition.HumanInputID, expectedPrefix)
+				}
 			}
 		}
 		if attemptID != "" {

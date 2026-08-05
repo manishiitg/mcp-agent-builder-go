@@ -37,28 +37,18 @@ func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 	}
 }
 
-// TestPulseFixerSurfaceCannotImpersonateACompletePass pins what the Fixer is
-// deliberately denied. Recording a worklist would let it decide what was due,
-// which belongs to Gate, and a fixer holding it could report a complete pass it
-// never ran.
-func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
-	surface := toolSet(pulseFixerStageToolAgentAllowedToolNames())
-	for _, denied := range []string{
-		"record_pulse_worklist",
-		"create_plan",
-		"delete_plan_steps",
-	} {
-		if surface[denied] {
-			t.Fatalf("Pulse Fixer surface includes %q, which lets it impersonate or overreach a scheduled pass", denied)
-		}
+// The Fixer is a workflow writer, so it uses the same capability definition as
+// Workshop. Keeping a smaller hand-maintained list repeatedly turned ordinary
+// repairs into false blockers when Builder gained a tool that Fixer did not.
+func TestPulseFixerUsesTheCanonicalWorkshopWriterSurface(t *testing.T) {
+	want := GetToolsForWorkshopMode("workshop")
+	got := pulseFixerStageToolAgentAllowedToolNames()
+	if len(got) != len(want) {
+		t.Fatalf("Pulse Fixer has %d tools, Workshop has %d", len(got), len(want))
 	}
-	for _, required := range []string{
-		"record_pulse_result",
-		"get_pulse_state",
-		"update_step_config",
-	} {
-		if !surface[required] {
-			t.Fatalf("Pulse Fixer surface is missing %q, which its contract requires", required)
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("Pulse Fixer tool[%d] = %q, want Workshop tool %q", index, got[index], want[index])
 		}
 	}
 }
@@ -93,11 +83,9 @@ func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
 	}
 }
 
-// TestDerivedReviewIdentityKeepsTheCallersPulseRun lets a standalone
-// /pulse-fixer reach the same fixer stage the scheduled path uses.
-//
-// A manual fixer already owns a pulse_run_id from begin_pulse_fixer_run and
-// must keep writing under it — its authority is bound to that exact run. If
+// TestDerivedReviewIdentityKeepsTheCallersPulseRun covers trusted recovery
+// callers that already own a pulse_run_id but need a derived review identity.
+// Their authority is bound to that exact run. If
 // deriving a review identity replaced that id, every lifecycle write from the
 // stage would be refused as a run mismatch.
 func TestDerivedReviewIdentityKeepsTheCallersPulseRun(t *testing.T) {

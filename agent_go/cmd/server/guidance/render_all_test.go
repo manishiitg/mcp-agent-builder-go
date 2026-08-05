@@ -61,6 +61,15 @@ func TestAllGuidanceTemplatesRender(t *testing.T) {
 	}
 }
 
+func TestEngineeringReviewReplacesStandalonePulseFixerCommand(t *testing.T) {
+	if _, ok := allKinds["engineering-review"]; !ok {
+		t.Fatal("engineering-review guidance is not registered")
+	}
+	if _, ok := allKinds["pulse-fixer"]; ok {
+		t.Fatal("retired standalone pulse-fixer guidance is still registered")
+	}
+}
+
 // get_reference_doc was removed when reference bundles became attached skills.
 // A stale call in any rendered flow is dead on arrival for Pulse and workshop
 // agents, so guard the complete registered guidance surface against regression.
@@ -130,7 +139,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		wants []string
 	}{
 		"pulse-archive": {
-			wants: []string{"newest 6 material dated", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
+			wants: []string{"still needed to understand the", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
 		},
 		"pulse-gate": {
 			wants: []string{
@@ -141,8 +150,9 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		"pulse-review-fixer": {
 			wants: []string{
 				"exactly one", "saved review and lifecycle evidence", "automatic notification", `get_pulse_state(view="review")`,
-				"one consolidated Fixer", "terminal current-run result", "cannot block later reviewers", "compact, priority-ordered Fix queue",
+				"bounded Fixer turn", "residual Fixer", "terminal current-run result", "cannot block later reviewers", "priority-ordered Fix queue",
 				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
+				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "plan-proposal-",
 			},
 		},
 		"pulse-finalizer": {
@@ -188,14 +198,14 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"STANDALONE PULSE BUG REVIEW",
 			"without applying fixes",
 			"READ-ONLY REVIEW",
-			"`/pulse-fixer`",
+			"`/engineering-review`",
 		},
 		"ops-review": {
 			"STANDALONE LLM AND OPERATIONS REVIEW",
 			"must not edit files or config",
 			"material goal criterion is below target",
 			"Missing evidence means keep the tier",
-			"before `/pulse-fixer` can apply them",
+			"before `/engineering-review` can apply them",
 		},
 		"strategy-auditor": {
 			"STANDALONE STRATEGY AUDITOR",
@@ -205,20 +215,15 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			`data-module="strategy_auditor"`,
 			"Do not launch `/goal-advisor` automatically",
 		},
-		"pulse-fixer": {
-			"STANDALONE PULSE FIXER",
-			"references/pulse-fixer-practices.md",
-			"does not rerun Pulse Gate",
-			"launch review agents",
-			"begin_pulse_fixer_run",
-			`get_pulse_state(view="module")`,
-			`get_pulse_state(view="backlog")`,
-			"`issue.id` as `finding_id`",
-			"record_pulse_result",
-			"post-change evidence boundary",
-			"changed_unverified",
-			"awaiting_next_valid_run",
-			"Dashboard is a projection",
+		"engineering-review": {
+			"ENGINEERING AND OPERATIONS REVIEW WITH FIXES",
+			"one agent conversation",
+			`module="workflow_review"`,
+			`role="fixer"`,
+			`review_lanes=["workflow_review","llm_ops_review"]`,
+			"Engineering → LLM/Ops → consolidation → Fixer",
+			"do not call `begin_pulse_fixer_run`",
+			"automatic completion notification",
 		},
 	}
 
@@ -396,7 +401,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one ordered finalizer turn",
 		"record_pulse_result(command=...)",
 		"not automatically due every Pulse",
-		"Three Independent Review Agents And One Consolidated Writer",
+		"Independent Strategy Review And One Sequenced Operational Writer",
 		"existing unchanged, existing with new evidence, reopened, or genuinely",
 		"every evidence-backed severity-ordered finding row",
 		"structured Fix queue",
@@ -421,7 +426,9 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"awaiting_next_valid_run",
 		"use `run_in_background`",
 		"READ-ONLY REVIEW",
-		"exactly one `call_generic_agent` with `role=\"fixer\"`",
+		"one `call_generic_agent` with",
+		"`module=\"workflow_review\"`",
+		"residual `module=\"pulse_fixer\"`",
 		"does not launch",
 		"`run_goal_advisor_review`",
 		"backend independently enforces",
@@ -579,14 +586,14 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	for _, want := range []string{
 		"Needs your decision",
 		"Latest Pulse",
-		"at most six material Activity transitions",
+		"concise material Activity transitions",
 		"Never render `.coverage`",
 		"Do not render `.worksummary`",
 		"Operational detail stays in Pulse",
 		"Hidden agent handoff projection",
 		`#pulse-agent-handoff`,
 		"scheduler conditionally sends a dedicated archive turn",
-		"newest **6** material Activity cards",
+		"concise through editorial judgment",
 		"Stage complete active and archive HTML documents",
 		`href="improve-archive/YYYY-MM.html"`,
 		"**Goal:**",
@@ -719,9 +726,9 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render pulse-review-fixer: %v", err)
 	}
 	for _, want := range []string{
-		"The shared operational reviewer, Strategy Auditor, and Goal Advisor are",
-		"one bounded parallel batch",
-		"Strategy Auditor and Goal Advisor may share a parallel batch",
+		"Strategy Auditor and Goal Advisor are independent",
+		"parallel batch",
+		"Complete that read-only batch before the shared operational",
 		"bounded improvements within the current strategic shape",
 		"blank-sheet opportunity",
 	} {
@@ -871,10 +878,10 @@ func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	monitor := readPulseDesignSpec(t)
 	for _, want := range []string{
-		`independent read-only agent`,
+		`independent read-only stages`,
 		`bounded parallel batch`,
-		`at most three read-only stages`,
-		`Review stages never mutate or mark module`,
+		`at most two independent read-only stages`,
+		`sequence mutates only in its final Fixer turn`,
 		`one honest terminal result for every due module`,
 		`later Dashboard stage`,
 		`must not update ` + "`builder/improve.html`",

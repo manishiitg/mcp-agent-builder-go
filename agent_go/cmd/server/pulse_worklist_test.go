@@ -834,7 +834,7 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		}
 	})
 
-	t.Run("caps active material history at six items", func(t *testing.T) {
+	t.Run("allows material activity history beyond an arbitrary count", func(t *testing.T) {
 		withExcessHistory := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "excess-history"),
 			`<div id="pulse-agent-handoff"`,
@@ -844,8 +844,8 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		workspaceState.mu.Lock()
 		workspaceState.files[htmlPath] = withExcessHistory
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "at most 6 material Activity items") {
-			t.Fatalf("excess Activity history error = %v", err)
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err != nil {
+			t.Fatalf("material Activity history must not fail solely by count: %v", err)
 		}
 	})
 

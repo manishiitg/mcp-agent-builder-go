@@ -1,12 +1,14 @@
-## Pulse selected-lane review and one consolidated Fixer
+## Pulse selected-lane review and sequenced fixing
 
 Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
 dated review run ID. Gate decides separately whether `workflow_review`
 (Engineering Review), `llm_ops_review`, `strategy_auditor`, and `goal_advisor`
-are due. Engineering and LLM/Ops may share one reviewer context with separate
-perspective turns; skipped perspectives are not sent. Strategy Auditor and Goal
-Advisor remain independent agents. After the read barrier, exactly one
-consolidated Fixer runs for the pass.
+are due. Engineering and LLM/Ops share one context with separate perspective
+turns, a persisted consolidation checkpoint, and then one bounded Fixer turn in
+that same agent; skipped perspectives are not sent. Strategy Auditor and Goal
+Advisor remain independent read-only agents. A residual Fixer runs afterward
+only when those independent modules or a failed operational sequence still lack
+a terminal result.
 
 Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -19,9 +21,11 @@ new finding. Attempt every safe bounded fix in the selected module. Leave a
 finding active only for a concrete blocker, decision, failed check, or future
 evidence checkpoint.
 
-The shared operational reviewer, Strategy Auditor, and Goal Advisor are
-independent. They never wait for, consume, or require one another's conclusions.
-Run selected reviewer stages in one bounded parallel batch.
+Strategy Auditor and Goal Advisor are independent and may run in one bounded
+parallel batch. Complete that read-only batch before the shared operational
+review-and-fix sequence starts, so no reviewer observes artifacts changing under
+it. The operational lanes remain independent in meaning but intentionally share
+evidence and conversation context with their own Fixer turn.
 An unreliable evidence window is classified inside the affected review as an
 execution problem or insufficient evidence; it does not cancel another review.
 Goal Advisor is selected only for its own blank-sheet opportunity, answered
@@ -35,13 +39,17 @@ strategic stage owns only its supplied module. First inspect current-run result,
 active retained backlog, answered decisions, awaiting-verification work, and
 any already-saved reviewer result. Do not launch a reviewer merely because the
 module is due: if saved review and lifecycle evidence already answer the review
-question, stop and leave that evidence for the consolidated Fixer. Reviewer
-stages never mutate, start fix attempts, or mark module state.
+question, stop and leave that evidence for the applicable final Fixer turn. Reviewer
+independent Strategy/Goal stages never mutate, start fix attempts, or mark
+module state. The operational sequence remains read-only through its lane and
+consolidation turns; only its final Fixer turn mutates and marks its selected
+lanes.
 
 When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
-make exactly one `call_generic_agent` call for this module. `workflow_review`
-uses that one agent for only the Gate-selected ordered operational lanes; pass
-the exact non-empty `review_lanes` list and do not spawn one child per lane.
+make exactly one `call_generic_agent` call for the independent module.
+`workflow_review` instead uses one `role="fixer"` agent for only the Gate-selected
+ordered operational lanes followed by its bounded Fixer turn; pass the exact
+non-empty `review_lanes` list and do not spawn one child per lane.
 Never combine the independent agents in one shell command, run curl
 in the background, use `&`/`wait`, or wait for another module. In coding-agent mode, use the documented API bridge
 shell transport. The call returns an `execution_id` immediately; record it,
@@ -50,8 +58,9 @@ Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
 its complete Markdown and structured verification results directly in SQLite;
 call `get_pulse_state(view="review")` with that review run and module before the review
 stage ends. Reviewer failure is retained as `Review incomplete` evidence for
-this module only and cannot block later reviewers. The consolidated Fixer
-records the terminal module result.
+this module only and cannot block later reviewers. The operational agent records
+its selected lane results; the residual Fixer records only still-unresolved
+independent module results.
 
 If a saved review has status `contract_failed`, the backend retained its raw
 Markdown but quarantined its invalid structured verification markers. Do not
@@ -164,14 +173,19 @@ Route outputs by professional perspective. Engineering Review normally creates
 an actionable issue and repair/verification lifecycle, never a product proposal.
 LLM/Ops normally creates a safe optimization issue; ask only for a real
 quality-versus-cost, spend, or reliability tradeoff. Strategy Auditor creates a
-user-facing in-strategy improvement artifact: record `proposal_only` when it is
-advisory, or create and link one `awaiting_user` decision when the recommendation
-materially changes product/business behavior. Use
+user-facing in-strategy improvement artifact. Enforce its declared route:
+`decision_required` must create and link one `awaiting_user` decision;
+`evidence_wait` becomes `proposal_only` only with the exact non-empty
+`next_check`; `fixer_handoff` must be attempted through the normal safe repair
+lifecycle rather than parked as a proposal. Use
 `create_human_input_request(source="strategy_auditor", input_id="strategy-proposal-...")`
-for that decision so the UI preserves who asked. Goal Advisor creates a materially
-different opportunity artifact and normally an approve/reject/defer decision;
-use `source="goal_advisor"` and `input_id="plan-proposal-..."`, and never apply
-it before that exact approval. Engineering may reach
+for a Strategy decision so the UI preserves who asked. Goal Advisor creates a
+materially different opportunity artifact. Its actionable thesis must create an
+approve/reject/defer decision with `source="goal_advisor"` and
+`input_id="plan-proposal-..."`; only a thesis explicitly waiting on named future
+evidence may use `proposal_only`, with that boundary in `next_check`. Route any
+technical prerequisite to the Fixer and never apply a materially different
+approach before that exact approval. Engineering may reach
 `awaiting_user` only for an exceptional repair that changes business meaning,
 affects real users or money, or leaves a genuinely balanced choice not settled
 by `soul.md`.
@@ -180,6 +194,11 @@ by `soul.md`.
 `create_human_input_request`, passed as `human_input_id`. Create the decision
 first: a finding marked awaiting_user with no question leaves the operator told
 that something needs them and given nothing to answer.
+For `strategy_auditor`, the question source must be `strategy_auditor` and its
+id must start `strategy-proposal-`. For `goal_advisor`, the source must be
+`goal_advisor` and its id must start `plan-proposal-`. The backend rejects an
+advisor `proposal_only` disposition with no `next_check`, so every accepted
+advisor recommendation has a concrete route to action or evidence.
 
 Deduplicate findings before filing: match stable target/component, behavioral
 claim, and evidence boundary against active and suppressed findings. Reuse the
@@ -191,13 +210,18 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-After every selected reviewer stage finishes, start exactly one Pulse Fixer as
-one `call_generic_agent` with `role="fixer"`, this run's `pulse_run_id`, dated
-`review_run_id`, and `module="pulse_fixer"`. Never run a Fixer per module and
-never run two Fixers at once. Do not apply fixes inline in the parent turn.
-Record its `execution_id`, end the current turn, and resume only from its
-automatic completion notification. The stage runs on the maintenance tier and
-is lent write authority for this run alone.
+For selected Engineering/LLM-Ops lanes, call one generic agent with
+`role="fixer"`, `module="workflow_review"`, the exact `review_lanes`, and this
+run's identities. The backend constructs the review turns, persists the
+consolidated review and filed concerns, then sends the bounded Fixer turn to the
+same conversation. It runs on the maintenance tier with write authority limited
+to this Pulse run. Never launch a second operational Fixer.
+
+After that sequence, start `module="pulse_fixer"` only when a due module is
+still non-terminal—normally an independent Strategy/Goal result needing
+lifecycle or decision handling, or recovery from a failed operational sequence.
+It preserves terminal operational results and processes only unresolved due
+modules. If every due module is terminal, skip the residual Fixer entirely.
 
 The Fixer first calls `get_pulse_state(view="backlog")` without a module filter
 and freezes the complete active starting manifest. Due reviewer modules decide
@@ -243,8 +267,8 @@ contain materially different proposal-only approaches. Operational observations
 may be cross-referenced to the matching module during consolidation, but never
 rewritten as a dependency or used to suppress that module's independent result.
 Advisor operational findings remain out-of-scope observations.
-Only the parent mutates workflow state. Neither reviewer nor Fixer writes Pulse
-HTML; the dedicated Dashboard owns it.
+Only a Fixer turn mutates workflow state. Neither reviewer turns nor Fixer turns
+write Pulse HTML; the dedicated Dashboard owns it.
 
 Before finishing, call `record_pulse_impact` once when there is an intervention,
 a matured assessment, or a trustworthy observation Gate did not already store.

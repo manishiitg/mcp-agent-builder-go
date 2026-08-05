@@ -15,6 +15,7 @@ export type PulseFindingQueue =
   | 'waiting_proof'
   | 'decisions'
   | 'proposals'
+  | 'blocked'
   | 'platform'
   | 'resolved'
   | 'workflow_reported'
@@ -178,7 +179,7 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
     if (reason === 'blocked') {
       return {
         label: 'Blocked · no available action',
-        queue: 'platform',
+        queue: 'blocked',
         tone: 'neutral',
         nextAction: finding.resolution_note?.trim()
           || (finding.reopen_condition?.trim()
@@ -203,6 +204,7 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
     || finding.events.some((event) => !['filed', 'rediscovered'].includes(event.event_type))
     || presentation.queue === 'decisions'
     || presentation.queue === 'proposals'
+    || presentation.queue === 'blocked'
     || presentation.queue === 'platform'
     || presentation.queue === 'resolved'
   const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)

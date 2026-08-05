@@ -177,7 +177,7 @@ func TestPulseGenericAgentRunsOnlyInBackground(t *testing.T) {
 			return true
 		}
 		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || selector.Sel.Name != "runGoalAdvisorStageAgentSequence" {
+		if !ok || (selector.Sel.Name != "runGoalAdvisorStageAgentSequence" && selector.Sel.Name != "runGoalAdvisorStageAgentSequenceObserved") {
 			return true
 		}
 		stageCalls++

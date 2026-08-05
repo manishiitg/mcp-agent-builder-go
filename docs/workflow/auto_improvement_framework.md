@@ -58,7 +58,7 @@ Each module may return multiple findings. Pulse keeps all material findings, but
 
 - `/define-success`: confirms and normalizes Goal / Ikigai in `soul/soul.md`; it does not create a duplicate Goal/Profile card.
 - `/pulse`: runs one complete manual Pulse against retained evidence without changing schedules or running the workflow.
-- `/pulse-fixer`: applies bounded fixes from existing review findings and verifies them.
+- `/engineering-review`: runs Engineering and LLM/Ops review, consolidates the findings, then applies and verifies bounded fixes in the same agent sequence.
 - The **Pulse** toolbar control enables the per-run review/fix pass via `post_run_monitor`.
 - `/improve-evaluation`: improves eval coverage and rubric quality.
 - Goal Advisor is selected dynamically by Pulse Gate; no separate recurring optimizer schedule is required.

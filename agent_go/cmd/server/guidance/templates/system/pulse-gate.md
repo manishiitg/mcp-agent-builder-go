@@ -74,10 +74,11 @@ give each an exact backlog-drained, artifact-change, or next-valid-run check.
 Do not repeatedly spend a pass rediscovering unchanged findings.
 
 Select every module with actionable repair/verification work or genuinely new
-trigger evidence. Module stages are independent and run in bounded parallel
-batches: one failed or hung reviewer must not block saved evidence or another
-reviewer. The scheduler waits for all selected reviewer outcomes before the
-single consolidated Fixer starts.
+trigger evidence. Strategy Auditor and Goal Advisor run independently in a
+bounded read-only batch. After they finish, selected Engineering/LLM-Ops lanes
+run as one ordered review-and-fix sequence with a persisted pre-mutation review
+checkpoint. A residual Fixer runs only for still-non-terminal independent or
+recovery work.
 When work must wait for a real evidence/user/external boundary, record that
 boundary instead of inventing a capacity cooldown.
 

@@ -111,6 +111,7 @@ const FOCUS_TITLES: Record<PulseFocus, string> = {
   waiting_proof: 'Waiting on a run',
   decisions: 'Your decisions',
   proposals: 'Proposed improvements',
+  blocked: 'Blocked',
   platform: 'Platform team',
   resolved: 'Resolved',
   workflow_reported: 'Workflow evidence',
@@ -122,6 +123,7 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   waiting_proof: 'Fixes that need evidence from a future workflow run',
   decisions: 'Items that cannot continue without your approval or direction',
   proposals: 'Ideas Pulse recommends considering; these are not waiting for your answer',
+  blocked: 'Diagnosed issues with no safe action available to Pulse yet',
   platform: 'Diagnosed work that must be fixed outside this workflow',
   resolved: 'Verified fixes and legitimate no-change closures',
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
@@ -254,6 +256,7 @@ export function PulseWorkspace({
       waiting_proof: 0,
       decisions: 0,
       proposals: 0,
+      blocked: 0,
       platform: 0,
       resolved: 0,
       workflow_reported: 0,
@@ -292,7 +295,10 @@ export function PulseWorkspace({
         // findings list are two views of one selection rather than two lists
         // that ignore each other.
         .filter((finding) => (
-          !moduleFilter || normalizePulseWorkspaceModule(finding.module) === moduleFilter
+          !moduleFilter
+          || (moduleFilter === 'product'
+            ? ['strategy_auditor', 'goal_advisor'].includes(normalizePulseWorkspaceModule(finding.module))
+            : normalizePulseWorkspaceModule(finding.module) === moduleFilter)
         ))
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
@@ -300,8 +306,9 @@ export function PulseWorkspace({
             waiting_proof: 5,
             decisions: 4,
             proposals: 3,
-            platform: 2,
-            workflow_reported: 1,
+            blocked: 2,
+            platform: 1,
+            workflow_reported: 0,
             resolved: 0,
           }
           const priority = rank[pulseFindingPresentation(b).queue] - rank[pulseFindingPresentation(a).queue]
@@ -442,6 +449,8 @@ export function PulseWorkspace({
               <span><span className="font-medium text-foreground">Pulse owns:</span> {queueCounts.needs_action}</span>
               <span><span className="font-medium text-foreground">You own:</span> {queueCounts.decisions}</span>
               <span><span className="font-medium text-foreground">Waiting on runs:</span> {queueCounts.waiting_proof}</span>
+              <span><span className="font-medium text-foreground">Blocked:</span> {queueCounts.blocked}</span>
+              <span><span className="font-medium text-foreground">Platform:</span> {queueCounts.platform}</span>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -508,10 +517,15 @@ export function PulseWorkspace({
             const areaModules = area.id === 'product'
               ? moduleSummaries.filter((module) => ['strategy_auditor', 'goal_advisor'].includes(module.id))
               : moduleSummaries.filter((module) => module.id === area.id)
-            const open = area.id === 'product'
-              ? queueCounts.decisions + queueCounts.proposals
+            const decisions = areaModules.reduce((sum, module) => sum + module.awaitingUser, 0)
+            const proposals = areaModules.reduce((sum, module) => sum + module.proposals, 0)
+            const actionable = area.id === 'product'
+              ? decisions + proposals
               : areaModules.reduce((sum, module) => sum + module.active + module.fixing, 0)
-            const waiting = areaModules.reduce((sum, module) => sum + module.awaitingVerification, 0)
+            const waiting = areaModules.reduce((sum, module) => (
+              sum + module.awaitingVerification + module.awaitingRun
+            ), 0)
+            const blocked = areaModules.reduce((sum, module) => sum + module.blocked, 0)
             const external = areaModules.reduce((sum, module) => sum + module.externalAction, 0)
             const latest = [...areaModules]
               .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
@@ -526,8 +540,8 @@ export function PulseWorkspace({
                     setSelectedModule(moduleID)
                     setModuleFilter(moduleID)
                   } else {
-                    setFocus(queueCounts.decisions > 0 ? 'decisions' : 'proposals')
-                    setModuleFilter(null)
+                    setFocus(decisions > 0 ? 'decisions' : 'proposals')
+                    setModuleFilter('product')
                   }
                 }}
                 className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
@@ -540,23 +554,26 @@ export function PulseWorkspace({
                       <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{area.description}</p>
                     </div>
                   </div>
-                  {open > 0 && (
+                  {actionable > 0 && (
                     <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {open} {area.id === 'product' ? 'recommendations' : 'open'}
+                      {actionable} {area.id === 'product' ? 'recommendations' : 'to fix'}
                     </span>
                   )}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
                   {area.id === 'product' ? (
                     <>
-                      <span><span className="font-semibold text-foreground">{queueCounts.proposals}</span> ideas</span>
-                      <span><span className="font-semibold text-foreground">{queueCounts.decisions}</span> decisions</span>
+                      <span><span className="font-semibold text-foreground">{proposals}</span> ideas</span>
+                      <span><span className="font-semibold text-foreground">{decisions}</span> decisions</span>
                     </>
                   ) : (
                     <>
-                      <span><span className="font-semibold text-foreground">{open}</span> active</span>
+                      <span><span className="font-semibold text-foreground">{actionable}</span> Pulse to fix</span>
                       <span><span className="font-semibold text-foreground">{waiting}</span> waiting on run</span>
+                      {decisions > 0 && <span><span className="font-semibold text-foreground">{decisions}</span> decisions</span>}
+                      {blocked > 0 && <span><span className="font-semibold text-foreground">{blocked}</span> blocked</span>}
                       {external > 0 && <span><span className="font-semibold text-foreground">{external}</span> platform</span>}
+                      {proposals > 0 && <span><span className="font-semibold text-foreground">{proposals}</span> ideas</span>}
                     </>
                   )}
                 </div>
@@ -611,11 +628,12 @@ export function PulseWorkspace({
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Issue filters">
               {([
-                ['all', 'Open', findings.filter((finding) => !['resolved', 'workflow_reported'].includes(pulseFindingPresentation(finding).queue)).length],
+                ['all', 'Current', findings.filter((finding) => !['resolved', 'workflow_reported'].includes(pulseFindingPresentation(finding).queue)).length],
                 ['needs_action', 'Pulse to fix', queueCounts.needs_action],
                 ['waiting_proof', 'Waiting on run', queueCounts.waiting_proof],
                 ['decisions', 'Your decisions', queueCounts.decisions],
                 ['proposals', 'Ideas', queueCounts.proposals],
+                ['blocked', 'Blocked', queueCounts.blocked],
                 ['platform', 'Platform', queueCounts.platform],
                 ['resolved', 'Resolved', queueCounts.resolved],
               ] as Array<[PulseFocus, string, number]>).map(([value, label, count]) => (
@@ -724,7 +742,8 @@ export function PulseWorkspace({
           {moduleSummaries.map((module) => {
             const state = moduleStateByID.get(module.id)
             const active = selectedModule === module.id
-            const openWork = module.active + module.fixing + module.awaitingVerification
+            const openWork = module.active + module.fixing
+            const waitingWork = module.awaitingVerification + module.awaitingRun
             return (
               <button
                 key={module.id}
@@ -748,6 +767,15 @@ export function PulseWorkspace({
                   </span>
                   {module.recurring > 0 && (
                     <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{module.recurring} recurring</span>
+                  )}
+                  {waitingWork > 0 && (
+                    <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{waitingWork} waiting</span>
+                  )}
+                  {module.awaitingUser > 0 && (
+                    <span className="text-[9px] font-medium text-fuchsia-700 dark:text-fuchsia-300">{module.awaitingUser} decisions</span>
+                  )}
+                  {module.blocked > 0 && (
+                    <span className="text-[9px] font-medium text-muted-foreground">{module.blocked} blocked</span>
                   )}
                   {module.externalAction > 0 && (
                     <span className="text-[9px] font-medium text-violet-700 dark:text-violet-300">

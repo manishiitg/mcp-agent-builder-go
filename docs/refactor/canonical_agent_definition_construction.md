@@ -476,7 +476,7 @@ Only adapter behavior differs, so test the entry points that previously
 diverged:
 
 - scheduled Pulse Fixer;
-- standalone `/pulse-fixer`;
+- manual `/engineering-review` review-and-fix sequence;
 - converted schedule-to-chat Pulse Fixer;
 - one reader and one writer ordinary workflow agent.
 
