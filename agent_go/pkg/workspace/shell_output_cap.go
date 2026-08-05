@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -56,7 +58,13 @@ func agentShellOutputBytes() int {
 // told only that output was truncated re-runs the identical command — three of
 // the 2026-08-04 rejections were byte-identical repeats.
 func capShellResultForAgent(result ShellCommandResult) ShellCommandResult {
-	limit := agentShellOutputBytes()
+	return capShellStreamsToBudget(result, agentShellOutputBytes())
+}
+
+// capShellStreamsToBudget bounds the two streams to a combined byte budget.
+// Split out from capShellResultForAgent so the encoder can re-cap against a
+// smaller budget once it has measured what serialization actually costs.
+func capShellStreamsToBudget(result ShellCommandResult, limit int) ShellCommandResult {
 	if limit <= 0 {
 		return result
 	}
@@ -74,6 +82,80 @@ func capShellResultForAgent(result ShellCommandResult) ShellCommandResult {
 	result.Stderr = truncateShellStream(result.Stderr, stderrBudget, "stderr")
 	result.Stdout = truncateShellStream(result.Stdout, limit-len(result.Stderr), "stdout")
 	return result
+}
+
+// encodeShellResultForAgent serializes a result without HTML escaping.
+//
+// encoding/json escapes <, > and & as <, > and & by default —
+// six bytes for one. That protection is for JSON embedded in an HTML page; this
+// payload goes to a tool-result channel, so it buys nothing and costs 6x on the
+// most ordinary content these workflows produce. Measured on 48,000 capped
+// characters: all-angle-bracket content encoded to 286,333 bytes with escaping,
+// and HTML-ish content to 90,949.
+func encodeShellResultForAgent(result ShellCommandResult) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(result); err != nil {
+		return "", fmt.Errorf("failed to marshal result: %w", err)
+	}
+	// Encoder.Encode appends a newline that Marshal does not.
+	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
+// marshalCappedShellResultForAgent bounds the SERIALIZED payload, which is the
+// thing the consumer actually measures.
+//
+// Capping the streams and then encoding does not bound anything: quotes and
+// backslashes double, control characters expand sixfold, and the JSON envelope
+// adds its own bytes — all after the budget was checked. A 48,000-character cap
+// delivered up to 286,333 bytes. So encode, measure, and if the real payload is
+// over, shrink the stream budget in proportion to the overshoot and encode
+// again. Ordinary output settles on the first pass; escape-heavy output takes a
+// few, and each pass is a marshal of an already-bounded string.
+func marshalCappedShellResultForAgent(result ShellCommandResult) (string, error) {
+	limit := agentShellOutputBytes()
+	if limit <= 0 {
+		return encodeShellResultForAgent(result)
+	}
+
+	budget := limit
+	for attempt := 0; attempt < 6; attempt++ {
+		capped := capShellStreamsToBudget(result, budget)
+		out, err := encodeShellResultForAgent(capped)
+		if err != nil {
+			return "", err
+		}
+		if len(out) <= limit {
+			return out, nil
+		}
+
+		// Shrink in proportion to how far over we landed, with a margin so a
+		// pass that lands just above the line does not need another one.
+		next := budget * limit / len(out) * 19 / 20
+		if next >= budget {
+			next = budget - 1
+		}
+		if next < 1 {
+			next = 1
+		}
+		budget = next
+	}
+
+	// Convergence failed — content so escape-dense that even a tiny budget
+	// encodes over the limit. Returning the oversize payload would recreate the
+	// spill this cap exists to prevent, so return the explanation instead.
+	return encodeShellResultForAgent(ShellCommandResult{
+		Stdout: "",
+		Stderr: fmt.Sprintf(
+			"... [output omitted: %d characters of stdout and %d of stderr could not be encoded within the %d-character result budget "+
+				"because the content is almost entirely escaped characters. Do NOT re-run this command unchanged. "+
+				"Produce less: filter with grep, slice with head/tail or sed -n '<start>,<end>p', select fields with jq/awk, "+
+				"or write the full output to a file under your working directory and read it back in pieces.] ...",
+			len(result.Stdout), len(result.Stderr), limit,
+		),
+		ExitCode: result.ExitCode,
+	})
 }
 
 // truncateShellStream keeps the head and tail of s within budget, replacing the
@@ -94,9 +176,16 @@ func truncateShellStream(s string, budget int, stream string) string {
 	)
 	// A budget too small to hold the marker plus useful text on both sides is
 	// better spent on the marker alone: the agent still learns why it is short
-	// and what to do, which is the part it acts on.
+	// and what to do, which is the part it acts on. Returning the full marker
+	// would itself exceed the budget, which is how a cap configured below the
+	// marker length used to overshoot, so fall back to a short form and finally
+	// to hard truncation — whatever is returned must fit.
 	if budget <= len(marker) {
-		return marker
+		short := fmt.Sprintf("\n... [%s truncated: %d of %d characters omitted. Do NOT re-run unchanged; produce less output.] ...\n", stream, len(s)-budget, len(s))
+		if len(short) <= budget {
+			return short
+		}
+		return s[:budget]
 	}
 
 	remaining := budget - len(marker)

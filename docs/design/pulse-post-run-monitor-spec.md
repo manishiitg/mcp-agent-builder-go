@@ -1,3 +1,33 @@
+<!-- STATUS: design spec, NOT loaded at runtime. -->
+
+# Pulse post-run monitor — design spec
+
+**This document is not delivered to any agent.** It was a `builder-reference`
+reference doc until 2026-08-05; it is now a design spec kept for humans and for
+the contract tests.
+
+Why it moved: no production prompt ever loaded it. Pulse orchestration lives in
+the per-module prompts in `cmd/server/scheduler.go`, in the focused reference
+docs that prompts *do* load (`pulse-gate`, `pulse-review-fixer`,
+`pulse-finalizer`, `strategy-auditor`, `pulse-fixer-practices`), and in the
+`get_workflow_command_guidance` kinds. Commit `00ca7a46` ("Compact Pulse review
+orchestration", 2026-07-21) moved orchestration into the prompts and created the
+focused docs; this file was touched only lightly in that commit and was left
+behind rather than retired.
+
+It stayed in the runtime bundle as the only reference doc large enough to exceed
+a single tool result on its own (69,576 bytes, ~25,769 tokens against a 25,000
+token cap), reachable whenever an agent browsed the skill index — so it was a
+standing hazard for content nothing needed.
+
+**Because nothing loads it, it cannot be trusted to match behavior.** Treat
+`scheduler.go` and the loaded reference docs as authoritative; when they and
+this file disagree, this file is the stale one. The contract tests in
+`cmd/server/guidance/render_all_test.go` and `cmd/server/scheduler_test.go` read
+it from this path.
+
+---
+
 ## Pulse — Dynamic Post-Run Steward
 
 This is the comprehensive/manual Pulse playbook. Scheduled Pulse runs load the

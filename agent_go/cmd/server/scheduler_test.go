@@ -878,14 +878,14 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	gatePrompt := gate
 	gate = gate + "\n" + readContract("agent_go/cmd/server/guidance/templates/system/pulse-gate.md") +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	dashboardPrompt := dashboard
 	dashboard = dashboard + "\n" + readContract("agent_go/cmd/server/guidance/templates/system/review-improve-log.md") +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	finalizerPrompt := finalizer
 	finalizerContract := readContract("agent_go/cmd/server/guidance/templates/system/pulse-finalizer.md")
 	finalizer = finalizer + "\n" + finalizerContract +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	for _, pair := range []struct{ prompt, ref string }{
 		{gatePrompt, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-gate.md"}])`},
 		{dashboardPrompt, `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`},

@@ -2,9 +2,39 @@ package guidance
 
 import (
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// readPulseDesignSpec loads docs/design/pulse-post-run-monitor-spec.md.
+//
+// That file is NOT a reference doc: no prompt loads it and it is not in
+// referenceKinds, so it cannot be rendered. It remains the written Pulse design
+// spec, and these tests check the spec against the behavior the prompts and
+// loaded reference docs implement. A failure here means the spec and the system
+// disagree — and the spec is the side more likely to be stale.
+func readPulseDesignSpec(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for range 8 {
+		candidate := filepath.Join(dir, "docs", "design", "pulse-post-run-monitor-spec.md")
+		if body, readErr := os.ReadFile(candidate); readErr == nil {
+			return string(body)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatal("could not locate docs/design/pulse-post-run-monitor-spec.md from the test working directory")
+	return ""
+}
 
 func containsNormalizedText(haystack, needle string) bool {
 	return strings.Contains(
@@ -233,10 +263,7 @@ func TestEvaluationPlanGuidanceAcceptsSourceGroundedValidEmptyResults(t *testing
 }
 
 func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	opsReview, err := renderFromRegistry("ops-review", tmplData{}, allKinds)
 	if err != nil {
 		t.Fatalf("render ops-review: %v", err)
@@ -275,10 +302,7 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 }
 
 func TestPulseGuidanceTracesStateChangesToRuntimeConsumers(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	// Gate keeps the failure-mode flags visible (via the bug_review pointer) so
 	// it can classify a suspect signal; the full reachability method lives in
 	// pulse-bug-review, loaded only when bug_review is due.
@@ -340,10 +364,7 @@ func TestPulseGuidanceTracesStateChangesToRuntimeConsumers(t *testing.T) {
 }
 
 func TestPulseGuidanceRequiresReviewedBaselineBeforeCadenceSkip(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	for _, want := range []string{
 		"Reviewed-baseline rule",
 		"successful workflow run is evidence for a review; it is not a substitute",
@@ -363,10 +384,7 @@ func TestPulseGuidanceRequiresReviewedBaselineBeforeCadenceSkip(t *testing.T) {
 }
 
 func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	for _, want := range []string{
 		"SQLite/runtime state is authoritative",
 		"`builder/improve.html` is the durable explanatory",
@@ -616,10 +634,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 }
 
 func TestPulseGuidanceRejudgesActiveExperimentCadenceFromCurrentEvidence(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	for _, want := range []string{
 		"Every Gate must re-judge current goal evidence",
 		"planned evidence boundary, not a lock",
@@ -720,11 +735,6 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 
 func TestTierGuidanceProtectsQualityWhileGoalsAreBelowTarget(t *testing.T) {
 	cases := map[string][]string{
-		"post-run-monitor": {
-			"Goal quality outranks tier savings",
-			"material success criterion is",
-			"not evidence for a downgrade",
-		},
 		"llm-selection": {
 			"material workflow goal is below target",
 			"representative eval/run evidence is at target",
@@ -747,6 +757,20 @@ func TestTierGuidanceProtectsQualityWhileGoalsAreBelowTarget(t *testing.T) {
 			}
 		}
 	}
+
+	// post-run-monitor is the design spec, not a rendered reference doc.
+	// Same contract, read from its documented location.
+	spec := readPulseDesignSpec(t)
+	for _, want := range []string{
+		"Goal quality outranks tier savings",
+		"material success criterion is",
+		"not evidence for a downgrade",
+	} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("pulse design spec missing %q", want)
+		}
+	}
+
 }
 
 func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
@@ -757,13 +781,6 @@ func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
 			"default_tier_models",
 			"Provider-profile defaults auto-update",
 			"infer freshness by name",
-		},
-		"post-run-monitor": {
-			"Inventory every exact model pin",
-			"list_provider_models",
-			"Provider-profile workflows inherit current defaults",
-			"Upgrade, Keep current, or Decide later",
-			"newer catalog model is a review candidate",
 		},
 		"llm-selection": {
 			"Exact pins do not move automatically",
@@ -796,6 +813,21 @@ func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
 			}
 		}
 	}
+	// post-run-monitor is the design spec, not a rendered reference doc.
+	// Same contract, read from its documented location.
+	spec := readPulseDesignSpec(t)
+	for _, want := range []string{
+		"Inventory every exact model pin",
+		"list_provider_models",
+		"Provider-profile workflows inherit current defaults",
+		"Upgrade, Keep current, or Decide later",
+		"newer catalog model is a review candidate",
+	} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("pulse design spec missing %q", want)
+		}
+	}
+
 }
 
 func TestGoalAdvisorPrioritizesStrategyOverHTMLFormatting(t *testing.T) {
@@ -821,10 +853,7 @@ func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render review-improve-log: %v", err)
 	}
-	monitor, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	monitor := readPulseDesignSpec(t)
 	checks := map[string]struct {
 		rendered string
 		wants    []string
@@ -842,10 +871,7 @@ func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 }
 
 func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
-	monitor, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	monitor := readPulseDesignSpec(t)
 	for _, want := range []string{
 		`independent read-only agent`,
 		`bounded parallel batch`,
@@ -1485,10 +1511,7 @@ func TestWorkflowPatternsUseCurrentRuntimeAndStoreContracts(t *testing.T) {
 // signal; the reviewer docs gain a re-verify -> demote pass and protect the
 // code-owned ledger from edits.
 func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {
-	postRun, err := renderFromRegistry("post-run-monitor", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render post-run-monitor: %v", err)
-	}
+	postRun := readPulseDesignSpec(t)
 	for _, want := range []string{
 		"learnings/_global/_freshness.json",
 		"knowledgebase/_freshness.json",
@@ -1585,5 +1608,53 @@ func TestNoTemplateNamesARemovedPulseTool(t *testing.T) {
 	}
 	if visited == 0 {
 		t.Fatal("no templates were walked; the embed pattern or path changed")
+	}
+}
+
+// The one-time old-format migration was extracted out of review-improve-log
+// into its own reference doc. review-improve-log is read on every Pulse
+// dashboard write and by ten workflow upgrade prompts; the migration detail is
+// needed only when an existing log is actually old-format. Keeping it inline
+// charged every steady-state write for content it never used, on a doc already
+// large enough to matter against the per-result token limit.
+func TestReviewImproveLogMigrationIsExtracted(t *testing.T) {
+	log, err := renderFromRegistry("review-improve-log", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render review-improve-log: %v", err)
+	}
+	migration, err := renderFromRegistry("review-improve-log-migration", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render review-improve-log-migration: %v", err)
+	}
+
+	// The detail lives in the extracted doc.
+	for _, want := range []string{
+		"must be upgraded, not appended",
+		"Improvement Ledger",
+		"Active Improvement Index",
+	} {
+		if !strings.Contains(migration, want) {
+			t.Fatalf("review-improve-log-migration missing %q", want)
+		}
+	}
+
+	// ...and must not drift back into the frequently-read doc.
+	for _, moved := range []string{
+		"must be upgraded, not appended",
+		"Active Improvement Index",
+	} {
+		if strings.Contains(log, moved) {
+			t.Fatalf("review-improve-log should not re-inline extracted migration contract %q", moved)
+		}
+	}
+
+	// A reader that IS on an old-format log still has to be able to find it.
+	if !strings.Contains(log, `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-migration.md"}])`) {
+		t.Fatal("review-improve-log missing pointer to review-improve-log-migration")
+	}
+
+	// The extraction only pays off if the steady-state doc actually got smaller.
+	if len(log) > 44000 {
+		t.Fatalf("review-improve-log is %d bytes; the extraction was supposed to bring it under 44000", len(log))
 	}
 }

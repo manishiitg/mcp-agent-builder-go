@@ -135,7 +135,11 @@ func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, ar
 		// Only the agent-facing result is capped. Scripted steps call
 		// client.ExecuteShellCommand directly and parse stdout as schema-validated
 		// JSON, so they must keep every byte.
-		return marshalResult(capShellResultForAgent(result))
+		//
+		// The cap is enforced on the encoded payload, not on the raw streams:
+		// JSON escaping happens after any stream-level check and can multiply the
+		// delivered size several times over.
+		return marshalCappedShellResultForAgent(result)
 	}
 
 	executors["read_image"] = func(ctx context.Context, args map[string]interface{}) (string, error) {

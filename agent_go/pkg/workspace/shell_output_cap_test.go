@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,104 @@ func TestCapHonoursAnOperatorOverride(t *testing.T) {
 	capped := capShellResultForAgent(ShellCommandResult{Stdout: strings.Repeat("x", 50000)})
 	if len(capped.Stdout) > 1000 {
 		t.Errorf("override ignored: %d characters", len(capped.Stdout))
+	}
+}
+
+// The budget must hold for the SERIALIZED payload, because that is what the
+// consumer measures. Capping the raw streams and encoding afterwards bounded
+// nothing: JSON escaping doubles quotes and backslashes and expands <, > and
+// control characters sixfold, all after the check. At 48,000 capped characters
+// the delivered payload reached 286,333 bytes.
+func TestEncodedShellResultStaysWithinBudget(t *testing.T) {
+	limit := agentShellOutputBytes()
+	cases := []struct {
+		name string
+		unit string
+	}{
+		{"plain prose", "the quick brown fox jumps over it "},
+		{"html report output", `<div class="row"><span>a &amp; b</span></div>`},
+		{"all angle brackets", "<<<<<<<<<<"},
+		{"quote heavy", `""""""""""`},
+		{"backslash heavy", `\\\\\\\\\\`},
+		{"control characters", "\x01\x02\x03\x04\x05"},
+		{"nested json", `{"k":"v","nested":{"a":[1,2,3]},"s":"say \"hi\""}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Repeat(tc.unit, 300000/len(tc.unit))
+			encoded, err := marshalCappedShellResultForAgent(ShellCommandResult{
+				Stdout: raw,
+				Stderr: strings.Repeat("e", 20000),
+			})
+			if err != nil {
+				t.Fatalf("marshal returned error: %v", err)
+			}
+			if len(encoded) > limit {
+				t.Fatalf("encoded payload = %d bytes, exceeds the %d-byte budget", len(encoded), limit)
+			}
+			// It must still be valid JSON the caller can parse.
+			var back ShellCommandResult
+			if err := json.Unmarshal([]byte(encoded), &back); err != nil {
+				t.Fatalf("encoded payload is not valid JSON: %v", err)
+			}
+		})
+	}
+}
+
+// Output that already fits must pass through untouched — the cap should cost
+// nothing in the ordinary case.
+func TestSmallShellResultIsNotTruncated(t *testing.T) {
+	result := ShellCommandResult{Stdout: "hello <world> & \"friends\"", Stderr: "", ExitCode: 0}
+	encoded, err := marshalCappedShellResultForAgent(result)
+	if err != nil {
+		t.Fatalf("marshal returned error: %v", err)
+	}
+	var back ShellCommandResult
+	if err := json.Unmarshal([]byte(encoded), &back); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if back.Stdout != result.Stdout {
+		t.Fatalf("stdout = %q, want it unchanged", back.Stdout)
+	}
+}
+
+// A cap configured smaller than the truncation marker used to emit the whole
+// marker and blow the very budget it was enforcing.
+func TestTinyBudgetStillRespectsTheBudget(t *testing.T) {
+	t.Setenv("SHELL_MAX_AGENT_OUTPUT_BYTES", "120")
+	encoded, err := marshalCappedShellResultForAgent(ShellCommandResult{
+		Stdout: strings.Repeat("x", 50000),
+		Stderr: strings.Repeat("y", 5000),
+	})
+	if err != nil {
+		t.Fatalf("marshal returned error: %v", err)
+	}
+	if len(encoded) > 120 {
+		t.Fatalf("encoded payload = %d bytes, exceeds the configured 120-byte budget", len(encoded))
+	}
+}
+
+// Disabling HTML escaping is what keeps ordinary report output from costing 6x.
+// The bytes must survive the round trip unchanged.
+func TestHTMLIsNotEscapedButRoundTrips(t *testing.T) {
+	result := ShellCommandResult{Stdout: `<a href="x">A & B</a>`}
+	encoded, err := encodeShellResultForAgent(result)
+	if err != nil {
+		t.Fatalf("encode returned error: %v", err)
+	}
+	// With escaping off the raw characters survive verbatim. Asserting their
+	// presence avoids writing the six-character escape sequence as a literal,
+	// which is easy to mangle and easy to misread.
+	for _, ch := range []string{"<", ">", "&"} {
+		if !strings.Contains(encoded, ch) {
+			t.Fatalf("payload escaped %q instead of emitting it verbatim: %s", ch, encoded)
+		}
+	}
+	var back ShellCommandResult
+	if err := json.Unmarshal([]byte(encoded), &back); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if back.Stdout != result.Stdout {
+		t.Fatalf("stdout = %q, want %q", back.Stdout, result.Stdout)
 	}
 }
