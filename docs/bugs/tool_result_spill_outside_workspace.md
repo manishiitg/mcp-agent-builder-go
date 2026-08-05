@@ -1,6 +1,6 @@
 # Bug: An oversized tool result becomes a file the agent is ordered to read and forbidden to open
 
-## Status: RCA only (2026-08-04). Root cause established and verified. **No fix chosen.**
+## Status: OPEN (as of 2026-08-05). Root cause established and verified. Every known route closed except one: `agent_browser`.
 
 This is a recurrence of ticket #5 in
 [what_the_runtime_tells_an_agent_about_itself.md](what_the_runtime_tells_an_agent_about_itself.md),
@@ -160,26 +160,138 @@ result, retrying and failing the same way each time.
   [pulse_fixer_sqlite_readonly_wal_and_schema_guessing.md](pulse_fixer_sqlite_readonly_wal_and_schema_guessing.md);
   it may be independent of this chain rather than downstream of it.
 
-## Directions considered, none chosen
+## 2026-08-05 — what changed, what is still open
 
-Recorded so the next reader does not have to re-derive them. **No decision.**
+### Closed
 
-1. **Pin the limit.** Set `MAX_MCP_OUTPUT_TOKENS` explicitly so branch 1 wins and
-   the value stops depending on a remote gate or a vendor default. Cheap, and
-   makes any cap here meaningful. Does not by itself stop spills.
-2. **Move the cap to the boundary.** Enforce one budget where every tool result
-   is serialised, instead of per tool. Closes the class rather than the instance.
-   Open question: scripted steps parse tool output as schema-validated JSON and
-   must keep every byte — the existing cap avoids this by living in the tool
-   executor, and a boundary-level cap has to preserve that carve-out.
-3. **Make the spill readable.** A narrow read-only exception for the session's own
-   `tool-results/` directory. Resolves the contradiction directly, at the cost of
-   a hole in a guard whose value is that it has none.
-4. **Make the results smaller.** Split the reference docs, return sections rather
-   than whole files, and reconcile the "batch up to five" advice with the budget.
-   Addresses the cause rather than the symptom; largest scope.
+| route | how it was closed |
+|---|---|
+| `read_skill` batching | `maxReadSkillBatchSize` 5 -> 1 in mcpagent. A count cannot bound a payload; five small files are fine and two large ones are not. |
+| a single oversized reference doc | `post-run-monitor.md` (25,769 tokens, the only doc that alone exceeded the cap) removed from the runtime bundle; the one-time migration contract split out of `review-improve-log.md`. No bundle doc now exceeds one result. |
+| the shell result cap not actually capping | enforced on the SERIALIZED payload, HTML escaping dropped. See the section above. |
 
-Options 2 and 4 are not alternatives — 4 reduces how often 2 is needed.
+### Still open: `agent_browser`
+
+Of the four workspace tools an agent can actually call, three are bounded and
+one is not:
+
+```text
+execute_shell_command      capped (48,000 chars, enforced post-encode)
+read_skill                 one file per call
+diff_patch_workspace_file  small by nature
+agent_browser              NOT capped   <- the remaining route
+```
+
+`NewBrowserExecutor` wires `agent_browser` straight to
+`browserExecutor.HandleAgentBrowser` with no cap, and page content is exactly
+the kind of thing that gets large. Capping it makes the deadlock unreachable
+rather than merely unlikely.
+
+### Correction to an earlier claim in this document's discussion
+
+During this audit `read_workspace_file` was measured against real
+`builder/improve.html` files (up to 2.3x the cap) and reported as a live route.
+**It was not.** The server only ever registers the advanced executor set; the
+basic file tools had not been agent-reachable since the basic/advanced split,
+and `CreateWorkspaceToolExecutors()` was consumed by one dev harness. A stale
+comment at `base_orchestrator_tools.go:44` claimed `"workspace_tools:*"`
+resolved to it, which had not been true for as long.
+
+The measurements were real; the reachability was not. The basic executors have
+since been removed precisely because reading them in `pkg/workspace/tools.go`
+leads a reasonable auditor — human or agent — to the wrong conclusion. Check
+tool *registration*, not tool *definition*, before calling a route live.
+
+## Why the CLI tells the agent to read a path it cannot read
+
+Worth recording, because it looks like a CLI bug and is not.
+
+Claude Code's spill message says *"Use offset and limit parameters to read
+specific portions of the file"*. Those are the parameters of its built-in
+`Read` tool. In an ordinary Claude Code session that advice is correct and
+optimal: the file is local, `Read` opens any path, it paginates, and re-running
+the command would be wasted work.
+
+This platform disables that tool. `mcpagent/agent/prompt/builder.go:22` tells
+the agent not to use provider-native filesystem tools, and
+`mcpagent/agent/agent.go:1896` restricts it to declared tools. So the agent is
+left holding three individually correct instructions:
+
+| source | instruction |
+|---|---|
+| Claude Code CLI | read the spill file with `Read(offset, limit)` |
+| mcpagent prompt | do not use `Read`; only declared MCP tools |
+| folder guard | the declared shell tool may not touch that path |
+
+Under this platform, re-running with less output is the ONLY recovery, and
+reading the saved file is impossible — the exact inverse of what the vendor
+message advises. `codingCLIToolResultSpillDenial` exists to override that
+advice, but it can only fire after the agent has already tried and been denied.
+
+The message ships inside the `claude` binary. It cannot be edited, and it will
+reappear whenever a result goes over. The only controllable variable is whether
+a result ever goes over — which is why prevention, not recovery, is the fix.
+
+## Decision: do NOT add `~/.claude` to the folder guard
+
+Considered and rejected on 2026-08-05.
+
+`~/.claude` holds 1,185 project directories — full conversation transcripts for
+every session on the machine, including unrelated work — plus `.mcp.json`
+(commonly holding API keys), `settings.json`, `history.jsonl`, `file-history/`
+and `backups/`. Granting read access there to reach one spill file the agent
+produced itself trades a bounded annoyance for an unbounded confidentiality
+problem, and re-opens the class of defect
+[workspace_docs_path_inside_repo.md](workspace_docs_path_inside_repo.md)
+deliberately closed.
+
+If defence in depth is ever wanted, the only defensible scope is the LIVE
+session's own directory:
+
+```text
+~/.claude/projects/<project-slug>/<session-id>/tool-results/
+```
+
+read-only, resolved from the running session id rather than a static path,
+justified narrowly because that directory holds output this agent just produced.
+Even then it is a hole in a guard whose value is having none — and if the caps
+hold, nothing will ever read it.
+
+
+## Directions considered
+
+Recorded so the next reader does not have to re-derive them. Status as of
+2026-08-05 is noted per item.
+
+1. **Pin the limit — NOT DONE.** Set `MAX_MCP_OUTPUT_TOKENS` explicitly so
+   branch 1 wins and the value stops depending on a remote gate or a vendor
+   default. One line. Cheap, and makes any cap here meaningful. Does not by
+   itself stop spills.
+2. **Move the cap to the boundary — NOT DONE; `agent_browser` is why it still
+   matters.** Enforce one budget where every tool result is serialised, instead
+   of per tool. Closes the class rather than the instance. Open question:
+   scripted steps parse tool output as schema-validated JSON and must keep every
+   byte — the existing cap avoids this by living in the tool executor, and a
+   boundary-level cap has to preserve that carve-out. A generic truncation also
+   cannot simply cut the JSON: the result must stay parseable, so the safety net
+   has to return a valid explanatory envelope rather than a truncated payload.
+3. **Make the spill readable — REJECTED 2026-08-05.** See the `~/.claude`
+   decision above. A whole-directory grant is out of the question; only a
+   live-session-scoped `tool-results/` grant would be defensible, and if the
+   caps hold nothing would ever read it.
+4. **Make the results smaller — DONE for the skill path.** `read_skill` is one
+   file per call, `post-run-monitor.md` is out of the bundle, and the one-time
+   migration contract is split out of `review-improve-log.md`. No bundle doc now
+   exceeds a single result. This does not help `agent_browser`, whose payload
+   size is decided by the page, not by us.
+
+Options 2 and 4 are not alternatives — 4 reduces how often 2 is needed. With 4
+done for the skill path, 2 is what remains, and `agent_browser` is the concrete
+reason to do it.
+
+**Next action when this is picked up: cap `agent_browser`.** It is the last
+known route, and capping one tool is a smaller change than the chokepoint
+refactor while closing the same live gap.
 
 ## Related, and now fixed: the cap did not bound the delivered payload
 
