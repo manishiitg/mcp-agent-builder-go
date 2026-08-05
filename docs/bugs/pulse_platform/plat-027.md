@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | `Codex` |
-| Ticket state | `implemented` |
+| Ticket state | `implemented; runtime parent-gate verified` |
 | Last synchronized | `2026-08-04` |
 
 - **Priority:** P0
@@ -34,7 +34,11 @@
   `todo_task_orchestrator` turn open and completes it only when the controller's
   existing `todo_task_step_completed` event arrives, after all owned children
   have settled and their results have been reconciled. Failed turn endings keep
-  their existing failure path.
+  their existing failure path. A projected child is also treated as a loading
+  navigation entry: the UI neither requests its unpublished `/events` endpoint
+  nor lets the generic synthetic-transcript branch override its waiting view.
+  This removes the misleading `Conversation could not be loaded (404)` screen
+  while the real child terminal is still being published.
 - **Primary files:** `frontend/src/utils/terminalExecutionProjection.ts`,
   `frontend/src/components/TerminalCenter.tsx`,
   `frontend/src/hooks/useSessionExecutionTree.ts`, and
@@ -48,10 +52,16 @@
   `orchestrator_agent_end` representing an asynchronous dispatch, proves no
   completion is emitted and the registry remains running, then sends
   `todo_task_step_completed` and proves exactly one completion reuses the
-  original execution identity.
+  original execution identity. The 2026-08-04 Social Media rerun supplied the
+  runtime evidence for the completion gate: the dispatch turn ended without a
+  false completion notification or workflow-progress completion while
+  `execute-allocate` remained live. A new frontend regression proves an
+  execution-tree placeholder cannot request terminal events; the focused tests
+  and production build pass.
 - **Acceptance:** when a parent turn ends after dispatch, its still-running
   child remains visible and the parent step remains running until the child
   settles and the controller reconciles its result. No workshop
   `[AUTO-NOTIFICATION]` may say that the step completed merely because the
-  orchestrator ended its dispatch turn. A real Social Media producing run
-  remains the runtime recheck.
+  orchestrator ended its dispatch turn. The parent gate passed a real Social
+  Media runtime recheck; the rebuilt placeholder UI still needs visual runtime
+  confirmation.

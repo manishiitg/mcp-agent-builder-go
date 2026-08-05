@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Codex` |
 | Ticket state | `runtime_reverify` |
-| Last synchronized | `2026-08-04` |
+| Last synchronized | `2026-08-05` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -59,6 +59,15 @@
   folder-guard overrides, tool materialization, and session shell environment
   setup. Each workflow-step route retains the DB write path and exposes both
   managed DB tools.
+- **Argument-contract follow-up (2026-08-05):** a Social Media scheduled agent
+  reached the correct custom tool but naturally sent
+  `{"query":"SELECT …"}`. The read tool accepted only the synonymous `sql`
+  field, rejected the call, and forced a describe/retry cycle before the run
+  continued. `query_workflow_db` now documents and accepts `query` as a
+  compatibility alias for `sql`. Both names enter the same row-bounded,
+  query-only backend. Supplying different non-empty values for both fields
+  fails before any database request. Regression tests cover schema exposure,
+  successful alias execution, and conflict rejection.
 - **Acceptance:** a producing workflow run must prove that ordinary steps,
   evaluation steps, and asynchronous/message-sequence children can query and
   mutate through the managed tools without permission drift. Non-workflow
