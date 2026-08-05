@@ -340,12 +340,14 @@ func CloneTokenUsageFile(src *TokenUsageFile) *TokenUsageFile {
 	}
 
 	clone := &TokenUsageFile{
-		CreatedAt:      src.CreatedAt,
-		UpdatedAt:      src.UpdatedAt,
-		ByModel:        make(map[string]*ModelTokenUsage),
-		ByStepAndModel: make(map[string]map[string]*ModelTokenUsage),
-		ByTool:         make(map[string]*ToolCostUsage),
-		ByStepAndTool:  make(map[string]map[string]*ToolCostUsage),
+		CreatedAt:         src.CreatedAt,
+		UpdatedAt:         src.UpdatedAt,
+		ByModel:           make(map[string]*ModelTokenUsage),
+		ByStepAndModel:    make(map[string]map[string]*ModelTokenUsage),
+		ByTool:            make(map[string]*ToolCostUsage),
+		ByStepAndTool:     make(map[string]map[string]*ToolCostUsage),
+		ExecutionID:       src.ExecutionID,
+		PriorExecutionIDs: append([]string(nil), src.PriorExecutionIDs...),
 	}
 
 	for modelID, usage := range src.ByModel {

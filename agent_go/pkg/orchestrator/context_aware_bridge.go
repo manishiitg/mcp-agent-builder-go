@@ -3,16 +3,25 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	orchevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/events"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
+
+// numericOnlyIdentifierPattern matches a bare digit string such as a
+// schedule-message counter. Every real planning/plan.json step ID observed
+// in this codebase is a descriptive slug (e.g. "fetch-data", "job-search-
+// ...-step-4"), never bare digits, so this is used to keep an unvalidated
+// numeric index from being attributed as if it were a plan step (PLAT-031).
+var numericOnlyIdentifierPattern = regexp.MustCompile(`^[0-9]+$`)
 
 // TokenPersister defines the interface for persisting token usage to file
 type TokenPersister interface {
@@ -138,7 +147,12 @@ type ContextAwareEventBridge struct {
 	underlyingBridge mcpagent.AgentEventListener
 	tokenPersister   TokenPersister // Interface for persisting token usage
 	iterationFolder  string         // Current iteration folder for persistence
-	currentPhase     string
+	// executionID is one immutable ID minted for the lifetime of this bridge
+	// instance (PLAT-031), i.e. for the whole run — stamped onto every step
+	// cost event so the cost ledger keeps one execution's identity intact
+	// even when its writes land in two different UTC date-shard files.
+	executionID  string
+	currentPhase string
 	currentStep      int    // Step index within the current phase
 	currentStepID    string // Step ID (e.g., "fetch-data", "process-results")
 	currentStepType  string // Plan step type (e.g., "regular", "todo_task", "routing")
@@ -227,7 +241,15 @@ func NewContextAwareEventBridge(underlyingBridge mcpagent.AgentEventListener, lo
 	return &ContextAwareEventBridge{
 		underlyingBridge: underlyingBridge,
 		logger:           logger,
+		executionID:      uuid.NewString(),
 	}
+}
+
+// ExecutionID returns the immutable ID minted for this run (PLAT-031).
+func (c *ContextAwareEventBridge) ExecutionID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.executionID
 }
 
 // SetLogger updates the logger used by the bridge so workflow/group scoping can
@@ -860,6 +882,17 @@ func (c *ContextAwareEventBridge) HandleEvent(ctx context.Context, event *events
 						attributedStepID = "workflow_orchestrator"
 					}
 				}
+				// A bare numeric ID (e.g. a schedule-message counter) is never a
+				// real planning/plan.json step ID in this codebase — plan step
+				// IDs are descriptive slugs. Keep it out of a step-shaped phase
+				// bucket so the cost ledger never claims plan-step provenance it
+				// doesn't have (PLAT-031).
+				if numericOnlyIdentifierPattern.MatchString(strings.TrimSpace(attributedStepID)) {
+					attributedPhase = "schedule_message"
+				}
+				c.mu.RLock()
+				executionID := c.executionID
+				c.mu.RUnlock()
 				stepTokenData := &StepTokenData{
 					Phase:            attributedPhase,
 					Step:             currentStep,
@@ -871,6 +904,7 @@ func (c *ContextAwareEventBridge) HandleEvent(ctx context.Context, event *events
 					CacheWriteTokens: cacheTokensSeparate.WriteTokens, // cache writes (premium 1.25x)
 					ReasoningTokens:  tokenEvent.ReasoningTokens,
 					LLMCallCount:     llmCallCount, // Extract actual call count from event
+					ExecutionID:      executionID,
 				}
 
 				// Persist token usage directly to file (real-time persistence, no accumulation)
