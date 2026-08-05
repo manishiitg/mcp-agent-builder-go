@@ -41,7 +41,7 @@ func getToolNamesByCategory(category string) map[string]bool {
 
 // FilterCustomToolsByCategory filters custom tools and executors based on enabled tools
 // Format: single array with entries like "category:tool" or "category:*"
-//   - "workspace_tools:*" → all tools from CreateWorkspaceToolExecutors()
+//   - "workspace_tools:*" → the advanced workspace registry plus browser tools
 //   - "workspace_tools:execute_shell_command" → specific tool
 //   - "human_tools:*" → all tools from CreateHumanToolExecutors()
 //   - "human_tools:human_feedback" → specific blocking tool

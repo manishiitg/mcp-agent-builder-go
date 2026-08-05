@@ -128,17 +128,3 @@ const (
 	FolderGuardAllowedWriteFolderKey = common.FolderGuardAllowedWriteFolderKey
 )
 
-// CreateWorkspaceToolExecutors creates the execution functions for all workspace tools.
-// Returns the executor map produced by NewBasicExecutor (low-level file CRUD wrappers)
-// merged with CreateWorkspaceAdvancedToolExecutors (shell, diff-patch, web_fetch, etc.).
-func CreateWorkspaceToolExecutors() map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
-	client := workspace.NewClient(
-		getWorkspaceAPIURL(),
-		workspace.WithFolderGuard(getDefaultFolderGuard()),
-	)
-	executors := workspace.NewBasicExecutor(client)
-	for k, v := range CreateWorkspaceAdvancedToolExecutors() {
-		executors[k] = v
-	}
-	return executors
-}

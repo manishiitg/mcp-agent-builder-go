@@ -45,79 +45,17 @@ func mapToStruct(args map[string]interface{}, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// NewBasicExecutor creates executors for basic workspace file tools.
-// Executors return JSON strings for LLM consumption, wrapping the typed client methods.
-func NewBasicExecutor(client *Client) map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
-	executors := make(map[string]func(ctx context.Context, args map[string]interface{}) (string, error))
-
-	executors["list_workspace_files"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params ListWorkspaceFilesParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.ListWorkspaceFiles(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "list", "", params.Folder)
-		// ListFiles returns raw JSON from the API — pass it through directly
-		return string(result.Raw), nil
-	}
-
-	executors["read_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params ReadWorkspaceFileParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.ReadWorkspaceFile(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "read", params.Filepath, "")
-		return marshalResult(result)
-	}
-
-	executors["update_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params UpdateWorkspaceFileParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.UpdateWorkspaceFile(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "update", params.Filepath, "")
-		return marshalResult(result)
-	}
-
-	executors["delete_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params DeleteWorkspaceFileParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.DeleteWorkspaceFile(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "delete", params.Filepath, "")
-		return marshalResult(result)
-	}
-
-	executors["move_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params MoveWorkspaceFileParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.MoveWorkspaceFile(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "move", params.DestinationFilepath, "")
-		return marshalResult(result)
-	}
-
-	return executors
-}
+// The basic file tools (read/list/update/delete/move_workspace_file) were
+// removed on 2026-08-05. They had not been reachable by an agent since the
+// basic/advanced split: the server only ever registers the advanced set, and
+// the "workspace_tools" category resolves to the advanced registry plus the
+// browser. They survived as an executor map used by one dev harness, and cost
+// more than they were worth — a reader (human or agent) auditing which tool
+// results are bounded finds them in this file and reasonably concludes agents
+// can call them. Reading a workspace file is execute_shell_command's job; it
+// is capped and can be sliced with head/tail/sed. The typed Client methods
+// (ReadWorkspaceFile and friends) are unaffected — the server uses them
+// throughout to read files in Go.
 
 // NewAdvancedExecutor creates executors for advanced workspace tools (shell, image, pdf, diff patch)
 func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
