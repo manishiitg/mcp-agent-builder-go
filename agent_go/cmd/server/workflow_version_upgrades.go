@@ -443,6 +443,26 @@ Goal: builder/improve.html is a short published executive journal. The SQLite-ba
 
 Report the before/after active card count, archived card count, Current work counts, and any blocker, then stop.`,
 	},
+	{
+		from:  workflowContractLightweightPulseReportVersion,
+		to:    workflowContractExecutivePulseJournalVersion,
+		label: "upgrade-1.0.20",
+		query: `WORKFLOW VERSION UPGRADE v1.0.19 -> v1.0.20.
+
+This is a product-managed Pulse presentation migration. Do ONLY this executive-journal upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
+
+Goal: builder/improve.html is a small published executive journal. The database-native Pulse popup owns reviewer coverage, assumptions, issue queues, backlog counts, evidence, verification, costs, diagnostics, and operational filtering.
+
+1. Read workflow.json and builder/improve.html. Load read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]).
+2. If builder/improve.html exists, upgrade it to data-pulse-schema="5". Keep only the Bug/Goal verdicts, one status sentence, exactly three Latest Pulse cells (Outcome, Goal movement, Next), at most six material Activity transitions, the hidden #pulse-agent-handoff, and Archive links.
+3. Remove visible reviewer coverage, assumptions, Current work/backlog counts, issue queues, technical/cost/maintenance tiles, filters, raw agent output, per-reviewer fields, and standing finding cards. These remain available in SQLite and the Pulse popup; do not copy them into another visible section.
+4. Preserve material lifecycle history: consequential filed/fixed/verified/reopened/escalated transitions, user decisions, and meaningful run outcomes. Move older safe-to-archive cards into their matching monthly builder/improve-archive/YYYY-MM.html file. Never delete history merely to shorten the active page.
+5. Keep at most six material Activity cards in the active file. Do not impose a byte, character, or token budget.
+6. Verify exactly one newest-first anchor, exactly one three-cell Latest Pulse summary, no retired operational-detail blocks, no .entry.open/.modfields/.agentlog, and one hidden #pulse-agent-handoff.
+7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.20". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
+
+Report the before/after active card count, archived card count, removed visible operational sections, and any blocker, then stop.`,
+	},
 }
 
 func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {

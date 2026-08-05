@@ -2592,8 +2592,14 @@ func workflowHasPendingPlanChangelogArtifactReview(ctx context.Context, workspac
 
 func postRunMonitorSteps() []postRunMonitorStep {
 	steps := []postRunMonitorStep{postRunMonitorGateStep("<pulse_run_id>", "<run_folder>", "<run_status>")}
-	for _, moduleStep := range postRunMonitorModuleSteps("<pulse_run_id>") {
-		steps = append(steps, moduleStep.step)
+	allOperational := []string{pulseModuleWorkflowReview, pulseModuleLLMOpsReview}
+	if shared, ok := postRunMonitorSharedOperationalReviewStep("<pulse_run_id>", "<review_run_id>", allOperational); ok {
+		steps = append(steps, shared)
+	}
+	for _, module := range []string{pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
+		if independent, ok := postRunMonitorIndependentModuleStep("<pulse_run_id>", "<review_run_id>", module); ok {
+			steps = append(steps, independent)
+		}
 	}
 	steps = append(steps, postRunMonitorFinalSteps("<pulse_run_id>")...)
 	return steps
@@ -2629,20 +2635,36 @@ func postRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleStep {
 		module: pulseModuleWorkflowReview,
 		step: postRunMonitorStep{
 			label: "workflow-review",
-			query: fmt.Sprintf(`PULSE MODULE — WORKFLOW REVIEW. pulse_run_id=%q. Run one independent READ-ONLY REVIEW agent as a native backend message sequence in one continuous context. In the opening turn, load the focused builder references in one read_skill call, collect shared goal, plan, latest-run, worklist, lifecycle, and cost evidence once, reconcile the complete active and suppressed backlog, and produce only a compact evidence map for the later ordered lenses. Do not perform all lenses in the opening turn. The required follow-up turns cover: (1) correctness and safe exploratory QA, including failed/hidden-error tool calls and arrived verification evidence; (2) plan/changelog and artifact drift; (3) report and eval truthfulness; (4) learnings, knowledgebase, and database contracts, including complete skill-package purity and every effective read-write learning_objective; (5) cost, time, model selection, tool/runtime reliability, and plan-design hygiene; then (6) semantic consolidation. Reuse earlier evidence and open original sources only when the current decision needs them. In the final turn: Semantically consolidate the same root cause across lenses into one finding, retain every distinct evidence pointer, and return one priority-ordered set of unique findings plus a separate verification section. Do not evaluate whether the selected tactic is strategically complete or invent a different strategy: those belong to independent strategy_auditor and goal_advisor agents. Never edit files or DB, run producing actions, create questions, update HTML, publish, notify, start fix attempts, or mark module state. %s The single consolidated Fixer applies bounded repairs after the reviewer barrier and marks workflow_review exactly once.`, pulseRunID, pulseModuleImproveLogReminder),
+			query: fmt.Sprintf(`PULSE MODULE — ENGINEERING REVIEW. pulse_run_id=%q. Review the workflow from a developer/QA perspective: whether explicit behavior is implemented correctly. Inspect execution and tool behavior, safe exploratory QA, failed or hidden-error tool calls, arrived verification evidence, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A technically correct report/eval that measures the wrong business outcome belongs to Strategy Auditor; a correct but inefficient model/tool choice belongs to LLM/Ops. Semantically merge the same root cause while retaining distinct evidence. Never propose product strategy, edit files or DB, run producing actions, create questions, update HTML, publish, notify, start fix attempts, or mark module state. %s The single consolidated Fixer applies bounded repairs after the reviewer barrier.`, pulseRunID, pulseModuleImproveLogReminder),
+		},
+	}
+	strategyAuditor := postRunMonitorModuleStep{
+		module: pulseModuleStrategyAuditor,
+		step: postRunMonitorStep{
+			label: "strategy-auditor",
+			query: fmt.Sprintf(`PULSE MODULE — STRATEGY AUDITOR. pulse_run_id=%q. Run one independent READ-ONLY PRODUCT/BUSINESS REVIEW of the current strategy. Start from the goal, constraints, comparable cross-run outcomes, funnel/cohort/channel evidence, and what decisions the user must make. Ask whether the correctly implemented workflow is useful and capable of achieving the goal: causal gaps, proxy optimization, repetition, concentration, saturation, weak exploration, diminishing returns, and whether technically correct reports/evaluations measure the outcomes the user and business actually care about. Do not diagnose implementation bugs, schema/path/tool failures, artifact inconsistency, or cost/runtime efficiency; hand those to Engineering Review or LLM/Ops without consuming this review. Return a concise user-facing improvement brief: business problem, outcome evidence, missing strategic piece, bounded in-strategy recommendation, expected goal impact, risks/tradeoffs, suggested experiment, and whether a material user decision is required. A recommendation is a proposal, not permission to mutate the plan. Do not edit files or DB, run producing actions, create questions, update HTML, or mark state. %s The single Fixer records the proposal_only lifecycle result or creates and links a real decision request when approval is genuinely required; it never silently applies a material strategy change.`, pulseRunID, pulseModuleImproveLogReminder),
+		},
+	}
+	goalAdvisor := postRunMonitorModuleStep{
+		module: pulseModuleGoalAdvisor,
+		step: postRunMonitorStep{
+			label: "goal-advisor",
+			query: fmt.Sprintf(`PULSE MODULE — GOAL ADVISOR. pulse_run_id=%q. Run the independent read-only advisor and critic with a BLANK-SHEET PRODUCT/BUSINESS lens. Start from the goal, constraints, and trustworthy outcome evidence without consuming Engineering, Ops, or Strategy Auditor conclusions. Propose a materially different approach outside the current strategic shape only when it offers credible leverage; bug repair, instrumentation, report/eval correction, plan cleanup, and incremental in-strategy improvement are invalid outcomes. Return one concise user-facing opportunity brief: current strategy ceiling, alternative thesis, expected upside, assumptions, risks, affected goal criterion, bounded experiment, measurement, migration/rollback, and the explicit decision required. The separate critic must challenge whether it is materially better than the current plan. Do not edit files or DB, run producing actions, create/consume questions, update HTML, or mark state. %s The single Fixer records the proposal and creates or refreshes the linked approve/reject/defer decision; it applies only an exact previously approved experiment.`, pulseRunID, pulseModuleImproveLogReminder),
 		},
 	}
 
 	return []postRunMonitorModuleStep{
 		workflowReview,
-		byModule[pulseModuleStrategyAuditor],
-		byModule[pulseModuleGoalAdvisor],
+		byModule[pulseModuleLLMOpsReview],
+		strategyAuditor,
+		goalAdvisor,
 	}
 }
 
 // legacyPostRunMonitorModuleSteps retains the focused historical briefs as
 // source material for manual commands and migration tests. Scheduled Pulse now
-// emits one workflow_review agent plus independent strategy and goal agents.
+// uses them as independently gated lane contracts inside one shared operational
+// reviewer session, plus independent strategy and goal agents.
 func legacyPostRunMonitorModuleSteps(pulseRunID string) []postRunMonitorModuleStep {
 	steps := []postRunMonitorModuleStep{
 		{pulseModuleBugReview, postRunMonitorStep{"bug-review", fmt.Sprintf("PULSE MODULE — BUG REVIEW. pulse_run_id=%q. This is a read-only reliability and exploratory QA review selected by Pulse Gate. Inspect the compact Gate worklist, retained run/eval evidence, execution logs, validation, prompts/config, stale artifacts, selector/API/runtime failures, hallucinated success, and report/eval evidence-chain breakage. First derive a concise behavioral contract from soul.md, the current plan and step descriptions/config, and applicable eval/report/DB contracts: state what must happen, what must never happen, and which evidence proves each claim. Build a small risk-ranked exploratory QA matrix covering the critical path, one negative path, one boundary or edge case, stale/current-run isolation, and failure/recovery behavior when applicable. Execute only tests proven side-effect-free, using existing artifacts, fixtures, validation scripts, temporary copies, scratch directories, or a scratch DB. Never send email/messages, post content, trade, publish, mutate production DB/data, or rerun an externally producing workflow action without explicit user approval. When a path cannot be tested safely, return an exact reproducible test case with setup, action, expected versus observed assertion, required evidence, and risk; do not simulate success. Treat semantic execution defects as Bugs too: for each suspect step named by Gate evidence, follow the post-run-monitor Observable execution-trace review contract and inspect only its latest applicable *-conversation.json (conversation_history, tool_calls, llm_calls), or message-sequence session.json, rather than auditing every conversation. A scripted step has no conversation, so the absence of one is not evidence of health. Its equivalent trace is logs/<step>/execution/scripted_fast_path.json, which records the script path, exit code, success, captured stdout, and any execution/validation error. Read that first, then its code/main.py, declared validation_schema, output files, and prevalidation results. Judge the run the same way you judge a trace: exit_code 0 with empty or unchanged output is the scripted form of hallucinated success, and success=true alongside a non-empty validation_error is a contradiction worth a finding. Ordinary correctness bugs in scripted steps are yours — wrong source, wrong filter or time window, wrong destination, silently swallowed errors, a hardcoded value that should be derived, a path that exits 0 having done no work. Whether a correct script has become outdated as the world moved is not yours; that belongs to strategy_auditor. Judge observable behavior: wrong tool/source, wrong workspace/run/group/table/endpoint/ids/filters/time window/destination, ignored or misinterpreted tool results, stale dependencies, invalid route/fallback/retry/stop choices, insufficient evidence, unsupported conclusions, and unverified recovery. Do not request or infer hidden chain-of-thought. Return every trace finding with classification, step/item, attempt, exact observable decision/tool call and result, impact, bounded fix, and verification, using exactly correctness_bug, efficiency_or_coaching, no_issue, or insufficient_evidence. Only correctness_bug belongs to the Pulse Fixer. Route efficiency_or_coaching to current llm_ops_review when due, otherwise preserve one deduplicated evidence pointer and next-check trigger for a future LLM/Ops pass; never change a correct step merely because a different tool might be faster. Return verdict, behavioral contract, QA coverage, ordered findings, expected versus observed behavior, exact evidence, confidence, untested risk, bounded recommended fixes, regression verification steps, and whether user judgment is required. Do not edit files, call mutation tools, update builder/improve.html, ask the user, or mark module state from the reviewer. "+pulseModuleImproveLogReminder+" The parent Pulse Fixer consolidates this review with all other due modules, applies safe fixes sequentially, runs targeted regression verification only in a temporary or otherwise proven side-effect-free environment, records one `Bug fix` outcome when needed, and calls record_pulse_result(workspace_path=\"<current workflow>\", pulse_run_id=%q, module=\"bug_review\", result=\"done|changed|blocked|failed|skipped\", reason=\"...\", evidence=[...]).", pulseRunID, pulseRunID)}},
@@ -2750,7 +2772,7 @@ func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotific
 		// reconcilePulseDashboardCommand then marked the whole stage failed even
 		// though the dashboard itself was correct. Naming the tool here, the same
 		// way the finalize stage already does, is what removes the guess.
-		{"dashboard", fmt.Sprintf("PULSE DASHBOARD. pulse_run_id=%q. This stage alone owns Pulse render. FIRST load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/review-improve-log.md\"}]); read worklist/results/reviews and call get_pulse_state(view=\"backlog\") without a module filter. Write builder/improve.html once as a lightweight SQLite-backed executive journal; if legacy/malformed, load the skeleton and upgrade while preserving history in monthly archives. Do not copy skeleton instructions/examples, issue-title queues, technical tiles, filters, raw agent output, per-reviewer field dumps, or standing open-finding cards into the active file. Refresh builder/card.health.html; create only genuine user questions. Read improve.html back. Require data-pulse-schema=\"4\", %d unique canonical coverage data-module ids and labels, exactly 3 Latest Pulse cells (Outcome/Goal movement/Next), one data-source=\"sqlite\" Current work count strip with Open/Fixing/Verify, no duplicated operational-detail sections, and #pulse-agent-handoff[data-pulse-run-id] for this run. Keep at most 12 material Activity cards active and archive older safe history. Mark command=\"dashboard\" running then done only after proof, using record_pulse_result(command=\"dashboard\", result=\"running\"|\"done\", reason=\"...\") — this is the only tool that may write pulse_final_command_state; never mutate_workflow_db or direct SQL for it — and stop.", pulseRunID, len(pulseModuleOrder))},
+		{"dashboard", fmt.Sprintf("PULSE DASHBOARD. pulse_run_id=%q. This stage alone owns Pulse render. FIRST load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/review-improve-log.md\"}]); read worklist/results/reviews and the SQLite-backed Pulse lifecycle state. Write builder/improve.html once as a lightweight published executive journal; if legacy/malformed, load the skeleton and upgrade while preserving history in monthly archives. Visible HTML contains only the two verdicts, one status sentence, exactly 3 Latest Pulse cells (Outcome/Goal movement/Next), at most 6 material Activity transitions, and archive links. Do not render reviewer coverage, assumptions panels, Current work/backlog counts, issue queues, technical/cost tiles, filters, raw agent output, per-reviewer fields, or standing finding cards; those belong to the database-native Pulse popup. Do not copy skeleton instructions or examples. Refresh builder/card.health.html and create only genuine user questions. Read improve.html back. Require data-pulse-schema=\"5\", exactly 3 Latest Pulse cells, no duplicated operational-detail sections, and #pulse-agent-handoff[data-pulse-run-id] for this run. Archive older safe history. Mark command=\"dashboard\" running then done only after proof, using record_pulse_result(command=\"dashboard\", result=\"running\"|\"done\", reason=\"...\") — this is the only tool that may write pulse_final_command_state; never mutate_workflow_db or direct SQL for it — and stop.", pulseRunID)},
 		{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The dashboard stage already ran, so complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)},
 	}
 }
@@ -2803,14 +2825,53 @@ func postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module string)
 	if label == "" {
 		return postRunMonitorStep{}, false
 	}
-	if module == pulseModuleWorkflowReview {
-		moduleBrief = `PULSE MODULE — WORKFLOW REVIEW. In the call_generic_agent instructions, tell the reviewer to load the focused pulse-review-fixer reference, collect goal, plan, latest-run, worklist, lifecycle, and cost evidence once, reconcile the complete active and suppressed backlog, and produce a compact shared evidence map in its opening turn. Do not include message_sequence in the tool call: the backend attaches the canonical correctness, artifact-drift, report/eval, stores, LLM/ops, and consolidation follow-ups for module="workflow_review". Those ordered turns reuse one agent, one MCP session, one isolated workspace, and one conversation history. The reviewer is read-only, keeps strategy completeness out of scope, persists one deduplicated priority-ordered review with a separate verification section, and never edits, publishes, notifies, asks the user, starts fixes, or marks module state.`
-	}
 	return postRunMonitorStep{
 		label: label,
 		query: fmt.Sprintf("PULSE INDEPENDENT READ-ONLY REVIEW. pulse_run_id=%q, review_run_id=%q, module=%q. "+
 			"Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"}]) and follow its reviewer phase for this module only. Reconcile the complete active retained backlog, awaiting-verification work, and any already-saved SQLite result before discovery. If the evidence is already sufficient, do not launch a duplicate reviewer. Otherwise make exactly one call_generic_agent call asynchronously with role=\"reviewer\", module=%q, and these exact run identities; never combine reviewers in one shell command or use background curl, & or wait. Record its execution_id, end the current turn, and resume only from the automatic completion notification. Then confirm the SQLite result can be loaded with get_pulse_state(view=\"review\") and stop without editing, fixing, or marking module state. The single consolidated Fixer stage after all selected reviews owns every mutation and terminal module result.",
 			pulseRunID, reviewRunID, module, module) + "\n\nMODULE-SPECIFIC CONTRACT:\n" + moduleBrief,
+	}, true
+}
+
+func isPulseOperationalReviewLane(module string) bool {
+	switch module {
+	case pulseModuleWorkflowReview, pulseModuleLLMOpsReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// postRunMonitorSharedOperationalReviewStep launches one reviewer session but
+// only the operational lanes Gate selected. The backend owns the ordered turn
+// construction from review_lanes, so a launcher cannot silently re-add skipped
+// expensive audits or omit consolidation.
+func postRunMonitorSharedOperationalReviewStep(pulseRunID, reviewRunID string, lanes []string) (postRunMonitorStep, bool) {
+	if len(lanes) == 0 {
+		return postRunMonitorStep{}, false
+	}
+	seen := map[string]bool{}
+	canonical := make([]string, 0, len(lanes))
+	for _, module := range pulseModuleOrder {
+		if !isPulseOperationalReviewLane(module) {
+			continue
+		}
+		for _, requested := range lanes {
+			if requested == module && !seen[module] {
+				seen[module] = true
+				canonical = append(canonical, module)
+			}
+		}
+	}
+	if len(canonical) != len(lanes) {
+		return postRunMonitorStep{}, false
+	}
+	laneJSON, _ := json.Marshal(canonical)
+	return postRunMonitorStep{
+		label: "workflow-review",
+		query: fmt.Sprintf("PULSE MODULE — WORKFLOW REVIEW (GATE-SELECTED LANES). pulse_run_id=%q, review_run_id=%q, selected_lanes=%s. "+
+			"Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"}]) and follow its reviewer phase. Reconcile the complete active retained backlog, awaiting-verification work, and saved SQLite results for only the selected lanes. Make exactly one call_generic_agent call asynchronously with role=\"reviewer\", module=\"workflow_review\", review_lanes=%s, and these exact run identities. Do not pass message_sequence: the backend builds one ordered turn for each selected lane plus one consolidation turn in this same agent, MCP session, folder guard, isolated workspace, and conversation history. Omitted lanes must not run. Record its execution_id, end the current turn, and resume only from the automatic completion notification. Then confirm the SQLite review can be loaded with get_pulse_state(view=\"review\") and stop without editing, fixing, marking module state, or launching another reviewer. The single consolidated Fixer after the reviewer barrier owns all mutations and terminal results for every due lane.",
+			pulseRunID, reviewRunID, string(laneJSON), string(laneJSON)) + " " + pulseModuleImproveLogReminder,
 	}, true
 }
 
@@ -2906,7 +2967,19 @@ func (s *SchedulerService) selectedPostRunMonitorModuleSteps(ctx context.Context
 	selected := make([]postRunMonitorStep, 0, len(selectedModules)+3)
 	if len(selectedModules) > 0 {
 		reviewRunID := pulseReviewRunID(pulseRunID, time.Now())
+		operationalLanes := make([]string, 0, 2)
+		independentModules := make([]string, 0, 2)
 		for _, module := range selectedModules {
+			if isPulseOperationalReviewLane(module) {
+				operationalLanes = append(operationalLanes, module)
+			} else {
+				independentModules = append(independentModules, module)
+			}
+		}
+		if step, exists := postRunMonitorSharedOperationalReviewStep(pulseRunID, reviewRunID, operationalLanes); exists {
+			selected = append(selected, step)
+		}
+		for _, module := range independentModules {
 			if step, exists := postRunMonitorIndependentModuleStep(pulseRunID, reviewRunID, module); exists {
 				selected = append(selected, step)
 			}

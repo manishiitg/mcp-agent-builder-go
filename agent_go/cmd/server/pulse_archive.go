@@ -12,7 +12,7 @@ import (
 
 const (
 	pulseImproveArchiveRetentionDays  = 15
-	pulseImproveArchiveMaxActiveItems = 12
+	pulseImproveArchiveMaxActiveItems = 6
 )
 
 type pulseImproveArchiveAssessment struct {

@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/tmuxinput"
 
+	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/liveattach"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 )
@@ -222,6 +223,111 @@ func installFakeAttach(t *testing.T, respond func(cmd string) liveattach.Reply) 
 		runTerminalTmuxCommand = origRun
 	})
 	return fake
+}
+
+func TestRetainedMainTurnSettlesFromTmuxStreamAndKeepsProcessLive(t *testing.T) {
+	var paneMu sync.RWMutex
+	pane := []string{"• Working (1s • esc to interrupt)", "›"}
+	fake := installFakeAttach(t, func(cmd string) liveattach.Reply {
+		if strings.HasPrefix(cmd, "capture-pane ") {
+			paneMu.RLock()
+			defer paneMu.RUnlock()
+			return liveattach.Reply{Lines: append([]string(nil), pane...)}
+		}
+		return liveattach.Reply{}
+	})
+
+	const sessionID = "retained-stream-completion"
+	const tmuxSession = "mlp-codex-cli-int-retained-stream"
+	terminalID := sessionID + ":main:" + sessionID
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, tmuxSession,
+	))
+	if _, ok := terminalStore.MarkTurnCompleted(terminalID); !ok {
+		t.Fatal("could not prepare idle retained terminal")
+	}
+	eventStore := internalevents.NewEventStore(100)
+	defer eventStore.Stop()
+	api := &StreamingAPI{
+		eventStore:                   eventStore,
+		terminalStore:                terminalStore,
+		liveAttach:                   newLiveAttachManager(),
+		activeSessions:               map[string]*ActiveSessionInfo{sessionID: {SessionID: sessionID, Status: "completed"}},
+		retainedMainTurns:            make(map[string]time.Time),
+		retainedMainTurnWatchCancels: make(map[string]context.CancelFunc),
+	}
+	eventStore.SetEventAddedCallback(func(ownerSessionID string, event internalevents.Event) {
+		terminalStore.HandleEventWithChange(ownerSessionID, event)
+		api.observeRetainedMainTurnEvent(ownerSessionID, event)
+	})
+
+	api.markRetainedMainCodingTurnRunning(sessionID)
+	if !api.isSessionBusy(sessionID) {
+		t.Fatal("retained turn was not marked busy")
+	}
+
+	// The first stream-driven inspection sees the active Codex status and must
+	// keep the turn open. This is the boundary the old test skipped by manually
+	// injecting streaming_end.
+	firstCaptureDeadline := time.After(2 * time.Second)
+	for {
+		select {
+		case cmd := <-fake.commands:
+			if strings.HasPrefix(cmd, "capture-pane ") {
+				goto firstCaptureObserved
+			}
+		case <-firstCaptureDeadline:
+			t.Fatal("stream observer never inspected the active pane")
+		}
+	}
+
+firstCaptureObserved:
+	if !api.isSessionBusy(sessionID) {
+		t.Fatal("active pane incorrectly settled the retained turn")
+	}
+	paneMu.Lock()
+	pane = []string{"Completed", "›"}
+	paneMu.Unlock()
+
+	api.liveAttach.mu.Lock()
+	stream := api.liveAttach.sessions[tmuxSession]
+	api.liveAttach.mu.Unlock()
+	if stream == nil {
+		t.Fatal("retained lifecycle did not attach to the tmux stream")
+	}
+	stream.broadcast([]byte("\x1b[2Jcodex repainted its idle composer"))
+
+	deadline := time.Now().Add(4 * time.Second)
+	for api.isSessionBusy(sessionID) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("stable idle composer did not settle retained turn")
+	}
+	settled, ok := terminalStore.GetRaw(terminalID)
+	if !ok || settled.Active || settled.State != "completed" || settled.ProcessState != "live" {
+		t.Fatalf("settled terminal = %+v, want completed logical turn with live tmux", settled)
+	}
+	api.activeSessionsMux.RLock()
+	gotStatus := api.activeSessions[sessionID].Status
+	api.activeSessionsMux.RUnlock()
+	if got := gotStatus; got != "completed" {
+		t.Fatalf("session status = %q, want completed", got)
+	}
+	if runtime, _ := api.authoritativeRuntimeSnapshot(sessionID); runtime.Phase != runtimePhaseCompleted {
+		t.Fatalf("runtime phase = %q (%s), want completed", runtime.Phase, runtime.Reason)
+	}
+	foundCompletion := false
+	for _, event := range eventStore.GetAllEventsRaw(sessionID) {
+		if event.Type == "unified_completion" && event.TerminalID == terminalID {
+			foundCompletion = true
+			break
+		}
+	}
+	if !foundCompletion {
+		t.Fatal("tmux stream settlement did not emit unified_completion")
+	}
 }
 
 // seedResponder answers the seed-chain commands with a canned seed.

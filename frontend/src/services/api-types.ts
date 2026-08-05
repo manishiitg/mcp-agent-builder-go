@@ -350,7 +350,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'goal_advisor' | 'chief_of_staff' | string
+  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | 'chief_of_staff' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string

@@ -27,6 +27,25 @@ export type PulseReviewStorageSummary = {
   native: number
 }
 
+const ENGINEERING_REVIEW_ALIASES = new Set([
+  'bug_review',
+  'artifact_review',
+  'report_health',
+  'eval_health',
+  'stores_health',
+  'learning_health',
+  'knowledgebase_health',
+  'db_health',
+])
+
+/** Keep old Pulse records visible after the reviewer model is simplified. */
+export function normalizePulseWorkspaceModule(module?: string): string {
+  const value = (module || '').trim()
+  if (ENGINEERING_REVIEW_ALIASES.has(value)) return 'workflow_review'
+  if (value === 'cost_llm_time') return 'llm_ops_review'
+  return value
+}
+
 export function summarizePulseReviewStorage(
   reviews: PulseReviewRecord[],
 ): PulseReviewStorageSummary {
@@ -49,14 +68,18 @@ export function buildPulseWorkspaceModuleSummaries(
 ): PulseWorkspaceModuleSummary[] {
   const latestReviewByModule = new Map<string, PulseReviewRecord>()
   reviews.forEach((review) => {
-    const current = latestReviewByModule.get(review.module)
+    const module = normalizePulseWorkspaceModule(review.module)
+    const current = latestReviewByModule.get(module)
     if (!current || review.recorded_at.localeCompare(current.recorded_at) > 0) {
-      latestReviewByModule.set(review.module, review)
+      latestReviewByModule.set(module, review)
     }
   })
 
   return definitions.map((definition) => {
-    const moduleFindings = findings.filter((finding) => finding.module === definition.id)
+    const definitionModule = normalizePulseWorkspaceModule(definition.id)
+    const moduleFindings = findings.filter((finding) => (
+      normalizePulseWorkspaceModule(finding.module) === definitionModule
+    ))
     return {
       ...definition,
       findings: moduleFindings.length,
@@ -76,7 +99,7 @@ export function buildPulseWorkspaceModuleSummaries(
         finding.seen_count > 1
         && finding.status !== 'external_action_required'
       )).length,
-      latestReview: latestReviewByModule.get(definition.id) || null,
+      latestReview: latestReviewByModule.get(definitionModule) || null,
     }
   })
 }

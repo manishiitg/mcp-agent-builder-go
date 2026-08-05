@@ -21,7 +21,8 @@ type ReportHumanInputDraft = {
   askingInChat?: boolean
 }
 
-function sourceLabel(source: string): string {
+function sourceLabel(source?: string): string {
+	if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
   if (source === 'chief_of_staff') return 'Chief of Staff'
   return 'Pulse'
@@ -380,7 +381,7 @@ export function ReportHumanInputPanel({
             </div>
             <div className="text-xs text-muted-foreground">
               {pending.length > 0
-                ? `Your answer will be used by the next ${source === 'chief_of_staff' ? 'Chief of Staff' : 'Pulse'} run.`
+				? `Your answer will be used by the next ${sourceLabel(source)} run.`
                 : 'Previous questions, your answers, and their outcomes.'}
             </div>
           </div>

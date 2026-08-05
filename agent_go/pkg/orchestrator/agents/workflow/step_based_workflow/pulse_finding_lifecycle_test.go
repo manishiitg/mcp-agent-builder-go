@@ -24,6 +24,19 @@ func filedReviewConcern(t *testing.T, workspacePath, pulseRunID, module, text st
 	return concerns[0]
 }
 
+func TestLoadPulseFindingLifecyclesIncludesLegacyAliasesForCurrentLane(t *testing.T) {
+	workspacePath := concernsWorkspace(t)
+	filedReviewConcern(t, workspacePath, "pulse-1", "knowledgebase_health", "legacy knowledge concern")
+
+	findings, err := LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
+	if err != nil {
+		t.Fatalf("load stores lifecycle: %v", err)
+	}
+	if len(findings) != 1 || findings[0].StepID != "workflow_review" {
+		t.Fatalf("legacy Engineering finding not visible through current lane: %#v", findings)
+	}
+}
+
 func recordFindingDispositions(t *testing.T, workspacePath, module, pulseRunID string, dispositions []PulseFindingDisposition) {
 	t.Helper()
 	ctx := context.Background()
@@ -728,13 +741,13 @@ func TestPulseFixerSentinelLoadsEveryModulesBacklog(t *testing.T) {
 		t.Fatalf("sentinel backlog = %d findings, want both modules", len(sentinel))
 	}
 
-	// A real module must still filter, or the sentinel fix would have widened
-	// every per-module read into a full-backlog read.
-	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "bug_review", -1)
+	// A real perspective must still filter, while its retired artifact aliases
+	// remain one Engineering backlog.
+	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "workflow_review", -1)
 	if err != nil {
 		t.Fatalf("load scoped backlog: %v", err)
 	}
-	if len(scoped) != 1 || scoped[0].StepID != "bug_review" {
-		t.Fatalf("bug_review backlog = %+v, want only its own finding", scoped)
+	if len(scoped) != 2 {
+		t.Fatalf("Engineering backlog = %+v, want both retired aliases", scoped)
 	}
 }

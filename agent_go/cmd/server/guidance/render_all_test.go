@@ -130,7 +130,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		wants []string
 	}{
 		"pulse-archive": {
-			wants: []string{"newest 12 material dated", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
+			wants: []string{"newest 6 material dated", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
 		},
 		"pulse-gate": {
 			wants: []string{
@@ -578,17 +578,15 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	}
 	for _, want := range []string{
 		"Needs your decision",
-		"Assumptions challenged",
 		"Latest Pulse",
-		"Current work: a projection, not another backlog",
-		`get_pulse_state(view="backlog")`,
-		"Open / Fixing / Verify counts only",
-		"Keep at most three active assumptions",
+		"at most six material Activity transitions",
+		"Never render `.coverage`",
+		"Do not render `.worksummary`",
 		"Operational detail stays in Pulse",
 		"Hidden agent handoff projection",
 		`#pulse-agent-handoff`,
 		"scheduler conditionally sends a dedicated archive turn",
-		"newest **12** material Activity cards",
+		"newest **6** material Activity cards",
 		"Stage complete active and archive HTML documents",
 		`href="improve-archive/YYYY-MM.html"`,
 		"**Goal:**",
@@ -610,7 +608,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if err != nil {
 		t.Fatalf("render review-improve-log-skeleton: %v", err)
 	}
-	for _, want := range []string{`data-pulse-schema="4"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="assumptions"`, `class="worksummary" data-source="sqlite"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Latest Pulse`, `Goal movement`} {
+	for _, want := range []string{`data-pulse-schema="5"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="brief"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Latest Pulse`, `Goal movement`} {
 		if !strings.Contains(skeleton, want) {
 			t.Fatalf("review-improve-log-skeleton missing stable verdict markup %q", want)
 		}
@@ -618,7 +616,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 	if !strings.Contains(skeleton, `href="improve-archive/YYYY-MM.html"`) {
 		t.Fatal("review-improve-log-skeleton missing archive link example")
 	}
-	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `class="entry open"`) || strings.Contains(skeleton, `class="modfields"`) {
+	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `class="entry open"`) || strings.Contains(skeleton, `class="modfields"`) || strings.Contains(skeleton, `class="coverage"`) || strings.Contains(skeleton, `class="assumptions"`) || strings.Contains(skeleton, `class="worksummary"`) {
 		t.Fatal("review-improve-log-skeleton must not duplicate Goal, standing issue cards, or reviewer field dumps")
 	}
 	for _, retired := range []string{`class="technical"`, `class="filters"`, `class="workqueue"`, `class="workitem"`} {
@@ -721,7 +719,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render pulse-review-fixer: %v", err)
 	}
 	for _, want := range []string{
-		"The three current reviewers are independent",
+		"The shared operational reviewer, Strategy Auditor, and Goal Advisor are",
 		"one bounded parallel batch",
 		"Strategy Auditor and Goal Advisor may share a parallel batch",
 		"bounded improvements within the current strategic shape",
@@ -1181,7 +1179,8 @@ func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 		"Verified external constraint",
 		"Current design choice",
 		"Agent-inferred assumption",
-		"Assumptions challenged",
+		"SQLite-backed Pulse lifecycle",
+		"Do not add an assumptions panel",
 		"Do not turn targeted maintenance into a full audit",
 	} {
 		if !strings.Contains(audit, want) {

@@ -5,9 +5,10 @@ export type PulseCommandDefinition = {
 }
 
 export const PULSE_MODULE_COMMANDS: PulseCommandDefinition[] = [
-  { id: 'workflow_review', label: 'Workflow review', description: 'One continuous review of correctness, artifacts, reports, stores, cost, and tool operations' },
-  { id: 'strategy_auditor', label: 'Strategy Auditor', description: 'Finds missing or ineffective pieces inside the current strategy' },
-  { id: 'goal_advisor', label: 'Goal Advisor', description: 'Proposes materially different approaches outside the current plan' },
+  { id: 'workflow_review', label: 'Engineering review', description: 'Implementation correctness across execution, reports/evals, plan changes, artifacts, and stores' },
+  { id: 'llm_ops_review', label: 'LLM & operations', description: 'Cost, time, model selection, tools, and runtime reliability' },
+  { id: 'strategy_auditor', label: 'Strategy Auditor', description: 'Product/business review of whether the current strategy and measurements can achieve the goal' },
+  { id: 'goal_advisor', label: 'Goal Advisor', description: 'User-facing proposals for materially different approaches outside the current plan' },
 ]
 
 export const PULSE_FIXED_COMMANDS: PulseCommandDefinition[] = [

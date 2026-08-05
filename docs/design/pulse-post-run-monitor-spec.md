@@ -48,7 +48,7 @@ the sole source for a machine action. Preserve its legacy recovery/Advisor state
 until replaced, but add no new state semantics. Project user-relevant outcomes
 without contradicting runtime state.
 
-When updating `builder/improve.html`, keep it a lightweight published executive journal. Runloop renders pending **Needs your decision** requests above the HTML. The HTML shows the Bug/Goal verdicts, one status sentence, reviewer coverage, optional active **Assumptions challenged**, exactly three **Latest Pulse** cells (Outcome, Goal movement, Next), a SQLite-derived **Current work** count strip (Open, Fixing, Verify), and at most 12 material Activity cards. The Pulse popup owns issue titles, evidence, checks, attempts, history, technical/cost tiles, filters, and complete reviewer detail; never duplicate those sections in HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative.
+When updating `builder/improve.html`, keep it a small published executive journal. Runloop renders pending **Needs your decision** requests above the HTML. Schema 5 shows only the Bug/Goal verdicts, one status sentence, exactly three **Latest Pulse** cells (Outcome, Goal movement, Next), at most six material Activity transitions, and archive links. The Pulse popup owns reviewer coverage, assumptions, issue queues, backlog counts, evidence, checks, attempts, history, technical/cost tiles, filters, and complete reviewer detail; never duplicate those sections in HTML. A hidden `#pulse-agent-handoff` marker may project compact current state for agent orientation; it is not recovery authority, not a visible Agent log, and must not duplicate the report narrative.
 
 ## Timeout Recovery
 
@@ -181,8 +181,10 @@ Fixer is the only writer and records every due module's result.
    partial fix. A `changed_unverified` result is resumed only when its named
    next valid evidence boundary has arrived; until
    then preserve it without reapplying the change or claiming it is fixed.
-2. Run every selected reviewer as an independent read-only agent in one bounded
-   parallel batch. No reviewer waits for or consumes another reviewer's
+2. Run the selected Engineering and LLM/Ops perspectives in one shared
+   read-only reviewer session,
+   while Strategy Auditor and Goal Advisor remain independent read-only agents
+   in the same bounded parallel batch. No independent reviewer waits for or consumes another reviewer's
    conclusion. A reviewer that cannot trust its evidence returns an execution
    problem or `insufficient_evidence` with an exact next-check boundary; it does
    not defer another reviewer. The scheduler waits for every selected review
@@ -192,19 +194,27 @@ Fixer is the only writer and records every due module's result.
    as existing unchanged, existing with new evidence, reopened, or genuinely
    new. Update the existing fingerprint for the first two; never file duplicate
    prose as another bug. Verify eligible prior changes before new discovery;
-   verification does not consume the discovery cap. Workflow Review keeps one
-   continuous context and walks correctness, artifacts, report/eval, stores,
-   and LLM/tool operations in sequence, checkpointing and deduplicating as it
-   goes. Launch exactly one reviewer only when changed
-   artifacts/current-run evidence or an evidence gap requires it. Never combine
+   verification does not consume the discovery cap. Gate decides separately on
+   four perspectives: `workflow_review` (Engineering), `llm_ops_review`,
+   `strategy_auditor`, and `goal_advisor`. Artifact drift, report/eval
+   implementation, and store integrity are conditionally loaded Engineering
+   evidence packs, not separately scheduled reviewers. The backend places only
+   due Engineering/Ops perspectives into one continuous context, then adds one
+   consolidation turn. A skipped lane does not run. Launch the shared reviewer
+   only when at least one operational lane is due. If every module is skipped,
+   launch no reviewer and no Fixer; Dashboard and Finalizer still run. Never combine
    reviewers in one shell command or use `run_in_background`, background curl,
    `&`, or `wait`.
+   The shared Markdown report is indexed under every selected perspective.
+   When both are selected, every trackable finding carries one backend-validated
+   Engineering-or-Ops attribution; the lifecycle files it only under that owner.
+   This keeps future Gate cadence independent.
 3. Every reviewer prompt must start with **READ-ONLY REVIEW** and include the
    workflow path, Pulse run id, module name, Gate evidence pointers, relevant
    reference guidance, and a compact non-HTML response contract: module,
    verdict, next-check condition, findings, evidence, bounded recommended fix,
    verification, and whether user judgment is required with a reason.
-   For Workflow Review's correctness lens, also include the suspect step ids/attempts and tell the
+   For the combined correctness/report/eval lane, also include the suspect step ids/attempts and tell the
    reviewer to load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-bug-review.md"}])` for the
    Exploratory QA and observable execution-trace contract whenever Gate evidence
    points to a specific step.
@@ -362,6 +372,14 @@ concurrency cap and persists one complete SQLite reviewer result per module.
 ## Module Decisions
 
 Every decision needs a reason and evidence. Skips are useful only when they explain why work is not worth doing yet. Every skipped module must set at least one concrete next-check condition: `next_check_at`, `next_check_after_run_id`, or a positive `cooldown_runs`. Record that condition authoritatively through `record_pulse_worklist`; the Dashboard projects it visibly in the Gate/Worklist entry in `builder/improve.html`.
+
+Cadence is schedule-aware. Gate reads the workflow's schedule definitions and
+uses both elapsed time and completed producing-run count. Hourly workflows do
+not repeat unchanged deep reviews every hour; sparse workflows running every
+few days do not defer an arrived verification boundary for several more runs.
+Failures, suspicious success, new verification evidence, answered decisions,
+and material plan/store/cost changes override ordinary cooldowns. A Pulse pass
+alone is never evidence that a review lane is due.
 
 Cadence remains agentic. New evidence can override any earlier cooldown or next-check suggestion, but when Gate checks a module earlier than previously planned, its reason and the visible Gate entry must say what new evidence caused the override. Do not silently ignore the prior cadence.
 
@@ -531,7 +549,7 @@ same agent's LLM and operations lens; it is not a second module or agent. Gate
 does not load that doc; it decides only whether `workflow_review` is due from
 the triggers above.
 
-#### Artifact lens (formerly artifact_review)
+#### Artifact evidence pack (Engineering Review; formerly artifact_review)
 
 `get_pulse_state(view="module")` returns `plan_change_backlog`: the exact count of
 changelog entries not yet stamped `artifact_review.done`, newest first, with each
@@ -556,16 +574,17 @@ The Pulse Fixer records the review result and uses
 `mark_changelog_artifact_reviewed` for fully inspected entries. Artifact review
 remains report-only; it does not repair the reviewed artifacts in this module.
 
-This module is the sole dispatcher for `plan_change_backlog`-driven triggers
-across all six dimensions above. No other module weighs that backlog itself —
-each has its own independent triggers instead (freshness-recency, dashboard
-staleness, rubric gameability, etc.). This removes a duplicate due-decision
-that used to require each module to explicitly defer to this one for the
-same entries.
+Engineering Review is the sole dispatcher for `plan_change_backlog`-driven
+triggers across all six dimensions above. Gate selects one Engineering
+perspective with the relevant evidence packs instead of paying for separate
+artifact and dependent reviewers.
 
-#### Report lens (formerly report_health)
+#### Report implementation evidence pack (Engineering Review; formerly report_health)
 
-Mark due when the reporting dashboard is stale, misleading, broken, too text-heavy, not goal-oriented, or not using live persisted evidence correctly.
+Load this Engineering evidence pack when the reporting dashboard is stale,
+misleading because of implementation, broken, or not using live persisted
+evidence correctly. A report that works as designed but measures or presents
+the wrong business outcome belongs to Strategy Auditor, not Engineering.
 Also mark it due when an approved Goal Advisor measurement step produces its
 first trustworthy rows, changes its schema/definition, or reaches a review
 checkpoint whose metric is not yet visible in the dashboard. A proposal without
@@ -584,9 +603,12 @@ The read-only reviewer follows `improve-report` as its audit checklist and
 returns exact recommended HTML/report-plan edits. The Pulse Fixer applies and
 verifies bounded report-only fixes and records the module outcome.
 
-#### Evaluation lens (formerly eval_health)
+#### Evaluation implementation evidence pack (Engineering Review; formerly eval_health)
 
-Mark due when evaluation evidence cannot be trusted or does not measure the workflow's stated success criteria:
+Load this Engineering evidence pack when evaluation evidence cannot be trusted
+because its implementation is broken. An evaluation that faithfully implements
+its current rubric but the rubric measures the wrong business outcome belongs
+to Strategy Auditor:
 
 - `evaluation/evaluation_plan.json` is missing, stale, too lenient, or not mapped to `soul.md`
 - eval runs are missing, scoped to the wrong run/group, or using a stale `TARGET_RUN_PATH`
@@ -600,9 +622,9 @@ checklist. It returns bounded recommendations and verification steps. The Pulse
 Fixer applies safe correctness repairs, validates them, and records changed eval
 artifacts as an `Eval fix` in `builder/improve.html`.
 
-#### Stores lens (formerly stores_health)
+#### Store-integrity evidence pack (Engineering Review; formerly stores_health)
 
-Covers three stores in one pass: learnings (HOW to run the task), the
+This Engineering evidence pack covers three stores in one pass: learnings (HOW to run the task), the
 knowledgebase (domain facts), and db/db.sqlite (structured run state). All
 three share the same due-cadence mechanism (the general Reviewed-baseline
 rule, no special throttling), the same freshness-recency check shape, and the

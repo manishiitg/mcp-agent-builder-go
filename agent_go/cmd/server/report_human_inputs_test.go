@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestNormalizeReportHumanInputSourcePreservesReviewerIdentity(t *testing.T) {
+	for input, want := range map[string]string{
+		"strategy-auditor": "strategy_auditor",
+		"Strategy Auditor": "strategy_auditor",
+		"goal-advisor":     "goal_advisor",
+		"unknown":          "pulse",
+	} {
+		if got := normalizeReportHumanInputSource(input); got != want {
+			t.Fatalf("normalizeReportHumanInputSource(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

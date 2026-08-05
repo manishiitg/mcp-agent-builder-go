@@ -12,7 +12,7 @@ import (
 
 var (
 	pulseSchemaRootPattern            = regexp.MustCompile(`(?i)<html\b[^>]*\bdata-pulse-schema\s*=\s*["']2["'][^>]*>`)
-	pulseLightweightSchemaRootPattern = regexp.MustCompile(`(?i)<html\b[^>]*\bdata-pulse-schema\s*=\s*["']4["'][^>]*>`)
+	pulseLightweightSchemaRootPattern = regexp.MustCompile(`(?i)<html\b[^>]*\bdata-pulse-schema\s*=\s*["']5["'][^>]*>`)
 	pulseViewportPattern              = regexp.MustCompile(`(?i)<meta\b[^>]*\bname\s*=\s*["']viewport["'][^>]*>`)
 	pulseHandoffPattern               = regexp.MustCompile(`(?i)\bid\s*=\s*["']pulse-agent-handoff["']`)
 	pulseDatePickerPattern            = regexp.MustCompile(`(?i)\bid\s*=\s*["']filter-date["']`)

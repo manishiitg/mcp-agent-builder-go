@@ -5,7 +5,9 @@ import {
   ArrowUpRight,
   CheckCircle2,
   Clock3,
+  Cpu,
   FileText,
+  Lightbulb,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -31,6 +33,7 @@ import {
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
 import {
   buildPulseWorkspaceModuleSummaries,
+  normalizePulseWorkspaceModule,
   selectPulseWorkspaceModule,
 } from './pulseWorkspaceUtils'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
@@ -92,6 +95,16 @@ function finalCommandLabel(state?: PulseFinalCommandState): string {
 /** Which slice of the backlog the findings list is showing. */
 type PulseFocus = 'all' | PulseFindingQueue
 
+type LatestWorkflowRun = {
+  folder: string
+  status: string
+  created_at?: string
+  completed_at?: string
+  completed_steps: number
+  total_steps: number
+  is_running: boolean
+}
+
 const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Current work',
   needs_action: 'Pulse to fix',
@@ -112,56 +125,6 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   platform: 'Diagnosed work that must be fixed outside this workflow',
   resolved: 'Verified fixes and legitimate no-change closures',
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
-}
-
-function Metric({
-  label,
-  value,
-  detail,
-  tone,
-  focus,
-  activeFocus,
-  onFocus,
-}: {
-  label: string
-  value: number
-  detail: string
-  tone: string
-  focus?: PulseFocus
-  activeFocus?: PulseFocus
-  onFocus?: (focus: PulseFocus) => void
-}) {
-  const body = (
-    <div className="flex min-w-0 items-center gap-2">
-      <span className="text-base font-semibold tabular-nums">{value}</span>
-      <span className="min-w-0">
-        <span className="block text-[10px] font-semibold uppercase tracking-wide">{label}</span>
-        <span className="block truncate text-[9px] opacity-70">{detail}</span>
-      </span>
-    </div>
-  )
-  if (!focus || !onFocus) {
-    return <div className={`rounded-md border px-3 py-2 ${tone}`}>{body}</div>
-  }
-  const selected = activeFocus === focus
-  // A count with nothing behind it should not look clickable — the empty list
-  // it opens says less than the zero already does.
-  const empty = value === 0
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      disabled={empty}
-      onClick={() => onFocus(selected ? 'all' : focus)}
-      className={`rounded-md border px-3 py-2 text-left transition ${tone} ${
-        empty
-          ? 'cursor-default opacity-60'
-          : 'cursor-pointer hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current'
-      } ${selected ? 'ring-2 ring-current' : ''}`}
-    >
-      {body}
-    </button>
-  )
 }
 
 export function PulseWorkspace({
@@ -187,6 +150,7 @@ export function PulseWorkspace({
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
   const [agentMetrics, setAgentMetrics] = useState<PulseAgentMetricRecord[]>([])
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
+  const [latestRun, setLatestRun] = useState<LatestWorkflowRun | null>(null)
   const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
   // Distinct from selectedModule on purpose. selectedModule always holds a
@@ -204,11 +168,12 @@ export function PulseWorkspace({
     if (!workspacePath) return
     setLoading(true)
     setError(null)
-    const [findingResult, reviewResult, impactResult, metricResult] = await Promise.allSettled([
+    const [findingResult, reviewResult, impactResult, metricResult, runResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
       agentApi.getPulseImpact(workspacePath),
       agentApi.getPulseAgentMetrics(workspacePath),
+      agentApi.getWorkflowsSummary([workspacePath]),
     ])
     const errors: string[] = []
     if (findingResult.status === 'fulfilled' && findingResult.value.success) {
@@ -251,6 +216,18 @@ export function PulseWorkspace({
           : metricResult.value.error || 'Could not load reviewer measurements.',
       )
     }
+    if (runResult.status === 'fulfilled' && runResult.value.success) {
+      const workflow = runResult.value.workflows.find((item) => item.workspace_path === workspacePath)
+        || runResult.value.workflows[0]
+      const retainedRun = workflow?.latest_run
+      // Older zero-step folders are bookkeeping artifacts, not useful run
+      // outcomes. Showing one as the "latest run" is actively misleading.
+      setLatestRun(retainedRun && (workflow.is_running || retainedRun.total_steps > 0)
+        ? { ...retainedRun, is_running: workflow.is_running }
+        : null)
+    } else {
+      setLatestRun(null)
+    }
     setError(errors.length > 0 ? errors.join(' ') : null)
     setLoading(false)
   }, [workspacePath])
@@ -261,6 +238,7 @@ export function PulseWorkspace({
     setReviews([])
     setAgentMetrics([])
     setImpact({ interventions: [], observations: [], assessments: [] })
+    setLatestRun(null)
     void load()
   }, [load])
 
@@ -294,7 +272,7 @@ export function PulseWorkspace({
   }, [moduleSummaries, selectedModule])
 
   const moduleStateByID = useMemo(
-    () => new Map(moduleStates.map((state) => [state.module, state])),
+    () => new Map(moduleStates.map((state) => [normalizePulseWorkspaceModule(state.module), state])),
     [moduleStates],
   )
   const finalCommandStateByID = useMemo(
@@ -313,7 +291,9 @@ export function PulseWorkspace({
         // Selecting a module narrows this list too, so the module grid and the
         // findings list are two views of one selection rather than two lists
         // that ignore each other.
-        .filter((finding) => !moduleFilter || finding.module === moduleFilter)
+        .filter((finding) => (
+          !moduleFilter || normalizePulseWorkspaceModule(finding.module) === moduleFilter
+        ))
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
             needs_action: 6,
@@ -432,12 +412,12 @@ export function PulseWorkspace({
     <div className="space-y-4">
       <SoulViewer workspacePath={workspacePath} pulseSummary />
 
-      <section className="overflow-hidden rounded-xl border bg-gradient-to-br from-primary/5 via-background to-background">
+      <section className="overflow-hidden rounded-xl border bg-gradient-to-br from-primary/7 via-background to-background">
         <div className="flex flex-wrap items-start justify-between gap-4 p-4 sm:p-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               <Activity className="h-3.5 w-3.5" />
-              Workflow health
+              Latest outcome
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${health.tone}`}>
@@ -446,14 +426,22 @@ export function PulseWorkspace({
               </span>
               <span className="text-xs text-muted-foreground">{health.detail}</span>
             </div>
-            <div className="mt-2 text-[11px] text-muted-foreground">
-              <span className="font-medium text-foreground">Pulse:</span> {queueCounts.needs_action} to repair
-              <span className="px-1.5">·</span>
-              <span className="font-medium text-foreground">You:</span> {queueCounts.decisions} decision{queueCounts.decisions === 1 ? '' : 's'}
-              <span className="px-1.5">·</span>
-              <span className="font-medium text-foreground">Ideas:</span> {queueCounts.proposals} proposal{queueCounts.proposals === 1 ? '' : 's'}
-              <span className="px-1.5">·</span>
-              <span className="font-medium text-foreground">Next run:</span> {queueCounts.waiting_proof} verification{queueCounts.waiting_proof === 1 ? '' : 's'}
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span>
+                <span className="font-medium text-foreground">Latest retained run:</span>{' '}
+                {latestRun
+                  ? readable(latestRun.is_running ? 'running' : latestRun.status)
+                  : 'Not recorded'}
+              </span>
+              {latestRun && latestRun.total_steps > 0 && (
+                <span>
+                  {latestRun.completed_steps}/{latestRun.total_steps} steps
+                  {' · '}{formatDate(latestRun.completed_at || latestRun.created_at)}
+                </span>
+              )}
+              <span><span className="font-medium text-foreground">Pulse owns:</span> {queueCounts.needs_action}</span>
+              <span><span className="font-medium text-foreground">You own:</span> {queueCounts.decisions}</span>
+              <span><span className="font-medium text-foreground">Waiting on runs:</span> {queueCounts.waiting_proof}</span>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -484,41 +472,104 @@ export function PulseWorkspace({
         )}
       </section>
 
+      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
+
       <section className="overflow-hidden rounded-xl border bg-background">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Goal impact</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Fixes and experiments linked to comparable success-criterion observations
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold">
-            <span className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-700 dark:text-emerald-300">{impactSummary.improved} improved</span>
-            <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-1 text-red-700 dark:text-red-300">{impactSummary.regressed} regressed</span>
-            <span className="rounded-full border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-amber-700 dark:text-amber-300">{impactSummary.inconclusive} inconclusive</span>
-            <span className="rounded-full border px-2 py-1 text-muted-foreground">{impactSummary.awaiting} awaiting evidence</span>
-          </div>
+        <div className="border-b px-4 py-3">
+          <h3 className="text-sm font-semibold text-foreground">Work areas</h3>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            What Pulse found, who owns the next move, and the latest judgment
+          </p>
         </div>
-        {impactSummary.latest.length === 0 ? (
-          <div className="flex items-start gap-2 px-4 py-3 text-xs text-muted-foreground">
-            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-            <span>No comparable result yet. A producing workflow run is needed before Pulse can say whether these changes improved the goal.</span>
-          </div>
-        ) : (
-          <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
-            {impactSummary.latest.map((observation) => (
-              <div key={observation.observation_id} className="bg-background px-4 py-3">
-                <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{readable(observation.criterion_id)}</div>
-                <div className="mt-1 text-sm font-semibold text-foreground">
-                  {typeof observation.value === 'number'
-                    ? `${observation.value}${observation.unit ? ` ${observation.unit}` : ''}`
-                    : readable(observation.status)}
+        <div className="grid gap-px bg-border lg:grid-cols-3">
+          {[
+            {
+              id: 'workflow_review',
+              title: 'Engineering issues',
+              icon: Wrench,
+              description: 'Execution, reports, evaluations, plan consistency, and data integrity',
+              tone: 'text-sky-600 dark:text-sky-300',
+            },
+            {
+              id: 'llm_ops_review',
+              title: 'Operations',
+              icon: Cpu,
+              description: 'Cost, latency, model and tool use, retries, timeouts, and reliability',
+              tone: 'text-violet-600 dark:text-violet-300',
+            },
+            {
+              id: 'product',
+              title: 'Product improvements',
+              icon: Lightbulb,
+              description: 'Strategy recommendations and blank-sheet opportunities for the goal',
+              tone: 'text-amber-600 dark:text-amber-300',
+            },
+          ].map((area) => {
+            const areaModules = area.id === 'product'
+              ? moduleSummaries.filter((module) => ['strategy_auditor', 'goal_advisor'].includes(module.id))
+              : moduleSummaries.filter((module) => module.id === area.id)
+            const open = area.id === 'product'
+              ? queueCounts.decisions + queueCounts.proposals
+              : areaModules.reduce((sum, module) => sum + module.active + module.fixing, 0)
+            const waiting = areaModules.reduce((sum, module) => sum + module.awaitingVerification, 0)
+            const external = areaModules.reduce((sum, module) => sum + module.externalAction, 0)
+            const latest = [...areaModules]
+              .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
+              ?.latestReview
+            const moduleID = area.id === 'product' ? null : area.id
+            return (
+              <button
+                key={area.id}
+                type="button"
+                onClick={() => {
+                  if (moduleID) {
+                    setSelectedModule(moduleID)
+                    setModuleFilter(moduleID)
+                  } else {
+                    setFocus(queueCounts.decisions > 0 ? 'decisions' : 'proposals')
+                    setModuleFilter(null)
+                  }
+                }}
+                className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <area.icon className={`mt-0.5 h-4 w-4 shrink-0 ${area.tone}`} />
+                    <div className="min-w-0">
+                      <h4 className="text-xs font-semibold text-foreground">{area.title}</h4>
+                      <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{area.description}</p>
+                    </div>
+                  </div>
+                  {open > 0 && (
+                    <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
+                      {open} {area.id === 'product' ? 'recommendations' : 'open'}
+                    </span>
+                  )}
                 </div>
-                <div className="mt-1 truncate text-[10px] text-muted-foreground">{readable(observation.metric)} · {formatDate(observation.observed_at)}</div>
-              </div>
-            ))}
-          </div>
-        )}
+                <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                  {area.id === 'product' ? (
+                    <>
+                      <span><span className="font-semibold text-foreground">{queueCounts.proposals}</span> ideas</span>
+                      <span><span className="font-semibold text-foreground">{queueCounts.decisions}</span> decisions</span>
+                    </>
+                  ) : (
+                    <>
+                      <span><span className="font-semibold text-foreground">{open}</span> active</span>
+                      <span><span className="font-semibold text-foreground">{waiting}</span> waiting on run</span>
+                      {external > 0 && <span><span className="font-semibold text-foreground">{external}</span> platform</span>}
+                    </>
+                  )}
+                </div>
+                <div className="mt-3 border-t pt-2 text-[10px] leading-4 text-muted-foreground">
+                  <span className="font-medium text-foreground">Latest:</span>{' '}
+                  <span className="line-clamp-2">
+                    {latest ? latest.verdict || 'Review recorded' : 'No stored review yet'}
+                  </span>
+                </div>
+              </button>
+            )
+          })}
+        </div>
       </section>
 
       {(error || statusError) && (
@@ -527,105 +578,61 @@ export function PulseWorkspace({
         </div>
       )}
 
-      {/* One lifecycle queue per card. These totals are mutually exclusive, so
-          the operator can read the actual workload without double-counting a
-          repair as open, fixing, and awaiting verification at the same time. */}
-      <section className="grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-7">
-        <Metric
-          label="Pulse to fix"
-          focus="needs_action"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.needs_action}
-          detail="owned by Pulse"
-          tone="border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300"
-        />
-        <Metric
-          label="Waiting on run"
-          focus="waiting_proof"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.waiting_proof}
-          detail="verify after workflow runs"
-          tone="border-amber-500/25 bg-amber-500/5 text-amber-700 dark:text-amber-300"
-        />
-        <Metric
-          label="Your decisions"
-          focus="decisions"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.decisions}
-          detail="approval or direction needed"
-          tone="border-fuchsia-500/25 bg-fuchsia-500/5 text-fuchsia-700 dark:text-fuchsia-300"
-        />
-        <Metric
-          label="Proposed improvements"
-          focus="proposals"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.proposals}
-          detail="ideas, no answer required"
-          tone="border-blue-500/25 bg-blue-500/5 text-blue-700 dark:text-blue-300"
-        />
-        <Metric
-          label="Platform team"
-          focus="platform"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.platform}
-          detail="owned outside this workflow"
-          tone="border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
-        />
-        <Metric
-          label="Resolved"
-          focus="resolved"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.resolved}
-          detail="verified or legitimately closed"
-          tone="border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
-        />
-        <Metric
-          label="Workflow evidence"
-          focus="workflow_reported"
-          activeFocus={focus}
-          onFocus={setFocus}
-          value={queueCounts.workflow_reported}
-          detail="reported by workflow runs"
-          tone="border-orange-500/25 bg-orange-500/5 text-orange-700 dark:text-orange-300"
-        />
-      </section>
-
-      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
-
       <div className="grid gap-4">
         <section className="overflow-hidden rounded-xl border bg-background">
-          <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">Issues</h3>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                {FOCUS_TITLES[focus]}
-                {moduleFilter && (
-                  <span className="ml-1 font-normal">
-                    in {moduleSummaries.find((m) => m.id === moduleFilter)?.label || moduleFilter}
-                  </span>
+          <div className="border-b px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Issues and follow-through</h3>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {FOCUS_TITLES[focus]}
+                  {moduleFilter && (
+                    <span className="ml-1 font-normal">
+                      in {moduleSummaries.find((m) => m.id === moduleFilter)?.label || moduleFilter}
+                    </span>
+                  )}
+                  {' · '}{FOCUS_HINTS[focus]}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {(focus !== 'all' || moduleFilter) && (
+                  <button
+                    type="button"
+                    onClick={() => { setFocus('all'); setModuleFilter(null) }}
+                    className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
+                  >
+                    Clear filter
+                  </button>
                 )}
-                {' · '}{FOCUS_HINTS[focus]}
-              </p>
+                <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+                  {attentionFindings.length} shown
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              {(focus !== 'all' || moduleFilter) && (
+            <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Issue filters">
+              {([
+                ['all', 'Open', findings.filter((finding) => !['resolved', 'workflow_reported'].includes(pulseFindingPresentation(finding).queue)).length],
+                ['needs_action', 'Pulse to fix', queueCounts.needs_action],
+                ['waiting_proof', 'Waiting on run', queueCounts.waiting_proof],
+                ['decisions', 'Your decisions', queueCounts.decisions],
+                ['proposals', 'Ideas', queueCounts.proposals],
+                ['platform', 'Platform', queueCounts.platform],
+                ['resolved', 'Resolved', queueCounts.resolved],
+              ] as Array<[PulseFocus, string, number]>).map(([value, label, count]) => (
                 <button
+                  key={value}
                   type="button"
-                  onClick={() => { setFocus('all'); setModuleFilter(null) }}
-                  className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
+                  aria-pressed={focus === value}
+                  onClick={() => setFocus(value)}
+                  className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                    focus === value
+                      ? 'border-primary/35 bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
                 >
-                  Clear filter
+                  {label} <span className="ml-1 tabular-nums opacity-75">{count}</span>
                 </button>
-              )}
-              <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground">
-                {attentionFindings.length} shown
-              </span>
+              ))}
             </div>
           </div>
           {attentionFindings.length === 0 ? (
@@ -639,7 +646,8 @@ export function PulseWorkspace({
           ) : (
             <div className="space-y-2 p-3">
               {attentionFindings.map((finding) => {
-                const module = moduleSummaries.find((item) => item.id === finding.module)
+                const moduleID = normalizePulseWorkspaceModule(finding.module)
+                const module = moduleSummaries.find((item) => item.id === moduleID)
                 return (
                   <PulseFindingCard
                     key={finding.fingerprint}
@@ -649,7 +657,7 @@ export function PulseWorkspace({
                     onToggle={() => setExpandedFinding(
                       expandedFinding === finding.fingerprint ? null : finding.fingerprint,
                     )}
-                    onOpenModule={() => finding.module && setSelectedModule(finding.module)}
+                    onOpenModule={() => moduleID && setSelectedModule(moduleID)}
                   />
                 )
               })}
@@ -659,8 +667,8 @@ export function PulseWorkspace({
 
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="border-b px-4 py-3">
-            <h3 className="text-sm font-semibold text-foreground">Recent activity</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">Filed, fixing, verified, closed, and reopened</p>
+            <h3 className="text-sm font-semibold text-foreground">Recent fixes and follow-through</h3>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">What changed after issues were filed</p>
           </div>
           {activity.length === 0 ? (
             <div className="flex min-h-40 items-center justify-center px-5 text-center text-xs text-muted-foreground">
@@ -693,12 +701,14 @@ export function PulseWorkspace({
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Reviewers</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Choose a reviewer to see its latest judgment or open the full forensic report</p>
+          <h3 className="text-sm font-semibold text-foreground">Pulse activity</h3>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            What Gate ran or skipped, why it made that choice, and whether a Fixer ran
+          </p>
 		  {latestPassMetrics && (
 		    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground" title={latestPassMetrics.pulseRunID}>
 		      <span className="font-medium text-foreground">Latest measured pass</span>
-		      <span>{latestPassMetrics.reviewers} reviewer{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} fixer` : ''}</span>
+		      <span>{latestPassMetrics.reviewers} review turn{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} fixer` : ' · no fixer needed'}</span>
 		      <span>{formatAgentDuration(latestPassMetrics.wallTimeMS)} wall</span>
 		      <span>{formatAgentDuration(latestPassMetrics.agentTimeMS)} agent time</span>
 		      <span>{latestPassMetrics.calls} calls</span>
@@ -710,7 +720,7 @@ export function PulseWorkspace({
 		    </div>
 		  )}
         </div>
-        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
           {moduleSummaries.map((module) => {
             const state = moduleStateByID.get(module.id)
             const active = selectedModule === module.id
@@ -748,6 +758,11 @@ export function PulseWorkspace({
                 <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-foreground">
                   {module.latestReview?.verdict || (module.latestReview ? 'Review recorded' : 'No stored review yet')}
                 </div>
+                {(state?.last_result_reason || state?.last_reason) && (
+                  <div className="mt-1 line-clamp-2 text-[9px] leading-4 text-muted-foreground">
+                    {state.last_result_reason || state.last_reason}
+                  </div>
+                )}
                 <div className="mt-1 text-[9px] text-muted-foreground">
                   {module.latestReview ? formatDate(module.latestReview.recorded_at) : 'Awaiting evidence'}
                 </div>
@@ -782,10 +797,49 @@ export function PulseWorkspace({
             workspacePath={workspacePath}
             module={selectedDefinition.id}
             label={selectedDefinition.label}
-            reviews={reviews.filter((review) => review.module === selectedDefinition.id)}
+            reviews={reviews.filter((review) => (
+              normalizePulseWorkspaceModule(review.module) === selectedDefinition.id
+            ))}
           />
         </section>
       )}
+
+      <section className="overflow-hidden rounded-xl border bg-background">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Impact over time</h3>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Whether Pulse changes improved the workflow’s actual success measures
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold">
+            <span className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-700 dark:text-emerald-300">{impactSummary.improved} improved</span>
+            <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-1 text-red-700 dark:text-red-300">{impactSummary.regressed} regressed</span>
+            <span className="rounded-full border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-amber-700 dark:text-amber-300">{impactSummary.inconclusive} inconclusive</span>
+            <span className="rounded-full border px-2 py-1 text-muted-foreground">{impactSummary.awaiting} awaiting evidence</span>
+          </div>
+        </div>
+        {impactSummary.latest.length === 0 ? (
+          <div className="flex items-start gap-2 px-4 py-3 text-xs text-muted-foreground">
+            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <span>No comparable result yet. A producing workflow run is needed before Pulse can say whether these changes improved the goal.</span>
+          </div>
+        ) : (
+          <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+            {impactSummary.latest.map((observation) => (
+              <div key={observation.observation_id} className="bg-background px-4 py-3">
+                <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{readable(observation.criterion_id)}</div>
+                <div className="mt-1 text-sm font-semibold text-foreground">
+                  {typeof observation.value === 'number'
+                    ? `${observation.value}${observation.unit ? ` ${observation.unit}` : ''}`
+                    : readable(observation.status)}
+                </div>
+                <div className="mt-1 truncate text-[10px] text-muted-foreground">{readable(observation.metric)} · {formatDate(observation.observed_at)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">

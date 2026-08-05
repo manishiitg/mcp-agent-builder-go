@@ -64,7 +64,7 @@ func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing
 	if err != nil {
 		t.Fatalf("parse default workflow review sequence: %v", err)
 	}
-	wantIDs := []string{"correctness", "artifact-drift", "report-eval", "stores", "llm-ops", "consolidate"}
+	wantIDs := []string{"engineering", "llm-ops", "consolidate"}
 	gotIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
@@ -72,25 +72,91 @@ func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("default workflow review IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
-	stores := items[3].Message
+	engineering := items[0].Message
 	for _, want := range []string{
-		"improve-learnings",
-		"every content-bearing Markdown file",
-		"read-write learning_objective",
-		"references are part of the skill",
-		"moving non-skill content behind a reference link is not a repair",
-		"one semantic item, one authoritative owner",
-		"kb_purity_manifest",
-		"db_ownership_manifest",
-		"ownership_manifest",
-		"lock_knowledgebase",
-		"per step from its own metadata and run evidence",
-		"do not emit the guides' legacy standalone module envelopes",
-		"do not mark stores_health",
+		"engineering QA reviewer",
+		"bug-review",
+		"artifact-drift",
+		"improve-report",
+		"improve-evaluation",
+		"DB/knowledgebase/learnings integrity",
+		"wrong business outcome",
+		"Strategy Auditor",
+		"LLM/Ops",
 	} {
-		if !strings.Contains(stores, want) {
-			t.Fatalf("default stores lens missing skill-purity contract %q:\n%s", want, stores)
+		if !strings.Contains(engineering, want) {
+			t.Fatalf("default engineering lens missing contract %q:\n%s", want, engineering)
 		}
+	}
+}
+
+func TestParseBackgroundMessageSequenceRunsOnlySelectedWorkflowReviewLanes(t *testing.T) {
+	items, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"role":         "reviewer",
+		"module":       "workflow_review",
+		"review_lanes": []interface{}{"llm_ops_review"},
+	})
+	if err != nil {
+		t.Fatalf("parse selected workflow review sequence: %v", err)
+	}
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if want := []string{"llm-ops", "consolidate"}; !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("selected workflow review IDs = %#v, want %#v", gotIDs, want)
+	}
+	for _, item := range items {
+		if item.ID == "engineering" {
+			t.Fatalf("skipped lane unexpectedly ran: %#v", item)
+		}
+	}
+}
+
+func TestParseBackgroundMessageSequenceRejectsUnknownWorkflowReviewLane(t *testing.T) {
+	_, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"role":         "reviewer",
+		"module":       "workflow_review",
+		"review_lanes": []interface{}{"goal_advisor"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported operational lane") {
+		t.Fatalf("expected unsupported-lane error, got %v", err)
+	}
+}
+
+func TestPartitionPulseReviewConcernsPreservesSelectedLaneOwnership(t *testing.T) {
+	summary := strings.Join([]string{
+		`PULSE_FINDING_JSON: {"module":"workflow_review","concern":"plan changelog is stale","issue_kind":"workflow_issue","summary":"stale plan"}`,
+		`CONCERNS: plan changelog is stale`,
+		`PULSE_FINDING_JSON: {"module":"llm_ops_review","concern":"tool retries duplicate cost","issue_kind":"workflow_issue","summary":"duplicate retries"}`,
+		`CONCERNS: tool retries duplicate cost`,
+	}, "\n")
+
+	partitioned, err := partitionPulseReviewConcerns(summary, []string{"workflow_review", "llm_ops_review"})
+	if err != nil {
+		t.Fatalf("partition concerns: %v", err)
+	}
+	if !strings.Contains(partitioned["workflow_review"], "plan changelog is stale") || strings.Contains(partitioned["workflow_review"], "tool retries") {
+		t.Fatalf("engineering partition = %q", partitioned["workflow_review"])
+	}
+	if !strings.Contains(partitioned["llm_ops_review"], "tool retries duplicate cost") || strings.Contains(partitioned["llm_ops_review"], "plan changelog") {
+		t.Fatalf("ops partition = %q", partitioned["llm_ops_review"])
+	}
+}
+
+func TestPartitionPulseReviewConcernsRejectsMissingOrSkippedLane(t *testing.T) {
+	for name, summary := range map[string]string{
+		"missing": `CONCERNS: unattributed problem`,
+		"skipped": strings.Join([]string{
+			`PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"wrong lane","issue_kind":"workflow_issue"}`,
+			`CONCERNS: wrong lane`,
+		}, "\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := partitionPulseReviewConcerns(summary, []string{"workflow_review", "llm_ops_review"}); err == nil {
+				t.Fatalf("expected %s attribution to fail", name)
+			}
+		})
 	}
 }
 
@@ -130,7 +196,7 @@ func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T)
 	}
 }
 
-func TestExecuteDefaultWorkflowReviewerSequenceUsesSevenOrderedTurns(t *testing.T) {
+func TestExecuteDefaultWorkflowReviewerSequenceUsesFourOrderedTurns(t *testing.T) {
 	items, err := parseBackgroundMessageSequence(map[string]interface{}{
 		"role":   "reviewer",
 		"module": "workflow_review",
@@ -142,13 +208,13 @@ func TestExecuteDefaultWorkflowReviewerSequenceUsesSevenOrderedTurns(t *testing.
 	if _, err := executeBackgroundMessageSequence(context.Background(), agent, nil, "opening evidence map", items); err != nil {
 		t.Fatalf("execute default workflow reviewer sequence: %v", err)
 	}
-	if len(agent.instructions) != 7 {
-		t.Fatalf("reviewer turns = %d, want opening + 6 follow-ups", len(agent.instructions))
+	if len(agent.instructions) != 4 {
+		t.Fatalf("reviewer turns = %d, want opening + 3 follow-ups", len(agent.instructions))
 	}
-	if agent.instructions[0] != "opening evidence map" || !strings.HasPrefix(agent.instructions[6], "Now reconcile every lens checkpoint") {
+	if agent.instructions[0] != "opening evidence map" || !strings.HasPrefix(agent.instructions[3], "Now reconcile every selected-lane checkpoint") {
 		t.Fatalf("reviewer turn order was not preserved: %#v", agent.instructions)
 	}
-	if want := []int{0, 1, 2, 3, 4, 5, 6}; !reflect.DeepEqual(agent.historyLens, want) {
+	if want := []int{0, 1, 2, 3}; !reflect.DeepEqual(agent.historyLens, want) {
 		t.Fatalf("reviewer history lengths = %#v, want %#v", agent.historyLens, want)
 	}
 }

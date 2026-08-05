@@ -64,11 +64,13 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    `pulse_finding_events` records filed/fixing/closed/reopened history. Complete
    reviewer Markdown is stored as human-readable SQLite TEXT in
    `pulse_review_log`; it is evidence, not the close/reopen state. The Pulse popup
-   is one database-native workspace: aggregate health, pending decisions, compact
-   Goal context, cross-module findings, recent lifecycle activity, module
-   reviews, fix/verification detail, and finalization status. Raw Markdown is a
-   secondary evidence view. The popup does not extract or display fragments from
-   `builder/improve.html`.
+   is one database-native, outcome-first workspace: Goal/Success/Constraints,
+   latest retained run outcome, pending decisions, Engineering/Operations/Product
+   work areas, one issue and follow-through queue, Pulse run/skip/Fixer activity,
+   longitudinal goal impact, and finalization status. Raw Markdown and individual
+   reviewer mechanics are secondary evidence views. Retired reviewer labels are
+   normalized into Engineering or Operations rather than exposed as primary UI.
+   The popup does not extract or display fragments from `builder/improve.html`.
    Every reviewer and consolidated Fixer also gets one automatic
    `pulse_agent_metrics` row keyed by its runtime execution ID. It separates
    queue delay from agent duration and snapshots exact LLM calls, input/output,
@@ -114,34 +116,45 @@ boot sweep reconciles final commands stranded by a crash.
 `knowledgebase/_freshness.json`) records when each store — and each reference
 file / topic note — was last confirmed by a run, stamped by the runtime at the
 learnings/KB contribution turns (not LLM-maintained, so it can't desync). Gate
-marks `workflow_review` due for its stores lens on a confirmation-recency
-signal, and the reviewer re-verifies → refreshes / demotes / retires aging
-knowledge (never deletes on age alone). This adds a *time/decay* axis to what was
-previously only contradiction-driven staleness.
+marks Engineering Review due with the store-integrity evidence pack on a
+confirmation-recency signal. That pass re-verifies → refreshes / demotes /
+retires aging knowledge (never deletes on age alone). This adds a *time/decay*
+axis to what was previously only contradiction-driven staleness.
 
 ## Current decisions
 
-### One operational reviewer, two independent strategic reviewers (2026-08-03)
+### Four perspectives, one shared engineering/operations reviewer, two independent product reviewers (2026-08-05)
 
-The former operational modules are lenses inside one native ordered
-`workflow_review` conversation. It collects common evidence once, checks
-correctness and pending verification, plan/artifact drift, reports/evals,
-stores, and LLM/cost/tool/runtime operations, then semantically deduplicates one
-final review. This reduces repeated reads and contradictory duplicate findings
-without collapsing different kinds of reasoning into one prompt.
+Gate independently decides whether four perspectives are due:
+`workflow_review` (Engineering Review), `llm_ops_review`, `strategy_auditor`,
+and `goal_advisor`. Artifact names are evidence packs, not reviewer identities.
+Engineering Review conditionally loads execution, report/eval implementation,
+plan-change/artifact-consistency, and DB/knowledgebase/learnings evidence.
+LLM/Ops owns cost, latency, model choice, tools, retries, timeouts, and runtime
+efficiency. When either is due, the backend places only those selected
+perspectives into one native ordered reviewer conversation and adds one
+consolidation turn. Skipped perspectives consume no turn.
 
-`strategy_auditor` remains a separate agent because it critiques omissions and
-weaknesses inside the selected strategy. `goal_advisor` remains a separate,
-less-frequent agent because it searches outside the selected strategy for a
-materially better route to the goal. Neither depends on Workflow Review or on
-the other. All due reviewers may run concurrently; the Fixer starts only after
-their shared barrier. Background agents now support native ordered message
-sequences, so Workflow Review keeps one conversation, MCP session, folder guard,
-and isolated working directory across its seven turns.
+For a two-perspective shared pass, every `CONCERNS:` item must carry exactly one
+selected owner. Go rejects missing, duplicate, or skipped ownership and files
+the concern only under Engineering or Ops. Historical `bug_review`,
+`artifact_review`, `report_health`, `eval_health`, and `stores_health` records
+normalize into Engineering Review; `cost_llm_time` normalizes into LLM/Ops.
 
-The six follow-up messages are backend-owned defaults for
-`role=reviewer, module=workflow_review`; the scheduler no longer pastes their
-JSON into the launcher user's message. Pulse reviewer launcher sessions carry
+`strategy_auditor` remains a separate product/business agent because it asks
+whether the correctly implemented current strategy and its report/eval system
+are useful and capable of achieving the goal. It emits a user-facing
+in-strategy proposal and, for a material behavior change, a linked decision
+whose source is `strategy_auditor`. `goal_advisor` remains a separate,
+less-frequent blank-sheet agent because it searches outside the selected
+strategy; it normally emits an approve/reject/defer decision whose source is
+`goal_advisor`. Neither depends on Engineering, Ops, or the other. All due
+reviewers may run concurrently; the one Fixer starts only after their barrier.
+Engineering normally creates issues and repairs, not product proposals.
+
+The scheduler passes compact `review_lanes` identities; the backend owns their
+ordered Engineering/Ops messages and consolidation for `role=reviewer,
+module=workflow_review`. Pulse reviewer launcher sessions carry
 an explicit `parent_session_id` and `session_kind=pulse_reviewer`. Refresh
 recovery and the global activity monitor keep those internal children out of
 the top-level chat list, remove child tabs persisted by older frontends without

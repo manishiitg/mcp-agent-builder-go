@@ -14,7 +14,6 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -761,8 +760,8 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 	t.Run("rejects malformed technical nesting from production regression", func(t *testing.T) {
 		malformed := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "malformed"),
-			`<section class="worksummary"`,
-			`</div><section class="worksummary"`,
+			`<div class="brief"`,
+			`</div><div class="brief"`,
 			1,
 		)
 		workspaceState.mu.Lock()
@@ -774,33 +773,33 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		}
 	})
 
-	t.Run("allows coverage display copy changes", func(t *testing.T) {
-		renamed := strings.Replace(
-			pulseImproveHTMLFixture(pulseRunID, "renamed-label"),
-			`<span class="cl">Plan drift</span>`,
-			`<span class="cl">Planning consistency</span>`,
+	t.Run("rejects retired reviewer coverage", func(t *testing.T) {
+		withCoverage := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "coverage"),
+			`<div id="pulse-agent-handoff"`,
+			`<div class="coverage"><div class="covitem">Reviewer</div></div><div id="pulse-agent-handoff"`,
 			1,
 		)
 		workspaceState.mu.Lock()
-		workspaceState.files[htmlPath] = renamed
+		workspaceState.files[htmlPath] = withCoverage
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err != nil {
-			t.Fatalf("cosmetic coverage label change was rejected: %v", err)
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), ".coverage") {
+			t.Fatalf("retired coverage error = %v", err)
 		}
 	})
 
-	t.Run("rejects duplicate coverage module identity", func(t *testing.T) {
-		duplicate := strings.Replace(
-			pulseImproveHTMLFixture(pulseRunID, "duplicate-module"),
-			`data-module="strategy_auditor"`,
-			`data-module="workflow_review"`,
+	t.Run("rejects retired current work counts", func(t *testing.T) {
+		withCounts := strings.Replace(
+			pulseImproveHTMLFixture(pulseRunID, "counts"),
+			`<div id="pulse-agent-handoff"`,
+			`<section class="worksummary"><div class="workstat">5</div></section><div id="pulse-agent-handoff"`,
 			1,
 		)
 		workspaceState.mu.Lock()
-		workspaceState.files[htmlPath] = duplicate
+		workspaceState.files[htmlPath] = withCounts
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "duplicate data-module") {
-			t.Fatalf("duplicate coverage module error = %v", err)
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), ".worksummary") {
+			t.Fatalf("retired Current work error = %v", err)
 		}
 	})
 
@@ -816,22 +815,6 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		workspaceState.mu.Unlock()
 		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "exactly 3 brief cells") {
 			t.Fatalf("missing outcome cell error = %v", err)
-		}
-	})
-
-	t.Run("requires SQLite current work projection", func(t *testing.T) {
-
-		missing := strings.Replace(
-			pulseImproveHTMLFixture(pulseRunID, "missing-current-work"),
-			`<section class="worksummary" data-source="sqlite">`,
-			`<section class="legacy-work">`,
-			1,
-		)
-		workspaceState.mu.Lock()
-		workspaceState.files[htmlPath] = missing
-		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "Current work") {
-			t.Fatalf("missing Current work error = %v", err)
 		}
 	})
 
@@ -851,17 +834,17 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 		}
 	})
 
-	t.Run("caps active material history at twelve items", func(t *testing.T) {
+	t.Run("caps active material history at six items", func(t *testing.T) {
 		withExcessHistory := strings.Replace(
 			pulseImproveHTMLFixture(pulseRunID, "excess-history"),
 			`<div id="pulse-agent-handoff"`,
-			strings.Repeat(`<article class="entry resolved" data-date="2026-08-04"></article>`, 13)+`<div id="pulse-agent-handoff"`,
+			strings.Repeat(`<article class="entry resolved" data-date="2026-08-04"></article>`, 7)+`<div id="pulse-agent-handoff"`,
 			1,
 		)
 		workspaceState.mu.Lock()
 		workspaceState.files[htmlPath] = withExcessHistory
 		workspaceState.mu.Unlock()
-		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "at most 12 material Activity items") {
+		if err := validatePulseDashboardArtifact(ctx, workspacePath, pulseRunID, previousHTML, true); err == nil || !strings.Contains(err.Error(), "at most 6 material Activity items") {
 			t.Fatalf("excess Activity history error = %v", err)
 		}
 	})
@@ -883,49 +866,14 @@ func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *tes
 }
 
 func pulseImproveHTMLFixture(pulseRunID, marker string) string {
-	var coverage strings.Builder
-	for _, module := range pulsemodules.All {
-		coverage.WriteString(`<div class="covitem ok" data-module="` + module.ID + `"><span class="dot"></span><span class="cl">` + module.Label + `</span></div>`)
-	}
-	return `<html data-pulse-schema="4"><body><div class="coverage">` + coverage.String() + `</div>` +
+	return `<html data-pulse-schema="5"><body>` +
 		`<div class="brief"><div class="brief-h">Latest Pulse</div><div class="briefgrid">` +
 		`<div class="briefitem"><div class="k">Outcome</div><p>Complete.</p></div>` +
 		`<div class="briefitem"><div class="k">Goal movement</div><p>On track.</p></div>` +
 		`<div class="briefitem"><div class="k">Next</div><p>Later.</p></div>` +
 		`</div></div>` +
-		`<section class="worksummary" data-source="sqlite"><div class="workstats">` +
-		`<div class="workstat" data-status="open" data-count="0"><b>0</b><span>Open</span></div>` +
-		`<div class="workstat" data-status="in_progress" data-count="0"><b>0</b><span>Fixing</span></div>` +
-		`<div class="workstat" data-status="in_review" data-count="0"><b>0</b><span>Verify</span></div>` +
-		`</div></section>` +
 		`<div id="pulse-agent-handoff" data-pulse-run-id="` + pulseRunID + `" hidden>` + marker + `</div>` +
 		`</body></html>`
-}
-
-func TestValidatePulseDashboardFindingCountsMatchesSQLiteProjection(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/dashboard-counts"
-	if _, err := step_based_workflow.RecordRunConcerns(
-		context.Background(), workspacePath, "run-1", "", pulseModuleBugReview,
-		step_based_workflow.ConcernPhaseReview,
-		"CONCERNS: the report omits the latest completed run",
-	); err != nil {
-		t.Fatalf("record finding: %v", err)
-	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, "", -1)
-	if err != nil || len(findings) != 1 {
-		t.Fatalf("load finding: findings=%+v err=%v", findings, err)
-	}
-	html := pulseImproveHTMLFixture("pulse-1", "counts")
-	html = strings.Replace(html, `data-status="open" data-count="0"><b>0</b>`, `data-status="open" data-count="1"><b>1</b>`, 1)
-	if err := validatePulseDashboardFindingCounts(context.Background(), workspacePath, html); err != nil {
-		t.Fatalf("matching Current work projection rejected: %v", err)
-	}
-	stale := strings.Replace(html, `data-status="open" data-count="1"><b>1</b>`, `data-status="open" data-count="0"><b>0</b>`, 1)
-	if err := validatePulseDashboardFindingCounts(context.Background(), workspacePath, stale); err == nil || !strings.Contains(err.Error(), "SQLite has 1") {
-		t.Fatalf("stale Current work count error = %v", err)
-	}
 }
 
 func TestRestorePulseDashboardArtifactsRestoresBothFiles(t *testing.T) {

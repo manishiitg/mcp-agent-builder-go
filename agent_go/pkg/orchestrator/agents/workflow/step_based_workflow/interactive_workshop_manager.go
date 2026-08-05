@@ -153,7 +153,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED FINDING DETAILS: an injected multi-lane contract may require one compact PULSE_FINDING_JSON marker before every CONCERNS line solely to preserve its owning module. Outside that contract, add this marker only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
 		artifactContract += "LIFECYCLE HISTORY: call get_pulse_state(view=\"backlog\") for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
@@ -197,30 +197,137 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
-func canonicalWorkflowReviewMessageSequence() []backgroundMessageSequenceItem {
-	return []backgroundMessageSequenceItem{
-		{ID: "correctness", Title: "Correctness and verification", Message: "Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
-		{ID: "artifact-drift", Title: "Plan and artifact drift", Message: "Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
-		{ID: "report-eval", Title: "Report and eval truthfulness", Message: "Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-		{ID: "stores", Title: "Stores contracts", Message: "Continue in the same context. Load the improve-learnings, improve-knowledge, and improve-database references together with read_skill and follow their read-only audit rules. This is the stores turn inside module=workflow_review: do not emit the guides' legacy standalone module envelopes, do not return the final review artifact yet, and do not mark stores_health. Enforce one semantic item, one authoritative owner across Soul, Plan/step config, Validation, Learnings, Knowledgebase, DB, and Pulse. For learnings, audit every content-bearing Markdown file in the complete skill package plus every effective read-write learning_objective: references are part of the skill, only reusable execution HOW may remain, and moving non-skill content behind a reference link is not a repair. For Knowledgebase, inventory every content-bearing note in a kb_purity_manifest. For DB, map every relevant table and content-bearing TEXT/JSON column in a db_ownership_manifest using bounded samples. Reconcile misplaced and duplicated content into one ownership_manifest with current location, semantic type, authoritative owner, duplicate locations, migration/removal action, and verification. Recommend lock_learnings or lock_knowledgebase only after the complete relevant manifest is clean; prove learning locks per step from its own metadata and run evidence, not merely the shared global skill. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-		{ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
-		{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."},
+func canonicalWorkflowReviewMessageSequence(lanes []string) ([]backgroundMessageSequenceItem, error) {
+	available := map[string]backgroundMessageSequenceItem{
+		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence; do not propose product strategy and do not consolidate yet."},
+		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
 	}
+	if len(lanes) == 0 {
+		lanes = []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
+	}
+	seen := map[string]bool{}
+	selected := map[string]bool{}
+	for _, lane := range lanes {
+		lane = strings.TrimSpace(lane)
+		if _, ok := available[lane]; !ok {
+			return nil, fmt.Errorf("review_lanes contains unsupported operational lane %q", lane)
+		}
+		if seen[lane] {
+			return nil, fmt.Errorf("review_lanes contains duplicate lane %q", lane)
+		}
+		seen[lane] = true
+		selected[lane] = true
+	}
+	ordered := []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
+	items := make([]backgroundMessageSequenceItem, 0, len(selected)+1)
+	for _, lane := range ordered {
+		if selected[lane] {
+			items = append(items, available[lane])
+		}
+	}
+	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."})
+	return items, nil
 }
 
-func defaultBackgroundMessageSequence(args map[string]interface{}) []backgroundMessageSequenceItem {
+func backgroundReviewLanes(args map[string]interface{}) ([]string, error) {
+	raw, exists := args["review_lanes"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]interface{})
+	if !ok {
+		if typed, typedOK := raw.([]string); typedOK {
+			return append([]string(nil), typed...), nil
+		}
+		return nil, fmt.Errorf("review_lanes must be an array of operational module IDs")
+	}
+	lanes := make([]string, 0, len(values))
+	for index, value := range values {
+		lane, ok := value.(string)
+		if !ok || strings.TrimSpace(lane) == "" {
+			return nil, fmt.Errorf("review_lanes[%d] must be a non-empty string", index)
+		}
+		lanes = append(lanes, strings.TrimSpace(lane))
+	}
+	if len(lanes) == 0 {
+		return nil, fmt.Errorf("review_lanes must contain at least one operational module")
+	}
+	return lanes, nil
+}
+
+func partitionPulseReviewConcerns(summary string, lanes []string) (map[string]string, error) {
+	concerns := ParseConcernLines(summary)
+	if len(concerns) == 0 {
+		return map[string]string{}, nil
+	}
+	canonical := make([]string, 0, len(lanes))
+	allowed := map[string]bool{}
+	for _, lane := range lanes {
+		lane = pulsemodules.Normalize(lane)
+		if lane == "" || allowed[lane] {
+			continue
+		}
+		allowed[lane] = true
+		canonical = append(canonical, lane)
+	}
+	if len(canonical) == 0 {
+		return nil, fmt.Errorf("review concerns have no owning module")
+	}
+	if len(canonical) == 1 {
+		return map[string]string{canonical[0]: summary}, nil
+	}
+
+	markers := map[string]pulseFindingDetailMarker{}
+	for _, marker := range ParsePulseFindingDetailMarkers(summary) {
+		key := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
+		if _, duplicate := markers[key]; duplicate {
+			return nil, fmt.Errorf("review concern %q has duplicate PULSE_FINDING_JSON attribution", marker.Concern)
+		}
+		marker.Module = pulsemodules.Normalize(marker.Module)
+		if !allowed[marker.Module] {
+			return nil, fmt.Errorf("review concern %q must name one selected module in PULSE_FINDING_JSON; got %q", marker.Concern, marker.Module)
+		}
+		markers[key] = marker
+	}
+
+	partitioned := map[string][]string{}
+	for _, concern := range concerns {
+		key := strings.ToLower(strings.Join(strings.Fields(concern), " "))
+		marker, ok := markers[key]
+		if !ok {
+			return nil, fmt.Errorf("review concern %q is missing selected-lane PULSE_FINDING_JSON attribution", concern)
+		}
+		rawMarker, err := json.Marshal(marker)
+		if err != nil {
+			return nil, fmt.Errorf("encode review concern attribution: %w", err)
+		}
+		partitioned[marker.Module] = append(partitioned[marker.Module], pulseFindingJSONPrefix+" "+string(rawMarker), concernLinePrefix+" "+concern)
+	}
+
+	out := make(map[string]string, len(partitioned))
+	for module, lines := range partitioned {
+		out[module] = strings.Join(lines, "\n")
+	}
+	return out, nil
+}
+
+func defaultBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	role, _ := args["role"].(string)
 	module, _ := args["module"].(string)
 	if strings.EqualFold(strings.TrimSpace(role), "reviewer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
-		return canonicalWorkflowReviewMessageSequence()
+		lanes, err := backgroundReviewLanes(args)
+		if err != nil {
+			return nil, err
+		}
+		return canonicalWorkflowReviewMessageSequence(lanes)
 	}
-	return nil
+	return nil, nil
 }
 
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
-		return defaultBackgroundMessageSequence(args), nil
+		return defaultBackgroundMessageSequence(args)
 	}
 	items, ok := raw.([]interface{})
 	if !ok {
@@ -269,7 +376,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    maxBackgroundMessageSequenceItems,
-		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for role=reviewer, module=workflow_review: the backend supplies that module's canonical six follow-ups. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for role=reviewer, module=workflow_review: the backend supplies only the Gate-selected operational lanes from review_lanes, then consolidation. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
 		"items": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3848,6 +3955,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"description": "Opening-turn instructions, including workflow path, Pulse run id, module, evidence, and response contract. Do not add a final completion marker; the tool appends its authoritative marker to the last turn.",
 				},
 				"message_sequence": backgroundMessageSequenceSchema(),
+				"review_lanes": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string", "enum": []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}},
+					"description": "For a scheduled shared operational reviewer, the exact non-empty perspective IDs selected by Pulse Gate: Engineering Review and/or LLM/Ops. The backend creates one ordered turn per selected perspective plus consolidation; omitted perspectives do not run.",
+				},
 				"preferred_tier": map[string]interface{}{
 					"type":        "integer",
 					"enum":        []int{1, 2, 3},
@@ -3894,6 +4006,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if err != nil {
 				return "", err
 			}
+			reviewLanes, err := backgroundReviewLanes(args)
+			if err != nil {
+				return "", err
+			}
 			preferredTier, ok := args["preferred_tier"].(float64)
 			if !ok || preferredTier < 1 || preferredTier > 3 {
 				return "", fmt.Errorf("preferred_tier is required and must be 1, 2, or 3")
@@ -3937,8 +4053,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			isPulseStage := pulseMetadataCount == 3
 			isPulseReviewer := isPulseStage && !isFixer
-			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(messageSequence) == 0 {
-				return "", fmt.Errorf("workflow_review requires message_sequence so its ordered lenses run as separate turns in one agent session")
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID {
+				if len(reviewLanes) == 0 {
+					return "", fmt.Errorf("scheduled workflow_review requires the exact non-empty review_lanes selected by Pulse Gate")
+				}
+				if len(messageSequence) == 0 {
+					return "", fmt.Errorf("workflow_review requires selected review lanes plus consolidation in one agent session")
+				}
 			}
 			if isFixer && !isPulseStage {
 				return "", fmt.Errorf("role=fixer requires pulse_run_id, review_run_id, and module together")
@@ -4038,6 +4159,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				reviewMeta["pulse_run_id"] = pulseRunID
 				reviewMeta["review_run_id"] = reviewRunID
 				reviewMeta["module"] = module
+				if len(reviewLanes) > 0 {
+					reviewMeta["review_lanes"] = strings.Join(reviewLanes, ",")
+				}
 				if resultPath != "" {
 					reviewMeta["review_result_path"] = resultPath
 				}
@@ -4063,16 +4187,35 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			marker := pulseReviewerCompletionMarker(todoID)
 			stageInstructions := instructions
 			if isPulseReviewer {
-				candidates, allowlistErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, module)
+				candidateModules := []string{module}
+				if module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
+					candidateModules = reviewLanes
+				}
+				candidates := []PulseReviewVerificationCandidate{}
+				var allowlistErrors []string
+				for _, candidateModule := range candidateModules {
+					moduleCandidates, candidateErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, candidateModule)
+					if candidateErr != nil {
+						allowlistErrors = append(allowlistErrors, candidateModule+": "+candidateErr.Error())
+						continue
+					}
+					candidates = append(candidates, moduleCandidates...)
+				}
 				allowlistJSON, _ := json.Marshal(candidates)
 				allowlistNote := ""
-				if allowlistErr != nil {
-					allowlistNote = " The allowlist could not be loaded; fail closed and emit zero verification markers. Error: " + allowlistErr.Error()
+				if len(allowlistErrors) > 0 {
+					candidates = []PulseReviewVerificationCandidate{}
+					allowlistJSON, _ = json.Marshal(candidates)
+					allowlistNote = " The complete selected-lane allowlist could not be loaded; fail closed and emit zero verification markers. Errors: " + strings.Join(allowlistErrors, "; ")
 				}
 				stageInstructions = strings.TrimSpace(stageInstructions) + fmt.Sprintf(
 					"\n\nTRUSTED VERIFICATION ALLOWLIST (backend generated): %s.%s Emit PULSE_VERIFICATION_JSON only for an exact finding_id + fingerprint + attempt_id tuple in this list. An empty list means emit no verification markers. Evidence that contradicts any other retained finding is a new/reopened finding, not verification of a nonexistent attempt.",
 					string(allowlistJSON), allowlistNote,
 				)
+				if len(reviewLanes) > 1 {
+					laneJSON, _ := json.Marshal(reviewLanes)
+					stageInstructions += fmt.Sprintf("\n\nSELECTED-LANE FINDING ATTRIBUTION (backend enforced): selected lanes are %s. Treat module=workflow_review as the shared-session transport identity, not as ownership for every finding. Load backlog and prior-review evidence for each selected lane before discovery. Immediately before every CONCERNS line, emit one single-line PULSE_FINDING_JSON marker whose concern exactly matches the CONCERNS payload, whose module is exactly one selected lane, and whose issue_kind is workflow_issue or harness_issue. Ordinary workflow findings do not need an invented finding_id or target_key. Harness findings still include their complete structured harness fields. A missing, duplicate, or unselected module attribution rejects the shared review rather than silently assigning the finding to the wrong future Gate lane.", string(laneJSON))
+				}
 			}
 			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, marker)
 			if isFixer {
@@ -4090,6 +4233,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				last := len(stageSequence) - 1
 				stageSequence[last].Message = strings.TrimSpace(stageSequence[last].Message) + pulseReviewerCompletionContract(marker)
 			}
+			reviewModules := []string{module}
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
+				reviewModules = append([]string(nil), reviewLanes...)
+			}
 			persistFailure := func(message string) error {
 				if !isPulseReviewer {
 					return nil
@@ -4097,7 +4244,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "failed", message, time.Now())
 				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
 				defer persistCancel()
-				return RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body)
+				return RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body)
 			}
 
 			go func() {
@@ -4150,10 +4297,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							if !isPulseReviewer {
 								return completed, nil
 							}
+							concernsByModule, attributionErr := partitionPulseReviewConcerns(completed, reviewModules)
+							if attributionErr != nil {
+								incompleteErr = attributionErr
+								logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned invalid lane attribution: %v", todoID, attempt, attributionErr))
+								continue
+							}
 							body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", completed, time.Now())
 							persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
 							defer persistCancel()
-							if writeErr := RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body); writeErr != nil {
+							if writeErr := RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body); writeErr != nil {
 								return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
 							}
 							// File the review's CONCERNS: lines through the same Go-side path
@@ -4161,9 +4314,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							// review records becomes visible as recurrence. The Markdown stored
 							// in SQLite remains the full evidence; this is only its trackable
 							// lifecycle index.
-							iwm.controller.recordStepConcerns(persistCtx, module, map[string]string{
-								ConcernPhaseReview: completed,
-							})
+							for concernModule, concernSummary := range concernsByModule {
+								iwm.controller.recordStepConcerns(persistCtx, concernModule, map[string]string{
+									ConcernPhaseReview: concernSummary,
+								})
+							}
 							// Log that this reviewer ran and what it concluded. Without it,
 							// Gate cannot tell a module that keeps finding real problems from
 							// one that never finds anything, and its next choice is a guess.

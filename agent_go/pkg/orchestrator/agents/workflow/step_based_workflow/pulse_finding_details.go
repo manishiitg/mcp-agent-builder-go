@@ -86,6 +86,7 @@ type PulseHarnessPlatformIssue struct {
 
 type pulseFindingDetailMarker struct {
 	Concern string `json:"concern"`
+	Module  string `json:"module,omitempty"`
 	PulseFindingDetails
 }
 
@@ -126,6 +127,7 @@ func ParsePulseFindingDetailMarkers(summary string) []pulseFindingDetailMarker {
 			continue
 		}
 		marker.Concern = strings.TrimSpace(marker.Concern)
+		marker.Module = strings.TrimSpace(marker.Module)
 		marker.PulseFindingDetails = normalizePulseFindingDetails(marker.PulseFindingDetails)
 		if marker.Concern == "" || marker.IssueKind == "" {
 			continue

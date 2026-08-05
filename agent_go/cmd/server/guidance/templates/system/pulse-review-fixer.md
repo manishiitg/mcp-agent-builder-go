@@ -1,10 +1,12 @@
-## Pulse three-agent review and one consolidated Fixer
+## Pulse selected-lane review and one consolidated Fixer
 
 Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
-dated review run ID. Current passes have three independent review agents:
-`workflow_review`, `strategy_auditor`, and `goal_advisor`. Workflow Review keeps
-one continuous context while it walks its operational lenses in sequence. After
-the read barrier, exactly one consolidated Fixer runs for the pass.
+dated review run ID. Gate decides separately whether `workflow_review`
+(Engineering Review), `llm_ops_review`, `strategy_auditor`, and `goal_advisor`
+are due. Engineering and LLM/Ops may share one reviewer context with separate
+perspective turns; skipped perspectives are not sent. Strategy Auditor and Goal
+Advisor remain independent agents. After the read barrier, exactly one
+consolidated Fixer runs for the pass.
 
 Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -17,8 +19,8 @@ new finding. Attempt every safe bounded fix in the selected module. Leave a
 finding active only for a concrete blocker, decision, failed check, or future
 evidence checkpoint.
 
-The three current reviewers are independent. Workflow Review, Strategy Auditor,
-and Goal Advisor never wait for, consume, or require one another's conclusions.
+The shared operational reviewer, Strategy Auditor, and Goal Advisor are
+independent. They never wait for, consume, or require one another's conclusions.
 Run selected reviewer stages in one bounded parallel batch.
 An unreliable evidence window is classified inside the affected review as an
 execution problem or insufficient evidence; it does not cancel another review.
@@ -26,9 +28,10 @@ Goal Advisor is selected only for its own blank-sheet opportunity, answered
 decision, healthy-headroom, or experiment-checkpoint trigger—not as a handler
 for a Strategy Auditor result.
 
-The scheduler invokes at most one agent for each current module while preserving
-canonical module order in the collected results. Each review stage owns only
-the supplied module. First inspect its current-run result,
+The scheduler invokes at most one shared operational reviewer and at most one
+agent for each selected strategic module. The operational reviewer receives an
+exact `review_lanes` list in canonical order and owns only those lanes. Each
+strategic stage owns only its supplied module. First inspect current-run result,
 active retained backlog, answered decisions, awaiting-verification work, and
 any already-saved reviewer result. Do not launch a reviewer merely because the
 module is due: if saved review and lifecycle evidence already answer the review
@@ -37,8 +40,9 @@ stages never mutate, start fix attempts, or mark module state.
 
 When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
 make exactly one `call_generic_agent` call for this module. `workflow_review`
-uses that one agent for all ordered operational lenses; it does not spawn one
-child per lens. Never combine the three agents in one shell command, run curl
+uses that one agent for only the Gate-selected ordered operational lanes; pass
+the exact non-empty `review_lanes` list and do not spawn one child per lane.
+Never combine the independent agents in one shell command, run curl
 in the background, use `&`/`wait`, or wait for another module. In coding-agent mode, use the documented API bridge
 shell transport. The call returns an `execution_id` immediately; record it,
 end the current turn, and resume only from its automatic notification of completion.
@@ -56,25 +60,30 @@ contract error, continue processing every other due module, and leave its
 findings unchanged for a clean reviewer retry on the next pass.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response
-contract. Workflow Review loads its focused docs together, then checks
-correctness, artifact drift, report/eval truth, stores, and LLM/tool operations
-in that order. It reuses shared evidence and consolidates the same root cause
-before returning. Strategy and Goal remain fresh independent contexts. Load docs with
+contract. Engineering Review conditionally loads execution, artifact-drift,
+report/eval implementation, and store-integrity evidence packs; those are not
+separate reviewer identities. LLM/Ops evaluates correct execution for cost,
+latency, model, tool, retry, and runtime fitness. The shared operational reviewer
+executes only selected perspectives in canonical order, reuses shared evidence,
+and consolidates the same root cause before returning. Strategy and Goal remain
+fresh independent contexts. Load docs with
 `read_skill(skills=[{"name":"builder-reference","path":"references/<name>.md"}])`:
 `pulse-bug-review`; `review-artifact-drift`; matching `improve-*` health guide;
 `llm-selection` plus cost/timing evidence; `strategy-auditor` plus cross-run
 DB/run evidence; or goal/constraint/outcome and experiment evidence for Goal
 Advisor. Strategy Auditor and Goal Advisor may share a parallel batch and must
-reason independently. Strategy Auditor returns
-one of `strategy_flaw`, `execution_bug`, `measurement_gap`,
-`insufficient_evidence`, or `no_material_problem`, without prescribing a plan
-mutation. Goal Advisor must lead with strategy ceiling, one materially different
+reason independently. Strategy Auditor reasons from a product/business
+perspective and returns a user-facing in-strategy improvement brief. A report or
+evaluation that is technically correct but does not measure useful goal progress
+is its `measurement_gap`; broken implementation belongs to Engineering Review.
+Goal Advisor must lead with strategy ceiling, one materially different
 thesis, relationship to the active experiment, and why incremental repair is
 insufficient. Reject maintenance- or instrumentation-only Advisor results.
 Reviewers never edit, publish, notify, ask the user, write HTML, or mark state.
 
-The Stores turn must load `improve-learnings`, `improve-knowledge`, and
-`improve-database`. Its learning review covers the complete skill package, not
+The Engineering store-integrity evidence pack must load `improve-learnings`,
+`improve-knowledge`, and `improve-database` when selected by Gate evidence. Its
+learning review covers the complete skill package, not
 only the root index or a sample of references, and audits every effective
 read-write `learning_objective`. References are part of the skill: only
 reusable execution HOW may remain anywhere under `learnings/_global/`.
@@ -82,7 +91,7 @@ Relocating business facts, run state, owner values, strategy, incidents,
 decisions, provenance, or architecture history from `SKILL.md` into a reference
 does not fix the finding.
 
-The Stores turn returns one reconciled `ownership_manifest`, not three
+The store-integrity pack returns one reconciled `ownership_manifest`, not three
 disconnected lists. Each misplaced or duplicated item names its current
 location, semantic type, authoritative owner, duplicate locations, bounded
 migration/removal action, and verification. Enforce one semantic item, one
@@ -150,6 +159,22 @@ rtslatency asked whether to retain per-turn latency rows: ~30MB a year against a
 2MB database, required by its own success criterion for reproducible
 percentiles. Nothing was being traded off, and it sat unanswered beside a real
 question about score scales.
+
+Route outputs by professional perspective. Engineering Review normally creates
+an actionable issue and repair/verification lifecycle, never a product proposal.
+LLM/Ops normally creates a safe optimization issue; ask only for a real
+quality-versus-cost, spend, or reliability tradeoff. Strategy Auditor creates a
+user-facing in-strategy improvement artifact: record `proposal_only` when it is
+advisory, or create and link one `awaiting_user` decision when the recommendation
+materially changes product/business behavior. Use
+`create_human_input_request(source="strategy_auditor", input_id="strategy-proposal-...")`
+for that decision so the UI preserves who asked. Goal Advisor creates a materially
+different opportunity artifact and normally an approve/reject/defer decision;
+use `source="goal_advisor"` and `input_id="plan-proposal-..."`, and never apply
+it before that exact approval. Engineering may reach
+`awaiting_user` only for an exceptional repair that changes business meaning,
+affects real users or money, or leaves a genuinely balanced choice not settled
+by `soul.md`.
 
 `awaiting_user` remains in the decision queue and requires a still-pending
 `create_human_input_request`, passed as `human_input_id`. Create the decision

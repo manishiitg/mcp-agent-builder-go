@@ -60,10 +60,10 @@ Pulse's durable memory is **SQLite**, including module results, reviews, finding
 attempts, verification, finalization, interventions, and comparable goal observations.
 `builder/improve.html` is the required lightweight executive journal and
 publishable history, not the lifecycle database. It contains Bug/Goal verdicts,
-one status sentence, reviewer coverage, optional assumptions, exactly three
-Latest Pulse cells, Open/Fixing/Verify counts, and at most 12 material Activity
-cards. Complete findings, checks, fix attempts, verification, questions, and
-review evidence remain in SQLite and are rendered by the Pulse popup.
+one status sentence, exactly three Latest Pulse cells, and at most six material
+Activity transitions. Reviewer coverage, assumptions, findings, checks, fix
+attempts, verification, questions, and review evidence remain in SQLite and are
+rendered by the Pulse popup.
 
 See `review-improve-log.md` for the journal structure and archive rules.
 

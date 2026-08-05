@@ -64,7 +64,7 @@ const (
 	RetiredKnowledgebaseHealthID = "knowledgebase_health"
 	RetiredDBHealthID            = "db_health"
 	// CostLLMTimeID remains readable for historical Pulse state and artifacts.
-	// New runs fold cost, timing, and tool/LLM operations into WorkflowReviewID.
+	// New runs fold cost, timing, and tool/LLM operations into LLMOpsReviewID.
 	CostLLMTimeID = "cost_llm_time"
 )
 
@@ -78,25 +78,29 @@ const (
 // and is part of the contract — the scheduler and UI both rely on it.
 var All = []Module{
 	{
-		// Workflow Review is one read-only agent session with ordered lenses.
-		// It replaces six agents that repeatedly loaded the same plan, run,
-		// backlog, and database evidence and then filed overlapping findings.
-		// Historical module IDs remain readable below and normalize here when a
-		// current command still uses an older focused name.
+		// WorkflowReviewID is retained as the durable identity for Engineering
+		// Review. Artifact names are evidence packs, not reviewer perspectives:
+		// execution, report/eval implementation, plan-change impact, artifact
+		// consistency, and store-integrity defects all belong here.
 		ID:        WorkflowReviewID,
-		Label:     "Workflow review",
+		Label:     "Engineering review",
 		StepLabel: "workflow-review",
 		Aliases: []string{
-			"workflow", "review", "operational_review",
+			"workflow", "review", "engineering", "engineering_review", "correctness", "correctness_review",
 			"bug", BugReviewID,
 			"artifact", "artifact_drift", ArtifactReviewID,
 			"report", "reporting", "report_repair", ReportHealthID,
 			"eval", "evaluation", "evaluation_health", "eval_repair", EvalHealthID,
-			"learnings", "learning", "learning_policy", "learning_health",
-			"kb", "knowledgebase", "knowledgebase_health",
-			"db", "database", "db_health", StoresHealthID,
-			"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID, LLMOpsReviewID,
+			"learnings", "learning", "learning_policy", RetiredLearningHealthID,
+			"kb", "knowledgebase", RetiredKnowledgebaseHealthID,
+			"db", "database", RetiredDBHealthID, StoresHealthID,
 		},
+	},
+	{
+		ID:        LLMOpsReviewID,
+		Label:     "LLM & operations",
+		StepLabel: "llm-ops-review",
+		Aliases:   []string{"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID},
 	},
 	{
 		// Strategy Auditor improves the selected strategy by finding missing
@@ -126,7 +130,6 @@ var RetiredIDs = []string{
 	ReportHealthID,
 	EvalHealthID,
 	StoresHealthID,
-	LLMOpsReviewID,
 	RetiredLearningHealthID,
 	RetiredKnowledgebaseHealthID,
 	RetiredDBHealthID,

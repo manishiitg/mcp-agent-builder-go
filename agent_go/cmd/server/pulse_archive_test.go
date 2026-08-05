@@ -64,16 +64,16 @@ func TestAssessPulseImproveArchiveIgnoresByteAndLineCounts(t *testing.T) {
 	}
 }
 
-func TestAssessPulseImproveArchiveCapsActiveMaterialHistoryAtTwelve(t *testing.T) {
-	twelve := strings.Repeat(`<article class="entry resolved" data-date="2026-07-21"></article>`, 12)
-	assessment := assessPulseImproveArchiveAt(twelve, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+func TestAssessPulseImproveArchiveCapsActiveMaterialHistoryAtSix(t *testing.T) {
+	six := strings.Repeat(`<article class="entry resolved" data-date="2026-07-21"></article>`, 6)
+	assessment := assessPulseImproveArchiveAt(six, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
 	if assessment.Due || assessment.ExcessActiveItems != 0 {
-		t.Fatalf("twelve material items should remain active: %+v", assessment)
+		t.Fatalf("six material items should remain active: %+v", assessment)
 	}
 
-	assessment = assessPulseImproveArchiveAt(twelve+`<article class="entry resolved" data-date="2026-07-21"></article>`, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	assessment = assessPulseImproveArchiveAt(six+`<article class="entry resolved" data-date="2026-07-21"></article>`, time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
 	if !assessment.Due || assessment.ExcessActiveItems != 1 {
-		t.Fatalf("thirteenth safe material item should trigger compaction: %+v", assessment)
+		t.Fatalf("seventh safe material item should trigger compaction: %+v", assessment)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestPostRunMonitorArchiveStepPreservesCurrentTruthAndStagesWrites(t *testin
 	contract := string(raw)
 	for _, want := range []string{
 		"lightweight published executive journal",
-		"newest 12 material dated",
+		"newest 6 material dated",
 		"strictly older than 15 calendar days",
 		"undated history is never",
 		"builder/improve-archive/YYYY-MM.html",

@@ -402,8 +402,9 @@ type StreamingAPI struct {
 	// Their structured terminal events remain available (the same events used by
 	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
 	// instead of guessing activity solely from the latest rendered spinner text.
-	retainedMainTurns   map[string]time.Time
-	retainedMainTurnsMu sync.Mutex
+	retainedMainTurns            map[string]time.Time
+	retainedMainTurnWatchCancels map[string]context.CancelFunc
+	retainedMainTurnsMu          sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -1576,6 +1577,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		sessionBusy:                     make(map[string]bool),
 		sessionBusySince:                make(map[string]time.Time),
 		retainedMainTurns:               make(map[string]time.Time),
+		retainedMainTurnWatchCancels:    make(map[string]context.CancelFunc),
 		pendingCompletions:              make(map[string][]string),
 		completionRetryScheduled:        make(map[string]bool),
 		pendingStartNotifications:       make(map[string][]string),
@@ -6573,16 +6575,152 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
+		provider := llmproviders.Provider(retainedCodingAgentProvider(snapshot))
+		watchCtx, watchCancel := context.WithCancel(context.Background())
 		api.retainedMainTurnsMu.Lock()
 		if api.retainedMainTurns == nil {
 			api.retainedMainTurns = make(map[string]time.Time)
 		}
+		if api.retainedMainTurnWatchCancels == nil {
+			api.retainedMainTurnWatchCancels = make(map[string]context.CancelFunc)
+		}
+		previousWatchCancel := api.retainedMainTurnWatchCancels[sessionID]
 		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnWatchCancels[sessionID] = watchCancel
 		api.retainedMainTurnsMu.Unlock()
+		if previousWatchCancel != nil {
+			previousWatchCancel()
+		}
 		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
+		go api.observeRetainedMainTurnStream(watchCtx, sessionID, snapshot, provider)
 		return
 	}
+}
+
+const (
+	retainedMainTurnStreamQuietWindow = 350 * time.Millisecond
+	retainedMainTurnReadyStableWindow = 1200 * time.Millisecond
+	retainedMainTurnCaptureTimeout    = 3 * time.Second
+)
+
+// observeRetainedMainTurnStream derives the logical end of a direct retained
+// turn from the real tmux output stream. Stream output schedules a coherent
+// in-band pane capture after a short quiet boundary; the provider adapter then
+// decides whether the screen is truly back at its idle composer. Requiring the
+// ready screen to remain stable prevents an intermediate repaint from settling
+// a turn that immediately continues into another tool/action.
+func (api *StreamingAPI) observeRetainedMainTurnStream(
+	ctx context.Context,
+	sessionID string,
+	snapshot terminals.Snapshot,
+	provider llmproviders.Provider,
+) {
+	if api == nil || api.liveAttach == nil || strings.TrimSpace(snapshot.TmuxSession) == "" || provider == "" {
+		return
+	}
+	output := make(chan struct{}, 1)
+	stream, unsubscribe, err := api.liveAttach.observeOutput(snapshot.TmuxSession, func([]byte) {
+		select {
+		case output <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		log.Printf("[RETAINED_TURN] Could not observe tmux stream session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, err)
+		return
+	}
+	defer unsubscribe()
+
+	// Inspect once even when the turn completed faster than stream attachment.
+	// Confirmed delivery plus a stable idle composer is a valid completion.
+	output <- struct{}{}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	resetTimer := func(delay time.Duration) {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+	}
+
+	var readySince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stream.done:
+			return
+		case <-output:
+			readySince = time.Time{}
+			resetTimer(retainedMainTurnStreamQuietWindow)
+		case <-timer.C:
+			captureCtx, cancel := context.WithTimeout(ctx, retainedMainTurnCaptureTimeout)
+			pane, captureErr := stream.capturePane(captureCtx)
+			cancel()
+			if captureErr != nil {
+				if ctx.Err() == nil {
+					log.Printf("[RETAINED_TURN] Tmux stream capture failed session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, captureErr)
+				}
+				return
+			}
+			if !llmproviders.CodingAgentPaneReady(provider, pane) {
+				readySince = time.Time{}
+				continue
+			}
+			if readySince.IsZero() {
+				readySince = time.Now()
+				resetTimer(retainedMainTurnReadyStableWindow)
+				continue
+			}
+			api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider)
+			return
+		}
+	}
+}
+
+func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, snapshot terminals.Snapshot, provider llmproviders.Provider) {
+	if api == nil {
+		return
+	}
+	now := time.Now()
+	executionID := strings.TrimSpace(snapshot.ExecutionID)
+	if executionID == "" {
+		executionID = "main:" + sessionID
+	}
+	event := events.Event{
+		ID:              fmt.Sprintf("retained-turn-completion-%d", now.UnixNano()),
+		Type:            "unified_completion",
+		Timestamp:       now,
+		SessionID:       sessionID,
+		ExecutionID:     executionID,
+		ExecutionKind:   "main_agent",
+		TerminalOwnerID: "main:" + sessionID,
+		TerminalID:      snapshot.TerminalID,
+		Data: &unifiedevents.AgentEvent{
+			Type:      unifiedevents.EventType("unified_completion"),
+			Timestamp: now,
+			SessionID: sessionID,
+			Data: &unifiedevents.GenericEventData{Data: map[string]interface{}{
+				"source":         "tmux_stream",
+				"provider":       string(provider),
+				"tmux_session":   snapshot.TmuxSession,
+				"execution_kind": "main_agent",
+				"scope":          "main_agent",
+			}},
+		},
+	}
+	if api.eventStore != nil {
+		api.eventStore.AddEvent(sessionID, event)
+		return
+	}
+	api.observeRetainedMainTurnEvent(sessionID, event)
 }
 
 func retainedMainTurnCompletionEvent(eventType string) bool {
@@ -6632,14 +6770,20 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 
 	api.retainedMainTurnsMu.Lock()
 	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	var watchCancel context.CancelFunc
 	if stillTracked && currentStart.Equal(startedAt) {
 		delete(api.retainedMainTurns, sessionID)
+		watchCancel = api.retainedMainTurnWatchCancels[sessionID]
+		delete(api.retainedMainTurnWatchCancels, sessionID)
 	} else {
 		stillTracked = false
 	}
 	api.retainedMainTurnsMu.Unlock()
 	if !stillTracked {
 		return
+	}
+	if watchCancel != nil {
+		watchCancel()
 	}
 
 	api.setSessionBusy(sessionID, false)

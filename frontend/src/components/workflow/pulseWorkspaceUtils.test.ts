@@ -5,6 +5,7 @@ import type {
 } from '../../services/api-types'
 import {
   buildPulseWorkspaceModuleSummaries,
+  normalizePulseWorkspaceModule,
   selectPulseWorkspaceModule,
   summarizePulseReviewStorage,
 } from './pulseWorkspaceUtils'
@@ -45,6 +46,13 @@ function review(module: string, recordedAt: string): PulseReviewRecord {
 }
 
 describe('Pulse workspace model', () => {
+  it('folds retired reviewer names into the four user-facing perspectives', () => {
+    expect(normalizePulseWorkspaceModule('bug_review')).toBe('workflow_review')
+    expect(normalizePulseWorkspaceModule('report_health')).toBe('workflow_review')
+    expect(normalizePulseWorkspaceModule('cost_llm_time')).toBe('llm_ops_review')
+    expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategy_auditor')
+  })
+
   it('summarizes module lifecycle state and keeps the latest review', () => {
     const summaries = buildPulseWorkspaceModuleSummaries(
       definitions,

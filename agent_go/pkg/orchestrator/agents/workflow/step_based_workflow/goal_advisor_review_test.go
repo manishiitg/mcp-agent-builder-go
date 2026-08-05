@@ -104,7 +104,7 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 		"never from an ID, fingerprint",
 		"reuse the exact existing CONCERNS payload",
 		"do not emit a separate technical manifest",
-		"STRUCTURED HARNESS ISSUES",
+		"STRUCTURED FINDING DETAILS",
 		"PULSE_FINDING_JSON:",
 		"PULSE_VERIFICATION_JSON:",
 		`"attempt_id"`,

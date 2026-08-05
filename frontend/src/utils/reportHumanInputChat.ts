@@ -59,6 +59,7 @@ export function selectReportDiscussionTab(
 
 function sourceName(source: string): string {
   if (source === 'chief_of_staff') return 'Chief of Staff'
+	if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
   return 'Pulse'
 }

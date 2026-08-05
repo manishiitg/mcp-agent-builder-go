@@ -6,12 +6,11 @@ semantic history compaction pass, not a normal Pulse review or a format rewrite.
 `builder/improve.html` remains the lightweight published executive journal.
 Preserve:
 
-- the verdicts, status sentence, reviewer coverage, optional assumptions,
-  three-cell Latest Pulse brief, SQLite-backed Current work counts, and
-  freshness labels;
-- every open finding, user rule, current note, unresolved/unconfirmed decision,
-  and unanswered or not-yet-consumed human question;
-- the newest 12 material dated Activity cards or run rows, even when some are
+- the verdicts, status sentence, three-cell Latest Pulse brief, and freshness
+  labels;
+- every unresolved material decision transition still needed in the executive
+  journal;
+- the newest 6 material dated Activity cards or run rows, even when some are
   older than 15 calendar days;
 - every item without a valid `data-date="YYYY-MM-DD"` (undated history is never
   archived automatically);
@@ -19,7 +18,7 @@ Preserve:
 
 Move only resolved findings, superseded confirmed decisions, and routine run
 rows into `builder/improve-archive/YYYY-MM.html` when they are either outside
-the newest 12 material dated items or strictly older than 15 calendar days by
+the newest 6 material dated items or strictly older than 15 calendar days by
 their `data-date`. Age or position alone never makes an open or pending item safe
 to move. Each archive is a
 complete renderable HTML document, never a fragment. Merge an existing month

@@ -174,6 +174,7 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-032 Child-agent calls omitted from parent telemetry | P1 | Social Media | **root cause fixed 2026-08-05 (`mcp-agent-builder-go` cdc3d1a76): async sub-agent dispatch now propagates the parent step's timing-capture ID to the child context; parent/child/total breakdown and failed-child/E2E tests not built; the separate failed-child status claim remains unreproduced; runtime reverify remains** |
 | PLAT-033 Managed changelog contains placeholder refs | P1 | Social Media | **implemented 2026-08-05 (`mcp-agent-builder-go` cdc3d1a76) for the two reproduced offenders (update_step_config, write_workflow_manifest); shared mechanism now prefers real before/after snapshots over sha256("[]"); fail-closed on unsupported fields and per-caller audit of the other ~13 changelog call sites not done; runtime reverify remains** |
 | PLAT-034 Completed Raw tmux terminal loses scrollback | P1 | Social Media / Electron | **fixed and runtime verified 2026-08-05 (`mcp-agent-builder-go` b984e6c5c); retained stream survives completion and remains scrollable** |
+| PLAT-035 Retained tmux follow-up stays globally busy after returning to its prompt | P0 | Social Media, LinkedIn | **stream-driven fix implemented and regression-tested 2026-08-05; runtime reverify after rebuild remains** |
 
 ### Social Media classification correction — 2026-08-05
 
@@ -404,7 +405,7 @@ priority and historical run context.
 | [PLAT-022](pulse_platform/plat-022.md) | [PLAT-023](pulse_platform/plat-023.md) | [PLAT-024](pulse_platform/plat-024.md) | [PLAT-025](pulse_platform/plat-025.md) |
 | [PLAT-026](pulse_platform/plat-026.md) | [PLAT-027](pulse_platform/plat-027.md) | [PLAT-028](pulse_platform/plat-028.md) | [PLAT-029](pulse_platform/plat-029.md) |
 | [PLAT-030](pulse_platform/plat-030.md) | [PLAT-031](pulse_platform/plat-031.md) | [PLAT-032](pulse_platform/plat-032.md) | [PLAT-033](pulse_platform/plat-033.md) |
-| [PLAT-034](pulse_platform/plat-034.md) |  |  |  |
+| [PLAT-034](pulse_platform/plat-034.md) | [PLAT-035](pulse_platform/plat-035.md) |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

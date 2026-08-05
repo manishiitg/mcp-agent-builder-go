@@ -153,9 +153,7 @@ func TestPulseReviewResultPathAcceptsEveryCanonicalModule(t *testing.T) {
 	// Mirrors cmd/server's pulseModuleOrder. Kept literal here because that
 	// package is not importable from this one.
 	for _, module := range []string{
-		"bug_review", "artifact_review", "report_health", "eval_health",
-		"stores_health", "llm_ops_review", "strategy_auditor",
-		"goal_advisor",
+		"workflow_review", "llm_ops_review", "strategy_auditor", "goal_advisor",
 	} {
 		path, err := pulseReviewResultPath(reviewRunID, module)
 		if err != nil {
@@ -171,7 +169,7 @@ func TestPulseReviewResultPathAcceptsEveryCanonicalModule(t *testing.T) {
 // before the stores and Ops merges remain readable.
 func TestPulseReviewResultPathStillAcceptsRetiredModules(t *testing.T) {
 	const reviewRunID = "2026-07-29T10-00-00.000Z_pulse-run-1"
-	for _, module := range []string{"learning_health", "knowledgebase_health", "db_health", "cost_llm_time"} {
+	for _, module := range []string{"bug_review", "report_health", "eval_health", "learning_health", "knowledgebase_health", "db_health", "cost_llm_time"} {
 		if _, err := pulseReviewResultPath(reviewRunID, module); err != nil {
 			t.Fatalf("historical module %q must stay readable: %v", module, err)
 		}
