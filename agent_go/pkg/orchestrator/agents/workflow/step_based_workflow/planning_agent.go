@@ -875,8 +875,20 @@ type PlanChangelogEntry struct {
 	Target          string                       `json:"target"`                    // canonical artifact path or surface
 	BeforeRef       string                       `json:"before_ref"`                // immutable digest of the pre-mutation state
 	AfterRef        string                       `json:"after_ref"`                 // immutable digest of the post-mutation state
+	NoOp            bool                         `json:"no_op,omitempty"`           // true when BeforeSnapshot/AfterSnapshot were both real and identical
 	Actor           string                       `json:"actor"`                     // managed mutation authority
 	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
+
+	// BeforeSnapshot / AfterSnapshot are the actual target-artifact content
+	// before and after the mutation, captured by the caller. When set, these
+	// — not Changes — are what BeforeRef/AfterRef hash, so the recorded refs
+	// always reflect the real artifact instead of a caller-reported diff
+	// that can be incomplete or entirely absent (PLAT-033: before_ref ==
+	// after_ref == sha256("[]") whenever a caller left Changes empty, even
+	// though the artifact demonstrably changed). Never persisted — only the
+	// resulting hashes are, not the raw content.
+	BeforeSnapshot interface{} `json:"-"`
+	AfterSnapshot  interface{} `json:"-"`
 }
 
 type PlanChangelogArtifactReview struct {
@@ -1017,18 +1029,31 @@ func completePlanChangelogEntry(entry *PlanChangelogEntry) {
 		}
 	}
 	if entry.BeforeRef == "" {
-		before := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			before = append(before, change.OldValue)
+		if entry.BeforeSnapshot != nil {
+			entry.BeforeRef = artifactContentRef(entry.BeforeSnapshot)
+		} else {
+			before := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				before = append(before, change.OldValue)
+			}
+			entry.BeforeRef = artifactContentRef(before)
 		}
-		entry.BeforeRef = artifactContentRef(before)
 	}
 	if entry.AfterRef == "" {
-		after := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			after = append(after, change.NewValue)
+		if entry.AfterSnapshot != nil {
+			entry.AfterRef = artifactContentRef(entry.AfterSnapshot)
+		} else {
+			after := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				after = append(after, change.NewValue)
+			}
+			entry.AfterRef = artifactContentRef(after)
 		}
-		entry.AfterRef = artifactContentRef(after)
+	}
+	// Only claim a no-op when both sides came from a real snapshot — an empty
+	// Changes list with no snapshot is "unknown," not "nothing changed."
+	if entry.BeforeSnapshot != nil && entry.AfterSnapshot != nil && entry.BeforeRef == entry.AfterRef {
+		entry.NoOp = true
 	}
 	if entry.Actor == "" {
 		entry.Actor = "managed_tool:" + strings.TrimSpace(entry.Tool)

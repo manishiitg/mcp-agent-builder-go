@@ -2499,7 +2499,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 											LogCanonicalArtifactChange(context.Background(), hcpo.GetWorkspacePath(), "runtime_learning_update",
 												"Step post-completion turn changed reusable runtime guidance.",
 												[]PlanFieldChange{{StepID: step.GetID(), Field: "artifact_tree", OldValue: learningBeforeRef, NewValue: learningAfterRef}},
-												hcpo.ReadWorkspaceFile, hcpo.WriteWorkspaceFile, hcpo.GetLogger())
+												hcpo.ReadWorkspaceFile, hcpo.WriteWorkspaceFile, hcpo.GetLogger(),
+												"", nil, nil)
 										}
 										if learnErr != nil {
 											hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Direct-learnings continuation failed for step %d: %v (accepting step anyway)", stepIndex+1, learnErr))

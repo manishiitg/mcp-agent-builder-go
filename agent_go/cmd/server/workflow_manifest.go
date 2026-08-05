@@ -616,6 +616,7 @@ func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *Workflo
 			ctx, workspacePath, "write_workflow_manifest",
 			"workflow.json was written directly; recorded so artifact drift review can see the change.",
 			nil, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			"workflow.json", previous, string(data),
 		)
 	}
 	return nil

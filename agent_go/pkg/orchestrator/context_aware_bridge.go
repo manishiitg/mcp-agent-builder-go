@@ -151,8 +151,8 @@ type ContextAwareEventBridge struct {
 	// instance (PLAT-031), i.e. for the whole run — stamped onto every step
 	// cost event so the cost ledger keeps one execution's identity intact
 	// even when its writes land in two different UTC date-shard files.
-	executionID  string
-	currentPhase string
+	executionID      string
+	currentPhase     string
 	currentStep      int    // Step index within the current phase
 	currentStepID    string // Step ID (e.g., "fetch-data", "process-results")
 	currentStepType  string // Plan step type (e.g., "regular", "todo_task", "routing")
@@ -973,6 +973,23 @@ func (c *ContextAwareEventBridge) StartTimingCaptureFor(ctx context.Context) con
 	captureID := fmt.Sprintf("capture-%d", c.timingCaptureID.Add(1))
 	c.startTimingCapture(captureID)
 	return context.WithValue(ctx, timingCaptureContextKey{}, captureID)
+}
+
+// CopyTimingCaptureContext propagates src's active timing-capture identity
+// (if any) onto dst. Use this whenever a child execution context is built
+// from something other than the in-flight tool-call context — e.g. an async
+// sub-agent's detached context, which is otherwise assembled from the step's
+// long-lived base context — so the child's LLM/tool timing events still land
+// in the collector the parent step will drain instead of a different one
+// (PLAT-032: child calls were silently missing from parent step telemetry).
+func CopyTimingCaptureContext(dst, src context.Context) context.Context {
+	if dst == nil || src == nil {
+		return dst
+	}
+	if captureID, ok := src.Value(timingCaptureContextKey{}).(string); ok && captureID != "" {
+		return context.WithValue(dst, timingCaptureContextKey{}, captureID)
+	}
+	return dst
 }
 
 func (c *ContextAwareEventBridge) drainTimingCapture(captureID string) TimingCaptureSnapshot {

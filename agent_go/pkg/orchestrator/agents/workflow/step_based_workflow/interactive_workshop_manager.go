@@ -5150,6 +5150,18 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				targetConfig.AgentConfigs = &AgentConfigs{}
 			}
 
+			// Snapshot the step's config exactly as it stood before this call's
+			// mutations, decoupled from *targetConfig via a JSON round trip so
+			// later in-place field writes below cannot retroactively change it.
+			// This is what makes the changelog's before_ref real instead of the
+			// sha256("[]") placeholder every prior call recorded (PLAT-033) — the
+			// entry below never set Changes at all, so before_ref/after_ref
+			// always hashed the same empty list regardless of what changed.
+			var beforeStepConfigSnapshot interface{}
+			if beforeJSON, beforeErr := json.Marshal(targetConfig); beforeErr == nil {
+				_ = json.Unmarshal(beforeJSON, &beforeStepConfigSnapshot)
+			}
+
 			// Apply provided fields
 			if val, ok := args["servers"]; ok && val != nil {
 				if arr, ok := val.([]interface{}); ok {
@@ -5604,6 +5616,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			workspacePath := iwm.controller.GetWorkspacePath()
+			configPath := configSubdir + "/step_config.json"
+			if isEvalStep {
+				configPath = "evaluation/step_config.json"
+			}
 			cleanupMessages := make([]string, 0, 1)
 			if cleanupStaleMainPy {
 				mainPyRelPath := fmt.Sprintf("learnings/%s/main.py", stepID)
@@ -5618,19 +5634,36 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					warnings = append(warnings, fmt.Sprintf("Declared agentic but could not check stale learnings/%s/main.py: %v", stepID, existsErr))
 				}
 			}
+
+			// Re-read the persisted state rather than reusing the in-memory
+			// targetConfig, so the after-snapshot reflects what
+			// WriteStepConfigsToSubdir actually wrote — including any
+			// normalization or silent field drop it applies — not what this
+			// call asked for.
+			var afterStepConfigSnapshot interface{}
+			if persistedConfigs, readErr := iwm.controller.ReadStepConfigsFromSubdir(ctx, configSubdir); readErr == nil {
+				for i := range persistedConfigs {
+					if persistedConfigs[i].ID == stepID {
+						if afterJSON, afterErr := json.Marshal(persistedConfigs[i]); afterErr == nil {
+							_ = json.Unmarshal(afterJSON, &afterStepConfigSnapshot)
+						}
+						break
+					}
+				}
+			}
 			if err := writePlanChangelogEntry(ctx, workspacePath, PlanChangelogEntry{
-				Tool:    "update_step_config",
-				Reason:  strings.TrimSpace(reasonRaw),
-				StepIDs: []string{stepID},
+				Tool:           "update_step_config",
+				Reason:         strings.TrimSpace(reasonRaw),
+				StepIDs:        []string{stepID},
+				Changes:        []PlanFieldChange{{StepID: stepID, Field: "agent_configs", OldValue: beforeStepConfigSnapshot, NewValue: afterStepConfigSnapshot}},
+				Target:         configPath,
+				BeforeSnapshot: beforeStepConfigSnapshot,
+				AfterSnapshot:  afterStepConfigSnapshot,
 			}, iwm.controller.ReadWorkspaceFile, iwm.controller.WriteWorkspaceFile, logger); err != nil {
 				logger.Warn(fmt.Sprintf("⚠️ Plan changelog write failed (non-fatal): %v", err))
 			}
 
 			logger.Info(fmt.Sprintf("📝 Workshop: step config updated for step %q in %s/step_config.json", stepID, configSubdir))
-			configPath := configSubdir + "/step_config.json"
-			if isEvalStep {
-				configPath = "evaluation/step_config.json"
-			}
 			result := fmt.Sprintf("Step config for %q updated successfully in %s. Changes will take effect on the next execute_step/run_full_evaluation call.", stepID, configPath)
 			if len(cleanupMessages) > 0 {
 				result += "\n\nCleanup:"
