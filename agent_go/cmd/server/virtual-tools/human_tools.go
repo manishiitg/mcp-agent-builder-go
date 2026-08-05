@@ -355,11 +355,29 @@ func IsHumanToolCategory(category string) bool {
 // human_feedback is available for explicit channel tests and truly urgent,
 // short-lived human-only input; ordinary builder questions stay in chat.
 // notify_user is the non-blocking outbound push (Slack/WhatsApp/Gmail).
-// create_human_input_request and
-// mark_human_input_consumed are non-blocking Pulse/report questions stored in
-// the workflow-local db/db.sqlite.
+// create_human_input_request, answer_human_input_request, and
+// mark_human_input_consumed implement the non-blocking Pulse/report question
+// lifecycle stored in the workflow-local db/db.sqlite.
 func WorkshopHumanToolNames() []string {
-	return []string{"human_feedback", "notify_user", "create_human_input_request", "mark_human_input_consumed"}
+	return []string{"human_feedback", "notify_user", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"}
+}
+
+// HumanToolNamesForWorkshopMode narrows the registered human-tool surface for
+// a specific conversation mode. A run agent may create a non-blocking question
+// and later consume an already-recorded answer, but only an interactive workshop
+// chat may record the user's answer itself.
+func HumanToolNamesForWorkshopMode(mode string) []string {
+	names := WorkshopHumanToolNames()
+	if strings.TrimSpace(mode) != "run" {
+		return names
+	}
+	filtered := make([]string, 0, len(names)-1)
+	for _, name := range names {
+		if name != "answer_human_input_request" {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
 }
 
 // CreateHumanToolExecutors creates the execution functions for human tools

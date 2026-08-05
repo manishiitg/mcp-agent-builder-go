@@ -157,12 +157,12 @@ export function ReportHumanInputPanel({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [externallyManaged, loadInputs])
 
-	const waitingForPulse = contentMode !== 'pending' && visibleInputs.some(input => input.status === 'answered' || input.status === 'claimed')
+	const needsStatusPolling = visibleInputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
-		if (externallyManaged || !waitingForPulse) return
+		if (externallyManaged || !needsStatusPolling) return
     const timer = window.setInterval(() => { void loadInputs() }, 5000)
     return () => window.clearInterval(timer)
-	}, [externallyManaged, loadInputs, waitingForPulse])
+	}, [externallyManaged, loadInputs, needsStatusPolling])
 
   useEffect(() => {
     setDrafts({})
@@ -613,12 +613,12 @@ export function ReportHumanInputCollection({
 		return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [loadInputs])
 
-	const waitingForAgent = inputs.some(input => input.status === 'answered' || input.status === 'claimed')
+	const needsStatusPolling = inputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
-		if (!waitingForAgent) return
+		if (!needsStatusPolling) return
 		const timer = window.setInterval(() => { void loadInputs() }, 5000)
 		return () => window.clearInterval(timer)
-	}, [loadInputs, waitingForAgent])
+	}, [loadInputs, needsStatusPolling])
 
 	if (loading && inputs.length === 0 && !error) return null
 

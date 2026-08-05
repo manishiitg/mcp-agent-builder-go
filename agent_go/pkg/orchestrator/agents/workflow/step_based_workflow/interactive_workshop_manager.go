@@ -1503,7 +1503,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// Secret management tools. Global secrets are read-only; workflow/user
 		// encrypted stores are writable when the corresponding tools are registered.
 		"list_secrets", "set_workflow_secret", "delete_workflow_secret", "set_user_secret", "delete_user_secret",
-		// Human tools are appended below from virtualtools.WorkshopHumanToolNames()
+		// Human tools are appended below from virtualtools.HumanToolNamesForWorkshopMode()
 		// (single source shared with registration, so the allow-list can't drift).
 		// Browser (if registered)
 		"agent_browser",
@@ -1523,7 +1523,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	}
 	// Human tools from the single source shared with registration (createCustomTools),
 	// so the allow-list and what's actually registered cannot drift apart.
-	system = append(system, virtualtools.WorkshopHumanToolNames()...)
+	system = append(system, virtualtools.HumanToolNamesForWorkshopMode(mode)...)
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
@@ -2839,7 +2839,7 @@ Every `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"referenc
 
 For `+"`human_feedback`"+`, use a foreground curl. Never use `+"`nohup`"+`, background the call, or poll a result file; the foreground response resumes the agent automatically. Cursor agents must keep `+"`timeout_seconds <= 45`"+`.
 
-The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and — whenever skills are attached — intrinsic `+"`read_skill`"+`. Names such as `+"`execute_step`"+`, `+"`query_step`"+`, `+"`list_executions`"+`, and the other workflow tools below are logical HTTP-backed tools, not native `+"`api-bridge.<name>`"+` calls. Never call `+"`api-bridge.list_executions`"+` or guess another native bridge name. First call `+"`get_api_spec(tool_name=\"<name>\")`"+`, then invoke the returned endpoint through `+"`execute_shell_command`"+` using the provided `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route and `+"`$MCP_AUTH`"+`; do not invent or hardcode a URL. The normal workflow loop uses `+"`execute_step`"+` / `+"`run_full_workflow`"+`, waits for the automatic completion notification rather than polling, and inspects a live step with `+"`query_step`"+` only when the user asks. Workshop decisions can use `+"`create_human_input_request`"+` and `+"`run_goal_advisor_review`"+`. Read the attached `+"`builder-reference`"+` skill's `+"`references/workflow-tools.md`"+` (or call `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`) for the complete catalog, signatures, mode rules, schedules, secrets, notifications, and gotchas.
+The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are HTTP-backed, not native `+"`api-bridge.<name>`"+` calls: use `+"`get_api_spec(tool_name=\"<name>\")`"+`, then its returned `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route with `+"`$MCP_AUTH`"+`; never guess a bridge name or URL. Normal execution waits for automatic completion instead of polling and queries a live step only when the user asks. Use `+"`create_human_input_request`"+` to ask a durable question and `+"`answer_human_input_request`"+` only after the user explicitly answers it. Read `+"`builder-reference/references/workflow-tools.md`"+` through `+"`read_skill`"+` for the complete catalog and rules.
 {{else}}
 ## TOOLS REFERENCE (cheat sheet)
 

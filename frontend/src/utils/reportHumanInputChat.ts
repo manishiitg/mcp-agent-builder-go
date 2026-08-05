@@ -70,8 +70,10 @@ export function buildReportHumanInputChatMessage(
 ): string {
   const lines = [
     `I want to discuss a pending ${sourceName(input.source)} decision. Do not submit, dismiss, or mark the decision handled yet; answer my question first.`,
+    'If I later explicitly choose an option or give a final answer, call answer_human_input_request with the exact IDs below. Record it as answered only; do not mark it consumed.',
     '',
     `Automation: ${workspacePath}`,
+    `Decision ID: ${input.id}`,
     '',
     'Decision:',
     input.question.trim(),
@@ -83,7 +85,7 @@ export function buildReportHumanInputChatMessage(
   if (input.options.length > 0) {
     lines.push('', 'Available options:')
     input.options.forEach((option, index) => {
-      lines.push(`${index + 1}. ${option.title}${option.description ? ` — ${option.description}` : ''}`)
+      lines.push(`${index + 1}. ${option.title} [option_id=${option.id}]${option.description ? ` — ${option.description}` : ''}`)
     })
   }
   if (input.evidence?.trim()) {
