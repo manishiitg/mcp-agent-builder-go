@@ -49,6 +49,17 @@ type ScheduleContext struct {
 	PulseEvidenceRunFolder string
 	PulseEvidenceRunStatus string
 	CalendarItem           *CalendarScheduleItem
+
+	// ProducedRunEvidence reports whether THIS invocation actually ran the
+	// workflow — a run folder created or restarted while it was executing.
+	//
+	// It is deliberately not the run's status. A run that FAILED still produced
+	// evidence and is exactly when review is most valuable. This is false only
+	// when the workflow never started at all: an upgrade preflight that aborts
+	// before the normal schedule message leaves nothing to review, and Pulse
+	// used to review it anyway because its gate tested runFolder != "" — a
+	// variable assigned "iteration-0" before any turn runs, so always true.
+	ProducedRunEvidence bool
 }
 
 const manualWorkflowPulseScheduleID = "manual-pulse"
@@ -1800,7 +1811,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 				s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
 					RunID: runID, To: schedulerstate.StatePulseGate, Reason: "Pulse enabled for workflow", SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
 				})
-				pulseResult = s.runPostRunMonitor(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID)
+				pulseResult = s.runPostRunMonitor(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
 			}
 		}
 	}
@@ -2010,7 +2021,10 @@ const (
 	postRunMonitorStopped   postRunMonitorResult = "stopped"
 )
 
-func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID string) (pulseResult postRunMonitorResult) {
+// runFailureReason is the scheduler's own error text for this invocation. It is
+// used only when the workflow never ran, so the notification can say WHY the
+// run did not happen instead of reporting on evidence that does not exist.
+func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult postRunMonitorResult) {
 	pulseResult = postRunMonitorPartial
 
 	// Resume the SAME session the workflow run just used, so Pulse continues in the
@@ -2249,7 +2263,24 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		return true
 	}
 
-	gateReady := true
+	// Pulse reviews run evidence. When the workflow never started — an upgrade
+	// preflight aborting before the normal schedule message is the case that
+	// prompted this — Gate, the reviewers and the Fixer have nothing to read, so
+	// they are skipped and `steps` falls through to the finalizer below.
+	//
+	// The finalizer still runs, on purpose: backup preserves whatever partial
+	// state the aborted attempt left (and is source-hash gated, so it costs
+	// nothing when nothing changed), and the notification is the only way the
+	// user learns the run did not happen. Silence here is what made a blocked
+	// workflow look like a quiet one.
+	//
+	// PulseOnly is the toolbar's manual Pulse: it deliberately reviews existing
+	// evidence with no new run, so it keeps the full pass.
+	reviewEvidenceAvailable := sctx.ProducedRunEvidence || sctx.PulseOnly
+	if !reviewEvidenceAvailable {
+		s.sessionLogf(sctx, sessionID, "[PULSE] the workflow did not run in this invocation; skipping Gate, reviewers and Fixer — backup and notification still run")
+	}
+	gateReady := reviewEvidenceAvailable
 	for _, st := range upgradeSteps {
 		result := runStep(st)
 		if abortIfInterrupted(st, result) {
@@ -2336,7 +2367,12 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		} else {
 			steps = postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 		}
+	} else if !reviewEvidenceAvailable {
+		// No run happened. Backup + notify only — see postRunMonitorNoRunSteps.
+		steps = postRunMonitorNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
+		// Gate itself did not complete, but a run DID happen: keep the normal
+		// finalizer so the run is still journalled, backed up and reported.
 		steps = postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	}
 
@@ -2700,6 +2736,43 @@ func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities)
 		pulseSummaryChannels:   append([]string(nil), notifications.PulseSummaryChannels...),
 		runSummaryRecipients:   append([]string(nil), notifications.RunSummaryRecipients...),
 		pulseSummaryRecipients: append([]string(nil), notifications.PulseSummaryRecipients...),
+	}
+}
+
+// postRunMonitorNoRunSteps is the finalizer for an invocation in which the
+// workflow never ran.
+//
+// It is one turn, not the normal two: there is no dashboard stage because there
+// is no run to journal, and no review results to render. Backup still runs —
+// an aborted attempt can leave partial edits, and the backup contract is
+// source-hash gated so it costs nothing when nothing changed. Publish is
+// skipped because nothing was produced.
+//
+// The notification is the point. A blocked workflow is invisible from the
+// outside; without this the user sees silence, or — worse, before this existed
+// — a cheerful Pulse summary about a run that never happened.
+func postRunMonitorNoRunSteps(pulseRunID, reason string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
+	ownerInstructions := workflowNotificationContentInstructions{}
+	if len(instructions) > 0 {
+		ownerInstructions = instructions[0]
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "the scheduler recorded no error, but no workflow run was started or resumed during this invocation"
+	}
+	recipients := ""
+	if len(ownerInstructions.runSummaryRecipients) > 0 {
+		recipients = fmt.Sprintf(" The backend addresses this from the workflow's saved run-summary recipients (%s); do NOT pass email_to.", notificationRecipientSummary(ownerInstructions.runSummaryRecipients))
+	}
+	return []postRunMonitorStep{
+		{"finalize-no-run", fmt.Sprintf(
+			"PULSE FINALIZER — WORKFLOW DID NOT RUN. pulse_run_id=%q. The scheduled workflow did not execute in this invocation, so there is no run evidence: Gate, the reviewers and the Fixer were all skipped, and there is nothing to review or render. Do NOT run them, do NOT write builder/improve.html, and do NOT invent a run outcome.\n\n"+
+				"Do exactly two things, in this order.\n\n"+
+				"1. BACKUP. Back up the workflow state per its configured backup contract, so anything a partial attempt left behind is preserved. If the source hash is unchanged there is nothing to push — record that as the result rather than forcing a commit. Do not publish; nothing was produced.\n\n"+
+				"2. NOTIFY. Send exactly one notify_user call with notification_kind=\"run_summary\" telling the user plainly that the scheduled run did not start, and why.%s The verbatim scheduler reason is:\n\n%s\n\n"+
+				"State what this means for them: the workflow did not execute, no results were produced, and it will be retried on its next schedule unless the cause is fixed. Do not describe it as a failed run, a partial run, or a successful one — it did not run. Report the delivery status honestly: only say the notification was sent if notify_user returns delivered.",
+			pulseRunID, recipients, reason,
+		)},
 	}
 }
 
@@ -3100,6 +3173,10 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// NEW run folder created by this invocation from a pre-existing one.
 	preRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	preRunFolderNames := runFolderNameSet(preRunFolders)
+	// Stamped before any turn runs, so a run folder touched during this
+	// invocation can be told from one left over by an earlier one.
+	invocationStartedAt := time.Now().UTC()
+	sctx.ProducedRunEvidence = false
 
 	sessionID := s.newScheduleSessionID(sctx)
 
@@ -3244,6 +3321,12 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// (BUG-20260729-10, social-media 2026-07-29: the scheduler recorded
 	// "success" for a run that fully failed at its first posting step).
 	postRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
+	// Set before the failed-run return below: a run that failed still produced
+	// evidence, and Pulse should review it. Only "never ran" skips review.
+	sctx.ProducedRunEvidence = workshopRunProducedEvidence(preRunFolderNames, postRunFolders, invocationStartedAt)
+	if !sctx.ProducedRunEvidence {
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] no run folder was created or restarted during this invocation for %s; Pulse review stages will be skipped", sctx.Schedule.ID)
+	}
 	if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
@@ -3270,6 +3353,41 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 // "running", "completed", anything else — are never treated as failure; only
 // an explicit "failed" is, so a transient listing hiccup fails open toward
 // "cannot verify" rather than toward a false failure.
+// workshopRunProducedEvidence reports whether this invocation actually ran the
+// workflow.
+//
+// A new run folder is the obvious signal, but it is not sufficient: a workflow
+// configured to reuse its run folder (always_use_same_run, or the ordinary
+// iteration-0 rotation landing on the same name) produces no new folder at all.
+// So a pre-existing folder also counts when its own run_metadata.json says it
+// started at or after this invocation began — that file is written by the
+// execution machinery independently of the scheduler, which is what makes it
+// trustworthy here.
+//
+// Deliberately says nothing about success. A failed run produced evidence.
+func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, since time.Time) bool {
+	for _, folder := range after {
+		if folder.Name == "" {
+			continue
+		}
+		if !before[folder.Name] {
+			return true
+		}
+		if folder.Metadata == nil {
+			continue
+		}
+		// StartedAt is set when a run begins; CreatedAt covers metadata written
+		// before the run was marked started. Either landing inside this
+		// invocation means the folder was touched by it.
+		for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
+			if !stamp.IsZero() && !stamp.Before(since) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo) (failedFolder string, found bool) {
 	for _, folder := range after {
 		if folder.Name == "" || before[folder.Name] {

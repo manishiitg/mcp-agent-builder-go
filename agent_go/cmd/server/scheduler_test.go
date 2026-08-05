@@ -4067,3 +4067,95 @@ func TestPulseDashboardStagePromptNamesTheCommandTool(t *testing.T) {
 		}
 	}
 }
+
+// Pulse gates its review stages on whether a run actually happened. The old
+// gate tested runFolder != "", which is assigned "iteration-0" before any turn
+// executes and is therefore always true — so a workflow blocked by a failed
+// upgrade preflight still got a full Pulse pass, and the user received a
+// summary of a run that never occurred.
+func TestWorkshopRunProducedEvidence(t *testing.T) {
+	start := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	before := map[string]bool{"iteration-0": true}
+
+	t.Run("no run: pre-existing folder untouched", func(t *testing.T) {
+		after := []RunFolderInfo{{
+			Name:     "iteration-0",
+			Metadata: &RunMetadata{StartedAt: start.Add(-2 * time.Hour), CreatedAt: start.Add(-3 * time.Hour), Status: "completed"},
+		}}
+		if workshopRunProducedEvidence(before, after, start) {
+			t.Fatal("a run folder from an earlier invocation must not count as evidence")
+		}
+	})
+
+	t.Run("new folder created", func(t *testing.T) {
+		after := []RunFolderInfo{
+			{Name: "iteration-0", Metadata: &RunMetadata{StartedAt: start.Add(-2 * time.Hour)}},
+			{Name: "iteration-1", Metadata: &RunMetadata{StartedAt: start.Add(time.Minute)}},
+		}
+		if !workshopRunProducedEvidence(before, after, start) {
+			t.Fatal("a newly created run folder is evidence")
+		}
+	})
+
+	// The case a new-folder-only check misses: a workflow that reuses its run
+	// folder produces no new directory at all.
+	t.Run("existing folder restarted in this invocation", func(t *testing.T) {
+		after := []RunFolderInfo{{
+			Name:     "iteration-0",
+			Metadata: &RunMetadata{StartedAt: start.Add(30 * time.Second), CreatedAt: start.Add(-3 * time.Hour)},
+		}}
+		if !workshopRunProducedEvidence(before, after, start) {
+			t.Fatal("a reused run folder restarted during this invocation is evidence")
+		}
+	})
+
+	// A failed run still produced evidence, and is exactly when review matters.
+	t.Run("failed run still counts", func(t *testing.T) {
+		after := []RunFolderInfo{{
+			Name:     "iteration-2",
+			Metadata: &RunMetadata{StartedAt: start.Add(time.Minute), Status: "failed"},
+		}}
+		if !workshopRunProducedEvidence(before, after, start) {
+			t.Fatal("a failed run is still evidence; gating on status would skip review when it is most useful")
+		}
+	})
+
+	t.Run("missing metadata on a known folder is not evidence", func(t *testing.T) {
+		after := []RunFolderInfo{{Name: "iteration-0"}}
+		if workshopRunProducedEvidence(before, after, start) {
+			t.Fatal("a pre-existing folder with no metadata proves nothing")
+		}
+	})
+}
+
+// When nothing ran, the finalizer must be one turn that backs up and notifies —
+// no dashboard, no invented outcome — and it must carry the real reason.
+func TestNoRunFinalizerBacksUpAndNotifiesWithReason(t *testing.T) {
+	reason := `workflow upgrade preflight upgrade-1.0.18 did not stamp required version "1.0.18" (found "1.0.17"); normal schedule message was not started`
+	steps := postRunMonitorNoRunSteps("pulse-run-1", reason)
+
+	if len(steps) != 1 {
+		t.Fatalf("no-run finalizer = %d steps, want exactly one (backup + notify); a dashboard turn has nothing to journal", len(steps))
+	}
+	q := steps[0].query
+	for _, want := range []string{
+		"WORKFLOW DID NOT RUN",
+		"BACKUP",
+		"NOTIFY",
+		`notification_kind="run_summary"`,
+		reason,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("no-run finalizer step missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"PULSE DASHBOARD", "publish the"} {
+		if strings.Contains(q, unwanted) {
+			t.Fatalf("no-run finalizer should not include %q", unwanted)
+		}
+	}
+	// Absent a scheduler error, it must still say something truthful.
+	if q := postRunMonitorNoRunSteps("pulse-run-2", "   ")[0].query; !strings.Contains(q, "no workflow run was started or resumed") {
+		t.Fatal("empty reason must fall back to an explicit statement, not an empty gap")
+	}
+}
