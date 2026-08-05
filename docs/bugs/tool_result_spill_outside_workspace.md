@@ -32,6 +32,17 @@ One session, `schedule-manual--2c694ae1`, working in
 Only #1 is a cause. Everything after it is one agent improvising after being
 handed an instruction it cannot carry out.
 
+The improvising itself — no recognised "this is unrecoverable, report and stop"
+path, so the agent spends its turn guessing — was reviewed on 2026-08-05 and
+deliberately left unfixed. With the routes into the trap closed it has no known
+trigger, and the narrow version of the cure already exists where a dead end IS
+known: `annotateKnownShellFailures` names the cause of a quoting failure and
+forbids the identical retry. Generalising that is the fix if this recurs.
+
+One loose end inside it, unexplained: the agent resolved `Downloads/…` against
+`Workflow/HDFC-Personal-Accounts` even though every result carried the `[cwd]`
+hint stating exactly that. The hint did not land, and nobody has checked why.
+
 ## The chain
 
 ```
