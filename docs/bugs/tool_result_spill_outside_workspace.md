@@ -232,6 +232,63 @@ The message ships inside the `claude` binary. It cannot be edited, and it will
 reappear whenever a result goes over. The only controllable variable is whether
 a result ever goes over — which is why prevention, not recovery, is the fix.
 
+## Which component produced the spill — and a second mechanism found while checking
+
+The claim "Claude Code wrote this file" was challenged and re-verified on
+2026-08-05, because mcpagent turns out to have its own tool-output offloader.
+Four independent discriminators, not just the string match:
+
+| | mcpagent's offloader | the file actually observed |
+|---|---|---|
+| filename | `tool_20260805_150405_123456789_1_read_skill.txt` | `mcp-api-bridge-read_skill-1785866860551.txt` |
+| timestamp | `20060102_150405` + nanoseconds + counter | `1785866860551` — millisecond epoch |
+| prefix | `tool_` | `mcp-api-bridge-` (the MCP server name) |
+| folder | `tool_output_folder/<session>/` | `~/.claude/projects/<slug>/<session>/tool-results/` |
+
+Plus the message strings, searched across all three modules
+(mcp-agent-builder-go, mcpagent, multi-llm-provider-go):
+
+```text
+"exceeds maximum allowed tokens"   0 hits in our repos, 6 in the claude binary
+"Output has been saved to"         0 hits in our repos
+"REQUIREMENTS FOR SUMMARIZATION"   0 hits in our repos
+```
+
+Every `.claude/projects` reference in our code is a reader or a detector —
+`strings.Contains(slashed, "/.claude/projects/")` in `execute_shell_command.go`
+to improve the denial message, and the transcript registry in
+multi-llm-provider-go reading `*.jsonl`. Nothing in our code writes there.
+
+**Conclusion: Claude Code produced the file and the message.** Verifying tool
+REGISTRATION and file PROVENANCE beats matching a symptom — the same lesson as
+the `read_workspace_file` correction above.
+
+### The second mechanism: `mcpagent/agent/tool_output_handler.go` — NOT traced
+
+Found while checking the above, unexamined, and recorded so it is not
+rediscovered as a surprise:
+
+```go
+DefaultLargeToolOutputThreshold = 10000    // offload above this
+DefaultMaxToolOutputTokenLimit  = 100000   // absolute ceiling
+OutputFolder                    = "tool_output_folder"   // RELATIVE path
+```
+
+It writes offloaded output with `os.WriteFile` under
+`<OutputFolder>/<SessionID>/`. Two open questions:
+
+1. **The budgets disagree by 4x.** mcpagent's ceiling is 100,000 tokens; the
+   Claude Code limit that actually rejects a payload is 25,000. So mcpagent will
+   pass through results the consumer then refuses — the same "one fact, two
+   sources, nothing checking they agree" shape as the rest of this ticket.
+2. **`tool_output_folder` is relative.** Where it resolves at runtime decides
+   whether an agent can read back its own offloaded output, and whether the
+   folder guard permits that path at all. If it lands outside every workspace
+   root, this is a SECOND instance of the deadlock described here, reached
+   through a different component.
+
+Neither has been traced. Do that before assuming the spill path is the only one.
+
 ## Decision: do NOT add `~/.claude` to the folder guard
 
 Considered and rejected on 2026-08-05.
