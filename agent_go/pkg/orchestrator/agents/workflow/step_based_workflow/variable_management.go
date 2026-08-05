@@ -141,6 +141,11 @@ func SyncVariablesToWorkspaceEnv(bo *orchestrator.BaseOrchestrator, variableValu
 	if bo == nil || len(variableValues) == 0 {
 		return
 	}
+	// Record them on the orchestrator FIRST, so they are restored if the env map
+	// is later replaced. Writing only into the live map below is what let a
+	// workflow lose every VAR_* to initialization order.
+	bo.SetWorkspaceVariables(variableValues)
+
 	envRef := bo.GetWorkspaceEnvRef()
 	if envRef == nil {
 		return
