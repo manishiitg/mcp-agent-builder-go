@@ -22,6 +22,7 @@ import {
   pulseFindingImpact,
   pulseFindingPresentation,
   pulseFindingProgress,
+  pulseFindingReporter,
   pulseFixAttemptIsIncomplete,
   pulseVerificationLevel,
   type PulseFindingTone,
@@ -120,7 +121,9 @@ export function PulseFindingCard({
   const [showAllActivity, setShowAllActivity] = useState(false)
   const issue = pulseIssueForFinding(finding)
   const presentation = pulseFindingPresentation(finding)
+  const reporter = pulseFindingReporter(finding, moduleLabel)
   const impact = pulseFindingImpact(finding)
+  const problem = issue.description?.trim() || finding.text.trim() || issue.title
   const attempts = useMemo(
     () => [...finding.fix_attempts].sort((a, b) => b.started_at.localeCompare(a.started_at)),
     [finding.fix_attempts],
@@ -155,9 +158,18 @@ export function PulseFindingCard({
         className="cursor-pointer select-text px-3 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 sm:px-4"
       >
         <div className="flex min-w-0 items-start gap-3">
-          <span className={`mt-0.5 rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase ${priorityTone(issue.priority)}`}>
-            {issue.priority === 'none' ? 'Issue' : issue.priority}
-          </span>
+          <div className="mt-0.5 flex max-w-36 shrink-0 flex-col items-start gap-1">
+            <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase ${priorityTone(issue.priority)}`}>
+              {issue.priority === 'none' ? 'Issue' : issue.priority}
+            </span>
+            <code
+              className="max-w-full truncate rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground"
+              title={`Issue ID: ${issue.id}`}
+              aria-label={`Issue ID ${issue.id}`}
+            >
+              {issue.id}
+            </code>
+          </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <h4 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{issue.title}</h4>
@@ -165,17 +177,34 @@ export function PulseFindingCard({
                 {presentation.label}
               </span>
             </div>
-            {impact && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-muted-foreground">{impact}</p>}
-            <div className="mt-2 flex items-start gap-1.5 rounded-md bg-muted/40 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground">
-              {presentation.queue === 'waiting_proof'
-                ? <Clock3 className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
-                : presentation.queue === 'resolved'
-                  ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />
-                  : <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />}
-              <span><b className="text-foreground">Next:</b> {presentation.nextAction}</span>
+            <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.7fr)]">
+              <div className="rounded-md border bg-muted/20 px-2.5 py-2">
+                <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Problem and impact</div>
+                <p className="mt-1 whitespace-pre-wrap text-[10px] leading-4 text-foreground">{problem}</p>
+                {impact && impact !== problem && (
+                  <p className="mt-1 text-[10px] leading-4 text-muted-foreground"><b className="text-foreground">Impact:</b> {impact}</p>
+                )}
+              </div>
+              <div className="rounded-md border bg-muted/20 px-2.5 py-2">
+                <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {presentation.queue === 'waiting_proof'
+                    ? <Clock3 className="h-3 w-3 shrink-0 text-amber-500" />
+                    : presentation.queue === 'resolved'
+                      ? <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                      : <AlertTriangle className="h-3 w-3 shrink-0" />}
+                  What happens next
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-foreground">{presentation.nextAction}</p>
+                {(finding.external_owner || finding.reopen_condition) && (
+                  <p className="mt-1 text-[9px] leading-4 text-muted-foreground">
+                    {finding.external_owner && <>Owner: {readable(finding.external_owner)}. </>}
+                    {finding.reopen_condition && <>Reopen when: {finding.reopen_condition}</>}
+                  </p>
+                )}
+              </div>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] text-muted-foreground">
-              <span>{moduleLabel || issue.module || finding.step_id || 'Pulse'}</span>
+              <span><b className="font-semibold text-foreground/80">Reported by</b> {reporter}</span>
               <span>·</span>
               <span>{formatDate(issue.updated_at || finding.last_seen_at)}</span>
               {issue.seen_count > 1 && (
@@ -184,7 +213,7 @@ export function PulseFindingCard({
                 </span>
               )}
               <span className="ml-auto inline-flex items-center gap-1 font-medium text-primary">
-                {expanded ? 'Hide details' : 'View details'}
+                {expanded ? 'Hide fix, checks & history' : 'View fix, checks & history'}
                 <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
               </span>
             </div>
@@ -194,28 +223,8 @@ export function PulseFindingCard({
 
       {expanded && (
         <div className="border-t bg-muted/10 px-3 py-3 sm:px-4" onClick={(event) => event.stopPropagation()}>
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.7fr)]">
-            <div className="rounded-lg border bg-background p-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Problem and impact</div>
-              <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-foreground">{issue.description || finding.text}</p>
-              {finding.details?.impact && finding.details.impact !== issue.description && (
-                <p className="mt-2 text-[11px] leading-5 text-muted-foreground"><b className="text-foreground">Impact:</b> {finding.details.impact}</p>
-              )}
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">What happens next</div>
-              <p className="mt-1.5 text-xs leading-5 text-foreground">{presentation.nextAction}</p>
-              {(finding.external_owner || finding.reopen_condition) && (
-                <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
-                  {finding.external_owner && <>Owner: {readable(finding.external_owner)}. </>}
-                  {finding.reopen_condition && <>Reopen when: {finding.reopen_condition}</>}
-                </p>
-              )}
-            </div>
-          </div>
-
           {showProgress && (
-            <div className="mt-3 rounded-lg border bg-background p-3">
+            <div className="rounded-lg border bg-background p-3">
               <FindingProgress finding={finding} />
             </div>
           )}
@@ -394,7 +403,7 @@ export function PulseFindingCard({
                 Open {moduleLabel || finding.module || 'module'} review
               </button>
             )}
-            <span>{issue.id} · source {finding.step_id || 'not recorded'} · first seen {formatDate(issue.created_at)}</span>
+            <span>First seen {formatDate(issue.created_at)}</span>
           </div>
         </div>
       )}

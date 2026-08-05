@@ -516,6 +516,7 @@ async function restoreWorkflowStateFromEvents(
       await hydrateTabEvents(sessionId, {
         workspacePath: workspacePath || undefined,
         fallbackToChatHistory: true,
+        preferChatHistory: true,
       })
       events = getTabEvents(sessionId)
       lastIndex = getTabLastEventIndex(sessionId)

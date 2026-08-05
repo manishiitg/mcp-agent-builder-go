@@ -1136,6 +1136,13 @@ func (api *StreamingAPI) handleTerminalStream(w http.ResponseWriter, r *http.Req
 		http.Error(w, "live-attach terminal transport disabled", http.StatusNotFound)
 		return
 	}
+	// Reject cross-site requests before terminal lookup or liveness
+	// reconciliation can reveal or mutate any session state. The websocket
+	// upgrader repeats this check at the transport boundary.
+	if !api.checkLiveAttachOrigin(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 	snapshot, ok := api.resolveLiveAttachTerminal(w, r)
 	if !ok {
 		return
@@ -1266,7 +1273,24 @@ func (api *StreamingAPI) resolveLiveAttachTerminal(w http.ResponseWriter, r *htt
 	}
 	if api.terminalStore != nil {
 		if snapshot, ok := api.terminalStore.Get(terminalID); ok && api.canAccessTerminalSession(r, snapshot.SessionID) {
-			return snapshot, true
+			ctx, cancel := context.WithTimeout(r.Context(), terminalTmuxActionTimeout)
+			err := runTerminalTmuxCommand(ctx, "", "has-session", "-t", snapshot.TmuxSession)
+			cancel()
+			if err == nil {
+				return snapshot, true
+			}
+			if isMissingTmuxTargetError(err) || strings.TrimSpace(snapshot.TmuxSession) == "" {
+				// The terminal list can briefly retain live process metadata after
+				// tmux has disappeared. Reconcile it before upgrading; otherwise the
+				// browser reconnects forever to a socket that can never produce data.
+				api.terminalStore.MarkProcessClosed(snapshot.TerminalID, "tmux session no longer exists")
+				http.Error(w, "Terminal process is closed", http.StatusGone)
+				return terminals.Snapshot{}, false
+			}
+			// A transient tmux command failure is not evidence that the process
+			// died, but it is also not safe to create a websocket that may hang.
+			http.Error(w, "Terminal process state is temporarily unavailable", http.StatusServiceUnavailable)
+			return terminals.Snapshot{}, false
 		}
 	}
 
@@ -1350,7 +1374,12 @@ func (api *StreamingAPI) persistLiveAttachTranscript(terminalID, content string)
 	if terminalID == "" || !liveAttachTranscriptHasDisplayContent(content) {
 		return
 	}
-	api.terminalStore.SetDisplayContent(terminalID, content, "tmux_capture")
+	// This is the complete byte stream seen by the embedded terminal (seed plus
+	// live output), not a capture-pane image. Keep that distinction durable: a
+	// completed terminal may still have a tmux pane for a short time, and the
+	// settled detail path used to replace this scrollable transcript with the
+	// pane's final visible screen.
+	api.terminalStore.SetDisplayContent(terminalID, content, "tmux_stream")
 }
 
 func liveAttachTranscriptHasDisplayContent(content string) bool {

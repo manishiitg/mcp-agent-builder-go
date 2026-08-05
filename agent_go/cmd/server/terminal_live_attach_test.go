@@ -122,6 +122,41 @@ func TestResolveLiveAttachRestartRecoveryRejectsDifferentTmuxOwner(t *testing.T)
 	}
 }
 
+func TestResolveLiveAttachStoredMissingTmuxMarksProcessClosed(t *testing.T) {
+	origRun := runTerminalTmuxCommand
+	runTerminalTmuxCommand = func(context.Context, string, ...string) error {
+		return fmt.Errorf("can't find session: tmux-missing")
+	}
+	t.Cleanup(func() { runTerminalTmuxCommand = origRun })
+
+	store := terminals.NewStore()
+	sessionID := "session-live-attach-missing"
+	terminalID := sessionID + ":main:" + sessionID
+	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "main:"+sessionID, "tmux-missing", "retained transcript", 1))
+	api := &StreamingAPI{terminalStore: store}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminals/"+terminalID+"/stream", nil)
+	req = mux.SetURLVars(req, map[string]string{"terminal_id": terminalID})
+	rec := httptest.NewRecorder()
+	if _, ok := api.resolveLiveAttachTerminal(rec, req); ok {
+		t.Fatal("missing stored tmux was accepted for live attach")
+	}
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusGone)
+	}
+
+	archived, ok := store.Get(terminalID)
+	if !ok {
+		t.Fatalf("terminal %q disappeared instead of being retained", terminalID)
+	}
+	if archived.ProcessState != "closed" || archived.SnapshotKind != "archived" || archived.TmuxSession != "" {
+		t.Fatalf("missing tmux was not reconciled to a retained archive: %+v", archived)
+	}
+	if !strings.Contains(archived.Content, "retained transcript") {
+		t.Fatalf("retained transcript was lost: %q", archived.Content)
+	}
+}
+
 func TestLiveAttachInitialSizeRejectsTinyGeometry(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/stream?cols=20&rows=8", nil)
 	cols, rows := liveAttachInitialSize(req)
@@ -677,7 +712,7 @@ func TestHandleTerminalStreamPersistsAnsiTranscript(t *testing.T) {
 	if !ok {
 		t.Fatalf("terminal %q not found", terminalID)
 	}
-	if stored.ContentSource != "tmux_capture" || !strings.Contains(stored.Content, "\x1b[34mseed") {
+	if stored.ContentSource != "tmux_stream" || !strings.Contains(stored.Content, "\x1b[34mseed") {
 		t.Fatalf("stored initial transcript = source %q content %q", stored.ContentSource, stored.Content)
 	}
 
@@ -701,7 +736,7 @@ func TestHandleTerminalStreamPersistsAnsiTranscript(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		stored, ok = store.Get(terminalID)
-		if ok && stored.ContentSource == "tmux_capture" && strings.Contains(stored.Content, "\x1b[31mlive") {
+		if ok && stored.ContentSource == "tmux_stream" && strings.Contains(stored.Content, "\x1b[31mlive") {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1178,6 +1213,46 @@ func TestLiveAttachRealTmuxExternalResizeDropsViewer(t *testing.T) {
 
 	if !viewerClosed(t, viewer.ch) {
 		t.Fatal("viewer survived an external tmux resize; %layout-change was not reconciled")
+	}
+}
+
+// A tmux control client can outlive the target session it originally attached
+// to. The control connection then remains open against the tmux server but can
+// never produce more bytes for this terminal, which leaves the browser on a
+// permanently connected, unscrollable pane. The target-session notification
+// must stop the stream even when tmux itself does not emit %exit.
+func TestLiveAttachRealTmuxTargetSessionCloseDropsViewer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), terminalTmuxActionTimeout)
+	ok, _ := liveAttachTmuxSupported(ctx)
+	cancel()
+	if !ok {
+		t.Skip("tmux unavailable or too old")
+	}
+
+	session := "live-attach-close-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	if err := exec.Command("tmux", "new-session", "-d", "-s", session, "-x", "100", "-y", "30", "sh", "-c", "while true; do sleep 1; done").Run(); err != nil {
+		t.Skipf("cannot create tmux session: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+
+	m := newLiveAttachManager()
+	st, viewer, seed, err := m.addViewer(context.Background(), session, 100, 30)
+	if err != nil {
+		t.Fatalf("addViewer: %v", err)
+	}
+	if len(seed) == 0 {
+		t.Fatal("empty seed")
+	}
+	t.Cleanup(func() { st.stop() })
+
+	if err := exec.Command("tmux", "kill-session", "-t", session).Run(); err != nil {
+		t.Fatalf("kill target session: %v", err)
+	}
+	if !viewerClosed(t, viewer.ch) {
+		t.Fatal("viewer survived after its target tmux session closed")
 	}
 }
 

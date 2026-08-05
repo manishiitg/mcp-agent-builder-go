@@ -941,7 +941,7 @@ export interface TerminalSnapshot {
   display_title?: string
   display_meta?: string
   tmux_session?: string
-  content_source?: 'tmux_pipe' | 'tmux_capture' | 'event_stream' | string
+  content_source?: 'tmux_pipe' | 'tmux_capture' | 'tmux_stream' | 'event_stream' | string
   // True for the short-lived rail row projected from the live execution tree
   // before the corresponding terminal/transcript snapshot has been retained.
   execution_tree_placeholder?: boolean

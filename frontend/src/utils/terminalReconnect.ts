@@ -4,6 +4,7 @@ const INITIAL_RECONNECT_DELAY_MS = 500
 const MAX_RECONNECT_DELAY_MS = 5000
 
 export type TerminalGrid = { cols: number; rows: number }
+export type TerminalGridChange = 'none' | 'rows-only' | 'columns'
 
 export function terminalReconnectDelayMs(failedAttempts: number): number {
   const attempt = Math.max(0, Math.floor(failedAttempts))
@@ -17,11 +18,22 @@ export function terminalSnapshotCanReconnect(snapshot: TerminalSnapshot): boolea
   return Boolean(snapshot.active) || state === 'running' || state === 'idle' || state === ''
 }
 
-// The live-attach pane keeps ONE fixed grid per connection. Changing the grid
-// is therefore a connection lifecycle event, not a resize: xterm must not be
-// resized while bytes wrapped for the old width can still arrive, or they land
-// on the new grid and scramble. These planners own that ordering so it is
-// testable independently of the DOM/WebSocket plumbing that executes it.
+// A column change is a connection lifecycle event: xterm must not be resized
+// while bytes wrapped for the old width can still arrive, or they land on the
+// new grid and scramble. A row-only change does not alter wrapping and can use
+// the existing socket's resize control frame, preserving browser scrollback.
+// These classifiers/planners keep that distinction independently testable.
+
+export function terminalGridChange(
+  current: TerminalGrid,
+  proposed: TerminalGrid | undefined,
+  minimum: TerminalGrid,
+): TerminalGridChange {
+  if (!proposed || proposed.cols < minimum.cols || proposed.rows < minimum.rows) return 'none'
+  if (proposed.cols !== current.cols) return 'columns'
+  if (proposed.rows !== current.rows) return 'rows-only'
+  return 'none'
+}
 
 // Steps a geometry change performs, IN ORDER. suspend-output must come first
 // (it stops the old socket's bytes from reaching xterm) and fit must come after
@@ -78,6 +90,5 @@ export function terminalGridNeedsReconnect(
   proposed: TerminalGrid | undefined,
   minimum: TerminalGrid,
 ): boolean {
-  if (!proposed || proposed.cols < minimum.cols || proposed.rows < minimum.rows) return false
-  return proposed.cols !== current.cols || proposed.rows !== current.rows
+  return terminalGridChange(current, proposed, minimum) === 'columns'
 }

@@ -3,6 +3,8 @@ import type { TerminalSnapshot } from '../services/api-types'
 import {
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
+  resolveTerminalFormattedView,
+  shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from './terminalSnapshotIdentity'
 
@@ -121,5 +123,37 @@ describe('shouldStreamTerminal', () => {
       snapshot_kind: 'archived',
       tmux_session: 'tmux-main',
     }))).toBe(false)
+  })
+})
+
+describe('shouldLoadTerminalEvents', () => {
+  it('does not request an unpublished execution-tree placeholder', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      execution_tree_placeholder: true,
+      state: 'running',
+      active: true,
+    }), false)).toBe(false)
+  })
+
+  it('loads events once the real child terminal is published', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      state: 'running',
+      active: true,
+    }), false)).toBe(true)
+  })
+})
+
+describe('resolveTerminalFormattedView', () => {
+  it('defaults every terminal to raw mode even when structured events exist', () => {
+    expect(resolveTerminalFormattedView(true)).toBe(false)
+  })
+
+  it('respects an explicit raw or formatted choice', () => {
+    expect(resolveTerminalFormattedView(true, false)).toBe(false)
+    expect(resolveTerminalFormattedView(true, true)).toBe(true)
+  })
+
+  it('never shows an unavailable formatted transcript', () => {
+    expect(resolveTerminalFormattedView(false, true)).toBe(false)
   })
 })

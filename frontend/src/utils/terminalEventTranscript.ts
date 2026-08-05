@@ -618,6 +618,12 @@ export interface PairedToolCall {
   result?: string
 }
 
+export interface ToolErrorContext {
+  name?: string
+  server?: string
+  args?: string
+}
+
 /**
  * mcpToolDisplayName splits MCP's wire name into its parts.
  *
@@ -707,4 +713,26 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
   }
 
   return out
+}
+
+/**
+ * Error banners are rendered outside the chronological transcript, but tool
+ * arguments normally exist only on the preceding start event. Join them by
+ * tool_call_id and index the result by the error event's stable ID so a banner
+ * can show the exact input without guessing across interleaved calls.
+ */
+export function toolErrorContextByEventID(events: PollingEvent[]): Map<string, ToolErrorContext> {
+  const contexts = new Map<string, ToolErrorContext>()
+  for (const pair of pairToolCalls(events)) {
+    if (pair.status !== 'error') continue
+    for (const event of pair.events) {
+      if (event.type !== 'tool_call_error' || !event.id) continue
+      contexts.set(event.id, {
+        name: pair.name === 'tool' ? undefined : pair.name,
+        server: pair.server,
+        args: pair.args,
+      })
+    }
+  }
+  return contexts
 }

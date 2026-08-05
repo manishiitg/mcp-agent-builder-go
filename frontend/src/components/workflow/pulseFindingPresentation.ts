@@ -37,6 +37,30 @@ function readable(value?: string): string {
   return (value || '').trim().replaceAll('_', ' ')
 }
 
+function titleCase(value: string): string {
+  return value.replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+/**
+ * The raw step_id is the durable origin of a finding. `module` may be a
+ * normalized grouping (for example an old bug_review is grouped under the new
+ * workflow_review), so prefer step_id when naming who actually reported it.
+ */
+export function pulseFindingReporter(
+  finding: PulseFindingLifecycle,
+  groupedModuleLabel?: string,
+): string {
+  const origin = readable(finding.step_id || finding.module)
+  if (finding.phase !== 'review') {
+    return origin ? `Workflow step · ${origin}` : 'Workflow run'
+  }
+  if (!origin) return groupedModuleLabel || 'Pulse reviewer'
+  if (finding.step_id && finding.module && finding.step_id !== finding.module) {
+    return titleCase(origin)
+  }
+  return groupedModuleLabel || titleCase(origin)
+}
+
 export function pulseFindingDisposition(finding: PulseFindingLifecycle): string {
   for (const event of finding.events) {
     const disposition = event.metadata?.disposition

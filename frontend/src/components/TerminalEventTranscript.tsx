@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo, useState } from 'react'
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
@@ -43,6 +43,19 @@ import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 // is what produced triplicated server names, boxes inside boxes, and a scroll
 // container fighting itself.
 const PREVIEW_LIMIT = 600
+
+function wheelDeltaPixels(deltaY: number, deltaMode: number, pageHeight: number): number {
+  if (deltaMode === 1) return deltaY * 16
+  if (deltaMode === 2) return deltaY * Math.max(1, pageHeight)
+  return deltaY
+}
+
+function elementCanConsumeVerticalWheel(element: HTMLElement, deltaY: number): boolean {
+  if (element.scrollHeight <= element.clientHeight + 1) return false
+  if (deltaY < 0) return element.scrollTop > 0
+  if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight - 1
+  return false
+}
 
 const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
   const [open, setOpen] = useState(false)
@@ -219,11 +232,32 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   onLoadOlder,
   onRetry,
 }) => {
+  const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const scoped = useMemo(
     () => selectTerminalEvents(events, terminal, siblingTerminals),
     [events, terminal, siblingTerminals],
   )
   const items = useMemo(() => buildTranscriptItems(scoped), [scoped])
+
+  // Electron occasionally fails to route a physical wheel/trackpad gesture to
+  // Virtuoso's internal scroller even though accessibility scroll actions work.
+  // Forward the gesture explicitly. Nested scroll regions (expanded tool output)
+  // keep first refusal while they can still move in the requested direction.
+  const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const scroller = scrollerRef.current
+    if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
+
+    let target = event.target instanceof HTMLElement ? event.target : null
+    while (target && target !== event.currentTarget) {
+      if (target !== scroller && elementCanConsumeVerticalWheel(target, event.deltaY)) return
+      target = target.parentElement
+    }
+
+    if (!elementCanConsumeVerticalWheel(scroller, event.deltaY)) return
+    event.preventDefault()
+    event.stopPropagation()
+    scroller.scrollTop += wheelDeltaPixels(event.deltaY, event.deltaMode, scroller.clientHeight)
+  }, [])
 
   if (items.length === 0) {
     const state = (terminal?.state || '').trim().toLowerCase()
@@ -278,7 +312,11 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }
 
   return (
-    <div data-testid="terminal-clear-view" className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0b0d0c]">
+    <div
+      data-testid="terminal-clear-view"
+      className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0b0d0c]"
+      onWheelCapture={handleWheelCapture}
+    >
       {(hasOlder || loadingOlder || error) && (
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
           error
@@ -311,6 +349,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       <Virtuoso
         data={items}
         className="min-h-0 flex-1"
+        scrollerRef={ref => { scrollerRef.current = ref }}
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}
