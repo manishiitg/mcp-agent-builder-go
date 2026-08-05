@@ -1,3 +1,4 @@
+import { routeForQueuedMessage, splitQueuedMessages } from '../utils/queuedMessageDelivery'
 import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -945,20 +946,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Get queued messages from tab config
   const queuedMessages = useMemo(() => tabConfig?.queuedMessages || [], [tabConfig?.queuedMessages])
 
-  useEffect(() => {
-    if (!tabSessionId) return
-    if (!isCLIProvider && !canSteer && queuedMessages.length === 0) return
-
-  }, [
-    activeTabId,
-    canShowSteer,
-    canSteer,
-    effectiveProviderForSteer,
-    isCLIProvider,
-    queuedMessages.length,
-    tabConfig?.llmConfig?.provider,
-    tabSessionId,
-  ])
   
   // State for summarization
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -1689,6 +1676,60 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     () => Boolean(tabSessionId) && (mainAgentIsTmuxCLI || isWorkflowMode),
     [isWorkflowMode, mainAgentIsTmuxCLI, tabSessionId]
   )
+
+  // Deliver queued HUMAN messages into a turn that is already running, using
+  // the same two routes typed text uses. Messages reach the queue from outside
+  // this input box — "ask in chat" on a pending decision is the case that
+  // surfaced this — and used to sit there until the turn ended. On a coding CLI
+  // there was not even a steer button to force them through, since canShowSteer
+  // is false for those providers.
+  //
+  // Auto-notifications are left queued on purpose; they wait for idle.
+  const liveDeliveryInFlightRef = useRef(false)
+  useEffect(() => {
+    if (liveDeliveryInFlightRef.current) return
+    const { human } = splitQueuedMessages(queuedMessages, AUTO_NOTIFICATION_PREFIX)
+    if (human.length === 0) return
+
+    const route = routeForQueuedMessage({
+      isStreaming,
+      hasSession: Boolean(tabSessionId),
+      isWorkflowMode,
+      isTmuxCLIProvider: mainAgentIsTmuxCLI,
+      canSteer,
+    })
+    if (route === 'wait') return
+
+    liveDeliveryInFlightRef.current = true
+    try {
+      if (route === 'steer') {
+        // One at a time: handleSteerQueuedMessage reports per-message delivery
+        // status and removes the message itself. The effect re-runs for the next.
+        const index = queuedMessages.findIndex(message => message === human[0])
+        if (index >= 0) void handleSteerQueuedMessage(index, human[0])
+        return
+      }
+      // live-query: same single-entry path as typing into a CLI/workflow chat.
+      const remaining = queuedMessages.filter(message => message.startsWith(AUTO_NOTIFICATION_PREFIX))
+      if (activeTabId) setTabConfig(activeTabId, { queuedMessages: remaining })
+      onSubmit(human.map(message => message.trim()).join('\n\n'), { preferLiveInput: true })
+    } finally {
+      // Released on the next tick so a single state update cannot re-enter,
+      // while a genuinely new queued message still gets picked up.
+      window.setTimeout(() => { liveDeliveryInFlightRef.current = false }, 0)
+    }
+  }, [
+    activeTabId,
+    canSteer,
+    handleSteerQueuedMessage,
+    isStreaming,
+    isWorkflowMode,
+    mainAgentIsTmuxCLI,
+    onSubmit,
+    queuedMessages,
+    setTabConfig,
+    tabSessionId,
+  ])
 
   // Ref for debounced file removal check
   const fileRemovalTimeoutRef = useRef<NodeJS.Timeout | null>(null)
