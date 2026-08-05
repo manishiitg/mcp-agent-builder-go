@@ -180,3 +180,57 @@ func TestHTMLIsNotEscapedButRoundTrips(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", back.Stdout, result.Stdout)
 	}
 }
+
+// A quoting error in generated code reads like a typo, so agents rewrite the
+// same prose the same way — one observed session reached migrate3.py before
+// giving up. The result must name the cause and forbid the identical retry.
+func TestQuotingFailureGetsAnActionableHint(t *testing.T) {
+	res := annotateKnownShellFailures(ShellCommandResult{
+		ExitCode: 1,
+		Stderr:   "  File \"Downloads/migrate3.py\", line 41\nSyntaxError: unterminated string literal (detected at line 41)",
+	})
+	for _, want := range []string{
+		"escaped twice",
+		"Do NOT rewrite the same text",
+		"QUOTED heredoc delimiter",
+		"diff_patch_workspace_file",
+	} {
+		if !strings.Contains(res.Stderr, want) {
+			t.Fatalf("quoting hint missing %q, got: %s", want, res.Stderr)
+		}
+	}
+	// The original error must survive; the hint is added, not substituted.
+	if !strings.Contains(res.Stderr, "SyntaxError: unterminated string literal") {
+		t.Fatal("hint replaced the original error instead of appending to it")
+	}
+}
+
+// The hint must not fire on unrelated failures or on success, or it becomes
+// noise the agent learns to skip.
+func TestQuotingHintDoesNotFireSpuriously(t *testing.T) {
+	cases := []ShellCommandResult{
+		{ExitCode: 0, Stderr: "unterminated string literal"},                  // succeeded; not a failure
+		{ExitCode: 1, Stderr: "ModuleNotFoundError: No module named 'pandas'"}, // different failure
+		{ExitCode: 2, Stderr: "grep: no such file"},
+	}
+	for _, in := range cases {
+		if got := annotateKnownShellFailures(in); got.Stderr != in.Stderr {
+			t.Fatalf("hint fired on %q", in.Stderr)
+		}
+	}
+}
+
+// It must survive the cap: a hint truncated away helps nobody.
+func TestQuotingHintSurvivesCapping(t *testing.T) {
+	encoded, err := marshalCappedShellResultForAgent(ShellCommandResult{
+		ExitCode: 1,
+		Stdout:   strings.Repeat("noise ", 40000),
+		Stderr:   "SyntaxError: unterminated string literal (detected at line 41)",
+	})
+	if err != nil {
+		t.Fatalf("marshal returned error: %v", err)
+	}
+	if !strings.Contains(encoded, "escaped twice") {
+		t.Fatal("quoting hint did not survive truncation")
+	}
+}

@@ -113,7 +113,38 @@ func encodeShellResultForAgent(result ShellCommandResult) (string, error) {
 // over, shrink the stream budget in proportion to the overshoot and encode
 // again. Ordinary output settles on the first pass; escape-heavy output takes a
 // few, and each pass is a marshal of an already-bounded string.
+// annotateKnownShellFailures appends a short, actionable note when the result
+// carries a failure signature agents are known to retry unchanged.
+//
+// A quoting error in generated code is the case this exists for. An apostrophe
+// in prose arrives already escaped through the tool-call boundary, gets escaped
+// again into the source, and the resulting backslash does not escape the quote —
+// it terminates the string. The interpreter reports the symptom ("unterminated
+// string literal") at a line number, which reads like a typo, so the agent
+// rewrites the same prose the same way. One observed session reached
+// migrate3.py: three attempts, one bug.
+//
+// The note names the cause and forbids the identical retry, which is the part
+// that breaks the loop.
+func annotateKnownShellFailures(result ShellCommandResult) ShellCommandResult {
+	if result.ExitCode == 0 {
+		return result
+	}
+	combined := result.Stderr + "\n" + result.Stdout
+	if !strings.Contains(combined, "unterminated string literal") &&
+		!strings.Contains(combined, "EOL while scanning string literal") {
+		return result
+	}
+	result.Stderr = strings.TrimRight(result.Stderr, "\n") + "\n\n" +
+		"... [quoting hint: this is almost always prose escaped twice, not a typo. Text carried through a tool call is already escaped; escaping it again yields a backslash before the quote, and that backslash does NOT escape the quote — it ends the string. " +
+		"Do NOT rewrite the same text into the same literal; it will fail identically. " +
+		"Move the text out of the code (write it to its own file and read it back), or use a triple-quoted block with a delimiter the text does not contain, and write the file with a QUOTED heredoc delimiter (<< 'EOF', not << EOF) so the shell does not re-escape the body. " +
+		"For a targeted change prefer diff_patch_workspace_file over rewriting the whole file.] ...\n"
+	return result
+}
+
 func marshalCappedShellResultForAgent(result ShellCommandResult) (string, error) {
+	result = annotateKnownShellFailures(result)
 	limit := agentShellOutputBytes()
 	if limit <= 0 {
 		return encodeShellResultForAgent(result)
