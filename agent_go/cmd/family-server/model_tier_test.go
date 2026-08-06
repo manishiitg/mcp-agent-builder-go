@@ -32,7 +32,7 @@ func TestFastModeChangesEffortNotModel(t *testing.T) {
 }
 
 func TestCursorDropsOneStepOnly(t *testing.T) {
-	// Cursor's honouring of reasoning_effort is the least established of the
+	// Cursor's honoring of reasoning_effort is the least established of the
 	// three, so it steps to medium rather than assuming a floor it may ignore.
 	if got := selectedReasoningEffort(true, llm.Provider(llmproviders.ProviderCursorCLI)); got != "medium" {
 		t.Fatalf("cursor fast effort = %q, want medium", got)

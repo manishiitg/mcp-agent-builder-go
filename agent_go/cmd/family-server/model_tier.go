@@ -53,7 +53,7 @@ const defaultReasoningEffort = "high"
 //   - Codex CLI exposes real low/medium/high effort; "low" is a genuine,
 //     large latency win.
 //   - Claude Code maps effort onto thinking budget; "low" likewise.
-//   - Cursor CLI's honouring of reasoning_effort is the least established of
+//   - Cursor CLI's honoring of reasoning_effort is the least established of
 //     the three, so it drops one step to "medium" rather than assuming a floor
 //     that may not be respected.
 //
