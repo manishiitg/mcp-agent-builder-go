@@ -48,12 +48,17 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    not clean. Distinguish proven failure, review candidate, and evidence gap.
    Use judgment to decide necessity, impact, and the recommendation; do not
    assume a deterministic Go detector has already classified the trace.
-5. Reconcile raw ledgers before judging cost. Preserve
-   `date + scope + group_folder + run_folder`. Treat `by_model` as authoritative
-   and `by_step_and_model` as included attribution; never add both. Report a
-   positive remainder as unattributed/orchestrator, do not double-count an
-   explicit `workflow_orchestrator` row, and report overflow, missing buckets,
-   and unpriced calls instead of estimating.
+5. Reconcile raw ledgers before judging cost. For current ledgers, the
+   immutable `execution_id` (or `evaluation_id`) is the record identity;
+   `date + scope + group_folder` locates its shard, while `run_folder` and
+   `archived_run_folder` are display metadata only. Never merge or compare
+   records merely because they share an `iteration-0/...` path: that path is
+   reused after rotation. Use `run_folders` only as a legacy fallback when no
+   ID-keyed record exists. Within each execution record and model, treat
+   `by_model` as authoritative and `by_step_and_model` as included attribution;
+   never add both. Report a positive remainder as unattributed/orchestrator, do
+   not double-count an explicit `workflow_orchestrator` row, and report
+   overflow, missing buckets, and unpriced calls instead of estimating.
 6. Inventory exact model pins in explicit workflow roles and
    planning/evaluation step config. Call `list_provider_models` once per pinned
    provider and compare against its catalog and `default_tier_models`; never

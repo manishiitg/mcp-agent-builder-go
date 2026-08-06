@@ -4,9 +4,9 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | `Claude Code` |
-| Ticket state | `implemented` (writer-side; reader/query work is PLAT-009's) |
-| Last synchronized | `2026-08-05` |
+| Assigned agent | `Codex` |
+| Ticket state | `implemented; runtime reverify` |
+| Last synchronized | `2026-08-06` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -17,6 +17,10 @@
 - **Source finding:** `HARNESS-COST-LEDGER-RUN-ATTRIBUTION`
 - **Source workflow:** `Workflow/rtslatency`
 - **Source Pulse run:** `schedule-cron--42eca39a_1785886230496797000`
+- **Reconfirmed as:** `HARNESS-RUN-ID-ALIASING` in `Workflow/hetznerssh`
+  (2026-08-06): historical cost/evaluation state under
+  `iteration-0/production-server` could be presented as today's run after
+  rotation.
 - **Problem:** the cost writer identifies an execution by a reusable run-folder
   key inside a wall-clock-date file. When one execution crosses UTC midnight,
   its costs are split between two files that both contain
@@ -152,7 +156,60 @@
     file I/O and `time.Now()` — that function has no injectable clock, so the
     UTC-midnight proof is at the extracted-helper level instead of a true
     file-system round trip.
-  - **Remaining/runtime reverify:** confirm against a real `rtslatency` run
+- **Remaining/runtime reverify:** confirm against a real `rtslatency` run
     that (a) both date shards for a midnight-crossing execution carry a
     matching `execution_id` field, and (b) no new `execution_only:<digits>`
     keys appear in fresh ledger writes.
+
+## Tectonicus reconciliation evidence — 2026-08-05
+
+Tectonicus independently reported `costs/phase/daily` versus
+`costs/execution` disagreement of 3.1× under one opaque workflow-builder
+bucket. That is not evidence that the writer-side execution-ID fix regressed:
+the current ticket deliberately left the lifetime-cumulative phase ledger
+unchanged. It is evidence that the reader/reporting layer must not compare the
+two shapes as though they were equivalent execution totals.
+
+PLAT-009 owns the query/aggregation work. PLAT-008 now records the shared
+reconciliation acceptance boundary: a real execution must reconcile exactly
+once in every view that claims to represent that execution, or the UI must
+describe its scope as cumulative/non-comparable.
+
+## Completion update — 2026-08-06 (Codex)
+
+**Platform ID:** `PLAT-031`
+**Status:** implemented; awaits one real run plus rotation for runtime
+reverification.
+
+The writer and reader are now genuinely execution-keyed; this supersedes the
+earlier sticky-field-only implementation above.
+
+- Daily cost files retain their existing date/group sharding, but their
+  authoritative payload is now `executions[execution_id]` with a `token_usage`
+  aggregate and `run_folder` / `archived_run_folder` metadata. New writes never
+  read from `run_folders["iteration-0/..."]`, so a reused active folder cannot
+  inherit old spend.
+- `run_folders` remains as a legacy read-compatible projection. New readers
+  use `executions` and deliberately ignore that projection when a v2 record is
+  present, preventing double-counting during migration. Old rows without an ID
+  remain visibly `legacy:<run-folder>` rather than being falsely split.
+- Rotation now changes only `archived_run_folder` on matching execution records
+  (for both execution and evaluation cost scopes). The immutable UUID and its
+  totals do not move or merge when `iteration-0` becomes `iteration-N`.
+- Evaluation score history now uses the same shape: every generated report has
+  an `evaluation_id`, and `scores/evaluation/...` is keyed by that ID rather
+  than a reusable target-run folder. Repeated evaluations no longer overwrite
+  each other.
+- Server cost/evaluation projections expose `execution_id` and archived path,
+  so callers can show individual executions rather than attributing history to
+  today's active run.
+
+Focused regression coverage:
+
+- `TestExecutionKeyedCostLedgerSeparatesIterationZeroReuse`
+- `TestArchiveRunCostPathsUpdatesOnlyExecutionDisplayPath`
+- `TestReadRunAcrossDatesUsesExecutionKeyedRecordsNotLegacyProjection`
+- `TestEvaluationLedgerSeparatesRepeatedIterationZeroEvaluations`
+
+The remaining acceptance item is runtime evidence from a production run and
+subsequent rotation; no migration invents IDs for ambiguous historical data.

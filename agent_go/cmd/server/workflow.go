@@ -390,8 +390,13 @@ func inferRunMetadata(ctx context.Context, workspacePath, folderName string, pro
 	}
 
 	if executionCosts, err := readAllRunTokenUsageFromCosts(ctx, workspacePath, orchestrator.CostScopeExecution); err == nil {
-		if tokenUsage := executionCosts[folderName]; tokenUsage != nil && !tokenUsage.CreatedAt.IsZero() {
-			metadata.CreatedAt = tokenUsage.CreatedAt
+		for _, execution := range executionCosts {
+			if execution == nil || execution.TokenUsage == nil || execution.effectiveRunFolder() != folderName || execution.TokenUsage.CreatedAt.IsZero() {
+				continue
+			}
+			if metadata.CreatedAt.IsZero() || execution.TokenUsage.CreatedAt.Before(metadata.CreatedAt) {
+				metadata.CreatedAt = execution.TokenUsage.CreatedAt
+			}
 		}
 	}
 

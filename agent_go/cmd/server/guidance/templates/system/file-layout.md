@@ -22,7 +22,8 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 |------|----------|
 | runs/{iter}/{group}/execution/{step-id}/ | Step output files (*.json) |
 | runs/{iter}/{group}/execution/Downloads/ | Downloaded files (bank statements, etc.) |
-| costs/execution/{group}/{YYYY-MM-DD}.json | Execution token usage ledger for that group/day |
+| costs/execution/{group}/{YYYY-MM-DD}.json | Execution token-usage ledger shard. Current records live under `executions[execution_id]`; `run_folder` is display metadata and `run_folders` is legacy compatibility only. |
+| costs/evaluation/{group}/{YYYY-MM-DD}.json | Evaluation cost ledger shard. Current records live under `evaluations[evaluation_id]`; do not use a reusable run-folder path as identity. |
 | costs/phase/token_usage.json | Aggregated phase-only token usage |
 
 ### Execution Logs (per run, per group, per step)

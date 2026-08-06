@@ -42,14 +42,17 @@ type EvaluationStepScore struct {
 }
 
 type EvaluationReport struct {
+	EvaluationID    string                `json:"evaluation_id,omitempty"`
 	TargetRunFolder string                `json:"target_run_folder"`
 	GeneratedAt     string                `json:"generated_at"`
 	StepScores      []EvaluationStepScore `json:"step_scores"`
 }
 
 type EvaluationReportEntry struct {
-	RunFolder string           `json:"run_folder"`
-	Report    EvaluationReport `json:"report"`
+	EvaluationID      string           `json:"evaluation_id,omitempty"`
+	RunFolder         string           `json:"run_folder"`
+	ArchivedRunFolder string           `json:"archived_run_folder,omitempty"`
+	Report            EvaluationReport `json:"report"`
 }
 
 type EvaluationAggregate struct {
@@ -83,12 +86,12 @@ func loadWorkflowCosts(ctx context.Context, workspacePath string) workflowCostsR
 
 	executionCosts, err := readAllRunTokenUsageFromCosts(ctx, workspacePath, orchestrator.CostScopeExecution)
 	if err != nil {
-		executionCosts = map[string]*orchestrator.TokenUsageFile{}
+		executionCosts = map[string]*storedRunTokenUsage{}
 	}
 
 	evaluationCosts, err := readAllRunTokenUsageFromCosts(ctx, workspacePath, orchestrator.CostScopeEvaluation)
 	if err != nil {
-		evaluationCosts = map[string]*orchestrator.TokenUsageFile{}
+		evaluationCosts = map[string]*storedRunTokenUsage{}
 	}
 
 	runDailyCosts := readWorkflowRunDailyCosts(ctx, workspacePath)
@@ -133,13 +136,15 @@ func loadWorkflowEvaluationReports(ctx context.Context, workspacePath, runFolder
 	}
 
 	var reports []EvaluationReportEntry
-	for runFolderName, report := range reportMap {
-		if !workflowRunFolderMatches(runFolderName, runFolder) {
+	for evaluationID, stored := range reportMap {
+		if stored == nil || stored.Report == nil || !workflowRunFolderMatches(stored.effectiveRunFolder(), runFolder) {
 			continue
 		}
 		reports = append(reports, EvaluationReportEntry{
-			RunFolder: runFolderName,
-			Report:    report,
+			EvaluationID:      evaluationID,
+			RunFolder:         stored.RunFolder,
+			ArchivedRunFolder: stored.ArchivedRunFolder,
+			Report:            *stored.Report,
 		})
 	}
 

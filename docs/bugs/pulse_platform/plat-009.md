@@ -39,3 +39,16 @@
 - **Acceptance:** query results reconcile to authoritative cost events across
   dates, groups, models, and execution IDs without double-counting aggregate
   and per-step views.
+
+## Execution-keyed compatibility update — 2026-08-06 (Codex)
+
+`get_cost_summary` reaches `GetRunTokenUsageFile` and its date-shard reader.
+That reader now consumes the new `executions[execution_id]` ledger records,
+matches against their effective (archived-or-current) path, and falls back to a
+legacy `run_folders` entry only when the requested run has no v2 record in that
+shard. This prevents a migration-day v1 projection from being added on top of
+the same UUID cost record. The focused test is
+`TestReadRunAcrossDatesUsesExecutionKeyedRecordsNotLegacyProjection`.
+
+Runtime reverify remains: run a workflow through an `iteration-0` rotation and
+compare `get_cost_summary` against the UUID-keyed JSON records.

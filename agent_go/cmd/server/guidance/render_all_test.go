@@ -275,6 +275,10 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 	}
 
 	for _, want := range []string{
+		"execution_id",
+		"evaluation_id",
+		"archived_run_folder",
+		"legacy fallback",
 		"group_folder",
 		"by_model",
 		"authoritative LLM total",
@@ -290,6 +294,10 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 		}
 	}
 	for _, want := range []string{
+		"execution_id",
+		"evaluation_id",
+		"archived_run_folder",
+		"legacy fallback",
 		"group_folder",
 		"run_folder",
 		"by_model",

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ExecuteEvaluationOnly runs only the evaluation execution phase
@@ -162,6 +164,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runEvaluationReportPhase(ctx context.
 	evalReportFolder := filepath.Join("evaluation", "runs", internalEvalRunFolder)
 
 	report := &EvaluationReport{
+		EvaluationID:    uuid.NewString(),
 		TargetRunFolder: targetRunFolder,
 		GeneratedAt:     time.Now().Format(time.RFC3339),
 		StepScores:      make([]*EvaluationStepScore, 0, len(evaluationPlan.Steps)+len(skippedStepScores)),

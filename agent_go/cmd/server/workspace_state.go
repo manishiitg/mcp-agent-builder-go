@@ -622,7 +622,16 @@ func (api *StreamingAPI) handleGetWorkflowsOverview(w http.ResponseWriter, r *ht
 			costResp := loadWorkflowCosts(ctx, workspacePath)
 			costByFolder := make(map[string]workflowRunCostEntry, len(costResp.Runs))
 			for _, entry := range costResp.Runs {
-				costByFolder[entry.RunFolder] = entry
+				// Multiple immutable executions may have begun in iteration-0.
+				// Prefer the latest record for the run-folder overview; detailed
+				// cost APIs retain every execution separately.
+				folder := entry.RunFolder
+				if entry.ArchivedRunFolder != "" {
+					folder = entry.ArchivedRunFolder
+				}
+				if current, exists := costByFolder[folder]; !exists || workflowRunCostEntryTime(entry).After(workflowRunCostEntryTime(current)) {
+					costByFolder[folder] = entry
+				}
 			}
 
 			details := make([]WorkflowOverviewRunFolderDetail, 0, len(folders))
