@@ -142,6 +142,13 @@ func main() {
 	mux.HandleFunc("/api/voice/native/unload", handleVoiceNativeUnload)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
+	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handleSetModel(w, r)
+			return
+		}
+		handleGetModels(w, r)
+	})
 	mux.HandleFunc("/api/browser/status", handleBrowserStatus)
 	mux.HandleFunc("/api/pulse/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {

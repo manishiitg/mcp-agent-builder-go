@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/manishiitg/mcpagent/llm"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
@@ -74,7 +75,19 @@ func selectedReasoningEffort(fastMode bool, provider llm.Provider) string {
 // pulse.go, whatsapp_bot.go) resolves the model, so a change applies uniformly
 // rather than being threaded into each one. No longer depends on Fast Mode —
 // see selectedReasoningEffort.
-func selectedModelID(provider llm.Provider) string {
+//
+// The family's explicit choice wins; otherwise this app's tuned default. The
+// choice is validated against the provider's real catalog on the way IN (see
+// handleSetModel), so a stale id from an older catalog cannot silently pin a
+// model the agent no longer offers.
+//
+// Takes the already-loaded state rather than re-reading it: every caller has it
+// in hand, and a resolver that quietly grabs stateMu would deadlock the moment
+// one of them is called with the lock already held.
+func selectedModelID(s familyState, provider llm.Provider) string {
+	if chosen := strings.TrimSpace(s.SelectedModels[string(provider)]); chosen != "" {
+		return chosen
+	}
 	return mediumTierModelID(provider)
 }
 

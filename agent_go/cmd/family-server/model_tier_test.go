@@ -18,7 +18,7 @@ func TestFastModeChangesEffortNotModel(t *testing.T) {
 		llmproviders.ProviderCursorCLI,
 	} {
 		provider := llm.Provider(p)
-		normal, fast := selectedModelID(provider), selectedModelID(provider)
+		normal, fast := selectedModelID(familyState{}, provider), selectedModelID(familyState{}, provider)
 		if normal != fast {
 			t.Fatalf("%s: model must not depend on Fast Mode (%q vs %q)", p, normal, fast)
 		}

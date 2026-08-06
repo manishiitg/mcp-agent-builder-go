@@ -1729,6 +1729,39 @@ export default function LearningApp() {
   const [fastMode, setFastMode] = useState(false)
   const [savingFastMode, setSavingFastMode] = useState(false)
 
+  // Which model the chosen coding agent should use. The list comes from the
+  // server (which reads the provider's real catalog) rather than being written
+  // here, so the picker cannot offer a model the agent would reject.
+  type ModelInfo = { provider: string; selected: string; default: string; models: { id: string; label: string }[] }
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
+  const [savingModel, setSavingModel] = useState(false)
+
+  const loadModels = useCallback(() => {
+    fetch(`${FAMILY_API}/api/models`)
+      .then((r) => r.json())
+      .then((d: ModelInfo) => setModelInfo(d?.models?.length ? d : null))
+      .catch(() => setModelInfo(null))
+  }, [])
+
+  // Reloads when the engine changes: the catalog is per coding agent, so the
+  // previous agent's models must not linger in the picker.
+  useEffect(() => { loadModels() }, [loadModels, engine])
+
+  const saveModel = (id: string) => {
+    setSavingModel(true)
+    // Optimistic so the select doesn't snap back while the request is in
+    // flight; the reload below is the source of truth.
+    setModelInfo((cur) => (cur ? { ...cur, selected: id } : cur))
+    fetch(`${FAMILY_API}/api/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: id }),
+    })
+      .then(() => loadModels())
+      .catch(() => loadModels())
+      .finally(() => setSavingModel(false))
+  }
+
   // Child Mode reminder sound — off by default, opt-in from Settings. Quill
   // can take anywhere from a few seconds to several minutes to reply (real
   // turns logged tonight ran 30s-5min); a child who's wandered off while
@@ -4268,8 +4301,28 @@ export default function LearningApp() {
                     </div>
                   )}
 
+                  {modelInfo && modelInfo.models.length > 0 && (
+                    <>
+                      <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Which model</p>
+                      <p className="fl-note">
+                        Picks the exact model within the AI you chose above. “Recommended” is the one this app is tuned for — change it only if you specifically want a stronger or cheaper one.
+                      </p>
+                      <select
+                        className="fl-model-select"
+                        value={modelInfo.selected}
+                        disabled={savingModel}
+                        onChange={(e) => saveModel(e.target.value)}
+                      >
+                        <option value="">Recommended{modelInfo.default ? ` (${modelInfo.default})` : ''}</option>
+                        {modelInfo.models.map((m) => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
-                  <p className="fl-note">Trades depth for speed — a cheaper, faster model answers every chat (web, WhatsApp, and Pulse check-ins) instead of the usual one. Good for quick questions; turn it off again for anything that needs careful judgment.</p>
+                  <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, across every chat (web, WhatsApp, and Pulse check-ins). Turn it off again for anything that needs careful judgment.</p>
                   <label className="fl-pulse-config-row">
                     <input
                       type="checkbox"

@@ -241,7 +241,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// never reach the *-KEY.md answer keys, other activities, or the parent's
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
-		ModelID:         selectedModelID(provider),
+		ModelID:         selectedModelID(s, provider),
 		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),

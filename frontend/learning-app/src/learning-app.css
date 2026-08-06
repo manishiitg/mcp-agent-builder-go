@@ -140,6 +140,12 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-boot p { margin: 0; font-size: var(--text-body); font-weight: 600; }
 .fl-thinking { display: inline-flex; align-items: center; gap: 8px; color: #5f708d; font-size: var(--text-secondary); }
 .fl-thinking img { display: block; }
+/* Model picker in Settings. Matches the other settings controls rather than
+   the composer's inline widgets — this is a rarely-touched preference. */
+.fl-model-select { width: 100%; margin-top: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); color: var(--heading); font: inherit; font-size: var(--text-secondary); cursor: pointer; }
+.fl-model-select:disabled { opacity: .6; cursor: default; }
+.fl-model-select:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
+
 /* Live model output while a turn runs. Deliberately NOT bubble-shaped: what
    streams here is the model reasoning out loud, not its answer, and rendering
    it in .fl-bubble made a plan read as the finished reply. Muted, quoted, and

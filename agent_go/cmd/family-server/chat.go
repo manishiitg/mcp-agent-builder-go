@@ -609,7 +609,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:        provider,
-		ModelID:         selectedModelID(provider),
+		ModelID:         selectedModelID(s, provider),
 		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),

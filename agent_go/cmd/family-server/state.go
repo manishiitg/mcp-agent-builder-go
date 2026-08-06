@@ -74,6 +74,14 @@ type familyState struct {
 	// have to be right. Off by default so nobody gets quietly shallower answers
 	// without asking for them.
 	FastMode bool `json:"fast_mode,omitempty"`
+
+	// SelectedModels is the family's chosen model per coding agent, keyed by
+	// provider id (e.g. "claude-code" -> "claude-opus-5"). Empty or missing
+	// means "use this app's tuned default" (model_tier.go's mediumTierModelID),
+	// so an existing family keeps exactly what it had until someone chooses.
+	// Per provider rather than one global value because the family can switch
+	// engines, and a model id is only meaningful to the agent that offers it.
+	SelectedModels map[string]string `json:"selected_models,omitempty"`
 }
 
 // ScheduleEntry is one recurring weekly commitment — school, tuition, a
