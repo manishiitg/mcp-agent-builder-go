@@ -424,6 +424,39 @@ var agentTurnHolder struct {
 	since time.Time
 }
 
+// lastInteractiveTurn is when a parent or child turn last started or finished.
+// Pulse uses it to stay out of the way: it is background work with no
+// deadline, and running it while someone is mid-conversation makes their reply
+// wait minutes behind it (measured: a parent's message queued 207s behind six
+// back-to-back Pulse checks, another 14 minutes).
+//
+// Waiting for quiet is better than yielding mid-run here, because Pulse writes
+// into the SAME conversation the parent chats in — one file, one warm tmux
+// session — so the two genuinely cannot run at once without forking the
+// agent's own context.
+var lastInteractiveTurn struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func noteInteractiveTurn() {
+	lastInteractiveTurn.mu.Lock()
+	lastInteractiveTurn.at = time.Now()
+	lastInteractiveTurn.mu.Unlock()
+}
+
+// sinceInteractiveTurn reports how long the family has been quiet. Returns a
+// very large duration when nothing has run yet, so a fresh process does not
+// treat "never" as "just now" and defer Pulse forever.
+func sinceInteractiveTurn() time.Duration {
+	lastInteractiveTurn.mu.Lock()
+	defer lastInteractiveTurn.mu.Unlock()
+	if lastInteractiveTurn.at.IsZero() {
+		return 365 * 24 * time.Hour
+	}
+	return time.Since(lastInteractiveTurn.at)
+}
+
 // markAgentTurnStart records ownership; the returned func clears it. Call
 // immediately after acquiring agentTurnMu, deferring the result.
 func markAgentTurnStart(kind string) func() {
@@ -431,10 +464,18 @@ func markAgentTurnStart(kind string) func() {
 	agentTurnHolder.kind = kind
 	agentTurnHolder.since = time.Now()
 	agentTurnHolder.mu.Unlock()
+	// Stamped at both ends: a turn that ran for six minutes should leave the
+	// family counted as "active now", not "active six minutes ago".
+	if kind != "pulse" {
+		noteInteractiveTurn()
+	}
 	return func() {
 		agentTurnHolder.mu.Lock()
 		agentTurnHolder.kind = ""
 		agentTurnHolder.mu.Unlock()
+		if kind != "pulse" {
+			noteInteractiveTurn()
+		}
 	}
 }
 

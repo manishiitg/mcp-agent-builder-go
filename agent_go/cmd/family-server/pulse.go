@@ -171,6 +171,17 @@ func pulseChecks(s familyState) []pulseCheck {
 // to remember to check.
 const pulseTickInterval = 5 * time.Minute
 
+// pulseQuietPeriod is how long the family must have been idle before a
+// scheduled Pulse may start. Pulse holds the agent for 25-250s per check and
+// runs several back to back, so starting one while someone is mid-conversation
+// pushes their reply minutes into the future.
+const pulseQuietPeriod = 10 * time.Minute
+
+// pulseMaxDeferral stops "wait for quiet" becoming "never run". A family using
+// the app all evening would otherwise defer Pulse indefinitely and silently
+// lose their check-ins; past this much overdue it runs regardless.
+const pulseMaxDeferral = 4 * time.Hour
+
 // runPulseOnce runs one Pulse cycle. When force is false (the periodic
 // ticker's normal call), it's a no-op unless Pulse is actually enabled —
 // when force is true (a manual "run now" trigger), it runs regardless of the
@@ -377,6 +388,22 @@ func startPulseTicker(ctx context.Context) {
 			}
 			if !due {
 				continue
+			}
+			// Stay out of the way of a conversation in progress — see
+			// lastInteractiveTurn in chat.go for the measured reason.
+			if quiet := sinceInteractiveTurn(); quiet < pulseQuietPeriod {
+				overdue := time.Duration(0)
+				if s.Pulse.LastRunAt != "" {
+					if last, err := time.Parse(time.RFC3339, s.Pulse.LastRunAt); err == nil {
+						overdue = time.Since(last) - s.Pulse.cadence()
+					}
+				}
+				if overdue < pulseMaxDeferral {
+					log.Printf("[pulse] deferring: family active %s ago (overdue by %s, forcing after %s)",
+						quiet.Round(time.Second), overdue.Round(time.Minute), pulseMaxDeferral)
+					continue
+				}
+				log.Printf("[pulse] running despite recent activity — overdue by %s", overdue.Round(time.Minute))
 			}
 			runCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 			if err := runPulseOnce(runCtx, false); err != nil {
