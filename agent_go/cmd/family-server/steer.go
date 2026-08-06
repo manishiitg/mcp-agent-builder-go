@@ -14,13 +14,18 @@ type activeTurnSender interface {
 	Send(context.Context, string) error
 }
 
-// activeTurn tracks the ONE currently in-flight agent turn against a given
-// conversation, so a concurrent request for the SAME conversation can inject a
-// message into it live (steer) instead of waiting for it to finish and
-// starting a wholly separate turn afterward. Family-server already
-// serializes every turn process-wide via agentTurnMu (the shared MCP bridge
-// uses process-global env vars), so there is realistically at most one entry
-// here at a time — this is just the bookkeeping needed to find it.
+// activeTurns maps conversation id -> the agent driving that conversation's
+// in-flight turn, so a concurrent request for the SAME conversation can inject
+// a message into it live (steer) instead of waiting for it to finish and
+// starting a wholly separate turn afterward.
+//
+// Keyed rather than a single slot. The old version held one global entry on
+// the assumption that agentTurnMu meant only one turn could exist at a time.
+// That assumption was already load-bearing in a way it should not have been:
+// clearActiveTurn() erased whatever was registered, so with two turns the
+// first to finish would deregister the second, silently disabling steering for
+// a turn still running. Keying by conversation removes the assumption and is a
+// precondition for running parent and child turns concurrently at all.
 //
 // Deliberately NOT mcpagent's own Agent.TurnInFlight(): that flag is only set
 // by mcpagent's ContinueConversation, which agentsession.Session.Ask never
@@ -28,10 +33,7 @@ type activeTurnSender interface {
 // on this call path. This registry is the actual source of truth.
 var (
 	activeTurnMu sync.Mutex
-	activeTurn   *struct {
-		conversationID string
-		sender         activeTurnSender
-	}
+	activeTurns  = map[string]activeTurnSender{}
 )
 
 // registerActiveTurn records the agent driving a turn that's about to start,
@@ -40,18 +42,17 @@ var (
 // clearActiveTurn.
 func registerActiveTurn(conversationID string, sender activeTurnSender) {
 	activeTurnMu.Lock()
-	activeTurn = &struct {
-		conversationID string
-		sender         activeTurnSender
-	}{conversationID, sender}
+	activeTurns[conversationID] = sender
 	activeTurnMu.Unlock()
 }
 
-// clearActiveTurn removes the registration once a turn completes (success or
-// error) — always via `defer`, right after registerActiveTurn.
-func clearActiveTurn() {
+// clearActiveTurn removes THIS conversation's registration once its turn
+// completes (success or error) — always via `defer`, right after
+// registerActiveTurn. Takes the id so a finishing turn cannot deregister
+// somebody else's.
+func clearActiveTurn(conversationID string) {
 	activeTurnMu.Lock()
-	activeTurn = nil
+	delete(activeTurns, conversationID)
 	activeTurnMu.Unlock()
 }
 
@@ -83,25 +84,23 @@ func trySteer(ctx context.Context, conversationID, message string) bool {
 		return false
 	}
 	activeTurnMu.Lock()
-	at := activeTurn
+	sender, ok := activeTurns[conversationID]
 	activeTurnMu.Unlock()
 	// Log every refusal with the reason. "Steering didn't work" is otherwise
-	// indistinguishable between three very different causes — no turn was in
-	// flight, a turn was in flight for a DIFFERENT conversation (the slot is
-	// process-wide and single, so a parent/Pulse turn holds it too), or the
-	// delivery itself failed inside the provider — and they need different
-	// fixes. Without this the caller only ever sees {"steered":false}.
-	if at == nil {
+	// indistinguishable between two very different causes — no turn was in
+	// flight for THIS conversation, or the delivery itself failed inside the
+	// provider — and they need different fixes. Without this the caller only
+	// ever sees {"steered":false}.
+	//
+	// The lookup is now by conversation, so a turn running for a different
+	// conversation is simply not found rather than being found and rejected.
+	if !ok {
 		log.Printf("[steer] %q: no turn in flight", conversationID)
-		return false
-	}
-	if at.conversationID != conversationID {
-		log.Printf("[steer] %q: refused — the in-flight turn belongs to %q", conversationID, at.conversationID)
 		return false
 	}
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err := at.sender.Send(sctx, message)
+	err := sender.Send(sctx, message)
 	if err != nil {
 		log.Printf("[steer] %q: delivery failed: %v", conversationID, err)
 		return false
