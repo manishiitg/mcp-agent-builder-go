@@ -11,7 +11,8 @@ export function buildPulseTimelineHtml(content: string): string {
   function text(el){ return (el.textContent || '').toLowerCase(); }
   function moduleFor(el){
     var explicit = el.getAttribute('data-module');
-    if (['bug_review','artifact_review','report_health','eval_health','stores_health','llm_ops_review','cost_llm_time','learning_health','knowledgebase_health','db_health'].indexOf(explicit) !== -1) return 'workflow_review';
+    if (['bug_review','artifact_review','report_health','eval_health','stores_health','learning_health','knowledgebase_health','db_health'].indexOf(explicit) !== -1) return 'workflow_review';
+    if (['llm_ops_review','cost_llm_time'].indexOf(explicit) !== -1) return 'llm_ops_review';
     if (explicit) return explicit;
     var value = text(el);
     var kind = el.getAttribute('data-kind') || '';
@@ -22,8 +23,8 @@ export function buildPulseTimelineHtml(content: string): string {
     if (value.indexOf('learning') !== -1 || value.indexOf('skill.md') !== -1) return 'workflow_review';
     if (value.indexOf('database') !== -1 || value.indexOf('db.sqlite') !== -1 || value.indexOf('db health') !== -1) return 'workflow_review';
     if (value.indexOf('knowledge') !== -1) return 'workflow_review';
-    if (value.indexOf('cost') !== -1 || value.indexOf('token') !== -1 || value.indexOf('spend') !== -1) return 'workflow_review';
-    if (value.indexOf('model') !== -1 || value.indexOf('llm') !== -1) return 'workflow_review';
+    if (value.indexOf('cost') !== -1 || value.indexOf('token') !== -1 || value.indexOf('spend') !== -1) return 'llm_ops_review';
+    if (value.indexOf('model') !== -1 || value.indexOf('llm') !== -1) return 'llm_ops_review';
     if (value.indexOf('evaluation') !== -1 || value.indexOf('eval ') !== -1) return 'workflow_review';
     if (value.indexOf('report') !== -1 || value.indexOf('dashboard') !== -1) return 'workflow_review';
     return '';

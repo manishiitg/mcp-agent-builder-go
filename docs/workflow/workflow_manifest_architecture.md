@@ -174,7 +174,7 @@ Two optional top-level fields configure hard behavioral gates the auto-improveme
 | `oversight_mode` | `manual` \| `supervised` \| `autonomous` | `supervised` | Controls when human approval is required for high-risk framework changes. Hard gate. |
 | `decision_log_mutability` | `append_only` \| `append_only_strict` | `append_only` | `append_only_strict` forbids rewriting a dated decision entry in `builder/improve.html`, even for correction. Used by compliance workflows. Hard gate. |
 
-`schema_version` controls the JSON shape. `version` controls product-managed workflow behavior. The current `1.0.19` contract upgrades `builder/improve.html` to the schema-4 lightweight Pulse journal before a scheduled workflow runs. The scheduler verifies the resulting HTML and writes the version through its trusted manifest writer.
+`schema_version` controls the JSON shape. `version` controls product-managed workflow behavior. The current `1.0.20` contract upgrades `builder/improve.html` to the schema-5 executive Pulse journal before a scheduled workflow runs. The scheduler verifies the resulting HTML and writes the version through its trusted manifest writer.
 
 The stable Goal lives only in `soul/soul.md`. `/define-success` records operating-model reasoning as a dated Reflection / Hansei entry in `builder/improve.html`; there is no permanent Workflow Profile card that can silently become an immutable constraint.
 
@@ -208,7 +208,7 @@ These still live alongside it:
 - `planning/output_plan.json`
 - `variables/variables.json`
 - `evaluation/evaluation_plan.json`
-- `builder/improve.html` — the schema-4 lightweight, newest-first Pulse executive journal: Bug/Goal verdicts, status, reviewer coverage, optional assumptions, three Latest Pulse cells, Current work counts, and at most 12 material Activity cards. Goal / Ikigai remains exclusively in `soul/soul.md` and is rendered directly by Runloop. Complete operational detail stays in SQLite/Pulse; older material history can live in linked monthly `builder/improve-archive/YYYY-MM.html` files. See [auto_improvement_framework.md](./auto_improvement_framework.md).
+- `builder/improve.html` — the schema-5 lightweight, newest-first Pulse executive journal: Bug/Goal verdicts, one status sentence, three Latest Pulse cells, and at most six material Activity transitions. Goal / Ikigai remains exclusively in `soul/soul.md` and is rendered directly by Runloop. Reviewer coverage, assumptions, issues, backlog counts, and complete operational detail stay in SQLite/Pulse; older material history can live in linked monthly `builder/improve-archive/YYYY-MM.html` files. See [auto_improvement_framework.md](./auto_improvement_framework.md).
 - `knowledgebase/rules/rules.md` and `knowledgebase/rules/examples/` — legacy business-rule storage when present. Current user-confirmed runtime context belongs in `knowledgebase/context/`; its audit trail is recorded in dated Reflection entries in `builder/improve.html`.
 
 `workflow.json` is the workflow-level definition file.

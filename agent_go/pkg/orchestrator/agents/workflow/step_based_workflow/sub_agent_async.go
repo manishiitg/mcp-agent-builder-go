@@ -10,6 +10,7 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	orchestratoragents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -74,6 +75,12 @@ func copyAsyncSubAgentContextValues(base, source context.Context) context.Contex
 		}
 	}
 	base = virtualtools.WithSubAgentSpec(base, virtualtools.SubAgentSpecFromContext(source))
+	// Without this, an async child's LLM/tool calls report their timing into
+	// a different collector than the one the dispatching step drains for its
+	// own trace, because base is built from the step's long-lived
+	// ParentContext rather than the in-flight tool-call context that carries
+	// the parent's active capture ID (PLAT-032).
+	base = orchestrator.CopyTimingCaptureContext(base, source)
 	return base
 }
 

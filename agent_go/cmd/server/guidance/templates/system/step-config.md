@@ -10,10 +10,10 @@ A step's access to each store is independent and defaults differently. Grant the
 |---|---|---|---|
 | `learnings_access` | `read` · `read-write` · `none` | `read` | `read-write` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK patterns, parsing/retry/recovery) — also requires a concrete `learning_objective`. `none` only when shared SKILL.md would mislead the step. |
 | `knowledgebase_access` | `read` · `write` · `read-write` · `none` | `none` | KB is opt-in. `read` to consume business context/notes (covers `knowledgebase/context/`); `write`/`read-write` to contribute — also needs a non-empty `knowledgebase_contribution`, and `knowledgebase_write_method` (`direct` = step writes notes/ itself, default; `agent` = separate post-step writer, only if the user asks). |
-| `db_access` | `read` · `read-write` | `read-write` | db/ is the shared structured-state surface, so read+write is the default. Set `read` for least-privilege steps that must never mutate the db — pure readers, report-shaping/aggregation, validation/preflight: db/ stays readable but is removed from the step's write paths, so an accidental write is sandbox-denied. |
+| `db_access` | compatibility field | `read-write` | Runtime currently grants every workflow step managed read-write access. Existing `read` values remain loadable but do not remove `mutate_workflow_db`; do not add or tune this field while the uniform-access policy is active. |
 
-- **DB contract:** agentic steps use `query_workflow_db` and, when `db_access=read-write`, `mutate_workflow_db`; they do not receive raw SQLite access. Saved scripted/application code retains the absolute `$DB_PATH` compatibility variable and must never use a relative `db/db.sqlite` path.
-- **Rule of thumb:** routing, validation, mechanical transforms, aggregation/report-shaping, human approval, pure db/KB readers, and mature scripted steps should stay read-only on learnings (and often `db_access: read`).
+- **DB contract:** every agentic workflow step receives `query_workflow_db` and `mutate_workflow_db`; it does not receive raw SQLite access. Saved scripted/application code retains the absolute `$DB_PATH` compatibility variable and must never use a relative `db/db.sqlite` path.
+- **Rule of thumb:** routing, validation, mechanical transforms, aggregation/report-shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only on learnings. DB access is intentionally uniform and is not a per-step tuning decision right now.
 - Deep dive on what belongs in each store and the write contracts: `read_skill(skills=[{"name":"builder-reference","path":"references/stores.md"}])`.
 
 ### The three locks

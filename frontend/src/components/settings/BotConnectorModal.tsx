@@ -264,8 +264,12 @@ export default function BotConnectorModal({ isOpen, onClose }: BotConnectorModal
 
   // ── Gmail derived state + save/test ────────────────────────────────────────
   const gmailCurrentBlocked = normalizeGmailEmails(gmailBlockedText)
-  const gmailDefaultRecipient = (gmailConfig.default_to || '').trim().toLowerCase()
-  const gmailDefaultIsBlocked = gmailDefaultRecipient !== '' && gmailCurrentBlocked.includes(gmailDefaultRecipient)
+  // The default is a LIST, so every address in it has to clear the denylist —
+  // checking the raw string as one address let a blocked entry through the
+  // moment a second recipient was added.
+  const gmailDefaultRecipients = normalizeGmailEmails(gmailConfig.default_to)
+  const gmailBlockedDefaults = gmailDefaultRecipients.filter(email => gmailCurrentBlocked.includes(email))
+  const gmailDefaultIsBlocked = gmailBlockedDefaults.length > 0
   const gmailTestPassed = gmailTestResult?.success === true
     && gmailTestedTo === (gmailConfig.default_to || '')
     && !gmailDefaultIsBlocked
@@ -1476,13 +1480,16 @@ export default function BotConnectorModal({ isOpen, onClose }: BotConnectorModal
                       )}
                       <Card className="space-y-3 p-4">
                         <div>
-                          <label className="mb-2 block text-sm font-medium">Default recipient</label>
-                          <input type="email" value={gmailConfig.default_to || ''} onChange={event => setGmailConfig({ ...gmailConfig, default_to: event.target.value })} placeholder="you@example.com" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+                          <label className="mb-2 block text-sm font-medium">Default recipients</label>
+                          {/* Deliberately type="text": type="email" rejects a comma-separated
+                              list, which is the whole point of this field. */}
+                          <input type="text" inputMode="email" value={gmailConfig.default_to || ''} onChange={event => setGmailConfig({ ...gmailConfig, default_to: event.target.value })} placeholder="you@example.com, teammate@example.com" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+                          <p className="mt-1 text-xs text-muted-foreground">Where notifications are emailed when a workflow has no recipients of its own. Separate several addresses with commas.</p>
                         </div>
                         <div>
                           <label className="mb-2 block text-sm font-medium">Disallowed recipients</label>
                           <textarea value={gmailBlockedText} onChange={event => setGmailBlockedText(event.target.value)} rows={3} placeholder="blocked@example.com, no-notify@example.com" className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
-                          {gmailDefaultIsBlocked && <p className="mt-1 text-xs text-red-600 dark:text-red-400">The default recipient is in the disallowed list.</p>}
+                          {gmailDefaultIsBlocked && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{gmailBlockedDefaults.join(', ')} {gmailBlockedDefaults.length === 1 ? 'is' : 'are'} both a default recipient and disallowed.</p>}
                         </div>
                       </Card>
                       <Button variant="outline" onClick={testGmail} disabled={gmailTesting || !gmailConfig.default_to || gmailDefaultIsBlocked} className="w-full">{gmailTesting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</> : 'Send test email'}</Button>

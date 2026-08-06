@@ -1,6 +1,15 @@
 # Canonical agent-definition construction
 
 **Status:** Design approved for reader/writer authority; implementation not started
+
+**Temporary runtime policy (2026-08-04):** Until the canonical-definition
+refactor replaces the fragmented capability derivation, every ordinary workflow
+execution step—including evaluation steps, todo-task children, and every turn of
+a message sequence—receives managed workflow-DB read/write access through
+`query_workflow_db` and `mutate_workflow_db`. Persisted `db_access: read` values
+remain loadable but do not downgrade runtime access. Direct SQLite access stays
+blocked for agentic steps. Specialized reviewers and maintenance agents are not
+reclassified by this temporary step policy.
 **Date:** 2026-08-04
 **Repositories:** `mcpagent`, `mcp-agent-builder-go`
 **Primary motivation:** repeated DB-tool availability failures across workflow
@@ -467,7 +476,7 @@ Only adapter behavior differs, so test the entry points that previously
 diverged:
 
 - scheduled Pulse Fixer;
-- standalone `/pulse-fixer`;
+- manual `/engineering-review` review-and-fix sequence;
 - converted schedule-to-chat Pulse Fixer;
 - one reader and one writer ordinary workflow agent.
 

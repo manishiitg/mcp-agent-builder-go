@@ -23,12 +23,21 @@ load together in a single `stores_health` pass — see `post-run-monitor`. If so
 this reviewer's output is one part of that combined packet, not a standalone
 result.
 
-Return only: `module=stores_health`, `verdict`, `next_check`, and ordered `findings`.
+Return only: `module=stores_health`, `verdict`, `db_ownership_manifest`,
+`ownership_candidates`, `next_check`, and ordered `findings`.
 Every finding includes stable `finding_id`, `target_key`, severity,
 plain-language summary, precise `evidence`, a bounded `recommended_fix`,
 migration risk, exact verification commands under `verification`, and
 `user_judgment_required` with reason.
 Use the remaining document only as the database-health audit checklist.
+
+`db_ownership_manifest` is **required.** For every relevant table and every
+content-bearing TEXT/JSON column, report its structured-state purpose, logical
+entity, keys, writers, runtime/report/eval consumers, retention/lifecycle,
+bounded sample evidence, and authoritative owner. `ownership_candidates`
+records each misplaced or duplicated semantic item with `item`,
+`current_location`, `semantic_type`, `authoritative_owner`,
+`duplicate_locations`, `recommended_action`, and exact `verification`.
 
 Read `builder/improve.html` for prior context and matching open findings, but do
 not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
@@ -36,6 +45,22 @@ style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
 the consolidated log update.
 
 Apply the parent-provided `assumption-audit` DB lens within this command's boundaries. Check whether schemas, enums, keys, or cardinality unnecessarily hardcode one source, channel, entity type, group, or current tactic. Recommend safe contract changes, but do not perform speculative row migrations; surface a consequential strategy/schema choice for Pulse's Assumptions challenged when business judgment is required.
+
+## Database purity and ownership contract
+
+The DB owns structured operational state: entities, metrics, actions, queues,
+statuses, timestamps, relationships, and historical rows with stable keys. It
+does not own long-form execution HOW (Learnings), goals/preferences/constraints
+(Soul), current workflow strategy or behavior (Plan), deterministic proof
+contracts (Validation), durable domain documents/facts (Knowledgebase), or
+review findings/diagnosis/attempts/decisions/fix narratives (Pulse).
+
+Enforce **one semantic item, one authoritative owner**. Structured references
+to an owner's stable ID/path are valid; copied prose or JSON snapshots that can
+drift are not. Flag content-bearing TEXT/JSON columns used as hidden prompt,
+plan, skill, KB, or Pulse stores. A risky semantic row migration requires
+`user_judgment_required=yes`; never infer new row meaning merely to make the
+manifest clean.
 
 BOUNDARIES
 
@@ -51,6 +76,8 @@ READ FIRST
 3. Read `reports/report_plan.json` if present. Map widgets to their `db: db/db.sqlite` + `sql` queries (and `source` for file/file-list widgets).
 4. Read `db/README.md` if present, then inspect the database: `sqlite3 db/db.sqlite ".tables"` and `.schema <table>` for each table; also note `db/assets/`.
 5. Sample each relevant table enough to understand shape. Do not dump whole tables; use `sqlite3 db/db.sqlite "SELECT * FROM <table> LIMIT 5"`, `SELECT COUNT(*)`, and targeted queries.
+   Include every content-bearing TEXT/JSON column in `db_ownership_manifest`,
+   using bounded samples and length/count summaries rather than whole dumps.
 6. Build a control-state ownership map for tables that affect allocation,
    routing, lifecycle/status, feature flags, guards, retries, or other runtime
    decisions. For each logical entity, name its canonical table/field, all

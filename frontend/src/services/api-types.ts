@@ -350,7 +350,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'goal_advisor' | 'chief_of_staff' | string
+  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | 'chief_of_staff' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -927,6 +927,7 @@ export interface TerminalSnapshot {
   session_id: string
   owner_id?: string
   execution_id?: string
+  parent_execution_id?: string
   execution_kind?: string
   label?: string
   scope?: string
@@ -940,7 +941,10 @@ export interface TerminalSnapshot {
   display_title?: string
   display_meta?: string
   tmux_session?: string
-  content_source?: 'tmux_pipe' | 'tmux_capture' | 'event_stream' | string
+  content_source?: 'tmux_pipe' | 'tmux_capture' | 'tmux_stream' | 'event_stream' | string
+  // True for the short-lived rail row projected from the live execution tree
+  // before the corresponding terminal/transcript snapshot has been retained.
+  execution_tree_placeholder?: boolean
   // Rich step context — populated by the orchestrator's bridge for
   // workflow-step terminals. Used to render the transport-class chip
   // and the "step 3/7 · attempt 1 · triggered by X" meta row.
@@ -2682,6 +2686,12 @@ export interface WorkflowNotificationInfoResponse {
   pulse_summary_instructions?: string
   run_summary_channels?: string[]
   pulse_summary_channels?: string[]
+  // Who each summary is emailed to. Empty means the account default recipient.
+  run_summary_recipients?: string[]
+  pulse_summary_recipients?: string[]
+  // Slack channels per summary, as webhook secret names (one webhook = one channel).
+  run_summary_slack_webhooks?: string[]
+  pulse_summary_slack_webhooks?: string[]
   exclude_channels?: string[]
   block_recipients?: string[]
 }
@@ -2921,6 +2931,10 @@ export interface UpdateWorkflowManifestRequest {
   pulse_notification_instructions?: string
   run_notification_channels?: string[]
   pulse_notification_channels?: string[]
+  // Send an empty array to clear a recipient list back to the account default;
+  // omit the field to leave it unchanged.
+  run_notification_recipients?: string[]
+  pulse_notification_recipients?: string[]
   notification_instructions?: string
 }
 

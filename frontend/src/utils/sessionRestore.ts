@@ -271,6 +271,11 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   chatStore.setTabEvents(sessionId, events)
   chatStore.setTabLastEventIndex(sessionId, events.length - 1)
   chatStore.setTabHasMoreOlderEvents(sessionId, false)
+  console.info(`${TAG} Hydrated persisted conversation`, {
+    sessionId,
+    eventCount: events.length,
+    source: conversation.ui_events && conversation.ui_events.length > 0 ? 'ui_events' : 'conversation_history',
+  })
 
   return {
     status: 'completed',
@@ -304,9 +309,20 @@ export async function hydrateTabEvents(
   options: {
     workspacePath?: string
     fallbackToChatHistory?: boolean
+    preferChatHistory?: boolean
   } = {},
 ): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
+
+  // Explicitly reopened chats should show the complete durable conversation,
+  // not whichever bounded tail happens to remain in the volatile EventStore.
+  // If the history file was removed or cannot be resolved, fall through to the
+  // live event endpoint so terminal restoration still works.
+  if (options.preferChatHistory) {
+    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+    if (restored) return restored
+  }
+
   let response
   try {
     response = await agentApi.getRecentSessionEvents(sessionId)
@@ -326,7 +342,12 @@ export async function hydrateTabEvents(
     if (response.has_more !== undefined) {
       chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
     }
-  } else if (options.fallbackToChatHistory && !response.session_status) {
+  } else if (options.fallbackToChatHistory) {
+    // A restored terminal can recreate an in-memory session shell whose status
+    // is "completed" but whose event buffer is empty. Status therefore cannot
+    // tell us whether the durable transcript exists. The caller only enables
+    // this fallback for an explicitly restored chat, so prefer its persisted
+    // history whenever the volatile event buffer has no events.
     const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
     if (restored) return restored
   }

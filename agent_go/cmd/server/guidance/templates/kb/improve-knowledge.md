@@ -22,8 +22,9 @@ load together in a single `stores_health` pass — see `post-run-monitor`. If so
 this reviewer's output is one part of that combined packet, not a standalone
 result.
 
-Return only: `module=stores_health`, `verdict`, `note_shape`, `next_check`,
-and ordered `findings`. Every finding includes stable `finding_id`, `target_key`,
+Return only: `module=stores_health`, `verdict`, `note_shape`,
+`kb_purity_manifest`, `ownership_candidates`, `next_check`, and ordered
+`findings`. Every finding includes stable `finding_id`, `target_key`,
 severity, plain-language summary, precise `evidence`, a bounded
 `recommended_fix`, exact `verification`, and `user_judgment_required` with
 reason. Use the remaining document only as the KB-health audit checklist.
@@ -41,12 +42,38 @@ that repeats the same conclusion every run is not accumulating knowledge — it 
 accumulating restatements, and the fix is condensation into
 `## Historical context`, not another appended entry.
 
+`kb_purity_manifest` is **required.** Enumerate every content-bearing Markdown
+note on disk and classify its sections as durable domain knowledge with
+provenance or content owned by Soul, Plan, Validation, Learnings, DB, or Pulse.
+For unusually large files, route bounded reads by headings and searches, but do
+not omit a file. No content-bearing note file may be omitted.
+`ownership_candidates` records each misplaced or duplicated
+semantic item with `item`, `current_location`, `semantic_type`,
+`authoritative_owner`, `duplicate_locations`, `recommended_action`, and exact
+`verification`.
+
 Read `builder/improve.html` for prior context and matching open findings, but do
 not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
 style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
 the consolidated log update.
 
 Apply the parent-provided `assumption-audit` KB-notes lens within this command's boundaries. A note that merely repeats the current plan's tactic, architecture, fixed source/channel, or unverified belief is not durable domain knowledge. Keep user-owned `knowledgebase/context/` untouched; surface a consequential unresolved restriction for Pulse's Assumptions challenged instead of copying it into more notes.
+
+## Knowledgebase purity and ownership contract
+
+Knowledgebase notes own durable workflow-discovered domain facts and patterns
+with source/provenance. They do not own:
+
+- owner goals, preferences, thresholds, or safety constraints (Soul);
+- current strategy, cadence, routing, or step behavior (Plan/step config);
+- deterministic acceptance checks (Validation);
+- selectors, tool quirks, retry rules, or execution recipes (Learnings);
+- run metrics, current status, queues, actions, or timestamps (DB/run evidence);
+- incident narratives, findings, attempts, decisions, or fix history (Pulse).
+
+Enforce **one semantic item, one authoritative owner**. A note may reference a
+stable record ID/path in another owner, but must not copy its content. Never
+move workflow-discovered material into user-owned `knowledgebase/context/`.
 
 BOUNDARIES
 
@@ -61,7 +88,10 @@ READ FIRST
 2. Read `builder/improve.html` if present. Use unresolved KB/db/report findings, prior failed cleanup attempts, recent Pulse fixes or Goal Advisor actions, and plan changes as context.
 3. Read `planning/plan.json` and `planning/step_config.json` if present so the KB improvement is aligned with the current plan.
 4. Read `knowledgebase/notes/_index.json` before opening topic files.
-5. Read only topic markdown files relevant to the requested cleanup or consolidation. Do not glob or load every `knowledgebase/notes/*.md` file.
+5. Inventory every content-bearing Markdown topic under `knowledgebase/notes/`
+   for `kb_purity_manifest`. Read each file completely when bounded; for large
+   files use headings/search and bounded chunks, but do not sample away an
+   entire file. Target deeper evidence reads to suspicious sections.
 6. If the focus is broad, names a step, or says to optimize for the plan, inspect the matching plan step(s) and recent iteration-0 outputs enough to understand what durable knowledge was produced.
 7. Read `knowledgebase/_freshness.json` if present (the code-owned confirmation ledger). Its store-level `last_confirmed_run` says how recently a run reviewed the notes store; its `items` map gives each topic note's own `last_confirmed_run` and `confirm_count`, so you can target the specific stale notes rather than re-scanning everything.
 

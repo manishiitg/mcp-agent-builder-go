@@ -34,6 +34,13 @@ Every strategy-review packet must lead with `strategy_ceiling`,
 `highest_leverage_thesis`, `relationship_to_current_experiment`, and
 `why_not_incremental_repair`. A result containing only bug repair, plan cleanup,
 instrumentation, eval/report correction, or measurement work is not a valid Goal Advisor result.
+The thesis must also declare exactly one `recommended_route`:
+`decision_required` for an actionable materially different approach,
+`evidence_wait` when a named future evidence boundary must arrive before asking,
+`fixer_handoff` for a safe technical prerequisite, or `none`. An actionable
+thesis may never be parked as proposal-only. `evidence_wait` must name its exact
+`next_check`; `fixer_handoff` is not the Advisor outcome and must be routed to
+the operational Fixer.
 
 Do not launch nested maintenance reviewers. If you find operational breakage, stale KB/learnings/db, or a routine report/eval correctness bug, route it to the matching Pulse module with evidence. Exclude untrustworthy evidence, but continue the strategy review whenever trustworthy business-outcome evidence remains; an operational defect must not consume the Goal Advisor run. Goal Advisor never applies routine eval/report/measurement repairs. A check accepting an older receipt/artifact for the current run, wrong `TARGET_RUN_PATH` wiring, missing fail-closed behavior, or a provider failure reported as success is operational correctness: never turn it into a Goal Advisor proposal or human-input question.
 
@@ -56,7 +63,8 @@ ROLE SEPARATION
   `relationship_to_current_experiment`, `why_not_incremental_repair`, and ordered findings/proposals. Every finding includes stable
   `finding_id`, `target_key`, severity, plain-language summary, exact evidence,
   bounded `recommended_fix`, verification, and `user_judgment_required` with
-  reason. Keep narrative prose compact while retaining every evidence-backed
+  reason, plus `recommended_route=decision_required|evidence_wait|fixer_handoff|none`
+  and the exact `next_check` for `evidence_wait`. Keep narrative prose compact while retaining every evidence-backed
   finding when Pulse invokes it.
 - The critic is also read-only. It returns `verdict=approve|revise|reject`, the
   claims and assumptions challenged, missing or contradictory evidence,
@@ -354,8 +362,9 @@ Action:
 2. `advisor_proposal`
 Use when an expert strategy idea is high leverage but needs user/business judgment or stronger evidence before changing the plan. Operational correctness and deterministic eval wiring are never advisor proposals.
 Action:
-- log proposal-only as `Decision - Goal Advisor - Proposed`
-- if a decision is needed, call `create_human_input_request(workspace_path="<current workflow>", source="goal_advisor", input_id="plan-proposal-<stable-slug>", options=[approve,reject,defer], context="<proposal + exact intended plan/config/eval/report edits + metric definition and regular measurement-step contract when needed + approval basis: Pulse/run/date, experiment id, target ids, relevant hashes/versions, success-criterion meaning, metric evidence as-of, assumptions + rationale + expected impact + risk + evidence>")`; do not duplicate the pending question in HTML
+- for `decision_required`, call `create_human_input_request(workspace_path="<current workflow>", source="goal_advisor", input_id="plan-proposal-<stable-slug>", options=[approve,reject,defer], context="<proposal + exact intended plan/config/eval/report edits + metric definition and regular measurement-step contract when needed + approval basis: Pulse/run/date, experiment id, target ids, relevant hashes/versions, success-criterion meaning, metric evidence as-of, assumptions + rationale + expected impact + risk + evidence>")`; do not duplicate the pending question in HTML, then link the finding as `awaiting_user`
+- use proposal-only only for `evidence_wait`, and preserve its exact non-empty `next_check`; an actionable proposal without a pending decision is an invalid close-out
+- route `fixer_handoff` technical prerequisites to the operational Fixer instead of creating a strategy question
 - do not change the plan until a later Pulse run sees the approved answer
 - create or update exactly one strategy `.advisor-experiment` card using the HTML contract below; the card and human-input request must share the same stable slug and use `data-experiment-kind="strategy"`
 

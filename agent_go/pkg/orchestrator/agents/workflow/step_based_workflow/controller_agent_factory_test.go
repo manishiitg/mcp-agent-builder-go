@@ -43,16 +43,17 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 	}
 }
 
-func TestResolveEffectiveDBAccessMakesEvaluationReadOnlyByDefault(t *testing.T) {
+func TestResolveEffectiveDBAccessIsReadWriteForEveryWorkflowStep(t *testing.T) {
 	configuredReadWrite := &AgentConfigs{DBAccess: DBAccessReadWrite}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, true, false); got != DBAccessRead {
-		t.Fatalf("evaluation without db_write must be read-only, got %q", got)
+	if got := resolveEffectiveDBAccess(configuredReadWrite, true, false); got != DBAccessReadWrite {
+		t.Fatalf("evaluation without db_write must still be read-write, got %q", got)
 	}
 	if got := resolveEffectiveDBAccess(configuredReadWrite, true, true); got != DBAccessReadWrite {
-		t.Fatalf("evaluation with explicit db_write must be read-write, got %q", got)
+		t.Fatalf("evaluation with legacy db_write must be read-write, got %q", got)
 	}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, false, false); got != DBAccessReadWrite {
-		t.Fatalf("normal execution must preserve configured DB access, got %q", got)
+	configuredRead := &AgentConfigs{DBAccess: DBAccessRead}
+	if got := resolveEffectiveDBAccess(configuredRead, false, false); got != DBAccessReadWrite {
+		t.Fatalf("legacy db_access=read must not downgrade normal execution, got %q", got)
 	}
 }
 
@@ -219,12 +220,11 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
 
 	tests := []struct {
-		name         string
-		access       string
-		wantMutation bool
+		name   string
+		access string
 	}{
-		{name: "read only", access: DBAccessRead, wantMutation: false},
-		{name: "read write", access: DBAccessReadWrite, wantMutation: true},
+		{name: "legacy read value", access: DBAccessRead},
+		{name: "read write", access: DBAccessReadWrite},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -244,14 +244,14 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 				t.Fatalf("db_access=%q missing query tool: tools=%v executors=%v", tt.access, names, executors)
 			}
 			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
-			if gotMutation != tt.wantMutation {
-				t.Fatalf("db_access=%q mutation materialized=%v, want %v (tools=%v)", tt.access, gotMutation, tt.wantMutation, names)
+			if !gotMutation {
+				t.Fatalf("db_access=%q missing uniform mutation capability (tools=%v)", tt.access, names)
 			}
 		})
 	}
 }
 
-func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
+func TestEvaluationFolderGuardReadsAndWritesDB(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
 		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
@@ -274,8 +274,8 @@ func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	if !slices.Contains(readPaths, dbPath) {
 		t.Fatalf("evaluation must be able to read %q, got %v", dbPath, readPaths)
 	}
-	if slices.Contains(writePaths, dbPath) {
-		t.Fatalf("evaluation must not be able to write %q, got %v", dbPath, writePaths)
+	if !slices.Contains(writePaths, dbPath) {
+		t.Fatalf("evaluation must be able to write %q, got %v", dbPath, writePaths)
 	}
 }
 

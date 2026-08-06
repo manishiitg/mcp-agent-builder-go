@@ -19,11 +19,12 @@ describe('buildPulseTimelineHtml', () => {
     expect(result.indexOf('__runloop_pulse_section_script')).toBeLessThan(result.indexOf('</body>'))
   })
 
-  it('routes historical operational cards into Workflow review', () => {
+  it('routes historical cards into their current gated lanes', () => {
     const result = buildPulseTimelineHtml('<html><body><div class="wrap"></div></body></html>')
 
-    expect(result).toContain("'cost_llm_time','learning_health','knowledgebase_health','db_health'")
+		expect(result).toContain("['bug_review','artifact_review','report_health','eval_health','stores_health','learning_health','knowledgebase_health','db_health']")
+    expect(result).toContain("['llm_ops_review','cost_llm_time']")
     expect(result).toContain("value.indexOf('cost')")
-    expect(result).toContain("return 'workflow_review'")
+    expect(result).toContain("return 'llm_ops_review'")
   })
 })

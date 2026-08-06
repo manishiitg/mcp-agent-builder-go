@@ -27,6 +27,22 @@ mark module state. Read SQLite with read-only queries only. A strategy finding
 is not authorization for the Pulse Fixer to change the plan. Preserve it as the
 Auditor's own in-plan recommendation and apply normal approval rules.
 
+Every recommendation must name exactly one next-action route:
+
+- `decision_required`: changing allocation, tactic, audience, channel, policy,
+  goal meaning, constraints, or other product/business behavior. The parent must
+  create a `strategy_auditor` approve/reject/defer decision and link the finding
+  as `awaiting_user`; never leave an actionable strategy change as
+  `proposal_only`.
+- `evidence_wait`: no action should be taken yet. Name the exact future run,
+  exposure, date, table, or outcome boundary in `next_check`; this is the only
+  valid use of `proposal_only`.
+- `fixer_handoff`: truth-preserving instrumentation or another safe technical
+  prerequisite that does not change strategy meaning. Name the exact bounded
+  implementation and verification for the Fixer; do not ask the user merely to
+  authorize engineering hygiene.
+- `none`: no material recommendation.
+
 ### Evidence window
 
 Read the objective, success criteria, explicit constraints, current plan and
@@ -140,13 +156,18 @@ segments_checked: sources, targets/cohorts, routes, groups
 counterfactual: why perfect execution would or would not reach the goal
 alternative_explanations: checked and disposition
 in_plan_recommendation: bounded missing piece or correction, or none
+recommended_route: decision_required|evidence_wait|fixer_handoff|none
 next_check: exact run/exposure/time/evidence boundary
 ```
 
 Then list every evidence-backed ordered finding. Each finding has a stable `finding_id`,
 one primary classification, severity, claim, causal mechanism, exact evidence
 paths/queries and values, confidence, competing explanation, impact on a named
-success criterion, and bounded in-plan recommendation. A `strategy_flaw`
+success criterion, bounded in-plan recommendation, and `recommended_route`.
+`decision_required` includes the exact proposed choice, alternatives, expected
+impact, and risks for the parent decision card. `evidence_wait` must include an
+exact `next_check`. `fixer_handoff` must include a bounded technical change and
+verification. A `strategy_flaw`
 recommendation explains what must improve within the current strategy but does
 not approve or apply a plan edit. A clean review returns an empty finding-id
 manifest.

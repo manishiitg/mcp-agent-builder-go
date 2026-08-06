@@ -80,3 +80,26 @@ export function shouldStreamTerminal(terminal: TerminalSnapshot | null): boolean
   }
   return terminal.active || state === 'running' || state === 'idle'
 }
+
+/**
+ * Execution-tree placeholders are navigation entries, not published terminal
+ * transcripts. Fetching /events for one necessarily returns 404 until the
+ * runtime replaces it with a real terminal snapshot.
+ */
+export function shouldLoadTerminalEvents(
+  terminal: TerminalSnapshot | null,
+  usesSessionEvents: boolean,
+): boolean {
+  return Boolean(terminal && !usesSessionEvents && !terminal.execution_tree_placeholder)
+}
+
+/** Raw terminal is the primary coding-agent view. The formatted event transcript
+ * remains an explicit per-terminal choice when it is available.
+ */
+export function resolveTerminalFormattedView(
+  canShowFormattedView: boolean,
+  explicitPreference?: boolean,
+): boolean {
+  if (!canShowFormattedView) return false
+  return explicitPreference ?? false
+}

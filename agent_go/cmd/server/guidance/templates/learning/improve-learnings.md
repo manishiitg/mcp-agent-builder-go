@@ -44,6 +44,12 @@ Return only this compact contract:
   `valid_how`, `misconfigured`, or `missing_coverage`, with the step ID and
   exact reason. Also identify objectives on read-only/disabled steps that
   should be cleared so legacy defaults cannot silently re-enable writes.
+- `ownership_candidates`: **required.** For every misplaced or duplicated
+  semantic item, report `item`, `current_location`, `semantic_type`,
+  `authoritative_owner`, `duplicate_locations`, `recommended_action`, and
+  `verification`. Use the shared Stores ownership contract below; a link or
+  summary that repeats the same fact still counts as a duplicate unless it is
+  only a stable reference to the authoritative record.
 - `findings`: stable `finding_id`, `target_key`, severity, plain-language
   summary, exact problem, and why it matters
 - `evidence`: precise paths and relevant step ids
@@ -68,6 +74,14 @@ the consolidated log update.
 Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing misplaced material from the complete skill package, not merely relocating it from `SKILL.md` to a reference. Surface consequential unresolved assumptions for Pulse's Assumptions challenged.
 
 ## Skill-content purity contract
+
+The Stores contract is **one semantic item, one authoritative owner**. Soul
+owns why, goals, preferences, and hard constraints. Plan/step config owns what
+the workflow currently does. Validation owns deterministic proof requirements.
+Learnings owns reusable execution HOW. Knowledgebase owns durable domain facts
+with provenance. DB owns structured operational state. Pulse owns findings,
+diagnosis, attempts, decisions, and fix verification. Other stores may retain a
+stable ID or path to the owner; they must not retain a second prose copy.
 
 The entire `learnings/_global/` package is a skill. `references/` is progressive
 disclosure for detailed skill instructions; it is not an archive or an escape

@@ -261,7 +261,7 @@ func TestPulseDashboardSkeletonHasOneCoverageChipPerCurrentModule(t *testing.T) 
 			t.Fatalf("Pulse coverage still contains pre-merge module label %q", retiredLabel)
 		}
 	}
-	if !strings.Contains(skeleton, `class="cl">Workflow review</span>`) {
-		t.Fatal("Pulse coverage is missing the consolidated Workflow review chip")
+	if !strings.Contains(skeleton, `class="cl">Engineering review</span>`) {
+		t.Fatal("Pulse coverage is missing the combined correctness review chip")
 	}
 }

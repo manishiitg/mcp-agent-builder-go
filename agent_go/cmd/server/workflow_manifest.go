@@ -24,7 +24,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.19"
+const WorkflowContractCurrentVersion = "1.0.20"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -37,6 +37,7 @@ const workflowContractEvalVerdictSchemaVersion = "1.0.16"
 const workflowContractPulseReviewSQLiteVersion = "1.0.17"
 const workflowContractCompactPulseReportVersion = "1.0.18"
 const workflowContractLightweightPulseReportVersion = "1.0.19"
+const workflowContractExecutivePulseJournalVersion = "1.0.20"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -174,6 +175,16 @@ type WorkflowCapabilities struct {
 type WorkflowNotificationConfig struct {
 	SlackWebhookSecretName string `json:"slack_webhook_secret_name,omitempty"`
 
+	// Per-summary Slack channels. A Slack Incoming Webhook is bound to ONE
+	// channel when it is created and ignores a channel field in the payload, so
+	// "send this summary to a different channel" means "post it through a
+	// different webhook". Each entry names an encrypted secret holding a
+	// complete webhook URL; listing several fans that summary out to several
+	// channels. An empty list falls back to SlackWebhookSecretName, so a
+	// workflow that never split its channels behaves exactly as before.
+	RunSummarySlackWebhookSecretNames   []string `json:"run_summary_slack_webhook_secret_names,omitempty"`
+	PulseSummarySlackWebhookSecretNames []string `json:"pulse_summary_slack_webhook_secret_names,omitempty"`
+
 	// RunSummaryInstructions controls the execution/outcome section of a
 	// notification. PulseSummaryInstructions controls the review/fix section.
 	// Both are ordinary workflow configuration, never secrets, recipients, or
@@ -198,6 +209,17 @@ type WorkflowNotificationConfig struct {
 	// account-wide GmailConfig.BlockedRecipients at send time. It can only block
 	// MORE addresses for this workflow, never unblock a globally-blocked one.
 	BlockRecipients []string `json:"block_recipients,omitempty"`
+
+	// RunSummaryRecipients and PulseSummaryRecipients say WHERE this workflow's
+	// email goes, selected by notify_user's notification_kind — the positive
+	// counterpart to BlockRecipients, which only ever says where it must not go.
+	// Empty means "inherit the account-level default recipient", so an existing
+	// workflow keeps its current behavior. These never widen permission: the
+	// account-wide denylist and BlockRecipients are still applied on top and
+	// still win, so naming a blocked address here skips the send rather than
+	// unblocking it.
+	RunSummaryRecipients   []string `json:"run_summary_recipients,omitempty"`
+	PulseSummaryRecipients []string `json:"pulse_summary_recipients,omitempty"`
 }
 
 func (c *WorkflowNotificationConfig) EffectiveRunSummaryInstructions() string {
@@ -595,6 +617,7 @@ func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *Workflo
 			ctx, workspacePath, "write_workflow_manifest",
 			"workflow.json was written directly; recorded so artifact drift review can see the change.",
 			nil, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			"workflow.json", previous, string(data),
 		)
 	}
 	return nil

@@ -1459,6 +1459,18 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 	case orchestrator_events.OrchestratorAgentEnd:
 		if endEvent, ok := event.Data.(*orchestrator_events.OrchestratorAgentEndEvent); ok {
 			agentType := endEvent.AgentType
+			// A todo_task orchestrator can end many successful LLM turns while the
+			// step is still running. In particular, an asynchronous call_sub_agent
+			// launch deliberately ends the current turn so the runtime can wait for
+			// the child outside the CLI process and deliver its completion back into
+			// the same conversation. Treating that turn boundary as step completion
+			// sends a false AUTO-NOTIFICATION to the workshop chat and closes the
+			// parent execution while its child is still live. The controller emits a
+			// TodoTaskStepCompleted event only after all owned children have settled
+			// and their results have been reconciled; that is the success boundary.
+			if agentType == "todo_task_orchestrator" && endEvent.Success {
+				break
+			}
 			if workflowProgressTracksAgent(agentType, endEvent.AgentName) {
 				stepName := endEvent.AgentName
 				// Use the plan-level step ID stamped by context_aware_bridge, falling back to
@@ -1522,6 +1534,59 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 				if b.logger != nil {
 					b.logger.Info(fmt.Sprintf("📊 [WORKFLOW_PROGRESS] Step %d '%s' %s", endEvent.StepIndex, stepName, status))
 				}
+			}
+		}
+	case orchestrator_events.TodoTaskStepCompleted:
+		if completedEvent, ok := event.Data.(*TodoTaskStepCompletedEvent); ok {
+			stepName := strings.TrimSpace(completedEvent.StepTitle)
+			if stepName == "" {
+				stepName = strings.TrimSpace(completedEvent.StepID)
+			}
+			if stepName == "" {
+				stepName = fmt.Sprintf("Step %d", completedEvent.StepIndex)
+			}
+			result := strings.TrimSpace(completedEvent.CompletionReason)
+			if result == "" {
+				result = "Todo task step completed"
+			}
+
+			progressID, alreadyStarted := b.workflowProgressExecIDForEnd("todo_task_orchestrator", stepName, completedEvent.StepIndex)
+			if b.session != nil && b.session.StepRegistry != nil {
+				b.session.StepRegistry.Register(&WorkshopStepExecution{
+					ID:     progressID,
+					StepID: completedEvent.StepID,
+					Status: WorkshopStepDone,
+					Result: fmt.Sprintf("[Step %d: %s] completed — %s", completedEvent.StepIndex, stepName, truncateResult(result, 500)),
+				})
+			}
+
+			if b.session != nil && b.session.executionNotifier != nil {
+				meta := map[string]string{
+					"execution_type": "workflow-step",
+					"step_name":      stepName,
+					"step_id":        completedEvent.StepID,
+					"agent_type":     "todo_task_orchestrator",
+					"step_index":     fmt.Sprintf("%d", completedEvent.StepIndex),
+				}
+				if b.iteration != "" {
+					meta["iteration"] = b.iteration
+				}
+				if b.groupName != "" {
+					meta["group_name"] = b.groupName
+				}
+				if !alreadyStarted {
+					b.session.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
+						ID:                progressID,
+						ParentExecutionID: b.parentID,
+						Name:              workflowProgressDisplayName(stepName),
+						Kind:              string(orchestrator_events.ExecutionKindOrchestrator),
+					})
+				}
+				b.session.executionNotifier.OnExecutionComplete(progressID, workflowProgressDisplayName(stepName), result, meta, nil)
+			}
+
+			if b.logger != nil {
+				b.logger.Info(fmt.Sprintf("📊 [WORKFLOW_PROGRESS] Todo task step %d '%s' completed", completedEvent.StepIndex, stepName))
 			}
 		}
 	case orchestrator_events.BatchGroupEnd:

@@ -188,6 +188,38 @@ func TestQueryWorkflowDBSuccessfulQueryIsUnchanged(t *testing.T) {
 	}
 }
 
+func TestQueryWorkflowDBAcceptsQueryAlias(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"query": "SELECT question, status FROM human_inputs ORDER BY id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `"ready?"`) || !strings.Contains(result, `"columns"`) {
+		t.Fatalf("unexpected query payload: %s", result)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("query alias must execute exactly once: requests=%d", got)
+	}
+}
+
+func TestQueryWorkflowDBRejectsConflictingSQLAliases(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	_, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"sql":   "SELECT 1",
+		"query": "SELECT 2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "different values") {
+		t.Fatalf("conflicting alias error=%v", err)
+	}
+	if got := atomic.LoadInt32(requests); got != 0 {
+		t.Fatalf("conflicting aliases reached the database: requests=%d", got)
+	}
+}
+
 func TestWorkflowDBTableFromSQLOnlyAnswersWhenCertain(t *testing.T) {
 	for _, testCase := range []struct{ sqlText, want string }{
 		{"SELECT a FROM human_inputs", "human_inputs"},

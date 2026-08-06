@@ -232,9 +232,29 @@ func truncateVerdict(s string) string {
 // Best-effort: a reviewer whose artifact was persisted must not fail because the
 // bookkeeping write did. Callers log and continue.
 func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, pulseRunID, artifactPath, artifact string) error {
+	return RecordPulseReviewForModules(ctx, workspacePath, []string{module}, reviewRunID, pulseRunID, artifactPath, artifact)
+}
+
+// RecordPulseReviewForModules stores one shared reviewer artifact under every
+// Gate-selected lane. The Markdown is one report, but each lane must retain an
+// independent review-history and lookup identity for future Gate decisions.
+func RecordPulseReviewForModules(ctx context.Context, workspacePath string, modules []string, reviewRunID, pulseRunID, artifactPath, artifact string) error {
+	canonicalModules := make([]string, 0, len(modules))
+	seen := map[string]bool{}
+	for _, module := range modules {
+		module = pulsemodules.Normalize(module)
+		if module == "" || seen[module] {
+			continue
+		}
+		seen[module] = true
+		canonicalModules = append(canonicalModules, module)
+	}
+	if len(canonicalModules) == 0 {
+		return nil
+	}
 	verifications, contractErr := ExtractPulseReviewVerifications(artifact)
 	if contractErr == nil {
-		contractErr = validatePulseReviewVerificationAllowlist(ctx, workspacePath, module, verifications)
+		contractErr = validatePulseReviewVerificationAllowlistForModules(ctx, workspacePath, canonicalModules, verifications)
 	}
 	status := pulseReviewStatus(artifact)
 	persistedArtifact := artifact
@@ -249,12 +269,18 @@ func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, 
 		persistedArtifact = strings.TrimRight(artifact, "\n") +
 			"\n\n---\n\n**Pulse review contract failure:** " + contractErr.Error() + "\n"
 	}
-	recordErr := recordPulseReviewAt(
-		ctx, workspacePath, module, reviewRunID, pulseRunID, "review",
-		artifactPath, status, persistedArtifact,
-		time.Now().UTC().Format(time.RFC3339Nano),
-	)
-	if recordErr != nil {
+	recordedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	var recordErrors []string
+	for _, module := range canonicalModules {
+		if err := recordPulseReviewAt(
+			ctx, workspacePath, module, reviewRunID, pulseRunID, "review",
+			artifactPath, status, persistedArtifact, recordedAt,
+		); err != nil {
+			recordErrors = append(recordErrors, module+": "+err.Error())
+		}
+	}
+	if len(recordErrors) > 0 {
+		recordErr := fmt.Errorf("%s", strings.Join(recordErrors, "; "))
 		if contractErr != nil {
 			return fmt.Errorf("review contract failed (%w) and the artifact could not be retained: %w", contractErr, recordErr)
 		}
@@ -266,28 +292,37 @@ func RecordPulseReview(ctx context.Context, workspacePath, module, reviewRunID, 
 	return nil
 }
 
-func validatePulseReviewVerificationAllowlist(
+func validatePulseReviewVerificationAllowlistForModules(
 	ctx context.Context,
-	workspacePath, module string,
+	workspacePath string,
+	modules []string,
 	verifications []PulseReviewVerificationResult,
 ) error {
 	if len(verifications) == 0 {
 		return nil
 	}
-	candidates, err := LoadPulseReviewVerificationCandidates(ctx, workspacePath, module)
-	if err != nil {
-		return fmt.Errorf("load verification allowlist: %w", err)
-	}
-	allowed := make(map[string]bool, len(candidates))
-	for _, candidate := range candidates {
-		allowed[candidate.FindingID+"\x00"+candidate.Fingerprint+"\x00"+candidate.AttemptID] = true
+	allowed := map[string]bool{}
+	canonicalModules := make([]string, 0, len(modules))
+	for _, module := range modules {
+		module = pulsemodules.Normalize(module)
+		if module == "" {
+			continue
+		}
+		canonicalModules = append(canonicalModules, module)
+		candidates, err := LoadPulseReviewVerificationCandidates(ctx, workspacePath, module)
+		if err != nil {
+			return fmt.Errorf("load verification allowlist for %s: %w", module, err)
+		}
+		for _, candidate := range candidates {
+			allowed[candidate.FindingID+"\x00"+candidate.Fingerprint+"\x00"+candidate.AttemptID] = true
+		}
 	}
 	for _, verification := range verifications {
 		key := verification.FindingID + "\x00" + verification.Fingerprint + "\x00" + verification.AttemptID
 		if !allowed[key] {
 			return fmt.Errorf(
-				"verification marker for finding %q attempt %q is outside the backend allowlist for module %q",
-				verification.FindingID, verification.AttemptID, pulsemodules.Normalize(module),
+				"verification marker for finding %q attempt %q is outside the backend allowlist for selected modules %q",
+				verification.FindingID, verification.AttemptID, strings.Join(canonicalModules, ","),
 			)
 		}
 	}

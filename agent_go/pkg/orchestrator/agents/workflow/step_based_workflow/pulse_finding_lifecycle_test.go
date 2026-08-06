@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 func filedReviewConcern(t *testing.T, workspacePath, pulseRunID, module, text string) RunConcern {
@@ -22,6 +24,19 @@ func filedReviewConcern(t *testing.T, workspacePath, pulseRunID, module, text st
 		t.Fatalf("concerns = %+v, want one", concerns)
 	}
 	return concerns[0]
+}
+
+func TestLoadPulseFindingLifecyclesIncludesLegacyAliasesForCurrentLane(t *testing.T) {
+	workspacePath := concernsWorkspace(t)
+	filedReviewConcern(t, workspacePath, "pulse-1", "knowledgebase_health", "legacy knowledge concern")
+
+	findings, err := LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
+	if err != nil {
+		t.Fatalf("load stores lifecycle: %v", err)
+	}
+	if len(findings) != 1 || findings[0].StepID != "workflow_review" {
+		t.Fatalf("legacy Engineering finding not visible through current lane: %#v", findings)
+	}
 }
 
 func recordFindingDispositions(t *testing.T, workspacePath, module, pulseRunID string, dispositions []PulseFindingDisposition) {
@@ -550,6 +565,97 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 	}
 }
 
+func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-advisor-routing"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.StrategyAuditorID,
+		"current allocation over-concentrates on reciprocal engagement")
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+
+	proposal := PulseFindingDisposition{
+		Fingerprint: concern.Fingerprint,
+		FindingID:   "STRATEGY-1",
+		Disposition: FindingDispositionProposalOnly,
+		Summary:     "Reserve more allocation for reach-bearing tactics.",
+	}
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+		[]PulseFindingDisposition{proposal}, ""); err == nil || !strings.Contains(err.Error(), "without next_check") {
+		t.Fatalf("actionable advisor proposal was silently parked without a decision: %v", err)
+	}
+
+	proposal.NextCheck = "after three completed outcome-bearing runs, compare follower growth with the current baseline"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+		[]PulseFindingDisposition{proposal}, ""); err != nil {
+		t.Fatalf("evidence-waiting advisor proposal was rejected: %v", err)
+	}
+}
+
+func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	pulseRunID := "pulse-goal-decision"
+	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.GoalAdvisorID,
+		"a new distribution channel could materially increase reach")
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
+		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
+		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		t.Fatalf("create human inputs table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, source, status) VALUES
+		('plan-proposal-new-channel', 'strategy_auditor', 'pending'),
+		('strategy-proposal-new-channel', 'goal_advisor', 'pending'),
+		('plan-proposal-owned-channel', 'goal_advisor', 'pending')`); err != nil {
+		t.Fatalf("seed decisions: %v", err)
+	}
+
+	disposition := PulseFindingDisposition{
+		Fingerprint:  concern.Fingerprint,
+		FindingID:    "GOAL-1",
+		Disposition:  FindingDispositionAwaitingUser,
+		Summary:      "Ask whether to test a new distribution channel.",
+		HumanInputID: "plan-proposal-new-channel",
+	}
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `source "strategy_auditor"`) {
+		t.Fatalf("Goal Advisor accepted another module's decision: %v", err)
+	}
+
+	disposition.HumanInputID = "strategy-proposal-new-channel"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `must start with "plan-proposal-"`) {
+		t.Fatalf("Goal Advisor accepted the wrong decision id namespace: %v", err)
+	}
+
+	disposition.HumanInputID = "plan-proposal-owned-channel"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err != nil {
+		t.Fatalf("Goal Advisor's real pending decision was rejected: %v", err)
+	}
+}
+
 // TestAwaitingRunSeparatesWaitingFromBlocked covers the distinction rtslatency
 // had no way to express.
 //
@@ -728,13 +834,13 @@ func TestPulseFixerSentinelLoadsEveryModulesBacklog(t *testing.T) {
 		t.Fatalf("sentinel backlog = %d findings, want both modules", len(sentinel))
 	}
 
-	// A real module must still filter, or the sentinel fix would have widened
-	// every per-module read into a full-backlog read.
-	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "bug_review", -1)
+	// A real perspective must still filter, while its retired artifact aliases
+	// remain one Engineering backlog.
+	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "workflow_review", -1)
 	if err != nil {
 		t.Fatalf("load scoped backlog: %v", err)
 	}
-	if len(scoped) != 1 || scoped[0].StepID != "bug_review" {
-		t.Fatalf("bug_review backlog = %+v, want only its own finding", scoped)
+	if len(scoped) != 2 {
+		t.Fatalf("Engineering backlog = %+v, want both retired aliases", scoped)
 	}
 }

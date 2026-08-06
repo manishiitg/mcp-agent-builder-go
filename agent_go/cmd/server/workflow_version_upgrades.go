@@ -281,14 +281,17 @@ Goal: per-workflow notification preferences now live in structured workflow.json
 The workflow.json "notifications" object supports:
   - "slack_webhook_secret_name": existing field, a workflow-scoped Slack Incoming Webhook secret reference (leave any existing value untouched);
   - "exclude_channels": array of account-level channel names ("gmail", "slack", "whatsapp") this workflow opts OUT of. An account-level channel enabled globally is otherwise inherited by every workflow;
-  - "block_recipients": array of email addresses this workflow must never email, unioned with the account-wide denylist (block-only; never unblocks a globally-blocked address).
+  - "block_recipients": array of email addresses this workflow must never email, unioned with the account-wide denylist (block-only; never unblocks a globally-blocked address);
+  - "run_summary_recipients" / "pulse_summary_recipients": arrays of email addresses each summary is sent TO. These are the positive "send here" lists, the opposite of block_recipients. Empty means the account default recipient is used.
 
 1. Read workflow.json and soul/soul.md. If soul/soul.md has no "## Notifications" section AND workflow.json needs no change, this is a no-op migration — skip to step 4 (version bump only).
 2. If soul/soul.md has a "## Notifications" section, translate ONLY explicit, user-approved preferences into workflow.json "notifications":
    - "do not email" / "no email" / "disable email for this workflow" -> add "gmail" to exclude_channels;
    - "no Slack" / "no WhatsApp" for this workflow -> add that channel to exclude_channels;
-   - "never email X" / "do not email address X" -> add X to block_recipients.
-   Preserve any existing notifications.slack_webhook_secret_name and any exclude_channels/block_recipients already present (union, de-duplicated). Do NOT invent preferences, recipients, or channels that are not explicitly stated. Do NOT copy account-wide Gmail enablement, default recipient, or the global disallowed-recipients list into workflow.json — those stay account-level.
+   - "never email X" / "do not email address X" -> add X to block_recipients;
+   - "email X" / "send the results to X" / "notify X" -> add X to run_summary_recipients (and to pulse_summary_recipients if the preference covers Pulse activity too).
+   Read the DIRECTION carefully before writing an address: an address the user wants to RECEIVE mail goes in a *_summary_recipients list, never in block_recipients. Putting a wanted recipient in block_recipients does the exact opposite of what was asked and silently drops their mail.
+   Preserve any existing notifications.slack_webhook_secret_name and any exclude_channels/block_recipients/*_summary_recipients already present (union, de-duplicated). Do NOT invent preferences, recipients, or channels that are not explicitly stated. Do NOT copy account-wide Gmail enablement, default recipient, or the global disallowed-recipients list into workflow.json — those stay account-level.
 3. Update soul/soul.md: remove the "## Notifications" section. If it also held a genuinely user-approved, non-channel/non-recipient constraint that has no structured home (e.g. an explicit cadence rule the user approved), move that single sentence into the "## Constraints" section rather than losing it; otherwise just delete the heading and its body. Keep ## Objective, ## Success Criteria, and ## Constraints. soul.md stays Markdown.
 4. Update workflow.json "version" to "1.0.12". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, publish, or make unrelated changes in this step.
 
@@ -434,11 +437,31 @@ Goal: builder/improve.html is a short published executive journal. The SQLite-ba
 2. If builder/improve.html exists, upgrade it to data-pulse-schema="4". Keep the Bug/Goal verdicts, one status sentence, the three-module coverage row, exactly three Latest Pulse cells (Outcome, Goal movement, Next), one SQLite-backed Current work count strip (Open, Fixing, Verify), material Activity history, the hidden #pulse-agent-handoff, and Archive links.
 3. Remove Current work issue-title queues, collapsed Technical details, signal/cost/maintenance tiles, and Activity filters from the active page. Those details are already available in the Pulse popup and SQLite. Do not copy them into another visible section.
 4. Preserve material lifecycle history: filed, fixed, verified, reopened, escalated, consequential decisions, and meaningful run outcomes. Archive older resolved history using the normal monthly archive contract. Never delete history merely to shorten the active page.
-5. Keep at most 12 material Activity cards in the active file. Move older safe-to-archive cards into their matching monthly archive; keep archive links. Do not impose a byte, character, or token budget.
+5. Keep material Activity history concise through editorial judgment. Retain important active history and move only genuinely safe resolved history into matching monthly archives; keep archive links. Never omit history merely to meet an item count. Do not impose a byte, character, or token budget.
 6. Verify exactly one newest-first anchor, one coverage row with all current modules, one three-cell Latest Pulse summary, one data-source="sqlite" Current work count strip, no .workqueue/.workitem/.technical/.filters blocks, no .entry.open/.modfields/.agentlog, and one hidden #pulse-agent-handoff.
 7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.19". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
 
 Report the before/after active card count, archived card count, Current work counts, and any blocker, then stop.`,
+	},
+	{
+		from:  workflowContractLightweightPulseReportVersion,
+		to:    workflowContractExecutivePulseJournalVersion,
+		label: "upgrade-1.0.20",
+		query: `WORKFLOW VERSION UPGRADE v1.0.19 -> v1.0.20.
+
+This is a product-managed Pulse presentation migration. Do ONLY this executive-journal upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
+
+Goal: builder/improve.html is a small published executive journal. The database-native Pulse popup owns reviewer coverage, assumptions, issue queues, backlog counts, evidence, verification, costs, diagnostics, and operational filtering.
+
+1. Read workflow.json and builder/improve.html. Load read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]).
+2. If builder/improve.html exists, upgrade it to data-pulse-schema="5". Keep only the Bug/Goal verdicts, one status sentence, exactly three Latest Pulse cells (Outcome, Goal movement, Next), concise material Activity transitions, the hidden #pulse-agent-handoff, and Archive links.
+3. Remove visible reviewer coverage, assumptions, Current work/backlog counts, issue queues, technical/cost/maintenance tiles, filters, raw agent output, per-reviewer fields, and standing finding cards. These remain available in SQLite and the Pulse popup; do not copy them into another visible section.
+4. Preserve material lifecycle history: consequential filed/fixed/verified/reopened/escalated transitions, user decisions, and meaningful run outcomes. Move older safe-to-archive cards into their matching monthly builder/improve-archive/YYYY-MM.html file. Never delete history merely to shorten the active page.
+5. Use editorial judgment: retain important active history, avoid duplicate standing state, and archive only genuinely safe resolved history. Never omit history merely to meet an item count. Do not impose a byte, character, or token budget.
+6. Verify exactly one newest-first anchor, exactly one three-cell Latest Pulse summary, no retired operational-detail blocks, no .entry.open/.modfields/.agentlog, and one hidden #pulse-agent-handoff.
+7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.20". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
+
+Report the before/after active card count, archived card count, removed visible operational sections, and any blocker, then stop.`,
 	},
 }
 

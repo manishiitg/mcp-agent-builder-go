@@ -85,8 +85,10 @@ describe('Pulse decision chat routing', () => {
     const message = buildReportHumanInputChatMessage(input, 'Workflow/example', 'Why is archiving safer?')
 
     expect(message).toContain('Do not submit, dismiss, or mark the decision handled yet')
+    expect(message).toContain('call answer_human_input_request')
+    expect(message).toContain('Decision ID: decision-one')
     expect(message).toContain('How should I finish the job?')
-    expect(message).toContain('Archive older entries — Nothing is lost.')
+    expect(message).toContain('Archive older entries [option_id=archive] — Nothing is lost.')
     expect(message).toContain('My question:\nWhy is archiving safer?')
   })
 })

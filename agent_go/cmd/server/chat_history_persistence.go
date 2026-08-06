@@ -291,8 +291,17 @@ func (api *StreamingAPI) captureChatHistoryTerminalSnapshots(sessionID string, r
 	}
 
 	candidates := make([]terminals.Snapshot, 0)
-	if snapshot, ok := api.captureChatHistoryRuntimeTmuxSnapshot(sessionID, runtime); ok {
+	// A live-attach stream is the only snapshot that contains the raw terminal
+	// history accumulated by xterm. Prefer it over a late capture-pane read: for
+	// alternate-screen CLIs tmux commonly has history_size=0, so that late read
+	// contains only the final viewport and makes retained Raw mode unscrollable.
+	if snapshot, ok := api.captureChatHistoryStoredTmuxStreamSnapshot(sessionID, runtime); ok {
 		candidates = append(candidates, snapshot)
+	}
+	if len(candidates) == 0 {
+		if snapshot, ok := api.captureChatHistoryRuntimeTmuxSnapshot(sessionID, runtime); ok {
+			candidates = append(candidates, snapshot)
+		}
 	}
 	if len(candidates) == 0 && api.terminalStore != nil {
 		stored := api.terminalStore.List(sessionID)
@@ -322,6 +331,30 @@ func (api *StreamingAPI) captureChatHistoryTerminalSnapshots(sessionID string, r
 		candidates = candidates[:maxChatHistoryTerminalSnapshots]
 	}
 	return candidates
+}
+
+func (api *StreamingAPI) captureChatHistoryStoredTmuxStreamSnapshot(sessionID string, runtime *ChatHistoryAgentRuntime) (terminals.Snapshot, bool) {
+	if api == nil || api.terminalStore == nil {
+		return terminals.Snapshot{}, false
+	}
+	wantedTmux := ""
+	if runtime != nil {
+		if tmuxSession, ok, _ := restoredRuntimeTmuxSession(runtime); ok {
+			wantedTmux = strings.TrimSpace(tmuxSession)
+		}
+	}
+	for _, snapshot := range api.terminalStore.List(sessionID) {
+		if strings.ToLower(strings.TrimSpace(snapshot.ContentSource)) != "tmux_stream" {
+			continue
+		}
+		if wantedTmux != "" && strings.TrimSpace(snapshot.TmuxSession) != wantedTmux {
+			continue
+		}
+		if prepared, ok := prepareChatHistoryTerminalSnapshot(snapshot); ok {
+			return prepared, true
+		}
+	}
+	return terminals.Snapshot{}, false
 }
 
 // collectChatHistoryTerminalSnapshots prepares persistable terminal snapshots
@@ -433,7 +466,7 @@ func chatHistoryTerminalSnapshotIsTmux(snapshot terminals.Snapshot) bool {
 		return true
 	}
 	source := strings.ToLower(strings.TrimSpace(snapshot.ContentSource))
-	return source == "tmux_pipe" || source == "tmux_capture"
+	return source == "tmux_pipe" || source == "tmux_capture" || source == "tmux_stream"
 }
 
 func chatHistoryTerminalSnapshotIsMainAgent(snapshot terminals.Snapshot) bool {

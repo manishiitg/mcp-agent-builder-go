@@ -75,6 +75,11 @@ type StepTokenData struct {
 	CacheWriteTokens int // Tokens written to cache (charged at premium rate, 1.25x)
 	ReasoningTokens  int
 	LLMCallCount     int
+	// ExecutionID is one immutable identifier minted per orchestrator/bridge
+	// instance (PLAT-031). It stays constant for the whole run, including
+	// across a UTC-date shard rotation, so cost rows split across two date
+	// files can still be recognized as one execution.
+	ExecutionID string
 }
 
 // ModelTokenData represents token data for a model to be persisted
@@ -109,6 +114,15 @@ type TokenUsageFile struct {
 	ByStepAndModel map[string]map[string]*ModelTokenUsage `json:"by_step_and_model"` // Nested map: stepKey -> modelID -> token usage
 	ByTool         map[string]*ToolCostUsage              `json:"by_tool,omitempty"` // Aggregated non-token tool costs
 	ByStepAndTool  map[string]map[string]*ToolCostUsage   `json:"by_step_and_tool,omitempty"`
+	// ExecutionID is the run-instance identity for this run folder's aggregate
+	// (PLAT-031). Sticky first-write: set once by whichever call first creates
+	// this run folder's entry, then carried forward through every clone/merge
+	// so it survives a UTC-midnight date-shard rotation.
+	ExecutionID string `json:"execution_id,omitempty"`
+	// PriorExecutionIDs records earlier ExecutionID values displaced by a
+	// later execution reusing this same run folder, so two runs that share a
+	// run folder remain distinguishable instead of silently merging identity.
+	PriorExecutionIDs []string `json:"prior_execution_ids,omitempty"`
 }
 
 // TokenUsageSummary represents total token usage across all models and steps

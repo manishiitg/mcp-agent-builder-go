@@ -241,7 +241,7 @@ type AgentConfigs struct {
 	AdditionalReadPaths          []string        `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
 	KnowledgebaseAccess          string          `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". If empty, defaults to "none" — KB is opt-in per step. Preset-level UseKnowledgebase is a prerequisite (off → forced "none"). When granted "read", this also covers user-supplied runtime context at knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
 	KnowledgebaseContribution    string          `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
-	DBAccess                     string          `json:"db_access,omitempty"`                       // "read" | "read-write". Empty defaults to "read-write" — every step gets read+write to db/ (back-compat). Set "read" for least-privilege read-only steps (pure readers, report-shaping, validation): db/ stays in read paths but is stripped from write paths. Mirrors the eval-step db_write opt-out.
+	DBAccess                     string          `json:"db_access,omitempty"`                       // Persisted compatibility field. Workflow execution currently grants every step managed read-write access through query_workflow_db / mutate_workflow_db; raw DB-file access remains blocked for agentic steps.
 	TodoTaskOrchestratorTier     *int            `json:"todo_task_orchestrator_tier,omitempty"`     // Tier for todo task orchestrator agent (1/2/3) in tiered mode
 	DisableParallelToolExecution *bool           `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
 	CodingAgentTmuxLifecycle     string          `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
@@ -875,8 +875,20 @@ type PlanChangelogEntry struct {
 	Target          string                       `json:"target"`                    // canonical artifact path or surface
 	BeforeRef       string                       `json:"before_ref"`                // immutable digest of the pre-mutation state
 	AfterRef        string                       `json:"after_ref"`                 // immutable digest of the post-mutation state
+	NoOp            bool                         `json:"no_op,omitempty"`           // true when BeforeSnapshot/AfterSnapshot were both real and identical
 	Actor           string                       `json:"actor"`                     // managed mutation authority
 	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
+
+	// BeforeSnapshot / AfterSnapshot are the actual target-artifact content
+	// before and after the mutation, captured by the caller. When set, these
+	// — not Changes — are what BeforeRef/AfterRef hash, so the recorded refs
+	// always reflect the real artifact instead of a caller-reported diff
+	// that can be incomplete or entirely absent (PLAT-033: before_ref ==
+	// after_ref == sha256("[]") whenever a caller left Changes empty, even
+	// though the artifact demonstrably changed). Never persisted — only the
+	// resulting hashes are, not the raw content.
+	BeforeSnapshot interface{} `json:"-"`
+	AfterSnapshot  interface{} `json:"-"`
 }
 
 type PlanChangelogArtifactReview struct {
@@ -1017,18 +1029,31 @@ func completePlanChangelogEntry(entry *PlanChangelogEntry) {
 		}
 	}
 	if entry.BeforeRef == "" {
-		before := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			before = append(before, change.OldValue)
+		if entry.BeforeSnapshot != nil {
+			entry.BeforeRef = artifactContentRef(entry.BeforeSnapshot)
+		} else {
+			before := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				before = append(before, change.OldValue)
+			}
+			entry.BeforeRef = artifactContentRef(before)
 		}
-		entry.BeforeRef = artifactContentRef(before)
 	}
 	if entry.AfterRef == "" {
-		after := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			after = append(after, change.NewValue)
+		if entry.AfterSnapshot != nil {
+			entry.AfterRef = artifactContentRef(entry.AfterSnapshot)
+		} else {
+			after := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				after = append(after, change.NewValue)
+			}
+			entry.AfterRef = artifactContentRef(after)
 		}
-		entry.AfterRef = artifactContentRef(after)
+	}
+	// Only claim a no-op when both sides came from a real snapshot — an empty
+	// Changes list with no snapshot is "unknown," not "nothing changed."
+	if entry.BeforeSnapshot != nil && entry.AfterSnapshot != nil && entry.BeforeRef == entry.AfterRef {
+		entry.NoOp = true
 	}
 	if entry.Actor == "" {
 		entry.Actor = "managed_tool:" + strings.TrimSpace(entry.Tool)
@@ -5125,8 +5150,9 @@ func registerPlanModificationTools(
 
 func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Context, string, string) error) func(context.Context, string, string) error {
 	planningPath := normalizePathForWorkspaceAPI("planning", workspacePath)
+	evaluationPlanPath := normalizePathForWorkspaceAPI(evaluationPlanRelPath, workspacePath)
 	return func(ctx context.Context, path, content string) error {
-		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath), path, content)
+		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath, evaluationPlanPath), path, content)
 	}
 }
 

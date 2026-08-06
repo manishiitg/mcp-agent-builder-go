@@ -124,6 +124,20 @@ type BaseOrchestrator struct {
 	// Mutex protecting concurrent writes to workspaceEnvRef (parallel sub-agents)
 	workspaceEnvMu sync.Mutex
 
+	// workspaceVars holds the workflow variable values that belong in the shell
+	// as VAR_*, for the same reason `secrets` is held here: SetWorkspaceEnvRef
+	// REPLACES the env map, so anything written into the previous map is lost
+	// unless this type can put it back.
+	//
+	// Secrets already had that backfill. Variables did not, so a workflow that
+	// loaded its variables early — a single-group workflow auto-loads all of
+	// them at workshop start — lost every VAR_* the moment any later
+	// initialization stored a fresh env map. Observed on confida-login: 28
+	// variables synced at 12:16:15, absent from every env ref afterwards, and
+	// the agent re-derived SITE_URL from variables/variables.json with jq.
+	// Guarded by workspaceEnvMu.
+	workspaceVars map[string]string
+
 	// Browser downloads path (relative to workspace, e.g., "runs/iteration-2/xspaces/execution/Downloads")
 	// Set by setupBrowserDownloadsPathOverride when agent-browser is detected.
 	// Injected into context via BrowserDownloadsPathKey so the browser executor uses it as working directory.
@@ -356,12 +370,52 @@ func (bo *BaseOrchestrator) SetWorkspaceEnvRef(env map[string]string) {
 			}
 			env["SECRET_"+secret.Name] = secret.Value
 		}
+		// Same reason as the secrets above: this call replaces the map, so any
+		// VAR_* written into the previous one is gone unless it is restored
+		// here. Without this a workflow silently loses its variables to
+		// initialization order and the agent re-derives them from
+		// variables/variables.json, or hardcodes them.
+		for name, value := range bo.workspaceVars {
+			if name == "" {
+				continue
+			}
+			env["VAR_"+name] = value
+		}
 	}
 	bo.workspaceEnvMu.Unlock()
 	if env != nil {
 		bo.logger.Info(fmt.Sprintf("🔗 Stored workspace env ref (keys: %v, MCP_API_URL=%s, MCP_SESSION_ID=%s, secrets=%d)",
 			getMapKeys(env), env["MCP_API_URL"], env["MCP_SESSION_ID"], len(bo.secrets)))
 	}
+}
+
+// SetWorkspaceVariables records the workflow variable values that must survive
+// a later SetWorkspaceEnvRef. Callers still write VAR_* into the live map for
+// the current shell; this is what lets them be restored when the map is
+// replaced. Values are copied so a caller mutating its own map afterwards
+// cannot change what gets backfilled.
+func (bo *BaseOrchestrator) SetWorkspaceVariables(values map[string]string) {
+	if len(values) == 0 {
+		return
+	}
+	copied := make(map[string]string, len(values))
+	for name, value := range values {
+		if name == "" {
+			continue
+		}
+		copied[name] = value
+	}
+	bo.workspaceEnvMu.Lock()
+	if bo.workspaceVars == nil {
+		bo.workspaceVars = copied
+	} else {
+		// Merge rather than replace: a later group-scoped load should add to
+		// what is already known, not drop variables an earlier one resolved.
+		for name, value := range copied {
+			bo.workspaceVars[name] = value
+		}
+	}
+	bo.workspaceEnvMu.Unlock()
 }
 
 // GetWorkspaceEnvRef returns the workspace executor env map reference.

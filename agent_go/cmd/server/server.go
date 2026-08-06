@@ -402,8 +402,9 @@ type StreamingAPI struct {
 	// Their structured terminal events remain available (the same events used by
 	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
 	// instead of guessing activity solely from the latest rendered spinner text.
-	retainedMainTurns   map[string]time.Time
-	retainedMainTurnsMu sync.Mutex
+	retainedMainTurns            map[string]time.Time
+	retainedMainTurnWatchCancels map[string]context.CancelFunc
+	retainedMainTurnsMu          sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -612,9 +613,18 @@ type QueryRequest struct {
 	NotificationPulseSummaryChannels     []string `json:"notification_pulse_summary_channels,omitempty"`
 	NotificationExcludeChannels          []string `json:"notification_exclude_channels,omitempty"`
 	NotificationBlockRecipients          []string `json:"notification_block_recipients,omitempty"`
-	// Internal-only resolved notification credential. Unlike DecryptedSecrets,
-	// this value is never serialized, prompted, or injected as SECRET_*.
-	notificationSlackWebhookURL string `json:"-"`
+	NotificationRunSummaryRecipients     []string `json:"notification_run_summary_recipients,omitempty"`
+	NotificationPulseSummaryRecipients   []string `json:"notification_pulse_summary_recipients,omitempty"`
+	// Per-summary Slack channels, as encrypted-secret names holding webhook URLs.
+	NotificationRunSummarySlackWebhookSecretNames   []string `json:"notification_run_summary_slack_webhook_secret_names,omitempty"`
+	NotificationPulseSummarySlackWebhookSecretNames []string `json:"notification_pulse_summary_slack_webhook_secret_names,omitempty"`
+	// Internal-only resolved notification credentials. Unlike DecryptedSecrets,
+	// these values are never serialized, prompted, or injected as SECRET_*.
+	// notificationSlackWebhookURL is the default/fallback webhook;
+	// notificationSlackWebhookURLs holds every resolved webhook by secret name,
+	// including the per-summary channels.
+	notificationSlackWebhookURL  string            `json:"-"`
+	notificationSlackWebhookURLs map[string]string `json:"-"`
 	// Delegation tier configuration: Maps reasoning levels (high/medium/low) to specific provider/model pairs
 	DelegationTierConfig *virtualtools.DelegationTierConfig `json:"delegation_tier_config,omitempty"`
 	// Decrypted secrets to inject into agent system prompt
@@ -702,19 +712,39 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 			URL:        req.notificationSlackWebhookURL,
 		}
 	}
+	// Per-summary Slack channels. A name whose secret did not resolve is dropped
+	// rather than carried as an empty URL, so a missing credential shows up as
+	// "this channel was skipped" instead of a silent post to nowhere.
+	webhooksFor := func(names []string) []services.SlackWebhookDest {
+		var webhooks []services.SlackWebhookDest
+		for _, name := range uniqueNonEmpty(names) {
+			url := strings.TrimSpace(req.notificationSlackWebhookURLs[name])
+			if url == "" {
+				continue
+			}
+			webhooks = append(webhooks, services.SlackWebhookDest{SecretName: name, URL: url})
+		}
+		return webhooks
+	}
+	dest.RunSummaryWebhooks = webhooksFor(req.NotificationRunSummarySlackWebhookSecretNames)
+	dest.PulseSummaryWebhooks = webhooksFor(req.NotificationPulseSummarySlackWebhookSecretNames)
 	// Per-workflow notification preferences (workflow.json notifications.*).
 	if len(req.NotificationExcludeChannels) > 0 {
 		dest.ExcludeChannels = append([]string(nil), req.NotificationExcludeChannels...)
 	}
 	dest.RunSummaryChannels = append([]string(nil), req.NotificationRunSummaryChannels...)
 	dest.PulseSummaryChannels = append([]string(nil), req.NotificationPulseSummaryChannels...)
+	dest.RunSummaryRecipients = append([]string(nil), req.NotificationRunSummaryRecipients...)
+	dest.PulseSummaryRecipients = append([]string(nil), req.NotificationPulseSummaryRecipients...)
 	if len(req.NotificationBlockRecipients) > 0 {
 		if dest.Gmail == nil {
 			dest.Gmail = &services.GmailDest{}
 		}
 		dest.Gmail.BlockedRecipients = append(dest.Gmail.BlockedRecipients, req.NotificationBlockRecipients...)
 	}
-	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil && len(dest.ExcludeChannels) == 0 {
+	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
+		len(dest.ExcludeChannels) == 0 && len(dest.RunSummaryRecipients) == 0 && len(dest.PulseSummaryRecipients) == 0 &&
+		len(dest.RunSummaryWebhooks) == 0 && len(dest.PulseSummaryWebhooks) == 0 {
 		return nil
 	}
 	return dest
@@ -728,17 +758,33 @@ func (api *StreamingAPI) resolveNotificationSecretForRequest(ctx context.Context
 	if api == nil || req == nil {
 		return
 	}
-	secretName := strings.TrimSpace(req.NotificationSlackWebhookSecretName)
-	if secretName == "" {
+	// Every configured webhook is a delivery credential, including the
+	// per-summary channel webhooks. They must ALL be stripped from agent-visible
+	// injection, not just the default one — otherwise adding a second channel
+	// would quietly turn its URL into a SECRET_* variable the agent can read.
+	defaultSecretName := strings.TrimSpace(req.NotificationSlackWebhookSecretName)
+	secretNames := uniqueNonEmpty(append(
+		append([]string{defaultSecretName}, req.NotificationRunSummarySlackWebhookSecretNames...),
+		req.NotificationPulseSummarySlackWebhookSecretNames...,
+	))
+	if len(secretNames) == 0 {
 		req.notificationSlackWebhookURL = ""
+		req.notificationSlackWebhookURLs = nil
 		return
 	}
 
+	wanted := make(map[string]bool, len(secretNames))
+	for _, name := range secretNames {
+		wanted[name] = true
+	}
+	resolved := make(map[string]string, len(secretNames))
+
 	filtered := req.DecryptedSecrets[:0]
 	for _, secret := range req.DecryptedSecrets {
-		if strings.TrimSpace(secret.Name) == secretName {
-			if req.notificationSlackWebhookURL == "" {
-				req.notificationSlackWebhookURL = secret.Value
+		name := strings.TrimSpace(secret.Name)
+		if wanted[name] {
+			if resolved[name] == "" {
+				resolved[name] = secret.Value
 			}
 			continue
 		}
@@ -747,24 +793,48 @@ func (api *StreamingAPI) resolveNotificationSecretForRequest(ctx context.Context
 	req.DecryptedSecrets = filtered
 
 	// nil means "inject every global secret", so convert it to an explicit
-	// allow-list before removing the notification credential. Otherwise a
+	// allow-list before removing the notification credentials. Otherwise a
 	// GLOBAL_SECRET_<NAME> webhook would still leak through mergeGlobalSecrets.
 	if req.SelectedGlobalSecrets == nil {
 		allowed := make([]string, 0, len(getGlobalSecrets()))
 		for _, secret := range getGlobalSecrets() {
-			if strings.TrimSpace(secret.Name) != secretName {
+			if !wanted[strings.TrimSpace(secret.Name)] {
 				allowed = append(allowed, secret.Name)
 			}
 		}
 		req.SelectedGlobalSecrets = &allowed
 	} else {
-		filteredGlobals := removeString(*req.SelectedGlobalSecrets, secretName)
+		filteredGlobals := *req.SelectedGlobalSecrets
+		for _, name := range secretNames {
+			filteredGlobals = removeString(filteredGlobals, name)
+		}
 		req.SelectedGlobalSecrets = &filteredGlobals
 	}
 
-	if strings.TrimSpace(req.notificationSlackWebhookURL) == "" {
-		req.notificationSlackWebhookURL, _ = api.resolveBackendNotificationSecret(ctx, userID, workflowPath, secretName)
+	for _, name := range secretNames {
+		if strings.TrimSpace(resolved[name]) == "" {
+			if value, ok := api.resolveBackendNotificationSecret(ctx, userID, workflowPath, name); ok {
+				resolved[name] = value
+			}
+		}
 	}
+	req.notificationSlackWebhookURLs = resolved
+	req.notificationSlackWebhookURL = resolved[defaultSecretName]
+}
+
+// uniqueNonEmpty trims, drops blanks, and de-duplicates while preserving order.
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 // resolveBackendNotificationSecret deliberately ignores agent secret-selection
@@ -931,6 +1001,10 @@ func applyMultiAgentCapabilitiesToRequest(req *QueryRequest, caps WorkflowCapabi
 		req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 		req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 		req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+		req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
+		req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
+		req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)
+		req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.PulseSummarySlackWebhookSecretNames...)
 	}
 	if req.BrowserMode == "" {
 		req.BrowserMode = "none"
@@ -1503,6 +1577,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		sessionBusy:                     make(map[string]bool),
 		sessionBusySince:                make(map[string]time.Time),
 		retainedMainTurns:               make(map[string]time.Time),
+		retainedMainTurnWatchCancels:    make(map[string]context.CancelFunc),
 		pendingCompletions:              make(map[string][]string),
 		completionRetryScheduled:        make(map[string]bool),
 		pendingStartNotifications:       make(map[string][]string),
@@ -3194,6 +3269,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), manifest.Capabilities.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), manifest.Capabilities.Notifications.BlockRecipients...)
+					req.NotificationRunSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.RunSummaryRecipients...)
+					req.NotificationPulseSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryRecipients...)
+					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames...)
+					req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), manifest.Capabilities.Notifications.PulseSummarySlackWebhookSecretNames...)
 				}
 				api.resolveNotificationSecretForRequest(context.Background(), currentUserID, resolvedWPath, &req)
 
@@ -3309,6 +3388,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+					req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
+					req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
+					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)
+					req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.PulseSummarySlackWebhookSecretNames...)
 				}
 				api.resolveNotificationSecretForRequest(context.Background(), currentUserID, manifestWorkspacePath, &req)
 				req.CdpPorts = append([]int(nil), caps.CDPPorts...)
@@ -6492,16 +6575,152 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
+		provider := llmproviders.Provider(retainedCodingAgentProvider(snapshot))
+		watchCtx, watchCancel := context.WithCancel(context.Background())
 		api.retainedMainTurnsMu.Lock()
 		if api.retainedMainTurns == nil {
 			api.retainedMainTurns = make(map[string]time.Time)
 		}
+		if api.retainedMainTurnWatchCancels == nil {
+			api.retainedMainTurnWatchCancels = make(map[string]context.CancelFunc)
+		}
+		previousWatchCancel := api.retainedMainTurnWatchCancels[sessionID]
 		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnWatchCancels[sessionID] = watchCancel
 		api.retainedMainTurnsMu.Unlock()
+		if previousWatchCancel != nil {
+			previousWatchCancel()
+		}
 		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
+		go api.observeRetainedMainTurnStream(watchCtx, sessionID, snapshot, provider)
 		return
 	}
+}
+
+const (
+	retainedMainTurnStreamQuietWindow = 350 * time.Millisecond
+	retainedMainTurnReadyStableWindow = 1200 * time.Millisecond
+	retainedMainTurnCaptureTimeout    = 3 * time.Second
+)
+
+// observeRetainedMainTurnStream derives the logical end of a direct retained
+// turn from the real tmux output stream. Stream output schedules a coherent
+// in-band pane capture after a short quiet boundary; the provider adapter then
+// decides whether the screen is truly back at its idle composer. Requiring the
+// ready screen to remain stable prevents an intermediate repaint from settling
+// a turn that immediately continues into another tool/action.
+func (api *StreamingAPI) observeRetainedMainTurnStream(
+	ctx context.Context,
+	sessionID string,
+	snapshot terminals.Snapshot,
+	provider llmproviders.Provider,
+) {
+	if api == nil || api.liveAttach == nil || strings.TrimSpace(snapshot.TmuxSession) == "" || provider == "" {
+		return
+	}
+	output := make(chan struct{}, 1)
+	stream, unsubscribe, err := api.liveAttach.observeOutput(snapshot.TmuxSession, func([]byte) {
+		select {
+		case output <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		log.Printf("[RETAINED_TURN] Could not observe tmux stream session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, err)
+		return
+	}
+	defer unsubscribe()
+
+	// Inspect once even when the turn completed faster than stream attachment.
+	// Confirmed delivery plus a stable idle composer is a valid completion.
+	output <- struct{}{}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	resetTimer := func(delay time.Duration) {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+	}
+
+	var readySince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stream.done:
+			return
+		case <-output:
+			readySince = time.Time{}
+			resetTimer(retainedMainTurnStreamQuietWindow)
+		case <-timer.C:
+			captureCtx, cancel := context.WithTimeout(ctx, retainedMainTurnCaptureTimeout)
+			pane, captureErr := stream.capturePane(captureCtx)
+			cancel()
+			if captureErr != nil {
+				if ctx.Err() == nil {
+					log.Printf("[RETAINED_TURN] Tmux stream capture failed session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, captureErr)
+				}
+				return
+			}
+			if !llmproviders.CodingAgentPaneReady(provider, pane) {
+				readySince = time.Time{}
+				continue
+			}
+			if readySince.IsZero() {
+				readySince = time.Now()
+				resetTimer(retainedMainTurnReadyStableWindow)
+				continue
+			}
+			api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider)
+			return
+		}
+	}
+}
+
+func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, snapshot terminals.Snapshot, provider llmproviders.Provider) {
+	if api == nil {
+		return
+	}
+	now := time.Now()
+	executionID := strings.TrimSpace(snapshot.ExecutionID)
+	if executionID == "" {
+		executionID = "main:" + sessionID
+	}
+	event := events.Event{
+		ID:              fmt.Sprintf("retained-turn-completion-%d", now.UnixNano()),
+		Type:            "unified_completion",
+		Timestamp:       now,
+		SessionID:       sessionID,
+		ExecutionID:     executionID,
+		ExecutionKind:   "main_agent",
+		TerminalOwnerID: "main:" + sessionID,
+		TerminalID:      snapshot.TerminalID,
+		Data: &unifiedevents.AgentEvent{
+			Type:      unifiedevents.EventType("unified_completion"),
+			Timestamp: now,
+			SessionID: sessionID,
+			Data: &unifiedevents.GenericEventData{Data: map[string]interface{}{
+				"source":         "tmux_stream",
+				"provider":       string(provider),
+				"tmux_session":   snapshot.TmuxSession,
+				"execution_kind": "main_agent",
+				"scope":          "main_agent",
+			}},
+		},
+	}
+	if api.eventStore != nil {
+		api.eventStore.AddEvent(sessionID, event)
+		return
+	}
+	api.observeRetainedMainTurnEvent(sessionID, event)
 }
 
 func retainedMainTurnCompletionEvent(eventType string) bool {
@@ -6551,14 +6770,20 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 
 	api.retainedMainTurnsMu.Lock()
 	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	var watchCancel context.CancelFunc
 	if stillTracked && currentStart.Equal(startedAt) {
 		delete(api.retainedMainTurns, sessionID)
+		watchCancel = api.retainedMainTurnWatchCancels[sessionID]
+		delete(api.retainedMainTurnWatchCancels, sessionID)
 	} else {
 		stillTracked = false
 	}
 	api.retainedMainTurnsMu.Unlock()
 	if !stillTracked {
 		return
+	}
+	if watchCancel != nil {
+		watchCancel()
 	}
 
 	api.setSessionBusy(sessionID, false)

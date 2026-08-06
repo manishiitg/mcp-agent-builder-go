@@ -17,18 +17,26 @@ accepted the core direction of #2, #4, and #7 with follow-ups, and found materia
 gaps in #3, #5, and #6. The per-issue review notes below are part of the current
 status; this document must not be read as saying all eight are fully closed.
 
-| # | Where | Author | Commit |
-|---|---|---|---|
-| 1 | `mcpagent/agent/codeexec/registry.go` — denial named a cause it cannot know | Claude Code | `a2c225d` |
-| 2 | `mcpagent/agent/codeexec/shell.go` — test fixture posing as the platform shell | Claude Code | `a2c225d` |
-| 3 | `interactive_workshop_manager.go` — grants missing the tools the prompts promise | Claude Code | `7eef64150` |
-| 4 | `pkg/workspace/advanced_tools.go` — tool description asserted the wrong cwd | Claude Code | `7eef64150` |
-| 5 | `pkg/workspace/execute_shell_command.go` — no output cap; unreadable spill files | Claude Code | `7eef64150` |
-| 6 | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault | Claude Code | `6f4737cc9` |
-| 7 | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | Claude Code | `b4402bcef` |
-| 8 | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | Claude Code | see #8 below |
-| 9 | `cmd/server/pulse_worklist.go` + `pulse_finding_lifecycle.go` — one finding, four sequential rejections | Claude Code | `fdd54c089` |
-| — | [Follow-up](#follow-up-the-global-header-can-hide-the-current-running-workflow): global header can hide the current running workflow | Claude Code | open, not fixed |
+**Read the Status column, not the Commit column.** A commit SHA means work was
+done, not that the defect is closed — the review verdict is what decides that.
+On 2026-08-05 #5 was re-encountered in production and re-diagnosed from scratch,
+because this table showed it with an author and a SHA while the word
+*incomplete* sat two hundred lines below in prose. Status values are `closed`
+(review accepted), `partial` (direction accepted, named follow-ups outstanding),
+and `open` (material gaps; treat as unfixed).
+
+| # | Status | Where | Author | Commit |
+|---|---|---|---|---|
+| 1 | **closed** | `mcpagent/agent/codeexec/registry.go` — denial named a cause it cannot know | Claude Code | `a2c225d` |
+| 2 | **partial** | `mcpagent/agent/codeexec/shell.go` — test fixture posing as the platform shell | Claude Code | `a2c225d` |
+| 3 | **open** | `interactive_workshop_manager.go` — grants missing the tools the prompts promise. Review: *incomplete / safety regression* | Claude Code | `7eef64150` |
+| 4 | **partial** | `pkg/workspace/advanced_tools.go` — tool description asserted the wrong cwd | Claude Code | `7eef64150` |
+| 5 | **partial** | `pkg/workspace/execute_shell_command.go` — no output cap; unreadable spill files. Re-encountered 2026-08-05 via `read_skill`; see [tool_result_spill_outside_workspace.md](tool_result_spill_outside_workspace.md) | Claude Code | `7eef64150` |
+| 6 | **open** | `cmd/server/pulse_worklist.go` — a mandated pre-check answered as a fault. Review: *incomplete* | Claude Code | `6f4737cc9` |
+| 7 | **partial** | `pkg/agentwrapper/llm_agent.go` — deliberate re-registration became fatal | Claude Code | `b4402bcef` |
+| 8 | **closed** | `mcpagent/agent/codeexec/registry.go` — a removed tool read as a withheld one | Claude Code | see #8 below |
+| 9 | **partial** | `cmd/server/pulse_worklist.go` + `pulse_finding_lifecycle.go` — one finding, four sequential rejections | Claude Code | `fdd54c089` |
+| — | **open** | [Follow-up](#follow-up-the-global-header-can-hide-the-current-running-workflow): global header can hide the current running workflow | Claude Code | not fixed |
 
 Everything in this file to date was authored by **Claude Code**. Other
 contributors to this archive — for example **Codex** — should add their own
@@ -317,6 +325,24 @@ the final serialized payload (or derive stream budgets from repeated
 tests. A smaller edge case also remains: when an operator configures a cap below
 the truncation marker length, the helper emits the whole marker and exceeds that
 configured cap.
+
+**2026-08-05 — re-encountered, partly fixed, still partial.** This chain
+recurred in production through `read_skill` rather than `execute_shell_command`:
+three batched reference docs returned 67,971 characters, spilled, and blocked a
+workflow upgrade preflight so the scheduled workflow never started. Full
+write-up: [tool_result_spill_outside_workspace.md](tool_result_spill_outside_workspace.md).
+
+Closed since: the cap is now enforced on the SERIALIZED payload (the encoding
+gap named above — measured at up to 6x for HTML-ish content, which is what these
+workflows produce most), the marker edge case now fits its own budget,
+`read_skill` accepts one file per call, and no doc in the reference bundle can
+exceed a single result on its own.
+
+Still open, and why this stays **partial**: the cap lives on one call site
+(`pkg/workspace/tools.go`) rather than at a shared chokepoint, so a new tool that
+returns large output reopens the same failure. `MAX_MCP_OUTPUT_TOKENS` is also
+still unpinned, so the effective limit can be changed remotely by the CLI's own
+gate.
 
 ---
 

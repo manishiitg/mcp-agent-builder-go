@@ -3,6 +3,7 @@ import type { PulseFindingLifecycle, PulseFixAttempt } from '../../services/api-
 import {
   pulseFindingPresentation,
   pulseFindingProgress,
+  pulseFindingReporter,
   pulseFixAttemptIsIncomplete,
   pulseVerificationLevel,
 } from './pulseFindingPresentation'
@@ -43,6 +44,24 @@ function attempt(overrides: Partial<PulseFixAttempt> = {}): PulseFixAttempt {
 }
 
 describe('Pulse finding presentation', () => {
+  it('names the reviewer that originally generated the finding', () => {
+    expect(pulseFindingReporter(finding({
+      module: 'strategy_auditor',
+      step_id: 'strategy_auditor',
+    }), 'Strategy Auditor')).toBe('Strategy Auditor')
+
+    expect(pulseFindingReporter(finding({
+      module: 'workflow_review',
+      step_id: 'bug_review',
+    }), 'Workflow review')).toBe('Bug Review')
+
+    expect(pulseFindingReporter(finding({
+      module: undefined,
+      phase: 'prevalidation',
+      step_id: 'collect-data',
+    }))).toBe('Workflow step · collect-data')
+  })
+
   it('routes an applied fix to proof instead of action', () => {
     expect(pulseFindingPresentation(finding({ status: 'awaiting_verification' }))).toMatchObject({
       queue: 'waiting_proof',
@@ -85,6 +104,11 @@ describe('Pulse finding presentation', () => {
       status: 'external_action_required',
       external_owner: 'scheduler platform',
     })).queue).toBe('platform')
+
+    expect(pulseFindingPresentation(finding({
+      status: 'acknowledged',
+      events: [{ event_type: 'blocked', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
+    }))).toMatchObject({ queue: 'blocked', label: 'Blocked · no available action' })
 
     expect(pulseFindingPresentation(finding({
       phase: 'prevalidation',

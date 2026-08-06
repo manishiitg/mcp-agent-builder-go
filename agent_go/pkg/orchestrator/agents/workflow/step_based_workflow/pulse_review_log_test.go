@@ -69,7 +69,7 @@ PULSE_VERIFICATION_JSON: {"finding_id":"ISS-9","fingerprint":"fp-9","attempt_id"
 		t.Fatalf("expected retained contract failure, got %v", err)
 	}
 
-	artifact, err := LoadPulseReviewArtifactForRun(ctx, ws, "review-invalid", "workflow_review")
+	artifact, err := LoadPulseReviewArtifactForRun(ctx, ws, "review-invalid", "artifact_review")
 	if err != nil {
 		t.Fatalf("load retained artifact: %v", err)
 	}
@@ -193,11 +193,26 @@ func TestRecordPulseReviewBuildsPerModuleHistory(t *testing.T) {
 		byModule[h.Module] = h
 	}
 	workflow, ok := byModule["workflow_review"]
-	if !ok || workflow.RunCount != 3 {
-		t.Fatalf("workflow_review should consolidate 3 historical operational runs, got %#v", byModule)
+	if !ok || workflow.RunCount != 3 || !strings.Contains(strings.Join(workflow.RecentVerdict, " "), "Half-migration") {
+		t.Fatalf("historical engineering evidence not consolidated under workflow_review: %#v", byModule)
 	}
-	if len(workflow.RecentVerdict) != 3 || !strings.Contains(strings.Join(workflow.RecentVerdict, " "), "Half-migration") {
-		t.Fatalf("verdicts not retained: %#v", workflow.RecentVerdict)
+}
+
+func TestRecordPulseReviewForModulesIndexesOneSharedReportUnderEverySelectedPerspective(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	artifact := "## Verdict\nArtifact and store evidence were reviewed together.\n"
+	if err := RecordPulseReviewForModules(ctx, ws, []string{"workflow_review", "llm_ops_review"}, "shared-review", "pulse-1", "", artifact); err != nil {
+		t.Fatalf("record shared review: %v", err)
+	}
+	for _, module := range []string{"workflow_review", "llm_ops_review"} {
+		record, err := LoadPulseReviewArtifactForRun(ctx, ws, "shared-review", module)
+		if err != nil {
+			t.Fatalf("load %s shared review: %v", module, err)
+		}
+		if record.Module != module || !strings.Contains(record.Markdown, "reviewed together") {
+			t.Fatalf("%s record = %#v", module, record)
+		}
 	}
 }
 

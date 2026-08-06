@@ -127,7 +127,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		notifyProps["email_to"] = map[string]interface{}{
 			"type":        "array",
 			"items":       map[string]interface{}{"type": "string"},
-			"description": "Optional Gmail To recipients that replace the configured default To recipient for this notification. Use only when the user's notification preference explicitly asks to send the email to different primary recipient(s). Addresses in Gmail's blocked recipients list are rejected. Other channels ignore this.",
+			"description": "Optional one-off Gmail To recipients for THIS notification, replacing the recipients that would otherwise apply. The DURABLE per-workflow recipient lists belong in workflow.json notifications.run_summary_recipients and pulse_summary_recipients — those are applied automatically by notification_kind, so use this arg only for a one-time send to someone else. Addresses in the account-wide or per-workflow blocked recipients list are rejected. Other channels ignore this.",
 		}
 		notifyProps["email_cc"] = map[string]interface{}{
 			"type":        "array",
@@ -142,7 +142,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		notifyProps["block_recipients"] = map[string]interface{}{
 			"type":        "array",
 			"items":       map[string]interface{}{"type": "string"},
-			"description": "Optional one-off email denylist for THIS notification (Gmail only). Addresses listed here are rejected as To or CC recipients, on top of BOTH the account-wide disallowed-recipients list AND the durable per-workflow denylist in workflow.json notifications.block_recipients — it can only block MORE, never unblock a globally-blocked address. Put addresses the workflow must never email in workflow.json notifications.block_recipients (applied automatically); use this arg only for a one-time block beyond that. If a blocked address is the resolved recipient, the email is skipped rather than sent elsewhere. Does not change any account-wide configuration; other channels ignore this.",
+			"description": "Optional one-off email denylist for THIS notification (Gmail only). Addresses listed here are rejected as To or CC recipients, on top of BOTH the account-wide disallowed-recipients list AND the durable per-workflow denylist in workflow.json notifications.block_recipients — it can only block MORE, never unblock a globally-blocked address. Put addresses the workflow must never email in workflow.json notifications.block_recipients (applied automatically); use this arg only for a one-time block beyond that. A blocked address is removed from the To/CC list and the message still goes to the remaining recipients; only when EVERY recipient is blocked is the email skipped entirely. Does not change any account-wide configuration; other channels ignore this.",
 		}
 		notifyProps["email_html"] = map[string]interface{}{
 			"type":        "string",
@@ -355,11 +355,29 @@ func IsHumanToolCategory(category string) bool {
 // human_feedback is available for explicit channel tests and truly urgent,
 // short-lived human-only input; ordinary builder questions stay in chat.
 // notify_user is the non-blocking outbound push (Slack/WhatsApp/Gmail).
-// create_human_input_request and
-// mark_human_input_consumed are non-blocking Pulse/report questions stored in
-// the workflow-local db/db.sqlite.
+// create_human_input_request, answer_human_input_request, and
+// mark_human_input_consumed implement the non-blocking Pulse/report question
+// lifecycle stored in the workflow-local db/db.sqlite.
 func WorkshopHumanToolNames() []string {
-	return []string{"human_feedback", "notify_user", "create_human_input_request", "mark_human_input_consumed"}
+	return []string{"human_feedback", "notify_user", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"}
+}
+
+// HumanToolNamesForWorkshopMode narrows the registered human-tool surface for
+// a specific conversation mode. A run agent may create a non-blocking question
+// and later consume an already-recorded answer, but only an interactive workshop
+// chat may record the user's answer itself.
+func HumanToolNamesForWorkshopMode(mode string) []string {
+	names := WorkshopHumanToolNames()
+	if strings.TrimSpace(mode) != "run" {
+		return names
+	}
+	filtered := make([]string, 0, len(names)-1)
+	for _, name := range names {
+		if name != "answer_human_input_request" {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
 }
 
 // CreateHumanToolExecutors creates the execution functions for human tools
@@ -385,7 +403,8 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	}
 
 	dest := NotificationDestinationFromContext(ctx)
-	if to := emailListFromArg(args["email_to"]); len(to) > 0 {
+	explicitTo := emailListFromArg(args["email_to"])
+	if to := explicitTo; len(to) > 0 {
 		if dest == nil {
 			dest = &services.NotificationDestination{}
 		}
@@ -438,6 +457,19 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	}
 	notificationKind, _ := args["notification_kind"].(string)
 	notificationKind = strings.ToLower(strings.TrimSpace(notificationKind))
+	// Durable per-workflow recipients for this summary kind. Applied only when
+	// the agent did not name its own, so an explicit email_to still wins for a
+	// one-off send. This must run after notification_kind is read, since the
+	// kind is what selects between the run and Pulse lists. The denylist on
+	// dest.Gmail is left untouched and is still enforced at send time.
+	if len(explicitTo) == 0 {
+		if routedTo := summaryRecipientsForKind(dest, notificationKind); len(routedTo) > 0 {
+			if dest.Gmail == nil {
+				dest.Gmail = &services.GmailDest{}
+			}
+			dest.Gmail.Email = strings.Join(routedTo, ", ")
+		}
+	}
 	routedChannels := summaryChannelsForKind(dest, notificationKind)
 	if len(routedChannels) > 0 {
 		excludeChannels = append(excludeChannels, excludedNotificationChannels(routedChannels)...)
@@ -447,17 +479,26 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	// (and so the send isn't killed when this turn's context is canceled).
 	results := notificationManager.SendUserNotificationSync(ctx, messageForUser, "", dest, excludeChannels...)
 	webhookAllowed := len(routedChannels) == 0 || containsNotificationChannel(routedChannels, "slack")
-	if dest != nil && dest.SlackWebhook != nil && webhookAllowed {
-		msgID, sendErr := sendRichSlackIncomingWebhook(ctx, dest.SlackWebhook.URL, messageForUser, slackContent)
-		result := services.ConnectorResult{
-			Channel: "slack_webhook",
-			OK:      sendErr == nil,
-			MsgID:   msgID,
+	if webhookAllowed {
+		// Each webhook is its own Slack channel, so a summary configured for two
+		// channels posts twice. Results are reported per webhook: one channel
+		// failing must not read as "Slack delivered" or hide the others. The
+		// label stays the plain "slack_webhook" for a single channel so existing
+		// delivery reports keep their shape, and is qualified by secret name only
+		// when there is more than one channel to tell apart.
+		webhooks := webhooksForKind(dest, notificationKind)
+		for _, webhook := range webhooks {
+			msgID, sendErr := sendRichSlackIncomingWebhook(ctx, webhook.URL, messageForUser, slackContent)
+			result := services.ConnectorResult{
+				Channel: webhookResultChannel(webhook, len(webhooks) > 1),
+				OK:      sendErr == nil,
+				MsgID:   msgID,
+			}
+			if sendErr != nil {
+				result.Err = sendErr.Error()
+			}
+			results = append(results, result)
 		}
-		if sendErr != nil {
-			result.Err = sendErr.Error()
-		}
-		results = append(results, result)
 	}
 
 	delivered := []string{}
@@ -507,6 +548,60 @@ func summaryChannelsForKind(dest *services.NotificationDestination, kind string)
 		return dest.RunSummaryChannels
 	case "pulse_summary":
 		return dest.PulseSummaryChannels
+	default:
+		return nil
+	}
+}
+
+// webhooksForKind picks which Slack channels this notification posts to. A
+// Slack Incoming Webhook is bound to one channel, so choosing a channel means
+// choosing a webhook. When the kind has no channels of its own it falls back to
+// the workflow's single configured webhook, which is the pre-split behavior.
+func webhooksForKind(dest *services.NotificationDestination, kind string) []services.SlackWebhookDest {
+	if dest == nil {
+		return nil
+	}
+	var configured []services.SlackWebhookDest
+	switch kind {
+	case "run_summary":
+		configured = dest.RunSummaryWebhooks
+	case "pulse_summary":
+		configured = dest.PulseSummaryWebhooks
+	}
+	if len(configured) > 0 {
+		return configured
+	}
+	if dest.SlackWebhook != nil && strings.TrimSpace(dest.SlackWebhook.URL) != "" {
+		return []services.SlackWebhookDest{*dest.SlackWebhook}
+	}
+	return nil
+}
+
+// webhookResultChannel labels a per-webhook delivery result. With several Slack
+// channels in play, a bare "slack_webhook" for each would make the agent's
+// delivery report ambiguous about which channel actually received the message —
+// but qualifying the single-channel case would change a report shape callers
+// already read, so the name is appended only when it disambiguates something.
+func webhookResultChannel(webhook services.SlackWebhookDest, qualify bool) string {
+	if name := strings.TrimSpace(webhook.SecretName); qualify && name != "" {
+		return "slack_webhook:" + name
+	}
+	return "slack_webhook"
+}
+
+// summaryRecipientsForKind picks the workflow's configured Gmail To list for
+// this notification kind. A "general" notification has no configured list and
+// falls through to the per-user preference and account default, matching how
+// channel routing treats an unclassified send.
+func summaryRecipientsForKind(dest *services.NotificationDestination, kind string) []string {
+	if dest == nil {
+		return nil
+	}
+	switch kind {
+	case "run_summary":
+		return dest.RunSummaryRecipients
+	case "pulse_summary":
+		return dest.PulseSummaryRecipients
 	default:
 		return nil
 	}
@@ -708,11 +803,15 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 		return nil
 	}
 	clone := &services.NotificationDestination{
-		UserID:               dest.UserID,
-		WorkflowName:         dest.WorkflowName,
-		ExcludeChannels:      append([]string(nil), dest.ExcludeChannels...),
-		RunSummaryChannels:   append([]string(nil), dest.RunSummaryChannels...),
-		PulseSummaryChannels: append([]string(nil), dest.PulseSummaryChannels...),
+		UserID:                 dest.UserID,
+		WorkflowName:           dest.WorkflowName,
+		ExcludeChannels:        append([]string(nil), dest.ExcludeChannels...),
+		RunSummaryChannels:     append([]string(nil), dest.RunSummaryChannels...),
+		PulseSummaryChannels:   append([]string(nil), dest.PulseSummaryChannels...),
+		RunSummaryRecipients:   append([]string(nil), dest.RunSummaryRecipients...),
+		PulseSummaryRecipients: append([]string(nil), dest.PulseSummaryRecipients...),
+		RunSummaryWebhooks:     append([]services.SlackWebhookDest(nil), dest.RunSummaryWebhooks...),
+		PulseSummaryWebhooks:   append([]services.SlackWebhookDest(nil), dest.PulseSummaryWebhooks...),
 	}
 	if dest.Slack != nil {
 		clone.Slack = &services.SlackDest{
@@ -781,5 +880,9 @@ func notificationDestinationEmpty(dest *services.NotificationDestination) bool {
 			(dest.Gmail == nil || dest.Gmail.Email == "") &&
 			len(dest.ExcludeChannels) == 0 &&
 			len(dest.RunSummaryChannels) == 0 &&
-			len(dest.PulseSummaryChannels) == 0)
+			len(dest.PulseSummaryChannels) == 0 &&
+			len(dest.RunSummaryRecipients) == 0 &&
+			len(dest.PulseSummaryRecipients) == 0 &&
+			len(dest.RunSummaryWebhooks) == 0 &&
+			len(dest.PulseSummaryWebhooks) == 0)
 }

@@ -28,6 +28,19 @@ type NotificationDestination struct {
 	// the backend, including the workflow Slack webhook.
 	RunSummaryChannels   []string
 	PulseSummaryChannels []string
+
+	// Summary-specific Slack Incoming Webhooks, selected by the same
+	// notification_kind. Each webhook is a distinct channel. Empty means fall
+	// back to the single SlackWebhook above.
+	RunSummaryWebhooks   []SlackWebhookDest
+	PulseSummaryWebhooks []SlackWebhookDest
+
+	// Summary-specific Gmail To lists, selected by the same notification_kind.
+	// Empty means fall through to the per-user preference and then the
+	// account-wide default recipient. Sourced from workflow.json
+	// notifications.run_summary_recipients / pulse_summary_recipients.
+	RunSummaryRecipients   []string
+	PulseSummaryRecipients []string
 }
 
 // SlackWebhookDest is a workflow-scoped, one-way Slack Incoming Webhook.
@@ -47,9 +60,11 @@ type GmailDest struct {
 	// BlockedRecipients is a per-notification denylist unioned with the
 	// account-wide GmailConfig.BlockedRecipients at send time. It lets a
 	// per-workflow notification preference (workflow.json capabilities.notifications,
-	// applied by the backend) reject additional recipients for this workflow
+	// applied by the backend) exclude additional recipients for this workflow
 	// without editing the account-wide config. Never widens the allow-set — it
-	// can only block more, never unblock a globally-blocked address.
+	// can only block more, never unblock a globally-blocked address. Blocked
+	// addresses are dropped from the recipient list, not grounds for canceling
+	// delivery to the recipients that are allowed.
 	BlockedRecipients []string
 }
 

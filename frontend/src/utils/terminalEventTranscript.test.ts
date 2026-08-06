@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   pairToolCalls,
+  toolErrorContextByEventID,
   selectTerminalEvents,
   buildTranscriptItems,
   collapseCompletedLifecycleStarts,
@@ -578,6 +579,29 @@ describe('pairToolCalls — args and result surfaced on the pair', () => {
     ])
     expect(pair.args).toBeUndefined()
     expect(pair.result).toBeUndefined()
+  })
+})
+
+describe('toolErrorContextByEventID', () => {
+  it('joins a tool error to the exact start arguments by tool_call_id', () => {
+    const start = evt({
+      id: 'start', session_id: 's1', type: 'tool_call_start',
+      data: { data: { tool_call_id: 'call-7', tool_name: 'execute_shell_command', tool_params: { arguments: '{"command":"/bin/ps"}' } } } as never,
+    })
+    const other = evt({
+      id: 'other', session_id: 's1', type: 'tool_call_start',
+      data: { data: { tool_call_id: 'call-8', tool_name: 'other_tool', tool_params: { arguments: '{"wrong":true}' } } } as never,
+    })
+    const failure = evt({
+      id: 'failure', session_id: 's1', type: 'tool_call_error',
+      data: { data: { tool_call_id: 'call-7', tool_name: 'execute_shell_command', error: 'Operation not permitted' } } as never,
+    })
+
+    expect(toolErrorContextByEventID([start, other, failure]).get('failure')).toEqual({
+      name: 'execute_shell_command',
+      server: undefined,
+      args: '{"command":"/bin/ps"}',
+    })
   })
 })
 

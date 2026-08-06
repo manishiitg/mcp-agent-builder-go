@@ -247,13 +247,15 @@ type liveAttachStream struct {
 	mgr         *liveAttachManager
 	tmuxSession string
 
-	mu           sync.Mutex
-	subs         map[*liveAttachViewer]struct{}
-	cancel       context.CancelFunc
-	done         chan struct{}
-	appliedCols  int
-	appliedRows  int
-	lastOutputAt time.Time
+	mu             sync.Mutex
+	subs           map[*liveAttachViewer]struct{}
+	outputWatchers map[uint64]func([]byte)
+	nextWatcherID  uint64
+	cancel         context.CancelFunc
+	done           chan struct{}
+	appliedCols    int
+	appliedRows    int
+	lastOutputAt   time.Time
 	// seeding counts viewers between seedViewer entry and splice/abandon, so
 	// idle-stop logic does not kill the attach under a viewer that has not
 	// reached the subs map yet.
@@ -314,13 +316,14 @@ func (m *liveAttachManager) stream(tmuxSession string, cols, rows int) *liveAtta
 	}
 	if st == nil {
 		st = &liveAttachStream{
-			mgr:         m,
-			tmuxSession: tmuxSession,
-			subs:        make(map[*liveAttachViewer]struct{}),
-			done:        make(chan struct{}),
-			writeCh:     make(chan *liveAttachCmd, 64),
-			cols:        cols,
-			rows:        rows,
+			mgr:            m,
+			tmuxSession:    tmuxSession,
+			subs:           make(map[*liveAttachViewer]struct{}),
+			outputWatchers: make(map[uint64]func([]byte)),
+			done:           make(chan struct{}),
+			writeCh:        make(chan *liveAttachCmd, 64),
+			cols:           cols,
+			rows:           rows,
 		}
 		m.sessions[tmuxSession] = st
 		// Queued before start so it is the first in-band command: pin the
@@ -355,6 +358,34 @@ func (m *liveAttachManager) addViewer(ctx context.Context, tmuxSession string, c
 		return nil, nil, nil, err
 	}
 	return st, viewer, seed, nil
+}
+
+// observeOutput subscribes a backend lifecycle observer to the same decoded
+// tmux stream used by the browser. Unlike addViewer it does not seed, resize,
+// or claim the single visible viewer slot.
+func (m *liveAttachManager) observeOutput(tmuxSession string, fn func([]byte)) (*liveAttachStream, func(), error) {
+	tmuxSession = strings.TrimSpace(tmuxSession)
+	if err := liveAttachValidTarget(tmuxSession); err != nil {
+		return nil, nil, err
+	}
+	// An observer can be the first control client for an unselected terminal.
+	// Match the existing window geometry so attaching the read-side lifecycle
+	// stream cannot resize/reflow the user's TUI before window-size is pinned.
+	cols, rows := liveAttachDefaultCols, liveAttachDefaultRows
+	sizeCtx, cancel := context.WithTimeout(context.Background(), terminalTmuxActionTimeout)
+	if size, sizeErr := runTerminalTmuxOutputCommand(
+		sizeCtx, "display-message", "-p", "-t", tmuxSession, "#{window_width},#{window_height}",
+	); sizeErr == nil {
+		if currentCols, currentRows, ok := parseLiveAttachPair(liveattach.Reply{Lines: []string{size}}); ok {
+			cols, rows = currentCols, currentRows
+		}
+	}
+	cancel()
+	st := m.stream(tmuxSession, cols, rows)
+	if st == nil {
+		return nil, nil, fmt.Errorf("empty tmux session name")
+	}
+	return st, st.observeOutput(fn), nil
 }
 
 func (st *liveAttachStream) isDone() bool {
@@ -422,10 +453,37 @@ func (st *liveAttachStream) unsubscribe(v *liveAttachViewer) {
 		delete(st.subs, v)
 		close(v.ch)
 	}
-	last := ok && len(st.subs) == 0 && st.seeding == 0
+	last := ok && len(st.subs) == 0 && st.seeding == 0 && len(st.outputWatchers) == 0
 	st.mu.Unlock()
 	if last {
 		st.stop()
+	}
+}
+
+// observeOutput keeps the shared control-mode stream alive without requiring a
+// browser viewer. Runtime lifecycle observers use it to react to real tmux
+// output from a retained coding-agent turn. The callback must be non-blocking.
+func (st *liveAttachStream) observeOutput(fn func([]byte)) func() {
+	if st == nil || fn == nil {
+		return func() {}
+	}
+	st.mu.Lock()
+	st.nextWatcherID++
+	id := st.nextWatcherID
+	st.outputWatchers[id] = fn
+	st.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			st.mu.Lock()
+			delete(st.outputWatchers, id)
+			idle := len(st.subs) == 0 && st.seeding == 0 && len(st.outputWatchers) == 0
+			st.mu.Unlock()
+			if idle {
+				st.stop()
+			}
+		})
 	}
 }
 
@@ -442,6 +500,10 @@ func (st *liveAttachStream) broadcast(b []byte) {
 	dropped := false
 	st.mu.Lock()
 	st.lastOutputAt = time.Now()
+	watchers := make([]func([]byte), 0, len(st.outputWatchers))
+	for _, watcher := range st.outputWatchers {
+		watchers = append(watchers, watcher)
+	}
 	for v := range st.subs {
 		select {
 		case v.ch <- cp:
@@ -452,10 +514,37 @@ func (st *liveAttachStream) broadcast(b []byte) {
 			log.Printf("[live-attach] session=%s dropped slow viewer (buffer full)", st.tmuxSession)
 		}
 	}
-	last := dropped && len(st.subs) == 0 && st.seeding == 0
+	last := dropped && len(st.subs) == 0 && st.seeding == 0 && len(st.outputWatchers) == 0
 	st.mu.Unlock()
+	for _, watcher := range watchers {
+		watcher(cp)
+	}
 	if last {
 		st.stop()
+	}
+}
+
+// capturePane takes an in-band visible-screen snapshot ordered against the
+// output stream. Output notifications decide WHEN to inspect; this command
+// supplies the provider readiness classifier with a coherent tmux screen.
+func (st *liveAttachStream) capturePane(ctx context.Context) (string, error) {
+	if st == nil {
+		return "", fmt.Errorf("nil live-attach stream")
+	}
+	cmd, err := st.sendCommand(fmt.Sprintf("capture-pane -p -J -t %s", st.tmuxSession), nil)
+	if err != nil {
+		return "", err
+	}
+	select {
+	case reply := <-cmd.done:
+		if reply.Err || reply.Overflow {
+			return "", fmt.Errorf("capture pane for %s failed: %s", st.tmuxSession, strings.Join(reply.Lines, " / "))
+		}
+		return strings.Join(reply.Lines, "\n"), nil
+	case <-st.done:
+		return "", fmt.Errorf("live-attach stream for %s closed during capture", st.tmuxSession)
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 }
 
@@ -676,7 +765,7 @@ func (st *liveAttachStream) dropViewersForGeometryChange() {
 		delete(st.subs, v)
 		close(v.ch)
 	}
-	idle := st.seeding == 0
+	idle := st.seeding == 0 && len(st.outputWatchers) == 0
 	st.mu.Unlock()
 	if idle {
 		st.stop()
@@ -1136,6 +1225,13 @@ func (api *StreamingAPI) handleTerminalStream(w http.ResponseWriter, r *http.Req
 		http.Error(w, "live-attach terminal transport disabled", http.StatusNotFound)
 		return
 	}
+	// Reject cross-site requests before terminal lookup or liveness
+	// reconciliation can reveal or mutate any session state. The websocket
+	// upgrader repeats this check at the transport boundary.
+	if !api.checkLiveAttachOrigin(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 	snapshot, ok := api.resolveLiveAttachTerminal(w, r)
 	if !ok {
 		return
@@ -1266,7 +1362,24 @@ func (api *StreamingAPI) resolveLiveAttachTerminal(w http.ResponseWriter, r *htt
 	}
 	if api.terminalStore != nil {
 		if snapshot, ok := api.terminalStore.Get(terminalID); ok && api.canAccessTerminalSession(r, snapshot.SessionID) {
-			return snapshot, true
+			ctx, cancel := context.WithTimeout(r.Context(), terminalTmuxActionTimeout)
+			err := runTerminalTmuxCommand(ctx, "", "has-session", "-t", snapshot.TmuxSession)
+			cancel()
+			if err == nil {
+				return snapshot, true
+			}
+			if isMissingTmuxTargetError(err) || strings.TrimSpace(snapshot.TmuxSession) == "" {
+				// The terminal list can briefly retain live process metadata after
+				// tmux has disappeared. Reconcile it before upgrading; otherwise the
+				// browser reconnects forever to a socket that can never produce data.
+				api.terminalStore.MarkProcessClosed(snapshot.TerminalID, "tmux session no longer exists")
+				http.Error(w, "Terminal process is closed", http.StatusGone)
+				return terminals.Snapshot{}, false
+			}
+			// A transient tmux command failure is not evidence that the process
+			// died, but it is also not safe to create a websocket that may hang.
+			http.Error(w, "Terminal process state is temporarily unavailable", http.StatusServiceUnavailable)
+			return terminals.Snapshot{}, false
 		}
 	}
 
@@ -1350,7 +1463,12 @@ func (api *StreamingAPI) persistLiveAttachTranscript(terminalID, content string)
 	if terminalID == "" || !liveAttachTranscriptHasDisplayContent(content) {
 		return
 	}
-	api.terminalStore.SetDisplayContent(terminalID, content, "tmux_capture")
+	// This is the complete byte stream seen by the embedded terminal (seed plus
+	// live output), not a capture-pane image. Keep that distinction durable: a
+	// completed terminal may still have a tmux pane for a short time, and the
+	// settled detail path used to replace this scrollable transcript with the
+	// pane's final visible screen.
+	api.terminalStore.SetDisplayContent(terminalID, content, "tmux_stream")
 }
 
 func liveAttachTranscriptHasDisplayContent(content string) bool {

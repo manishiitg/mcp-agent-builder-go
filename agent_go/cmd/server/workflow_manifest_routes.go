@@ -161,6 +161,10 @@ type UpdateWorkflowManifestRequest struct {
 	PulseNotificationInstructions *string   `json:"pulse_notification_instructions,omitempty"`
 	RunNotificationChannels       *[]string `json:"run_notification_channels,omitempty"`
 	PulseNotificationChannels     *[]string `json:"pulse_notification_channels,omitempty"`
+	// Recipient lists are pointers so an explicitly sent empty array clears them
+	// (back to the account default) while omission leaves them untouched.
+	RunNotificationRecipients   *[]string `json:"run_notification_recipients,omitempty"`
+	PulseNotificationRecipients *[]string `json:"pulse_notification_recipients,omitempty"`
 	// NotificationInstructions is retained for older clients that still send a
 	// single preference. New clients should use the two scoped fields above.
 	NotificationInstructions *string `json:"notification_instructions,omitempty"`
@@ -183,7 +187,11 @@ func mergeWorkflowCapabilitiesUpdate(existing WorkflowCapabilities, incoming *Wo
 		len(updated.Notifications.RunSummaryChannels) == 0 &&
 		len(updated.Notifications.PulseSummaryChannels) == 0 &&
 		len(updated.Notifications.ExcludeChannels) == 0 &&
-		len(updated.Notifications.BlockRecipients) == 0 {
+		len(updated.Notifications.BlockRecipients) == 0 &&
+		len(updated.Notifications.RunSummaryRecipients) == 0 &&
+		len(updated.Notifications.PulseSummaryRecipients) == 0 &&
+		len(updated.Notifications.RunSummarySlackWebhookSecretNames) == 0 &&
+		len(updated.Notifications.PulseSummarySlackWebhookSecretNames) == 0 {
 		// An explicitly supplied empty object (no webhook, no exclude/block
 		// preferences) disables the workflow-specific notification config.
 		updated.Notifications = nil
@@ -250,7 +258,8 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 		manifest.PostRunMonitor = req.PostRunMonitor
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
-		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil {
+		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||
+		req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil {
 		runInstructions := ""
 		pulseInstructions := ""
 		if manifest.Capabilities.Notifications != nil {
@@ -264,7 +273,8 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 			pulseInstructions = strings.TrimSpace(*req.PulseNotificationInstructions)
 		}
 		if manifest.Capabilities.Notifications == nil && (runInstructions != "" || pulseInstructions != "" ||
-			req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil) {
+			req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||
+			req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil) {
 			manifest.Capabilities.Notifications = &WorkflowNotificationConfig{}
 		}
 		if manifest.Capabilities.Notifications != nil {
@@ -276,6 +286,12 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 			}
 			if req.PulseNotificationChannels != nil {
 				manifest.Capabilities.Notifications.PulseSummaryChannels = normalizeNotificationChannels(*req.PulseNotificationChannels)
+			}
+			if req.RunNotificationRecipients != nil {
+				manifest.Capabilities.Notifications.RunSummaryRecipients = normalizeNotificationRecipients(*req.RunNotificationRecipients)
+			}
+			if req.PulseNotificationRecipients != nil {
+				manifest.Capabilities.Notifications.PulseSummaryRecipients = normalizeNotificationRecipients(*req.PulseNotificationRecipients)
 			}
 		}
 	} else if req.NotificationInstructions != nil {
@@ -313,6 +329,31 @@ func normalizeNotificationChannels(channels []string) []string {
 		}
 		seen[channel] = true
 		normalized = append(normalized, channel)
+	}
+	return normalized
+}
+
+// normalizeNotificationRecipients cleans a saved recipient list: one address
+// per entry, lowercased and de-duplicated. Callers may paste "a@x.com, b@x.com"
+// into a single entry, so separators are split the same way the Gmail connector
+// splits them at send time — otherwise a pasted list would be stored as one
+// malformed address and silently fail to deliver.
+func normalizeNotificationRecipients(recipients []string) []string {
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(recipients))
+	for _, raw := range recipients {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+		}) {
+			email := strings.ToLower(strings.TrimSpace(part))
+			// A bare token with no "@" is not an address. Dropping it keeps a
+			// typo from becoming a recipient that never receives anything.
+			if email == "" || seen[email] || !strings.Contains(email, "@") {
+				continue
+			}
+			seen[email] = true
+			normalized = append(normalized, email)
+		}
 	}
 	return normalized
 }

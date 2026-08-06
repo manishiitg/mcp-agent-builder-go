@@ -32,6 +32,10 @@
   tests cover scheduled and bot observations and assert that conversion keeps
   both `tabId` and `sessionId`; TypeScript compilation passes. A real converted
   schedule remains to be exercised after deployment.
+- **Completion follow-up:** PLAT-035 records the separate defect where a
+  successfully delivered retained turn stayed `foreground_turn.busy=true`
+  after its tmux had returned to an idle prompt. PLAT-020 owns conversation
+  continuity; PLAT-035 owns the retained turn's stream-driven end boundary.
 - **Regression tests:**
   `TestTryDeliverQueryAsLiveInputReactivatesSettledRetainedTmux` plus
   `workflowChatTabConversion.test.ts` for scheduled and bot conversations.

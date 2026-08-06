@@ -2,7 +2,7 @@ import type {
   PulseFindingLifecycle,
   PulseReviewRecord,
 } from '../../services/api-types'
-import { isPulseFindingClosed } from './pulseModuleInspectorUtils'
+import { summarizePulseModule } from './pulseModuleInspectorUtils'
 
 export type PulseWorkspaceModuleDefinition = {
   id: string
@@ -12,11 +12,17 @@ export type PulseWorkspaceModuleDefinition = {
 
 export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
   findings: number
+  /** Work Pulse can diagnose or repair now, including an in-progress fix. */
   active: number
   fixing: number
   awaitingVerification: number
+  awaitingRun: number
+  awaitingUser: number
+  blocked: number
+  proposals: number
   closed: number
   externalAction: number
+  workflowReported: number
   recurring: number
   latestReview: PulseReviewRecord | null
 }
@@ -25,6 +31,25 @@ export type PulseReviewStorageSummary = {
   total: number
   migrated: number
   native: number
+}
+
+const ENGINEERING_REVIEW_ALIASES = new Set([
+  'bug_review',
+  'artifact_review',
+  'report_health',
+  'eval_health',
+  'stores_health',
+  'learning_health',
+  'knowledgebase_health',
+  'db_health',
+])
+
+/** Keep old Pulse records visible after the reviewer model is simplified. */
+export function normalizePulseWorkspaceModule(module?: string): string {
+  const value = (module || '').trim()
+  if (ENGINEERING_REVIEW_ALIASES.has(value)) return 'workflow_review'
+  if (value === 'cost_llm_time') return 'llm_ops_review'
+  return value
 }
 
 export function summarizePulseReviewStorage(
@@ -49,34 +74,37 @@ export function buildPulseWorkspaceModuleSummaries(
 ): PulseWorkspaceModuleSummary[] {
   const latestReviewByModule = new Map<string, PulseReviewRecord>()
   reviews.forEach((review) => {
-    const current = latestReviewByModule.get(review.module)
+    const module = normalizePulseWorkspaceModule(review.module)
+    const current = latestReviewByModule.get(module)
     if (!current || review.recorded_at.localeCompare(current.recorded_at) > 0) {
-      latestReviewByModule.set(review.module, review)
+      latestReviewByModule.set(module, review)
     }
   })
 
   return definitions.map((definition) => {
-    const moduleFindings = findings.filter((finding) => finding.module === definition.id)
+    const definitionModule = normalizePulseWorkspaceModule(definition.id)
+    const moduleFindings = findings.filter((finding) => (
+      normalizePulseWorkspaceModule(finding.module) === definitionModule
+    ))
+    const lifecycle = summarizePulseModule(moduleFindings)
     return {
       ...definition,
       findings: moduleFindings.length,
-      active: moduleFindings.filter((finding) => (
-        !isPulseFindingClosed(finding.status)
-        && finding.status !== 'fixing'
-        && finding.status !== 'awaiting_verification'
-      )).length,
-      fixing: moduleFindings.filter((finding) => finding.status === 'fixing').length,
-      awaitingVerification: moduleFindings.filter((finding) => finding.status === 'awaiting_verification').length,
-      closed: moduleFindings.filter((finding) => (
-        isPulseFindingClosed(finding.status)
-        && finding.status !== 'external_action_required'
-      )).length,
-      externalAction: moduleFindings.filter((finding) => finding.status === 'external_action_required').length,
+      active: lifecycle.open,
+      fixing: lifecycle.fixing,
+      awaitingVerification: lifecycle.awaitingVerification,
+      awaitingRun: lifecycle.awaitingRun,
+      awaitingUser: lifecycle.awaitingUser,
+      blocked: lifecycle.blocked,
+      proposals: lifecycle.proposals,
+      closed: lifecycle.closed,
+      externalAction: lifecycle.externalAction,
+      workflowReported: lifecycle.workflowReported,
       recurring: moduleFindings.filter((finding) => (
         finding.seen_count > 1
         && finding.status !== 'external_action_required'
       )).length,
-      latestReview: latestReviewByModule.get(definition.id) || null,
+      latestReview: latestReviewByModule.get(definitionModule) || null,
     }
   })
 }
@@ -86,8 +114,14 @@ export function selectPulseWorkspaceModule(
 ): string | null {
   if (summaries.length === 0) return null
   const ranked = [...summaries].sort((a, b) => {
-    const aPriority = a.active * 100 + a.awaitingVerification * 20 + a.fixing * 10 + a.recurring
-    const bPriority = b.active * 100 + b.awaitingVerification * 20 + b.fixing * 10 + b.recurring
+    const aPriority = (a.active + a.fixing) * 100
+      + (a.awaitingVerification + a.awaitingRun) * 20
+      + a.awaitingUser * 10
+      + a.recurring
+    const bPriority = (b.active + b.fixing) * 100
+      + (b.awaitingVerification + b.awaitingRun) * 20
+      + b.awaitingUser * 10
+      + b.recurring
     if (aPriority !== bPriority) return bPriority - aPriority
     return (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || '')
   })

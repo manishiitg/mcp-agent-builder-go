@@ -178,6 +178,12 @@ func toUnreviewedPlanChange(e PlanChangelogEntry, sourceFile string) UnreviewedP
 //
 // Best-effort by contract, like the plan tools: a workflow change that succeeded
 // must not fail because its audit note could not be appended.
+// target, beforeSnapshot, and afterSnapshot are optional. When the caller has
+// the actual pre/post artifact content on hand (e.g. a direct file write that
+// already read the previous bytes), pass it so BeforeRef/AfterRef reflect the
+// real artifact instead of the tool-name-based Target guess and the
+// Changes-derived refs, which collapse to the same sha256("[]") whenever
+// changes is nil (PLAT-033).
 func LogCanonicalArtifactChange(
 	ctx context.Context,
 	workspacePath string,
@@ -187,6 +193,8 @@ func LogCanonicalArtifactChange(
 	readFile func(context.Context, string) (string, error),
 	writeFile func(context.Context, string, string) error,
 	logger loggerv2.Logger,
+	target string,
+	beforeSnapshot, afterSnapshot interface{},
 ) {
 	if strings.TrimSpace(workspacePath) == "" || readFile == nil || writeFile == nil || logger == nil {
 		return
@@ -195,8 +203,11 @@ func LogCanonicalArtifactChange(
 		reason = "Recorded automatically so this artifact's change is visible to artifact drift review."
 	}
 	logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-		Tool:    strings.TrimSpace(tool),
-		Reason:  reason,
-		Changes: changes,
+		Tool:           strings.TrimSpace(tool),
+		Reason:         reason,
+		Changes:        changes,
+		Target:         strings.TrimSpace(target),
+		BeforeSnapshot: beforeSnapshot,
+		AfterSnapshot:  afterSnapshot,
 	}, readFile, writeFile, logger)
 }

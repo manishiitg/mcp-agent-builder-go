@@ -671,50 +671,6 @@ func validatePulseDashboardArtifact(ctx context.Context, workspacePath, pulseRun
 	if err := validatePulseImproveHTMLContract(html); err != nil {
 		return fmt.Errorf("Pulse Dashboard wrote an outdated builder/improve.html: %w", err)
 	}
-	if err := validatePulseDashboardFindingCounts(ctx, workspacePath, html); err != nil {
-		return fmt.Errorf("Pulse Dashboard wrote stale Current work counts: %w", err)
-	}
-	return nil
-}
-
-func validatePulseDashboardFindingCounts(ctx context.Context, workspacePath, content string) error {
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
-	if err != nil {
-		return fmt.Errorf("read finding backlog: %w", err)
-	}
-	expected := map[string]int{"open": 0, "in_progress": 0, "in_review": 0}
-	for _, finding := range findings {
-		switch finding.Issue.Status {
-		case "in_progress":
-			expected["in_progress"]++
-		case "in_review":
-			expected["in_review"]++
-		case "backlog", "blocked", "needs_input":
-			expected["open"]++
-		}
-	}
-	document, err := htmlpkg.Parse(strings.NewReader(content))
-	if err != nil {
-		return fmt.Errorf("parse HTML: %w", err)
-	}
-	workSummary, err := requireSinglePulseElement(document, "worksummary", "Current work summary")
-	if err != nil {
-		return err
-	}
-	for _, stat := range pulseElementsWithClass(workSummary, "workstat") {
-		status := strings.TrimSpace(pulseHTMLAttribute(stat, "data-status"))
-		want, known := expected[status]
-		if !known {
-			continue
-		}
-		got, parseErr := strconv.Atoi(strings.TrimSpace(pulseHTMLAttribute(stat, "data-count")))
-		if parseErr != nil {
-			return fmt.Errorf("parse %s count: %w", status, parseErr)
-		}
-		if got != want {
-			return fmt.Errorf("%s count is %d; SQLite has %d", status, got, want)
-		}
-	}
 	return nil
 }
 
@@ -787,42 +743,11 @@ func validatePulseImproveHTMLContract(content string) error {
 		return err
 	}
 	if count := len(pulseLightweightSchemaRootPattern.FindAllString(content, -1)); count != 1 {
-		return fmt.Errorf("expected exactly one data-pulse-schema=\"4\" html root (found %d)", count)
+		return fmt.Errorf("expected exactly one data-pulse-schema=\"5\" html root (found %d)", count)
 	}
 	document, err := htmlpkg.Parse(strings.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("parse HTML: %w", err)
-	}
-
-	coverage, err := requireSinglePulseElement(document, "coverage", "Pulse coverage")
-	if err != nil {
-		return err
-	}
-	coverageItems := pulseElementsWithClass(coverage, "covitem")
-	if len(coverageItems) != len(pulsemodules.All) {
-		return fmt.Errorf("Pulse coverage must contain exactly %d module items (found %d)", len(pulsemodules.All), len(coverageItems))
-	}
-	expectedCoverage := make(map[string]bool, len(pulsemodules.All))
-	for _, module := range pulsemodules.All {
-		expectedCoverage[module.ID] = true
-	}
-	seenCoverage := make(map[string]bool, len(coverageItems))
-	for _, item := range coverageItems {
-		labels := pulseElementsWithClass(item, "cl")
-		if len(labels) != 1 {
-			return fmt.Errorf("each Pulse coverage item must contain exactly one .cl label")
-		}
-		if normalizePulseHTMLText(pulseHTMLText(labels[0])) == "" {
-			return fmt.Errorf("each Pulse coverage item must contain a non-empty .cl label")
-		}
-		moduleID := strings.TrimSpace(pulseHTMLAttribute(item, "data-module"))
-		if !expectedCoverage[moduleID] {
-			return fmt.Errorf("Pulse coverage contains unknown data-module %q", moduleID)
-		}
-		if seenCoverage[moduleID] {
-			return fmt.Errorf("Pulse coverage contains duplicate data-module %q", moduleID)
-		}
-		seenCoverage[moduleID] = true
 	}
 
 	brief, err := requireSinglePulseElement(document, "brief", "Latest Pulse brief")
@@ -858,56 +783,16 @@ func validatePulseImproveHTMLContract(content string) error {
 		seenBrief[label] = true
 	}
 
-	workSummary, err := requireSinglePulseElement(document, "worksummary", "Current work summary")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(pulseHTMLAttribute(workSummary, "data-source")) != "sqlite" {
-		return fmt.Errorf("Current work must declare data-source=\"sqlite\"")
-	}
-	workStats := pulseElementsWithClass(workSummary, "workstat")
-	expectedWorkStats := map[string]bool{"open": true, "in_progress": true, "in_review": true}
-	if len(workStats) != len(expectedWorkStats) {
-		return fmt.Errorf("Current work must contain exactly %d status counts (found %d)", len(expectedWorkStats), len(workStats))
-	}
-	seenWorkStats := make(map[string]bool, len(workStats))
-	for _, stat := range workStats {
-		status := strings.TrimSpace(pulseHTMLAttribute(stat, "data-status"))
-		if !expectedWorkStats[status] {
-			return fmt.Errorf("Current work contains unknown data-status %q", status)
-		}
-		if seenWorkStats[status] {
-			return fmt.Errorf("Current work contains duplicate data-status %q", status)
-		}
-		seenWorkStats[status] = true
-		countText := strings.TrimSpace(pulseHTMLAttribute(stat, "data-count"))
-		count, parseErr := strconv.Atoi(countText)
-		if parseErr != nil || count < 0 {
-			return fmt.Errorf("Current work data-status %q must have a non-negative data-count", status)
-		}
-		visibleCounts := pulseDirectChildrenByTag(stat, "b")
-		if len(visibleCounts) != 1 || strings.TrimSpace(pulseHTMLText(visibleCounts[0])) != countText {
-			return fmt.Errorf("Current work data-status %q visible count must match data-count", status)
-		}
-	}
-	for _, retiredClass := range []string{"workqueue", "workitem", "technical", "filters", "modfields", "agentlog"} {
+	for _, retiredClass := range []string{"coverage", "covitem", "assumptions", "worksummary", "workstats", "workstat", "workqueue", "workitem", "technical", "filters", "modfields", "agentlog"} {
 		if len(pulseElementsWithClass(document, retiredClass)) > 0 {
 			return fmt.Errorf("Lightweight Pulse report must not contain .%s blocks", retiredClass)
 		}
 	}
 	activityEntries := pulseElementsWithClass(document, "entry")
-	activityCount := len(activityEntries) + len(pulseElementsWithClass(document, "run"))
-	if activityCount > pulseImproveArchiveMaxActiveItems {
-		return fmt.Errorf("Lightweight Pulse report must keep at most %d material Activity items (found %d)", pulseImproveArchiveMaxActiveItems, activityCount)
-	}
 	for _, entry := range activityEntries {
 		if pulseHTMLHasClass(entry, "open") {
 			return fmt.Errorf("Current Pulse report must not keep standing open-finding cards in Activity")
 		}
-	}
-
-	if brief.Parent == nil || workSummary.Parent != brief.Parent {
-		return fmt.Errorf("Latest Pulse and Current work must be sibling sections")
 	}
 
 	if _, err := requireSinglePulseElementByID(document, "pulse-agent-handoff"); err != nil {
@@ -1073,16 +958,6 @@ func pulseDirectChildrenWithClass(root *htmlpkg.Node, className string) []*htmlp
 					break
 				}
 			}
-		}
-	}
-	return nodes
-}
-
-func pulseDirectChildrenByTag(root *htmlpkg.Node, tag string) []*htmlpkg.Node {
-	var nodes []*htmlpkg.Node
-	for child := root.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == htmlpkg.ElementNode && child.Data == tag {
-			nodes = append(nodes, child)
 		}
 	}
 	return nodes
@@ -1698,7 +1573,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which modules are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. workflow_review is one continuous read-only agent covering correctness, artifacts, reports/evals, stores, and LLM/tool operations through ordered lenses. strategy_auditor independently improves the current strategy; goal_advisor independently proposes materially different out-of-plan approaches and experiments. Do not pass retired operational module names and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value. The scheduler reads this table and only sends prompts for due modules.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which perspectives are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. llm_ops_review owns efficiency and runtime operations. strategy_auditor owns product/business adequacy inside the current strategy; goal_advisor owns materially different approaches. Engineering and Ops may share one selected-perspective sequence; Strategy and Goal remain independent agents. Do not pass retired artifact-named modules and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1756,7 +1631,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			Description: fmt.Sprintf("Record one Pulse outcome in the workflow's db/db.sqlite. Pass exactly one of module or command.\n"+
 				"module (%s): the terminal result of a selected Pulse module after its review and Fixer work complete — done, changed, blocked, failed, or skipped. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required.\n"+
 				"command (%s): the live or final status of one Pulse final command — running, done, skipped, blocked, or failed. The combined Pulse finalizer marks each command running before work and then terminal immediately after it finishes.\n"+
-				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run; use it instead of blocked, which means no action is available at all. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for finding/module linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
+				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run; use it instead of blocked, which means no action is available at all. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. For strategy_auditor and goal_advisor, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to that module's pending decision, while safe technical prerequisites use the normal Fixer lifecycle. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for finding/module linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
 				strings.Join(pulseModuleOrder, ", "), strings.Join(pulseFinalCommandOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",

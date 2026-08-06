@@ -143,13 +143,17 @@ func preValidationConcernFingerprint(stepID string) string {
 	return concernFingerprint(stepID, "prevalidation:step-output-contract")
 }
 
-// existingWorkflowReviewFingerprint preserves the identity of an exact
-// historical operational finding after the six reviewer modules were folded
-// into workflow_review. Without this bridge the same CONCERNS payload would be
-// refiled under a different step-id hash on the first consolidated pass.
-func existingWorkflowReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, text string) string {
+// existingCanonicalReviewFingerprint preserves the identity of an exact
+// historical finding when a retired reviewer identity is folded into a current
+// lane. Without this bridge the same concern is refiled once under the new lane.
+func existingCanonicalReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, module, text string) string {
 	wanted := strings.ToLower(strings.Join(strings.Fields(text), " "))
-	modules := append([]string{pulsemodules.WorkflowReviewID}, pulsemodules.RetiredIDs...)
+	modules := []string{module}
+	for _, retired := range pulsemodules.RetiredIDs {
+		if pulsemodules.Normalize(retired) == module {
+			modules = append(modules, retired)
+		}
+	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(modules)), ",")
 	args := make([]interface{}, 0, len(modules)+1)
 	args = append(args, ConcernPhaseReview)
@@ -204,6 +208,9 @@ func openRunConcernsDB(ctx context.Context, workspacePath string, create bool) (
 // Best-effort by contract: a step that did its work must not fail because its
 // concern could not be filed. Callers log and continue.
 func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName, stepID, phase, summary string) (int, error) {
+	if phase == ConcernPhaseReview && (pulsemodules.IsValid(stepID) || pulsemodules.IsRetired(stepID)) {
+		stepID = pulsemodules.Normalize(stepID)
+	}
 	lines := ParseConcernLines(summary)
 	if len(lines) == 0 {
 		return 0, nil
@@ -263,8 +270,8 @@ func recordRunConcernLinesAtWithFingerprints(
 		} else if fp == "" {
 			fp = concernFingerprint(stepID, text)
 		}
-		if stepID == pulsemodules.WorkflowReviewID {
-			if historical := existingWorkflowReviewFingerprint(ctx, db, text); historical != "" {
+		if phase == ConcernPhaseReview && pulsemodules.IsValid(stepID) {
+			if historical := existingCanonicalReviewFingerprint(ctx, db, stepID, text); historical != "" {
 				fp = historical
 			}
 		}

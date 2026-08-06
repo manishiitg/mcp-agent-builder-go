@@ -153,7 +153,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED FINDING DETAILS: an injected multi-lane contract may require one compact PULSE_FINDING_JSON marker before every CONCERNS line solely to preserve its owning module. Outside that contract, add this marker only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
 		artifactContract += "LIFECYCLE HISTORY: call get_pulse_state(view=\"backlog\") for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
@@ -197,30 +197,145 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
-func canonicalWorkflowReviewMessageSequence() []backgroundMessageSequenceItem {
-	return []backgroundMessageSequenceItem{
-		{ID: "correctness", Title: "Correctness and verification", Message: "Using the shared evidence map already collected, review correctness, safe exploratory QA, failed or hidden-error tool calls, and every arrived changed_unverified verification boundary. Checkpoint compact findings and evidence for the next turn; do not consolidate yet."},
-		{ID: "artifact-drift", Title: "Plan and artifact drift", Message: "Continue in the same context. Review plan/changelog and artifact drift against the shared evidence and original sources only where needed. Checkpoint compact findings and cross-links; do not repeat earlier evidence or consolidate yet."},
-		{ID: "report-eval", Title: "Report and eval truthfulness", Message: "Continue in the same context. Review report and evaluation truthfulness, freshness, run/group binding, and evidence-chain integrity. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-		{ID: "stores", Title: "Stores contracts", Message: "Continue in the same context. Load the improve-learnings, improve-knowledge, and improve-database references together with read_skill and follow their read-only audit rules. This is the stores turn inside module=workflow_review: do not emit the guides' legacy standalone module envelopes, do not return the final review artifact yet, and do not mark stores_health. For learnings, audit every content-bearing Markdown file in the complete skill package plus every effective read-write learning_objective: references are part of the skill, only reusable execution HOW may remain, and moving non-skill content behind a reference link is not a repair. Review knowledgebase and database contracts, freshness, consumers, and integrity in the same stores lens. Checkpoint only new conclusions and cross-links; do not consolidate yet."},
-		{ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
-		{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every lens checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."},
+func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) ([]backgroundMessageSequenceItem, error) {
+	available := map[string]backgroundMessageSequenceItem{
+		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence; do not propose product strategy and do not consolidate yet."},
+		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
 	}
+	if len(lanes) == 0 {
+		lanes = []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
+	}
+	seen := map[string]bool{}
+	selected := map[string]bool{}
+	for _, lane := range lanes {
+		lane = strings.TrimSpace(lane)
+		if _, ok := available[lane]; !ok {
+			return nil, fmt.Errorf("review_lanes contains unsupported operational lane %q", lane)
+		}
+		if seen[lane] {
+			return nil, fmt.Errorf("review_lanes contains duplicate lane %q", lane)
+		}
+		seen[lane] = true
+		selected[lane] = true
+	}
+	ordered := []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
+	items := make([]backgroundMessageSequenceItem, 0, len(selected)+1)
+	for _, lane := range ordered {
+		if selected[lane] {
+			items = append(items, available[lane])
+		}
+	}
+	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."})
+	if includeFixer {
+		items = append(items, backgroundMessageSequenceItem{
+			ID:      "fix",
+			Title:   "Apply and verify fixes",
+			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The backend has now persisted your consolidated review and filed its trackable concerns. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the persisted review and complete lifecycle backlog, consume verification verdicts first, and build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome; do not repeat CONCERNS lines because the review checkpoint already filed them.",
+		})
+	}
+	return items, nil
 }
 
-func defaultBackgroundMessageSequence(args map[string]interface{}) []backgroundMessageSequenceItem {
+func backgroundReviewLanes(args map[string]interface{}) ([]string, error) {
+	raw, exists := args["review_lanes"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]interface{})
+	if !ok {
+		if typed, typedOK := raw.([]string); typedOK {
+			return append([]string(nil), typed...), nil
+		}
+		return nil, fmt.Errorf("review_lanes must be an array of operational module IDs")
+	}
+	lanes := make([]string, 0, len(values))
+	for index, value := range values {
+		lane, ok := value.(string)
+		if !ok || strings.TrimSpace(lane) == "" {
+			return nil, fmt.Errorf("review_lanes[%d] must be a non-empty string", index)
+		}
+		lanes = append(lanes, strings.TrimSpace(lane))
+	}
+	if len(lanes) == 0 {
+		return nil, fmt.Errorf("review_lanes must contain at least one operational module")
+	}
+	return lanes, nil
+}
+
+func partitionPulseReviewConcerns(summary string, lanes []string) (map[string]string, error) {
+	concerns := ParseConcernLines(summary)
+	if len(concerns) == 0 {
+		return map[string]string{}, nil
+	}
+	canonical := make([]string, 0, len(lanes))
+	allowed := map[string]bool{}
+	for _, lane := range lanes {
+		lane = pulsemodules.Normalize(lane)
+		if lane == "" || allowed[lane] {
+			continue
+		}
+		allowed[lane] = true
+		canonical = append(canonical, lane)
+	}
+	if len(canonical) == 0 {
+		return nil, fmt.Errorf("review concerns have no owning module")
+	}
+	if len(canonical) == 1 {
+		return map[string]string{canonical[0]: summary}, nil
+	}
+
+	markers := map[string]pulseFindingDetailMarker{}
+	for _, marker := range ParsePulseFindingDetailMarkers(summary) {
+		key := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
+		if _, duplicate := markers[key]; duplicate {
+			return nil, fmt.Errorf("review concern %q has duplicate PULSE_FINDING_JSON attribution", marker.Concern)
+		}
+		marker.Module = pulsemodules.Normalize(marker.Module)
+		if !allowed[marker.Module] {
+			return nil, fmt.Errorf("review concern %q must name one selected module in PULSE_FINDING_JSON; got %q", marker.Concern, marker.Module)
+		}
+		markers[key] = marker
+	}
+
+	partitioned := map[string][]string{}
+	for _, concern := range concerns {
+		key := strings.ToLower(strings.Join(strings.Fields(concern), " "))
+		marker, ok := markers[key]
+		if !ok {
+			return nil, fmt.Errorf("review concern %q is missing selected-lane PULSE_FINDING_JSON attribution", concern)
+		}
+		rawMarker, err := json.Marshal(marker)
+		if err != nil {
+			return nil, fmt.Errorf("encode review concern attribution: %w", err)
+		}
+		partitioned[marker.Module] = append(partitioned[marker.Module], pulseFindingJSONPrefix+" "+string(rawMarker), concernLinePrefix+" "+concern)
+	}
+
+	out := make(map[string]string, len(partitioned))
+	for module, lines := range partitioned {
+		out[module] = strings.Join(lines, "\n")
+	}
+	return out, nil
+}
+
+func defaultBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	role, _ := args["role"].(string)
 	module, _ := args["module"].(string)
-	if strings.EqualFold(strings.TrimSpace(role), "reviewer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
-		return canonicalWorkflowReviewMessageSequence()
+	role = strings.ToLower(strings.TrimSpace(role))
+	if (role == "reviewer" || role == "fixer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
+		lanes, err := backgroundReviewLanes(args)
+		if err != nil {
+			return nil, err
+		}
+		return canonicalWorkflowReviewMessageSequence(lanes, role == "fixer")
 	}
-	return nil
+	return nil, nil
 }
 
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
-		return defaultBackgroundMessageSequence(args), nil
+		return defaultBackgroundMessageSequence(args)
 	}
 	items, ok := raw.([]interface{})
 	if !ok {
@@ -269,7 +384,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    maxBackgroundMessageSequenceItems,
-		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for role=reviewer, module=workflow_review: the backend supplies that module's canonical six follow-ups. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for module=workflow_review: the backend supplies only the Gate-selected operational lanes from review_lanes, then consolidation; role=fixer adds one bounded Fixer turn after the persisted review checkpoint. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
 		"items": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -298,6 +413,19 @@ func executeBackgroundMessageSequence(
 	opening string,
 	messageSequence []backgroundMessageSequenceItem,
 ) (string, error) {
+	return executeBackgroundMessageSequenceObserved(ctx, agent, templateVars, opening, messageSequence, nil)
+}
+
+type backgroundMessageSequenceObserver func(backgroundMessageSequenceItem, string) error
+
+func executeBackgroundMessageSequenceObserved(
+	ctx context.Context,
+	agent agents.OrchestratorAgent,
+	templateVars map[string]string,
+	opening string,
+	messageSequence []backgroundMessageSequenceItem,
+	observer backgroundMessageSequenceObserver,
+) (string, error) {
 	if agent == nil {
 		return "", fmt.Errorf("background sequence agent is nil")
 	}
@@ -318,6 +446,11 @@ func executeBackgroundMessageSequence(
 		result, history, err = agent.Execute(ctx, turnVars, history)
 		if err != nil {
 			return "", fmt.Errorf("sequence turn %d (%s) failed: %w", turnIndex+1, turn.ID, err)
+		}
+		if observer != nil {
+			if err := observer(turn, result); err != nil {
+				return "", fmt.Errorf("sequence turn %d (%s) checkpoint failed: %w", turnIndex+1, turn.ID, err)
+			}
 		}
 	}
 	return result, nil
@@ -1274,6 +1407,26 @@ func uniqueStringsPreserveOrder(values []string) []string {
 	return result
 }
 
+// notificationRecipientSummary renders a configured recipient list for the
+// agent-facing config read-out. An empty list is described by what it actually
+// does at send time rather than as a blank, so the agent does not read a
+// missing override as "this workflow emails nobody".
+func notificationRecipientSummary(recipients []string) string {
+	if len(recipients) == 0 {
+		return "not configured (uses the account default recipient)"
+	}
+	return strings.Join(recipients, ", ")
+}
+
+// notificationWebhookSummary renders the Slack channels configured for one
+// summary. Each entry is a webhook secret, and a webhook is one channel.
+func notificationWebhookSummary(secretNames []string) string {
+	if len(secretNames) == 0 {
+		return "not configured (uses the workflow's single Slack webhook, if any)"
+	}
+	return strings.Join(secretNames, ", ")
+}
+
 // persistWorkflowConfigToManifest writes the current in-memory workflow config
 // (servers, tools, skills, secrets) back to workflow.json so changes survive
 // session end.
@@ -1483,7 +1636,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// Secret management tools. Global secrets are read-only; workflow/user
 		// encrypted stores are writable when the corresponding tools are registered.
 		"list_secrets", "set_workflow_secret", "delete_workflow_secret", "set_user_secret", "delete_user_secret",
-		// Human tools are appended below from virtualtools.WorkshopHumanToolNames()
+		// Human tools are appended below from virtualtools.HumanToolNamesForWorkshopMode()
 		// (single source shared with registration, so the allow-list can't drift).
 		// Browser (if registered)
 		"agent_browser",
@@ -1503,7 +1656,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	}
 	// Human tools from the single source shared with registration (createCustomTools),
 	// so the allow-list and what's actually registered cannot drift apart.
-	system = append(system, virtualtools.WorkshopHumanToolNames()...)
+	system = append(system, virtualtools.HumanToolNamesForWorkshopMode(mode)...)
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
@@ -1753,45 +1906,19 @@ func goalAdvisorFinalizerProposalToolAgentAllowedToolNames() []string {
 	return goalAdvisorCommonMutationToolAgentAllowedToolNames()
 }
 
-// pulseFixerStageToolAgentAllowedToolNames is the Fixer's surface: the bounded
-// mutation tools it needs to repair a workflow, plus the lifecycle writers that
-// record what it did.
+// pulseFixerStageToolAgentAllowedToolNames uses the canonical Workshop writer
+// surface instead of maintaining a second, hand-curated approximation of it.
+// A Fixer is expected to repair any proven workflow implementation defect; a
+// missing plan, route, schedule, skill, model setting, report, evaluation, or
+// store tool must not turn a repairable issue into a false platform blocker.
 //
-// It deliberately omits record_pulse_worklist. A fixer stage must not decide
-// which modules are due, so a fixer child cannot impersonate a complete pass.
-// Declaring a Pulse finished is likewise not its job: record_pulse_result is
-// granted for module results, and the finalizer stage is the only caller told to
-// use its command form. It also omits create_plan and the step add/delete tools:
-// reshaping the plan is a Goal Advisor decision under explicit approval, not
-// something a bounded repair reaches for.
+// Authority and intent remain separate. The Fixer still receives delegated
+// Pulse write authority for one pulse_run_id, must follow the finding lifecycle,
+// and must not make approval-bound product/strategy changes merely because the
+// underlying Builder tool exists. Those rules belong to the lifecycle and
+// prompt contracts, not to a second tool-permission matrix that can drift.
 func pulseFixerStageToolAgentAllowedToolNames() []string {
-	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
-	tools = append(tools,
-		// Bounded repair of what a review actually found.
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
-		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"update_step_config", "update_validation_schema", "update_evaluation_plan", "validate_evaluation_plan",
-		"update_variable", "update_workflow_config",
-
-		// Durable finding lifecycle: read module state, the backlog, and saved
-		// reviews, then record one honest disposition per finding.
-		"get_pulse_state",
-		"record_pulse_result", "record_pulse_impact", "resolve_run_concern",
-		"mark_changelog_artifact_reviewed",
-		// Write access to the workflow database. Reading it (query_workflow_db)
-		// and read_skill come from the common list every agent inherits; only the
-		// single writer gets mutate.
-		"mutate_workflow_db",
-
-		// Scheduler repair. pulse-fixer-practices.md gives this agent a
-		// "Scheduler and lifecycle repair" section, so withholding the schedule
-		// tools made its own instructions unfollowable — it burned four calls on
-		// update_schedule and reported the workflow unchanged. Creating and
-		// deleting schedules stay out: those reshape the run surface, which is a
-		// Workshop decision, not a bounded repair.
-		"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule",
-	)
-	return tools
+	return append([]string(nil), GetToolsForWorkshopMode("workshop")...)
 }
 
 func goalAdvisorFinalizerApprovedToolAgentAllowedToolNames() []string {
@@ -2805,7 +2932,7 @@ For the full debugging playbook (workshop vs run investigation workflow steps, r
 
 Priority order when reviewing a step: (1) Correctness — description precision, validation schema completeness, context I/O wiring. (2) Knowledge — learnings quality, lock lifecycle. (3) Efficiency — tool-call waste, workflow structure (merge/split/reorder).
 
-	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. `+"`db_access`"+` defaults to `+"`\"read-write\"`"+`: agentic steps get `+"`query_workflow_db`"+` plus `+"`mutate_workflow_db`"+`, while saved scripted code keeps `+"`$DB_PATH`"+` compatibility; set `+"`\"read\"`"+` for pure readers, report shaping, and validation. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_learnings=true`"+` is a deliberate Workshop/user decision, never a runtime side effect; `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. Three locks: `+"`lock_learnings`"+` (per-step, freezes SKILL.md), `+"`lock_code`"+` (per-step scripted, freezes main.py), `+"`lock_knowledgebase`"+` (workflow-wide, freezes notes/ auto-updates).
+	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. Every workflow step currently gets managed DB read-write access: agentic steps receive `+"`query_workflow_db`"+` plus `+"`mutate_workflow_db`"+`, while saved scripted code keeps `+"`$DB_PATH`"+` compatibility. Treat `+"`db_access`"+` as a compatibility field, not a tuning decision. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_learnings=true`"+` is a deliberate Workshop/user decision, never a runtime side effect; `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. Three locks: `+"`lock_learnings`"+` (per-step, freezes SKILL.md), `+"`lock_code`"+` (per-step scripted, freezes main.py), `+"`lock_knowledgebase`"+` (workflow-wide, freezes notes/ auto-updates).
 
 For the full playbook (validation design, learning config, three-locks decision tree, scripted debugging, mode promotion gates, evidence-based locking, orchestrator design + fast path, KB curation modes): `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/optimize-playbook.md\"}])`"+`. For the per-step config knobs themselves — all store-access modes (`+"`learnings_access`"+` / `+"`knowledgebase_access`"+` / `+"`db_access`"+`), the three locks, execution mode/tier/model, and `+"`update_step_config`"+`/clear usage — load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-config.md\"}])`"+`. When patching `+"`learnings/{step-id}/main.py`"+`: also load `+"`code-authoring`"+`.
 {{end}}
@@ -2819,7 +2946,7 @@ Every `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"referenc
 
 For `+"`human_feedback`"+`, use a foreground curl. Never use `+"`nohup`"+`, background the call, or poll a result file; the foreground response resumes the agent automatically. Cursor agents must keep `+"`timeout_seconds <= 45`"+`.
 
-The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and — whenever skills are attached — intrinsic `+"`read_skill`"+`. Names such as `+"`execute_step`"+`, `+"`query_step`"+`, `+"`list_executions`"+`, and the other workflow tools below are logical HTTP-backed tools, not native `+"`api-bridge.<name>`"+` calls. Never call `+"`api-bridge.list_executions`"+` or guess another native bridge name. First call `+"`get_api_spec(tool_name=\"<name>\")`"+`, then invoke the returned endpoint through `+"`execute_shell_command`"+` using the provided `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route and `+"`$MCP_AUTH`"+`; do not invent or hardcode a URL. The normal workflow loop uses `+"`execute_step`"+` / `+"`run_full_workflow`"+`, waits for the automatic completion notification rather than polling, and inspects a live step with `+"`query_step`"+` only when the user asks. Workshop decisions can use `+"`create_human_input_request`"+` and `+"`run_goal_advisor_review`"+`. Read the attached `+"`builder-reference`"+` skill's `+"`references/workflow-tools.md`"+` (or call `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`) for the complete catalog, signatures, mode rules, schedules, secrets, notifications, and gotchas.
+The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are HTTP-backed, not native `+"`api-bridge.<name>`"+` calls: use `+"`get_api_spec(tool_name=\"<name>\")`"+`, then its returned `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route with `+"`$MCP_AUTH`"+`; never guess a bridge name or URL. Normal execution waits for automatic completion instead of polling and queries a live step only when the user asks. Use `+"`create_human_input_request`"+` to ask a durable question and `+"`answer_human_input_request`"+` only after the user explicitly answers it. Read `+"`builder-reference/references/workflow-tools.md`"+` through `+"`read_skill`"+` for the complete catalog and rules.
 {{else}}
 ## TOOLS REFERENCE (cheat sheet)
 
@@ -3815,7 +3942,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// code-exec registry.
 	if err := mcpAgent.RegisterCustomTool(
 		"call_generic_agent",
-		"Start one isolated Pulse stage asynchronously through the documented MCP API bridge and return its execution_id immediately. role=reviewer is strictly read-only, persists complete Markdown plus structured verification markers in SQLite, and reports a compact review identity on completion. role=fixer is the single bounded writer for a Pulse pass, does not create a review artifact, and may process every due module when module=pulse_fixer. Every stage is tracked as a child execution. After launch, end the current turn and await the automatic completion notification; do not poll or enter the next Pulse phase. Incomplete provider snapshots are rejected and retried once. Do not add a completion marker; this tool owns it.",
+		"Start one isolated Pulse stage asynchronously through the documented MCP API bridge and return its execution_id immediately. role=reviewer is strictly read-only and persists complete Markdown plus structured verification markers in SQLite. role=fixer,module=workflow_review runs Gate-selected operational reviews and bounded repairs as ordered turns in one agent, persisting the consolidated review before mutation. role=fixer,module=pulse_fixer handles only residual non-terminal due modules. Every stage is tracked as a child execution. After launch, end the current turn and await the automatic completion notification; do not poll or enter the next Pulse phase. Read-only incomplete provider snapshots are retried once; writers are never replayed automatically. Do not add a completion marker; this tool owns it.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3828,6 +3955,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"description": "Opening-turn instructions, including workflow path, Pulse run id, module, evidence, and response contract. Do not add a final completion marker; the tool appends its authoritative marker to the last turn.",
 				},
 				"message_sequence": backgroundMessageSequenceSchema(),
+				"review_lanes": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string", "enum": []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}},
+					"description": "For a scheduled shared operational reviewer, the exact non-empty perspective IDs selected by Pulse Gate: Engineering Review and/or LLM/Ops. The backend creates one ordered turn per selected perspective plus consolidation; omitted perspectives do not run.",
+				},
 				"preferred_tier": map[string]interface{}{
 					"type":        "integer",
 					"enum":        []int{1, 2, 3},
@@ -3843,12 +3975,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"module": map[string]interface{}{
 					"type":        "string",
-					"description": "Reviewer: exact canonical module. Consolidated scheduled Fixer: pulse_fixer, meaning all due modules in this Pulse run. Standalone/manual Fixer may still pass one canonical module.",
+					"description": "Reviewer: exact canonical module. Combined scheduled operational review/fix: workflow_review with role=fixer and review_lanes. Residual scheduled Fixer: pulse_fixer. Standalone/manual Fixer may still pass one canonical module.",
 				},
 				"role": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"reviewer", "fixer"},
-					"description": "Defaults to reviewer: read-only, returns findings, changes nothing. Use fixer once per pass with module=pulse_fixer to drain all due modules, or with one canonical module for a standalone manual repair. The stage is lent bounded Pulse write authority for this run only.",
+					"description": "Defaults to reviewer: read-only, returns findings, changes nothing. Use fixer with module=workflow_review and review_lanes for the combined operational review/fix sequence; use module=pulse_fixer only for residual non-terminal due modules or one canonical module for a standalone manual repair. A Fixer stage is lent bounded Pulse write authority for this run only.",
 				},
 			},
 			"required": []string{"todo_id", "instructions", "preferred_tier"},
@@ -3871,6 +4003,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "", fmt.Errorf("instructions are required")
 			}
 			messageSequence, err := parseBackgroundMessageSequence(args)
+			if err != nil {
+				return "", err
+			}
+			reviewLanes, err := backgroundReviewLanes(args)
 			if err != nil {
 				return "", err
 			}
@@ -3898,11 +4034,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if module != "" && module != "pulse_fixer" && pulseRunID == "" && reviewRunID == "" && !looksLikeScheduledPulseReview {
 				pulseRunID, reviewRunID = newManualPulseReviewIdentity(time.Now(), todoID, module)
 			}
-			// A standalone /pulse-fixer already owns a pulse_run_id from
-			// begin_pulse_fixer_run and must keep writing under it, so it cannot
-			// take the branch above. Derive the review identity for it instead
-			// of making the caller invent one, so the manual and scheduled paths
-			// reach the same stage through the same arguments.
+			// A trusted recovery caller may already own a pulse_run_id while
+			// lacking a review identity. Keep its authority bound to that run and
+			// derive only the missing review identity.
 			if module != "" && pulseRunID != "" && reviewRunID == "" {
 				_, reviewRunID = newDerivedPulseReviewIdentity(time.Now(), pulseRunID, todoID, module)
 			}
@@ -3916,9 +4050,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "", fmt.Errorf("scheduled Pulse reviews require pulse_run_id, review_run_id, and module together; standalone reviews pass module alone and keep scheduler identity fields out of reviewer instructions")
 			}
 			isPulseStage := pulseMetadataCount == 3
-			isPulseReviewer := isPulseStage && !isFixer
-			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(messageSequence) == 0 {
-				return "", fmt.Errorf("workflow_review requires message_sequence so its ordered lenses run as separate turns in one agent session")
+			isReviewFixer := isPulseStage && isFixer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0
+			isPulseReviewer := isPulseStage && (!isFixer || isReviewFixer)
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID {
+				if len(reviewLanes) == 0 {
+					return "", fmt.Errorf("scheduled workflow_review requires the exact non-empty review_lanes selected by Pulse Gate")
+				}
+				if len(messageSequence) == 0 {
+					return "", fmt.Errorf("workflow_review requires selected review lanes plus consolidation in one agent session")
+				}
 			}
 			if isFixer && !isPulseStage {
 				return "", fmt.Errorf("role=fixer requires pulse_run_id, review_run_id, and module together")
@@ -4018,6 +4158,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				reviewMeta["pulse_run_id"] = pulseRunID
 				reviewMeta["review_run_id"] = reviewRunID
 				reviewMeta["module"] = module
+				if len(reviewLanes) > 0 {
+					reviewMeta["review_lanes"] = strings.Join(reviewLanes, ",")
+				}
 				if resultPath != "" {
 					reviewMeta["review_result_path"] = resultPath
 				}
@@ -4043,19 +4186,38 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			marker := pulseReviewerCompletionMarker(todoID)
 			stageInstructions := instructions
 			if isPulseReviewer {
-				candidates, allowlistErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, module)
+				candidateModules := []string{module}
+				if module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
+					candidateModules = reviewLanes
+				}
+				candidates := []PulseReviewVerificationCandidate{}
+				var allowlistErrors []string
+				for _, candidateModule := range candidateModules {
+					moduleCandidates, candidateErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, candidateModule)
+					if candidateErr != nil {
+						allowlistErrors = append(allowlistErrors, candidateModule+": "+candidateErr.Error())
+						continue
+					}
+					candidates = append(candidates, moduleCandidates...)
+				}
 				allowlistJSON, _ := json.Marshal(candidates)
 				allowlistNote := ""
-				if allowlistErr != nil {
-					allowlistNote = " The allowlist could not be loaded; fail closed and emit zero verification markers. Error: " + allowlistErr.Error()
+				if len(allowlistErrors) > 0 {
+					candidates = []PulseReviewVerificationCandidate{}
+					allowlistJSON, _ = json.Marshal(candidates)
+					allowlistNote = " The complete selected-lane allowlist could not be loaded; fail closed and emit zero verification markers. Errors: " + strings.Join(allowlistErrors, "; ")
 				}
 				stageInstructions = strings.TrimSpace(stageInstructions) + fmt.Sprintf(
 					"\n\nTRUSTED VERIFICATION ALLOWLIST (backend generated): %s.%s Emit PULSE_VERIFICATION_JSON only for an exact finding_id + fingerprint + attempt_id tuple in this list. An empty list means emit no verification markers. Evidence that contradicts any other retained finding is a new/reopened finding, not verification of a nonexistent attempt.",
 					string(allowlistJSON), allowlistNote,
 				)
+				if len(reviewLanes) > 1 {
+					laneJSON, _ := json.Marshal(reviewLanes)
+					stageInstructions += fmt.Sprintf("\n\nSELECTED-LANE FINDING ATTRIBUTION (backend enforced): selected lanes are %s. Treat module=workflow_review as the shared-session transport identity, not as ownership for every finding. Load backlog and prior-review evidence for each selected lane before discovery. Immediately before every CONCERNS line, emit one single-line PULSE_FINDING_JSON marker whose concern exactly matches the CONCERNS payload, whose module is exactly one selected lane, and whose issue_kind is workflow_issue or harness_issue. Ordinary workflow findings do not need an invented finding_id or target_key. Harness findings still include their complete structured harness fields. A missing, duplicate, or unselected module attribution rejects the shared review rather than silently assigning the finding to the wrong future Gate lane.", string(laneJSON))
+				}
 			}
 			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, marker)
-			if isFixer {
+			if isFixer && !isReviewFixer {
 				stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, marker)
 			}
 			stageSequence := append([]backgroundMessageSequenceItem(nil), messageSequence...)
@@ -4064,11 +4226,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				// out of the opening and intermediate turns prevents an early lens
 				// from looking terminal to the trusted persistence boundary.
 				stageInstruction = buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, "")
-				if isFixer {
+				if isFixer && !isReviewFixer {
 					stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, "")
 				}
 				last := len(stageSequence) - 1
 				stageSequence[last].Message = strings.TrimSpace(stageSequence[last].Message) + pulseReviewerCompletionContract(marker)
+			}
+			reviewModules := []string{module}
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
+				reviewModules = append([]string(nil), reviewLanes...)
 			}
 			persistFailure := func(message string) error {
 				if !isPulseReviewer {
@@ -4077,13 +4243,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "failed", message, time.Now())
 				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
 				defer persistCancel()
-				return RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body)
+				return RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body)
 			}
 
 			go func() {
 				var toolResult string
 				var toolErr error
 				var stageStartedAt time.Time
+				combinedReviewPersisted := false
 				// Finalize and notify before releasing the execution context. Calling
 				// cancel first would misclassify a successful completion as cancelled.
 				defer cancel()
@@ -4104,7 +4271,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					stageStartedAt = time.Now().UTC()
 
 					var incompleteErr error
-					for attempt := 1; attempt <= 2; attempt++ {
+					maxAttempts := 2
+					if isFixer {
+						// A writer may already have checkpointed mutations before an
+						// incomplete final response. Re-running the entire conversation is
+						// not a safe completion retry.
+						maxAttempts = 1
+					}
+					for attempt := 1; attempt <= maxAttempts; attempt++ {
 						stageName := "Generic agent - " + todoID
 						if isPulseStage {
 							stageName = "Pulse reviewer - " + todoID
@@ -4115,25 +4289,67 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						if attempt > 1 {
 							stageName += " - completion retry"
 						}
-						result, runErr := iwm.runGoalAdvisorStageAgentSequence(execCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID)
+						var observer backgroundMessageSequenceObserver
+						if isReviewFixer {
+							observer = func(turn backgroundMessageSequenceItem, reviewResult string) error {
+								if turn.ID != "consolidate" {
+									return nil
+								}
+								concernsByModule, attributionErr := partitionPulseReviewConcerns(reviewResult, reviewModules)
+								if attributionErr != nil {
+									return attributionErr
+								}
+								body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", reviewResult, time.Now())
+								persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
+								defer persistCancel()
+								if writeErr := RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body); writeErr != nil {
+									return fmt.Errorf("persist combined Pulse review %s: %w", resultPath, writeErr)
+								}
+								for concernModule, concernSummary := range concernsByModule {
+									iwm.controller.recordStepConcerns(persistCtx, concernModule, map[string]string{
+										ConcernPhaseReview: concernSummary,
+									})
+								}
+								combinedReviewPersisted = true
+								return nil
+							}
+						}
+						result, runErr := iwm.runGoalAdvisorStageAgentSequenceObserved(execCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID, observer)
 						if runErr != nil {
-							if writeErr := persistFailure(runErr.Error()); writeErr != nil {
-								return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
+							if !combinedReviewPersisted {
+								if writeErr := persistFailure(runErr.Error()); writeErr != nil {
+									return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
+								}
 							}
 							if isPulseReviewer {
+								if isReviewFixer && combinedReviewPersisted {
+									return "", fmt.Errorf("%w; completed operational review retained at %s for residual Fixer recovery", runErr, resultPath)
+								}
 								return "", fmt.Errorf("%w; failure recorded at %s", runErr, resultPath)
 							}
 							return "", runErr
 						}
 						completed, completionErr := completedPulseReviewerResult(result, marker)
 						if completionErr == nil {
+							if isReviewFixer {
+								if !combinedReviewPersisted {
+									return "", fmt.Errorf("combined operational reviewer reached Fixer completion without persisting its review checkpoint")
+								}
+								return completed, nil
+							}
 							if !isPulseReviewer {
 								return completed, nil
+							}
+							concernsByModule, attributionErr := partitionPulseReviewConcerns(completed, reviewModules)
+							if attributionErr != nil {
+								incompleteErr = attributionErr
+								logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned invalid lane attribution: %v", todoID, attempt, attributionErr))
+								continue
 							}
 							body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", completed, time.Now())
 							persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
 							defer persistCancel()
-							if writeErr := RecordPulseReview(persistCtx, workspacePath, module, reviewRunID, pulseRunID, "", body); writeErr != nil {
+							if writeErr := RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body); writeErr != nil {
 								return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
 							}
 							// File the review's CONCERNS: lines through the same Go-side path
@@ -4141,9 +4357,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							// review records becomes visible as recurrence. The Markdown stored
 							// in SQLite remains the full evidence; this is only its trackable
 							// lifecycle index.
-							iwm.controller.recordStepConcerns(persistCtx, module, map[string]string{
-								ConcernPhaseReview: completed,
-							})
+							for concernModule, concernSummary := range concernsByModule {
+								iwm.controller.recordStepConcerns(persistCtx, concernModule, map[string]string{
+									ConcernPhaseReview: concernSummary,
+								})
+							}
 							// Log that this reviewer ran and what it concluded. Without it,
 							// Gate cannot tell a module that keeps finding real problems from
 							// one that never finds anything, and its next choice is a guess.
@@ -4992,7 +5210,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"db_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "read-write"},
-					"description": "Access mode for this step against db/db.sqlite (and db/). Defaults to 'read-write'. Agentic steps receive query_workflow_db plus mutate_workflow_db; 'read' exposes query only. Saved scripted/application code retains absolute $DB_PATH compatibility during migration. Pure readers, report shaping, aggregation, validation, and preflight checks should use 'read'. Omit to keep the read-write default.",
+					"description": "Compatibility field for this step's workflow database access. Runtime currently grants every workflow step managed read-write access: agentic steps receive query_workflow_db plus mutate_workflow_db, while saved scripted/application code retains absolute $DB_PATH compatibility. Existing 'read' values remain loadable but do not narrow runtime access; omit this field while uniform access is active.",
 				},
 				"knowledgebase_contribution": map[string]interface{}{
 					"type":        "string",
@@ -5128,6 +5346,18 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			if targetConfig.AgentConfigs == nil {
 				targetConfig.AgentConfigs = &AgentConfigs{}
+			}
+
+			// Snapshot the step's config exactly as it stood before this call's
+			// mutations, decoupled from *targetConfig via a JSON round trip so
+			// later in-place field writes below cannot retroactively change it.
+			// This is what makes the changelog's before_ref real instead of the
+			// sha256("[]") placeholder every prior call recorded (PLAT-033) — the
+			// entry below never set Changes at all, so before_ref/after_ref
+			// always hashed the same empty list regardless of what changed.
+			var beforeStepConfigSnapshot interface{}
+			if beforeJSON, beforeErr := json.Marshal(targetConfig); beforeErr == nil {
+				_ = json.Unmarshal(beforeJSON, &beforeStepConfigSnapshot)
 			}
 
 			// Apply provided fields
@@ -5584,6 +5814,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			workspacePath := iwm.controller.GetWorkspacePath()
+			configPath := configSubdir + "/step_config.json"
+			if isEvalStep {
+				configPath = "evaluation/step_config.json"
+			}
 			cleanupMessages := make([]string, 0, 1)
 			if cleanupStaleMainPy {
 				mainPyRelPath := fmt.Sprintf("learnings/%s/main.py", stepID)
@@ -5598,19 +5832,36 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					warnings = append(warnings, fmt.Sprintf("Declared agentic but could not check stale learnings/%s/main.py: %v", stepID, existsErr))
 				}
 			}
+
+			// Re-read the persisted state rather than reusing the in-memory
+			// targetConfig, so the after-snapshot reflects what
+			// WriteStepConfigsToSubdir actually wrote — including any
+			// normalization or silent field drop it applies — not what this
+			// call asked for.
+			var afterStepConfigSnapshot interface{}
+			if persistedConfigs, readErr := iwm.controller.ReadStepConfigsFromSubdir(ctx, configSubdir); readErr == nil {
+				for i := range persistedConfigs {
+					if persistedConfigs[i].ID == stepID {
+						if afterJSON, afterErr := json.Marshal(persistedConfigs[i]); afterErr == nil {
+							_ = json.Unmarshal(afterJSON, &afterStepConfigSnapshot)
+						}
+						break
+					}
+				}
+			}
 			if err := writePlanChangelogEntry(ctx, workspacePath, PlanChangelogEntry{
-				Tool:    "update_step_config",
-				Reason:  strings.TrimSpace(reasonRaw),
-				StepIDs: []string{stepID},
+				Tool:           "update_step_config",
+				Reason:         strings.TrimSpace(reasonRaw),
+				StepIDs:        []string{stepID},
+				Changes:        []PlanFieldChange{{StepID: stepID, Field: "agent_configs", OldValue: beforeStepConfigSnapshot, NewValue: afterStepConfigSnapshot}},
+				Target:         configPath,
+				BeforeSnapshot: beforeStepConfigSnapshot,
+				AfterSnapshot:  afterStepConfigSnapshot,
 			}, iwm.controller.ReadWorkspaceFile, iwm.controller.WriteWorkspaceFile, logger); err != nil {
 				logger.Warn(fmt.Sprintf("⚠️ Plan changelog write failed (non-fatal): %v", err))
 			}
 
 			logger.Info(fmt.Sprintf("📝 Workshop: step config updated for step %q in %s/step_config.json", stepID, configSubdir))
-			configPath := configSubdir + "/step_config.json"
-			if isEvalStep {
-				configPath = "evaluation/step_config.json"
-			}
 			result := fmt.Sprintf("Step config for %q updated successfully in %s. Changes will take effect on the next execute_step/run_full_evaluation call.", stepID, configPath)
 			if len(cleanupMessages) > 0 {
 				result += "\n\nCleanup:"
@@ -6729,6 +6980,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			var pulseNotificationChannels []string
 			var notificationExcludeChannels []string
 			var notificationBlockRecipients []string
+			var runNotificationRecipients []string
+			var pulseNotificationRecipients []string
+			var runNotificationWebhooks []string
+			var pulseNotificationWebhooks []string
 			if content, readErr := ctrl.ReadWorkspaceFile(ctx, "workflow.json"); readErr == nil {
 				var manifest struct {
 					Capabilities struct {
@@ -6741,6 +6996,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							Instructions             string   `json:"instructions"`
 							ExcludeChannels          []string `json:"exclude_channels"`
 							BlockRecipients          []string `json:"block_recipients"`
+							RunSummaryRecipients     []string `json:"run_summary_recipients"`
+							PulseSummaryRecipients   []string `json:"pulse_summary_recipients"`
+
+							RunSummarySlackWebhookSecretNames   []string `json:"run_summary_slack_webhook_secret_names"`
+							PulseSummarySlackWebhookSecretNames []string `json:"pulse_summary_slack_webhook_secret_names"`
 						} `json:"notifications"`
 					} `json:"capabilities"`
 				}
@@ -6757,6 +7017,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 					notificationExcludeChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.ExcludeChannels)
 					notificationBlockRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.BlockRecipients)
+					runNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummaryRecipients)
+					pulseNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummaryRecipients)
+					runNotificationWebhooks = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames)
+					pulseNotificationWebhooks = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummarySlackWebhookSecretNames)
 					runNotificationChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummaryChannels)
 					pulseNotificationChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummaryChannels)
 				}
@@ -6787,6 +7051,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			if len(notificationBlockRecipients) > 0 {
 				sb.WriteString(fmt.Sprintf("- Blocked recipients: %s\n", strings.Join(notificationBlockRecipients, ", ")))
+			}
+			// State both recipient lists unconditionally. "Not configured" is a real
+			// answer here — it means mail goes to the account default — and leaving
+			// the line out entirely reads as "no email is sent", which is wrong.
+			sb.WriteString(fmt.Sprintf("- Workflow run summary recipients: %s\n", notificationRecipientSummary(runNotificationRecipients)))
+			sb.WriteString(fmt.Sprintf("- Pulse review summary recipients: %s\n", notificationRecipientSummary(pulseNotificationRecipients)))
+			if len(runNotificationWebhooks) > 0 || len(pulseNotificationWebhooks) > 0 {
+				sb.WriteString(fmt.Sprintf("- Workflow run summary Slack channels: %s\n", notificationWebhookSummary(runNotificationWebhooks)))
+				sb.WriteString(fmt.Sprintf("- Pulse review summary Slack channels: %s\n", notificationWebhookSummary(pulseNotificationWebhooks)))
 			}
 
 			// Show available secrets that can be added
@@ -6983,6 +7256,26 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"items":       map[string]interface{}{"type": "string", "enum": []string{"gmail", "slack", "whatsapp"}},
 					"minItems":    1,
 					"description": "Channels for the Pulse review summary only. The backend enforces this allowlist. Omit to retain the current/default routing.",
+				},
+				"run_notification_slack_webhooks": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Which Slack CHANNEL(S) the workflow run summary posts to, as names of existing encrypted secrets that each hold a complete Slack Incoming Webhook URL. A webhook is bound to one channel when it is created and cannot be retargeted, so a different channel means a different webhook secret — store each with set_workflow_secret, then list its name here. Listing several posts the run summary to several channels. Stored in workflow.json capabilities.notifications.run_summary_slack_webhook_secret_names. Omit to leave unchanged; pass an empty array to fall back to the workflow's single slack_webhook_secret_name.",
+				},
+				"pulse_notification_slack_webhooks": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Which Slack CHANNEL(S) the Pulse review summary posts to, as encrypted-secret names holding Slack Incoming Webhook URLs. Use when Pulse activity belongs in a different channel than the run outcome. Stored in workflow.json capabilities.notifications.pulse_summary_slack_webhook_secret_names. Omit to leave unchanged; pass an empty array to fall back to the workflow's single slack_webhook_secret_name.",
+				},
+				"run_notification_recipients": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Email addresses the workflow run summary is sent TO, stored in workflow.json capabilities.notifications.run_summary_recipients and applied automatically to every run_summary send. This is the positive 'send here' list — set it when the user names who should receive this workflow's run emails. Omit to leave unchanged; pass an empty array to clear it and fall back to the account default recipient. Never blocks anything: the account-wide and per-workflow denylists are still applied on top, so a blocked address listed here is skipped rather than unblocked.",
+				},
+				"pulse_notification_recipients": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Email addresses the Pulse review summary is sent TO, stored in workflow.json capabilities.notifications.pulse_summary_recipients and applied automatically to every pulse_summary send. Use when Pulse findings should reach different people than the run outcome. Omit to leave unchanged; pass an empty array to clear it and fall back to the account default recipient. Denylists still apply on top.",
 				},
 				"update_tier_fallbacks": map[string]interface{}{
 					"type":        "object",
@@ -7399,8 +7692,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			pulseRaw, pulseProvided := args["pulse_notification_instructions"]
 			runChannelsRaw, runChannelsProvided := args["run_notification_channels"]
 			pulseChannelsRaw, pulseChannelsProvided := args["pulse_notification_channels"]
+			runRecipientsRaw, runRecipientsProvided := args["run_notification_recipients"]
+			pulseRecipientsRaw, pulseRecipientsProvided := args["pulse_notification_recipients"]
 			if (runProvided && runRaw != nil) || (pulseProvided && pulseRaw != nil) ||
-				(runChannelsProvided && runChannelsRaw != nil) || (pulseChannelsProvided && pulseChannelsRaw != nil) {
+				(runChannelsProvided && runChannelsRaw != nil) || (pulseChannelsProvided && pulseChannelsRaw != nil) ||
+				(runRecipientsProvided && runRecipientsRaw != nil) || (pulseRecipientsProvided && pulseRecipientsRaw != nil) {
 				parseInstructions := func(name string, raw interface{}, provided bool) (string, error) {
 					if !provided || raw == nil {
 						return "", nil
@@ -7488,6 +7784,48 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if parseErr != nil {
 					return "Error: " + parseErr.Error() + ".", nil
 				}
+				// Recipient lists are stored as-given minus obvious junk. An empty
+				// array is a legitimate value here — it clears the list back to the
+				// account default — so unlike channels it is not an error.
+				parseRecipients := func(name string, raw interface{}, provided bool) ([]string, error) {
+					if !provided || raw == nil {
+						return nil, nil
+					}
+					values, ok := raw.([]interface{})
+					if !ok {
+						return nil, fmt.Errorf("%s must be an array of email addresses", name)
+					}
+					recipients := make([]string, 0, len(values))
+					seen := map[string]bool{}
+					for _, rawValue := range values {
+						value, ok := rawValue.(string)
+						if !ok {
+							return nil, fmt.Errorf("%s must contain only email addresses", name)
+						}
+						for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+							return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+						}) {
+							email := strings.ToLower(strings.TrimSpace(part))
+							if email == "" || seen[email] {
+								continue
+							}
+							if !strings.Contains(email, "@") {
+								return nil, fmt.Errorf("%s contains %q, which is not an email address", name, part)
+							}
+							seen[email] = true
+							recipients = append(recipients, email)
+						}
+					}
+					return recipients, nil
+				}
+				runRecipients, parseErr := parseRecipients("run_notification_recipients", runRecipientsRaw, runRecipientsProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+				pulseRecipients, parseErr := parseRecipients("pulse_notification_recipients", pulseRecipientsRaw, pulseRecipientsProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
 				delete(notifications, "instructions")
 				for key, value := range map[string]string{
 					"run_summary_instructions":   strings.TrimSpace(runInstructions),
@@ -7504,6 +7842,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 				if pulseChannelsProvided {
 					notifications["pulse_summary_channels"] = pulseChannels
+				}
+				// An explicitly emptied list is stored as "no override" by removing
+				// the key, which is what falls back to the account default.
+				if runRecipientsProvided {
+					if len(runRecipients) == 0 {
+						delete(notifications, "run_summary_recipients")
+					} else {
+						notifications["run_summary_recipients"] = runRecipients
+					}
+				}
+				if pulseRecipientsProvided {
+					if len(pulseRecipients) == 0 {
+						delete(notifications, "pulse_summary_recipients")
+					} else {
+						notifications["pulse_summary_recipients"] = pulseRecipients
+					}
 				}
 				if len(notifications) == 0 {
 					delete(caps, "notifications")
@@ -7522,7 +7876,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 				anyChanged = true
 				sb.WriteString("\n### Notification Instructions (updated)\nSaved separate workflow run and Pulse review content preferences in workflow.json.\n")
-				logger.Info(fmt.Sprintf("Updated workflow notification instructions: run_configured=%v pulse_configured=%v", strings.TrimSpace(runInstructions) != "", strings.TrimSpace(pulseInstructions) != ""))
+				if runRecipientsProvided {
+					sb.WriteString(fmt.Sprintf("- Run summary recipients: %s\n", notificationRecipientSummary(runRecipients)))
+				}
+				if pulseRecipientsProvided {
+					sb.WriteString(fmt.Sprintf("- Pulse summary recipients: %s\n", notificationRecipientSummary(pulseRecipients)))
+				}
+				logger.Info(fmt.Sprintf("Updated workflow notification instructions: run_configured=%v pulse_configured=%v run_recipients=%d pulse_recipients=%d", strings.TrimSpace(runInstructions) != "", strings.TrimSpace(pulseInstructions) != "", len(runRecipients), len(pulseRecipients)))
 			}
 
 			// --- Workflow-scoped one-way Slack webhook ---
@@ -7648,6 +8008,192 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					sb.WriteString(fmt.Sprintf("\n### Slack Incoming Webhook (configured)\n- Encrypted backend-only secret: %s\n- Applies immediately to notify_user in this builder turn and to future workflow runs. notify_user renders rich Block Kit by default; the agent never receives the URL. It is one-way and is not used for human_feedback.\n", secretName))
 				}
 				logger.Info(fmt.Sprintf("Updated workflow Slack webhook secret reference: configured=%v", secretName != ""))
+			}
+
+			// --- Per-summary Slack channels (one webhook == one channel) ---
+			runWebhooksRaw, runWebhooksProvided := args["run_notification_slack_webhooks"]
+			pulseWebhooksRaw, pulseWebhooksProvided := args["pulse_notification_slack_webhooks"]
+			if (runWebhooksProvided && runWebhooksRaw != nil) || (pulseWebhooksProvided && pulseWebhooksRaw != nil) {
+				// Validate before writing anything: a name with no stored value, or
+				// one holding something that is not a webhook URL, would persist as a
+				// channel that silently never receives a message.
+				resolveWebhookSecret := func(name string) (string, error) {
+					var value string
+					if iwm.resolveSecretValues != nil {
+						value = iwm.resolveSecretValues(ctx, []string{name})[name]
+					}
+					if strings.TrimSpace(value) == "" {
+						for _, secret := range iwm.controller.GetSecrets() {
+							if secret.Name == name {
+								value = secret.Value
+								break
+							}
+						}
+					}
+					if strings.TrimSpace(value) == "" {
+						return "", fmt.Errorf("Slack webhook secret %q has no stored value. Save the full Incoming Webhook URL with set_workflow_secret first", name)
+					}
+					if validateErr := services.ValidateSlackIncomingWebhookURL(value); validateErr != nil {
+						return "", fmt.Errorf("secret %q is not a valid Slack Incoming Webhook URL: %w", name, validateErr)
+					}
+					return value, nil
+				}
+				parseWebhooks := func(argName string, raw interface{}, provided bool) ([]string, map[string]string, error) {
+					if !provided || raw == nil {
+						return nil, nil, nil
+					}
+					values, ok := raw.([]interface{})
+					if !ok {
+						return nil, nil, fmt.Errorf("%s must be an array of secret names", argName)
+					}
+					names := make([]string, 0, len(values))
+					resolved := map[string]string{}
+					seen := map[string]bool{}
+					for _, rawValue := range values {
+						name, ok := rawValue.(string)
+						if !ok {
+							return nil, nil, fmt.Errorf("%s must contain only secret names", argName)
+						}
+						name = strings.TrimSpace(name)
+						if name == "" || seen[name] {
+							continue
+						}
+						value, resolveErr := resolveWebhookSecret(name)
+						if resolveErr != nil {
+							return nil, nil, resolveErr
+						}
+						seen[name] = true
+						names = append(names, name)
+						resolved[name] = value
+					}
+					return names, resolved, nil
+				}
+				runWebhookNames, runWebhookValues, parseErr := parseWebhooks("run_notification_slack_webhooks", runWebhooksRaw, runWebhooksProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+				pulseWebhookNames, pulseWebhookValues, parseErr := parseWebhooks("pulse_notification_slack_webhooks", pulseWebhooksRaw, pulseWebhooksProvided)
+				if parseErr != nil {
+					return "Error: " + parseErr.Error() + ".", nil
+				}
+
+				content, readErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+				if readErr != nil {
+					return fmt.Sprintf("Failed to read workflow.json: %v", readErr), nil
+				}
+				var manifest map[string]interface{}
+				if parseErr := json.Unmarshal([]byte(content), &manifest); parseErr != nil {
+					return fmt.Sprintf("Failed to parse workflow.json: %v", parseErr), nil
+				}
+				caps, _ := manifest["capabilities"].(map[string]interface{})
+				if caps == nil {
+					caps = make(map[string]interface{})
+				}
+				notifications, _ := caps["notifications"].(map[string]interface{})
+				if notifications == nil {
+					notifications = make(map[string]interface{})
+				}
+				applyWebhookNames := func(key string, names []string, provided bool) {
+					if !provided {
+						return
+					}
+					if len(names) == 0 {
+						delete(notifications, key)
+						return
+					}
+					notifications[key] = names
+				}
+				applyWebhookNames("run_summary_slack_webhook_secret_names", runWebhookNames, runWebhooksProvided)
+				applyWebhookNames("pulse_summary_slack_webhook_secret_names", pulseWebhookNames, pulseWebhooksProvided)
+				if len(notifications) == 0 {
+					delete(caps, "notifications")
+				} else {
+					caps["notifications"] = notifications
+				}
+
+				// Same backend-only guarantee the single webhook gets: a credential
+				// referenced by notifications must never reach the agent as SECRET_*.
+				backendOnly := append(append([]string{}, runWebhookNames...), pulseWebhookNames...)
+				if len(backendOnly) > 0 {
+					blocked := map[string]bool{}
+					for _, name := range backendOnly {
+						blocked[name] = true
+					}
+					for _, key := range []string{"selected_secrets", "selected_global_secret_names"} {
+						if rawSelected, ok := caps[key].([]interface{}); ok {
+							filtered := make([]interface{}, 0, len(rawSelected))
+							for _, entry := range rawSelected {
+								if name, _ := entry.(string); !blocked[strings.TrimSpace(name)] {
+									filtered = append(filtered, entry)
+								}
+							}
+							caps[key] = filtered
+						}
+					}
+				}
+				manifest["capabilities"] = caps
+				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+				updated, marshalErr := json.MarshalIndent(manifest, "", "  ")
+				if marshalErr != nil {
+					return fmt.Sprintf("Failed to marshal workflow.json: %v", marshalErr), nil
+				}
+				if writeErr := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(updated)); writeErr != nil {
+					return fmt.Sprintf("Failed to write workflow.json: %v", writeErr), nil
+				}
+
+				if len(backendOnly) > 0 {
+					blocked := map[string]bool{}
+					for _, name := range backendOnly {
+						blocked[name] = true
+					}
+					currentSecrets := iwm.controller.GetSecrets()
+					filtered := make([]orchestrator.SecretEntry, 0, len(currentSecrets))
+					for _, secret := range currentSecrets {
+						if !blocked[strings.TrimSpace(secret.Name)] {
+							filtered = append(filtered, secret)
+						}
+					}
+					iwm.controller.SetSecrets(filtered)
+					if iwm.workshopConfig != nil {
+						iwm.workshopConfig.Secrets = append([]orchestrator.SecretEntry(nil), filtered...)
+					}
+					if envRef := iwm.controller.GetWorkspaceEnvRef(); envRef != nil {
+						iwm.controller.LockWorkspaceEnv()
+						for name := range blocked {
+							delete(envRef, "SECRET_"+name)
+						}
+						iwm.controller.UnlockWorkspaceEnv()
+					}
+				}
+
+				// Apply to the live builder turn so a test notify_user right after
+				// this call already posts to the newly chosen channels.
+				toWebhookDests := func(names []string, values map[string]string) []services.SlackWebhookDest {
+					var dests []services.SlackWebhookDest
+					for _, name := range names {
+						dests = append(dests, services.SlackWebhookDest{SecretName: name, URL: values[name]})
+					}
+					return dests
+				}
+				if destination, ok := ctx.Value(virtualtools.BotNotificationDestinationKey).(*services.NotificationDestination); ok && destination != nil {
+					if runWebhooksProvided {
+						destination.RunSummaryWebhooks = toWebhookDests(runWebhookNames, runWebhookValues)
+					}
+					if pulseWebhooksProvided {
+						destination.PulseSummaryWebhooks = toWebhookDests(pulseWebhookNames, pulseWebhookValues)
+					}
+				}
+
+				anyChanged = true
+				sb.WriteString("\n### Slack channels per summary (updated)\n")
+				if runWebhooksProvided {
+					sb.WriteString(fmt.Sprintf("- Workflow run summary channels: %s\n", notificationWebhookSummary(runWebhookNames)))
+				}
+				if pulseWebhooksProvided {
+					sb.WriteString(fmt.Sprintf("- Pulse review summary channels: %s\n", notificationWebhookSummary(pulseWebhookNames)))
+				}
+				sb.WriteString("Each webhook is one Slack channel. The agent never receives these URLs; the backend posts through them by notification_kind.\n")
+				logger.Info(fmt.Sprintf("Updated per-summary Slack webhooks: run=%d pulse=%d", len(runWebhookNames), len(pulseWebhookNames)))
 			}
 
 			// --- Tier Fallbacks ---
@@ -10262,6 +10808,10 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Cont
 // not implemented as multiple runGoalAdvisorStageAgent calls: doing that would
 // create separate agents, sessions, coding workspaces, and context windows.
 func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
+	return iwm.runGoalAdvisorStageAgentSequenceObserved(ctx, name, instruction, messageSequence, access, pulseRunID, parentSessionID, nil)
+}
+
+func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequenceObserved(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string, observer backgroundMessageSequenceObserver) (string, error) {
 	logger := iwm.controller.GetLogger()
 	workspacePath := iwm.controller.GetWorkspacePath()
 	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
@@ -10435,7 +10985,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 	}
 
 	logger.Info(fmt.Sprintf("✨ Running Goal Advisor stage agent: %q (access=%d, turns=%d)", name, access, 1+len(messageSequence)))
-	result, err := executeBackgroundMessageSequence(ctx, agent, templateVars, instruction, messageSequence)
+	result, err := executeBackgroundMessageSequenceObserved(ctx, agent, templateVars, instruction, messageSequence, observer)
 	if err != nil {
 		return "", fmt.Errorf("%s agent failed: %w", name, err)
 	}

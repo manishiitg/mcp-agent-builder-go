@@ -525,13 +525,13 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking question for the user. Pulse and Goal Advisor store workflow questions in that workflow's db/db.sqlite; Chief of Staff may use workspace_path=\"pulse\" for an org-wide question, stored in pulse/db/db.sqlite, or a Workflow/<name> path for a workflow-specific question. The user answers inside Runloop's Pulse/report panel; published static reports should only show the question and tell the user to open Runloop to answer. For Goal Advisor plan-change proposals, use source=\"goal_advisor\", a stable input_id prefixed with \"plan-proposal-\", options approve/reject/defer, and put the exact proposed plan changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
+			Description: "Create or refresh a structured non-blocking question for the user. Pulse, Strategy Auditor, and Goal Advisor store workflow questions in that workflow's db/db.sqlite; Chief of Staff may use workspace_path=\"pulse\" for an org-wide question, stored in pulse/db/db.sqlite, or a Workflow/<name> path for a workflow-specific question. The user answers inside Runloop's Pulse/report panel; published static reports should only show the question and tell the user to open Runloop to answer. For an in-strategy business proposal use source=\"strategy_auditor\" and a stable input_id prefixed with \"strategy-proposal-\". For a materially different plan proposal use source=\"goal_advisor\" and a stable input_id prefixed with \"plan-proposal-\". Use approve/reject/defer options and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media. Chief of Staff may use pulse for an org-wide question. Required; requests are stored in that scope's db/db.sqlite."},
 					"input_id":       map[string]interface{}{"type": "string", "description": "Optional stable id. Reuse this for the same still-open question so Pulse refreshes it instead of duplicating it."},
-					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "goal_advisor", "chief_of_staff"}, "description": "Who is asking. Defaults to pulse."},
+					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "strategy_auditor", "goal_advisor", "chief_of_staff"}, "description": "Who is asking. Defaults to pulse."},
 					"priority":       map[string]interface{}{"type": "string", "enum": []string{"low", "medium", "high"}, "description": "How important the answer is. Defaults to medium."},
 					"question":       map[string]interface{}{"type": "string", "description": "The exact user-facing question in ONE short plain sentence -- the kind a busy operator reads in three seconds, not an analyst's framing of the problem."},
 					"context":        map[string]interface{}{"type": "string", "description": "Short explanation of why this matters and what will happen next, for a non-technical operator, not a technical report. One to three short sentences PER SECTION, plain language, no jargon, no walked-through derivation -- state the single number or fact that matters and the conclusion, not how you got there; the full analysis belongs in the reviewer's findings file, not this question. For plan-change proposals, use newline-separated labeled sections exactly like: Proposal:\n...\nExact intended edits if approved:\n(1) ...\n(2) ...\nRationale:\n...\nExpected impact:\n...\nRisk:\n... -- each section still capped at one to three short sentences. Keep evidence paths in the separate evidence field, never inline citations or file paths in context."},
@@ -573,6 +573,23 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			}),
 		},
 	}
+	answerTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "answer_human_input_request",
+			Description: "Record the current user's explicit answer to an existing pending Pulse/report decision. Call this only after the user clearly selects an option or gives a final free-text answer; never infer an answer from discussion. This changes the request to answered so a later Pulse, Goal Advisor, or Chief of Staff run can apply it. It does not apply the decision or mark it consumed.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workspace_path":     map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media, or pulse for an org-wide Chief of Staff decision."},
+					"input_id":           map[string]interface{}{"type": "string", "description": "Exact decision id supplied in the chat context."},
+					"selected_option_id": map[string]interface{}{"type": "string", "description": "Exact option id supplied in the chat context when the user selects an option."},
+					"note":               map[string]interface{}{"type": "string", "description": "The user's final free-text answer or optional note. Free text is accepted only when the request allows it."},
+				},
+				"required": []string{"workspace_path", "input_id"},
+			}),
+		},
+	}
 	executors := map[string]interface{}{
 		"create_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			req, err := reportHumanInputCreateRequestFromToolArgs(args)
@@ -587,6 +604,19 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 				return "", err
 			}
 			return marshalReportHumanInputToolResult("created", input)
+		},
+		"answer_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			inputID, _ := args["input_id"].(string)
+			req := ReportHumanInputAnswerRequest{}
+			req.SelectedOptionID, _ = args["selected_option_id"].(string)
+			req.Note, _ = args["note"].(string)
+			req.AnsweredBy = GetUserIDFromContext(ctx)
+			input, err := answerReportHumanInput(ctx, workspacePath, inputID, req)
+			if err != nil {
+				return "", err
+			}
+			return marshalReportHumanInputToolResult("answered", input)
 		},
 		"mark_human_input_consumed": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
@@ -606,9 +636,10 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 	}
 	categories := map[string]string{
 		"create_human_input_request": "human_tools",
+		"answer_human_input_request": "human_tools",
 		"mark_human_input_consumed":  "human_tools",
 	}
-	return []llmtypes.Tool{createTool, consumeTool}, executors, categories
+	return []llmtypes.Tool{createTool, answerTool, consumeTool}, executors, categories
 }
 
 func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (ReportHumanInputCreateRequest, error) {
@@ -956,6 +987,8 @@ func reportHumanInputAnswerForAgent(input ReportHumanInput) string {
 
 func normalizeReportHumanInputSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "strategy_auditor", "strategy-auditor", "strategy auditor":
+		return "strategy_auditor"
 	case "goal_advisor", "goal-advisor", "goal advisor":
 		return "goal_advisor"
 	case "chief_of_staff", "chief-of-staff", "chief", "org_pulse", "org-pulse":

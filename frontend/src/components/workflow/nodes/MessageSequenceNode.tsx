@@ -143,7 +143,7 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
   const accessChips = [
     learningsAccess ? { icon: BookOpen, label: `Learnings: ${learningsAccess}` } : null,
     knowledgebaseAccess ? { icon: FileText, label: `KB: ${knowledgebaseAccess}` } : null,
-    dbAccess ? { icon: Database, label: `DB: ${dbAccess}` } : null,
+    dbAccess ? { icon: Database, label: 'DB: read-write (runtime)' } : null,
   ].filter((c): c is { icon: typeof BookOpen; label: string } => c !== null)
 
   useEffect(() => {

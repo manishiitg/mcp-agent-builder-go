@@ -4,9 +4,9 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | `Claude Code` |
+| Assigned agent | `Codex` |
 | Ticket state | `runtime_reverify` |
-| Last synchronized | `2026-08-04` |
+| Last synchronized | `2026-08-05` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -28,12 +28,16 @@
 - **Impact:** the permission contract and actual capability disagree. Agents
   burn failed calls, abandon persistence, or publish a false claim that the DB
   capability does not exist.
-- **Current implementation:** managed DB tools are already capability-derived
-  from trusted `db_access`, even when a step has a narrower explicit custom-tool
-  list. `read` materializes query only; `read-write` materializes query and
-  mutation. Direct SQLite/WAL/SHM paths remain blocked for managed agentic
-  sessions, while the mutation executor independently fails closed without an
-  explicit read-write grant.
+- **Current implementation (expanded 2026-08-04):** every workflow execution
+  step now receives the same managed read-write database capability.
+  Agentic steps materialize both `query_workflow_db` and
+  `mutate_workflow_db`; saved scripted code retains `$DB_PATH` compatibility.
+  Persisted `db_access=read` and message-sequence item-level DB flags remain
+  loadable compatibility data but no longer narrow the runtime grant. Parent,
+  child, evaluation, and message-sequence execution paths therefore cannot
+  disagree about whether a workflow step is a DB writer. Direct SQLite/WAL/SHM
+  paths remain blocked for managed agentic sessions, and mutation still fails
+  closed for sessions that are not workflow execution steps.
 - **Verification (2026-08-03):** the real stdio MCP bridge → custom executor →
   workspace HTTP API → WAL-mode SQLite E2E passes for query and mutation.
   Focused capability tests pass for read-only/read-write exposure and for
@@ -50,6 +54,21 @@
   capability fails before the expensive LLM run; mutation remains fail-closed.
 - **Current workaround:** raw `$MCP_CUSTOM/query_workflow_db` and
   `$MCP_CUSTOM/mutate_workflow_db` calls when their exact API is known.
-- **Acceptance:** real workflow-step bridge E2E tests for read-only and
-  read-write grants prove the matching tools are discoverable and callable;
-  no-grant and read-only mutation attempts fail closed.
+- **Verification (uniform-access change):** focused tests cover legacy
+  `db_access=read`, evaluation steps, message-sequence turns, item-specific
+  folder-guard overrides, tool materialization, and session shell environment
+  setup. Each workflow-step route retains the DB write path and exposes both
+  managed DB tools.
+- **Argument-contract follow-up (2026-08-05):** a Social Media scheduled agent
+  reached the correct custom tool but naturally sent
+  `{"query":"SELECT …"}`. The read tool accepted only the synonymous `sql`
+  field, rejected the call, and forced a describe/retry cycle before the run
+  continued. `query_workflow_db` now documents and accepts `query` as a
+  compatibility alias for `sql`. Both names enter the same row-bounded,
+  query-only backend. Supplying different non-empty values for both fields
+  fails before any database request. Regression tests cover schema exposure,
+  successful alias execution, and conflict rejection.
+- **Acceptance:** a producing workflow run must prove that ordinary steps,
+  evaluation steps, and asynchronous/message-sequence children can query and
+  mutate through the managed tools without permission drift. Non-workflow
+  sessions must remain unable to manufacture a write grant.

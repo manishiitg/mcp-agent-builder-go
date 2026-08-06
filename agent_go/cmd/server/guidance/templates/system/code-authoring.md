@@ -32,6 +32,36 @@ Apply these when writing or patching a step's `main.py`. Scripts must run identi
 - Prefer `diff_patch_workspace_file` for targeted changes — preserves working code and reduces regressions. Full rewrite (cat-heredoc) only when restructuring large portions.
 - Helper files alongside main.py also live in `learnings/{step-id}/` — patch them the same way.
 
+**Never hand-escape prose into a string literal**
+
+Text you are inserting into generated code — an HTML fragment, a log line, a
+sentence for the user — has usually already been escaped once on its way to you
+through the tool call. Escaping it again is what produces a backslash before the
+quote, and a backslash before a quote does not escape it: the quote still closes
+the string.
+
+A real failure: `'page\\'s Current work counts...'` — an apostrophe in the word
+"page's" written as `\\'`, which Python reads as a literal backslash followed by
+a string-terminating quote. `SyntaxError: unterminated string literal`. It was
+the third attempt at the same file (`migrate3.py`), because each retry rewrote
+the same prose the same way.
+
+Keep text out of code instead of trying to quote it correctly:
+
+- Write the text to its own file and have the script read it. Prose in a data
+  file cannot break the parser that reads the code.
+- If it must be inline, use a triple-quoted block and pick a delimiter the text
+  does not contain. Do not add backslashes by hand.
+- When writing the file through the shell, use a QUOTED heredoc delimiter —
+  `<< 'PYEOF'` and not `<< PYEOF`. Quoting the delimiter stops the shell
+  expanding or re-escaping anything in the body, which is the other half of the
+  same problem.
+- Prefer `diff_patch_workspace_file` over a full heredoc rewrite. A targeted
+  patch touches fewer lines, so there is less text to get wrong.
+
+If a generated script fails to parse twice, stop rewriting it the same way. The
+quoting is the bug, not the logic — move the text out of the code.
+
 **Output format — HTML vs JSON vs Markdown**
 
 - **JSON** — for structured data consumed by downstream steps or db writes. Always use JSON for `context_output` files other steps read.

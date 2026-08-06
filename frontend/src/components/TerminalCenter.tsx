@@ -8,6 +8,8 @@ import { agentApi } from '../services/api'
 import {
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
+  resolveTerminalFormattedView,
+  shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from '../utils/terminalSnapshotIdentity'
 import type { PollingEvent, RuntimeSnapshot, TerminalSnapshot } from '../services/api-types'
@@ -16,9 +18,10 @@ import { normalizeEventViewMode, useChatStore } from '../stores/useChatStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore } from '../stores/useAppStore'
 import { TERMINAL_REFRESH_REQUEST_EVENT } from '../utils/terminalRefresh'
-import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
+import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridChange, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
 import { terminalPayloadHasVisibleContent } from '../utils/terminalVisibleContent'
 import { useTheme } from '../hooks/useTheme'
+import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
 import type { Theme } from '../contexts/ThemeContext'
 import { normalizeAnsiForEmbeddedXterm } from '../utils/ansiSanitize'
 import { preserveTerminalContinuity } from '../utils/terminalContinuity'
@@ -38,10 +41,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { reconcileTerminalRuntimeState, runtimeDisplayStatus } from '../utils/runtimeActivity'
 import { usePlanData } from './workflow/hooks/usePlanData'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
-import { selectTerminalEvents } from '../utils/terminalEventTranscript'
+import { selectTerminalEvents, toolErrorContextByEventID } from '../utils/terminalEventTranscript'
+import { formatToolCallArguments } from '../utils/toolCallFormatting'
 import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
 import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from '../utils/terminalEventPage'
+import { projectExecutionTreeTerminals } from '../utils/terminalExecutionProjection'
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -63,7 +68,20 @@ function hasTerminalRedrawControls(s: string): boolean {
 
 function isTmuxContentSource(source?: string): boolean {
   const normalized = (source || '').trim().toLowerCase()
-  return normalized === 'tmux_pipe' || normalized === 'tmux_capture'
+  return normalized === 'tmux_pipe' || normalized === 'tmux_capture' || normalized === 'tmux_stream'
+}
+
+// xterm invokes write callbacks asynchronously. A React pane can unmount and
+// dispose its terminal before that callback runs; calling scrollToBottom on the
+// disposed instance throws inside xterm and can break the surrounding chat UI.
+function scrollCurrentXtermToBottom(term: XTerm, currentTerm: XTerm | null): boolean {
+  if (currentTerm !== term) return false
+  try {
+    term.scrollToBottom()
+    return true
+  } catch {
+    return false
+  }
 }
 
 interface TerminalCenterProps {
@@ -882,7 +900,11 @@ function formatSelectedTerminalMeta(terminal: TerminalSnapshot): string {
   // The selected pane already exposes provider/model/transport and execution
   // details in its status area. Keep this header to the minimum orientation
   // context: the title is rendered separately, followed by type and freshness.
-  return [terminalStepTypeLabel(terminal), formatUpdatedAge(terminal)].filter(Boolean).join(' · ')
+  return [
+    terminal.execution_tree_placeholder ? terminal.display_meta : '',
+    terminalStepTypeLabel(terminal),
+    formatUpdatedAge(terminal),
+  ].filter(Boolean).join(' · ')
 }
 
 function findPlanStepByID(steps: PlanStep[] | undefined, stepID: string): PlanStep | null {
@@ -1475,7 +1497,7 @@ const LiveAttachXtermPaneInner: React.FC<{
     applyRawXtermTheme(term, xtermTheme)
     terminalRef.current = term
     onScrollToBottomReady?.(() => {
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
 
@@ -1529,7 +1551,7 @@ const LiveAttachXtermPaneInner: React.FC<{
         if (snapshotContent.trim()) {
           clearXtermSelection(term)
           term.write(buildVisibleScreenReseed(snapshotContent), () => {
-            term.scrollToBottom()
+            if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
             onViewportStickChangeRef.current?.(true)
           })
           onOutputTextRef.current?.(snapshotContent)
@@ -1789,11 +1811,23 @@ const LiveAttachXtermPaneInner: React.FC<{
           return
         }
 
-        const needsReconnect = terminalGridNeedsReconnect(
-          { cols: term.cols, rows: term.rows },
-          fit.proposeDimensions(),
-          { cols: RAW_XTERM_MIN_FIT_COLS, rows: RAW_XTERM_MIN_FIT_ROWS },
-        )
+        const currentGrid = { cols: term.cols, rows: term.rows }
+        const proposedGrid = fit.proposeDimensions()
+        const minimumGrid = { cols: RAW_XTERM_MIN_FIT_COLS, rows: RAW_XTERM_MIN_FIT_ROWS }
+        const gridChange = terminalGridChange(currentGrid, proposedGrid, minimumGrid)
+
+        // Vertical layout changes do not alter line wrapping. Resize xterm and
+        // tmux over the existing socket so the browser's accumulated history is
+        // retained. Reconnecting here used to send a RIS seed, clearing all
+        // xterm scrollback; Claude's alternate-screen TUI commonly has
+        // tmux history_size=0, so there was nothing with which to restore it.
+        if (gridChange === 'rows-only' && wsRef.current?.readyState === WebSocket.OPEN) {
+          fitRawXtermToVisibleGrid(fit)
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+          return
+        }
+
+        const needsReconnect = terminalGridNeedsReconnect(currentGrid, proposedGrid, minimumGrid)
         const steps = planGeometryChange({
           hasSocket: Boolean(wsRef.current),
           alreadyPending: resizeReconnectPending,
@@ -1877,7 +1911,7 @@ const LiveAttachXtermPaneInner: React.FC<{
       setConnectionState('snapshot')
       clearXtermSelection(term)
       term.write(buildVisibleScreenReseed(content), () => {
-        term.scrollToBottom()
+        if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
         onViewportStickChangeRef.current?.(true)
       })
       return
@@ -1901,7 +1935,7 @@ const LiveAttachXtermPaneInner: React.FC<{
       lastVisibleReseedRef.current = { content, at: Date.now() }
       clearXtermSelection(currentTerm)
       currentTerm.write(buildSettledScreenReseed(content), () => {
-        currentTerm.scrollToBottom()
+        if (!scrollCurrentXtermToBottom(currentTerm, terminalRef.current)) return
         onViewportStickChangeRef.current?.(true)
       })
     }, waitMs)
@@ -2049,7 +2083,7 @@ const StaticXtermPaneInner: React.FC<{
     terminalRef.current = term
     fitRef.current = fit
     onScrollToBottomReady?.(() => {
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
 
@@ -2121,7 +2155,7 @@ const StaticXtermPaneInner: React.FC<{
       } catch {
         // ignore
       }
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
   }, [content])
@@ -2339,6 +2373,9 @@ interface TerminalErrorBannerEntry {
   message: string
   timestamp?: string
   terminalID?: string
+  toolName?: string
+  toolServer?: string
+  toolArguments?: string
 }
 
 const TERMINAL_ERROR_MESSAGE_LIMIT = 220
@@ -2359,6 +2396,32 @@ function extractErrorMessage(event: unknown): string {
     if (typeof v === 'string' && v.trim()) return v
   }
   return ''
+}
+
+function TerminalErrorExpandedDetails({ entry, maxHeightClass }: {
+  entry: TerminalErrorBannerEntry
+  maxHeightClass: string
+}) {
+  return (
+    <div className={`mt-1 space-y-2 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200 ${maxHeightClass}`}>
+      {(entry.toolName || entry.toolServer) && (
+        <div>
+          <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Tool</div>
+          <div className="break-all">{entry.toolName || 'tool'}{entry.toolServer ? ` · ${entry.toolServer}` : ''}</div>
+        </div>
+      )}
+      {entry.toolArguments && (
+        <div>
+          <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Arguments</div>
+          <pre className="whitespace-pre-wrap break-words">{entry.toolArguments}</pre>
+        </div>
+      )}
+      <div>
+        <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Error</div>
+        <div className="whitespace-pre-wrap break-words">{entry.message}</div>
+      </div>
+    </div>
+  )
 }
 
 function eventErrorParts(event: PollingEvent): {
@@ -2503,6 +2566,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // filtering by currentSessionId surfaces this chat's workflow steps
   // without leaking terminals from other chat tabs / unrelated workflows.
   const viewAll = false
+  // A foreground turn can finish before its asynchronous child starts. Keep
+  // polling while the surrounding session still expects activity; stopping on
+  // a briefly idle tree between dispatch and child registration would miss the
+  // later child and recreate the invisibility bug. Once the session is settled,
+  // the hook still polls for as long as the tree itself reports live work.
+  const { data: sessionExecutionTree } = useSessionExecutionTree(
+    currentSessionId,
+    !!currentSessionId,
+    hasPendingTerminalActivity,
+  )
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([])
   const [runtimeStatesBySession, setRuntimeStatesBySession] = useState<Record<string, RuntimeSnapshot>>({})
   // archivedTurnContents caches `:turn-N` snapshot bodies so we can stitch
@@ -2633,6 +2706,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const byTerminalID = new Map<string, TerminalErrorBannerEntry[]>()
     const global: TerminalErrorBannerEntry[] = []
     if (!sessionEvents || sessionEvents.length === 0) return { global, byTerminalID }
+    const toolErrorContexts = toolErrorContextByEventID(sessionEvents)
     const seen = new Set<string>()
     for (let i = sessionEvents.length - 1; i >= 0; i--) {
       const evt = sessionEvents[i] as unknown as { id?: string; type?: string; timestamp?: string }
@@ -2640,12 +2714,24 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       const id = evt.id || `${evt.type}-${i}`
       if (dismissedErrorIDs.has(id)) continue
       const message = extractErrorMessage(evt) || evt.type.replace(/_/g, ' ')
+      const toolContext = toolErrorContexts.get(id)
       const terminal = resolveErrorTerminal(sessionEvents[i], terminals)
       const terminalID = terminal ? terminalPaneKey(terminal) : undefined
       const dedupeKey = `${terminalID || 'global'}:${evt.type}:${compactTerminalErrorMessage(message)}`
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
-      const entry = { id, type: evt.type, message, timestamp: evt.timestamp, terminalID }
+      const entry: TerminalErrorBannerEntry = {
+        id,
+        type: evt.type,
+        message,
+        timestamp: evt.timestamp,
+        terminalID,
+        toolName: toolContext?.name,
+        toolServer: toolContext?.server,
+        toolArguments: toolContext?.args
+          ? formatToolCallArguments(toolContext.args).text
+          : undefined,
+      }
       if (terminalID) {
         const items = byTerminalID.get(terminalID) || []
         if (items.length < 2) {
@@ -2993,7 +3079,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   }, [clearableNonRunningTerminals, dismissTerminal])
 
   const groupedTerminals = useMemo(() => {
-    const uniqueTerminals = dedupeTerminalsByID(terminals)
+    const projectedTerminals = projectExecutionTreeTerminals(terminals, sessionExecutionTree)
+    const uniqueTerminals = dedupeTerminalsByID(projectedTerminals)
     const railTerminals = uniqueTerminals.filter(isRailVisibleTerminal)
     // Selection always sees the complete terminal set. Rail filters only affect
     // navigation, so changing a filter cannot make the active pane jump.
@@ -3033,7 +3120,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       visibleGroups,
       sectionCounts,
     }
-  }, [terminals, terminalRailFilter, terminalRailSearch, selectedID])
+  }, [terminals, sessionExecutionTree, terminalRailFilter, terminalRailSearch, selectedID])
   const terminalFocusActive = activeEventViewMode === 'terminal'
   const currentMainTerminal = useMemo(
     () => groupedTerminals.currentTerminals.find(terminal => isMainAgentTerminal(terminal)) || null,
@@ -3233,21 +3320,20 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     },
     [selectedTerminalView, priorArchivedTurns, archivedTurnContents],
   )
-  // Tmux terminals the user switched to the formatted view. A tmux pane shows
+  // Per-terminal explicit view choices. A tmux pane shows
   // raw TUI bytes, but the same turn is ALSO emitted as structured events
   // (tool_call_start/end with arguments, llm_generation_end with the answer) --
   // that is what the transcript renders for structured providers. Both views
   // describe the same run, so which one is useful is a reading choice, not a
-  // property of the transport. Kept per terminal id and not persisted: it is a
-  // way to look at something, not a setting.
-  const [formattedViewTerminalIDs, setFormattedViewTerminalIDs] = useState<Set<string>>(() => new Set())
-  const toggleFormattedView = useCallback((terminalID: string) => {
-    setFormattedViewTerminalIDs(current => {
-      const next = new Set(current)
-      if (next.has(terminalID)) next.delete(terminalID)
-      else next.add(terminalID)
-      return next
-    })
+  // property of the transport. Coding-agent TUIs commonly use tmux's alternate
+  // screen (history_size=0), so their durable transcript is the useful default
+  // for both parent and child agents. An explicit user toggle wins.
+  const [formattedViewPreferences, setFormattedViewPreferences] = useState<Record<string, boolean>>({})
+  const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
+    setFormattedViewPreferences(current => ({
+      ...current,
+      [terminalID]: !currentlyFormatted,
+    }))
   }, [])
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
   const selectedTerminalIsTmux = Boolean(
@@ -3261,9 +3347,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalUsesSessionEvents = Boolean(
     selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
   )
+  const selectedTerminalCanLoadEvents = shouldLoadTerminalEvents(
+    selectedTerminalView,
+    selectedTerminalUsesSessionEvents,
+  )
 
   const loadSelectedTerminalEventPage = useCallback(async () => {
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) return
 
     terminalEventRefreshInFlightRef.current = false
     const generation = ++terminalEventRequestGenerationRef.current
@@ -3298,23 +3388,23 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
         error: loadError instanceof Error ? loadError.message : 'Failed to load conversation events.',
       })
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   useEffect(() => {
     terminalEventRequestGenerationRef.current++
     terminalEventRefreshInFlightRef.current = false
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) {
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) {
       setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
       return
     }
     void loadSelectedTerminalEventPage()
-  }, [loadSelectedTerminalEventPage, selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [loadSelectedTerminalEventPage, selectedTerminalCanLoadEvents, selectedTerminalID])
 
   const refreshSelectedTerminalEvents = useCallback(async () => {
     const page = selectedTerminalEventPageRef.current
     if (
       !selectedTerminalID ||
-      selectedTerminalUsesSessionEvents ||
+      !selectedTerminalCanLoadEvents ||
       page.terminalId !== selectedTerminalID ||
       !page.loaded ||
       page.loading ||
@@ -3351,13 +3441,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
         terminalEventRefreshInFlightRef.current = false
       }
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   // Detailed child events do not enter the session-wide store. Poll only the
   // selected live transcript, and do one final refresh whenever its terminal
   // snapshot changes or settles.
   useEffect(() => {
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) return
     void refreshSelectedTerminalEvents()
     if (!isSelectedTerminalStreaming) return
     const interval = window.setInterval(
@@ -3369,7 +3459,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     isSelectedTerminalStreaming,
     refreshSelectedTerminalEvents,
     selectedTerminalID,
-    selectedTerminalUsesSessionEvents,
+    selectedTerminalCanLoadEvents,
     selectedTerminalView?.chunk_index,
     selectedTerminalView?.updated_at,
   ])
@@ -3378,7 +3468,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const page = selectedTerminalEventPageRef.current
     if (
       !selectedTerminalID ||
-      selectedTerminalUsesSessionEvents ||
+      !selectedTerminalCanLoadEvents ||
       page.terminalId !== selectedTerminalID ||
       page.loadingOlder ||
       !page.hasOlder ||
@@ -3418,7 +3508,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           }
         : current)
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   const selectedTerminalEventSource = selectedTerminalUsesSessionEvents
     ? sessionEvents
@@ -3439,8 +3529,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const canShowFormattedView = Boolean(
     selectedTerminalIsTmux && selectedTerminalID && selectedTerminalHasEvents,
   )
-  const showFormattedView = Boolean(
-    canShowFormattedView && selectedTerminalID && formattedViewTerminalIDs.has(selectedTerminalID),
+  const showFormattedView = resolveTerminalFormattedView(
+    canShowFormattedView,
+    selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
   )
   const selectedTerminalHasPreValidationEvent = useMemo(
     () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
@@ -3526,6 +3617,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
   useEffect(() => {
     if (!selectedTerminalView || useLiveAttachForSelected) return
+    if (selectedTerminalView.execution_tree_placeholder) return
     const detailKey = terminalDetailCacheKey(selectedTerminalView)
     const cached = terminalDetailCacheRef.current[detailKey]
     // selectedTerminalView may contain a deliberately stale cached body to
@@ -3907,8 +3999,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
             // gives no clue which one finished last. Nothing in the icon or the
             // tooltip carried a time at all. Surface the age so recency is
             // readable without destabilising the order.
-            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
-            aria-label={`Open ${title} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
+            title={`${title} · ${terminal.display_meta ? `${terminal.display_meta} · ` : ''}${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
+            aria-label={`Open ${title}${terminal.display_meta ? `, ${terminal.display_meta}` : ''} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
           >
             <span className="relative inline-flex h-5 w-5 items-center justify-center rounded border border-neutral-700/80 bg-neutral-900/90">
               <TerminalTypeGlyph terminal={terminal} className="h-3 w-3" />
@@ -4187,6 +4279,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                   <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
                     {entry.type.replace(/_/g, ' ')}
                   </span>
+                  {entry.toolName && (
+                    <span className="max-w-48 shrink truncate font-mono text-[10px] text-red-200/80" title={entry.toolName}>
+                      {entry.toolName}
+                    </span>
+                  )}
                   <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
                     {compactTerminalErrorMessage(entry.message)}
                   </span>
@@ -4209,9 +4306,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                   </button>
                 </div>
                 {isOpen && (
-                  <div className="mt-1 max-h-32 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200">
-                    {entry.message}
-                  </div>
+                  <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-32" />
                 )}
               </div>
               )
@@ -4319,7 +4414,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       {canShowFormattedView && selectedTerminalID && (
                         <button
                           type="button"
-                          onClick={() => toggleFormattedView(selectedTerminalID)}
+                          onClick={() => toggleFormattedView(selectedTerminalID, showFormattedView)}
                           aria-pressed={showFormattedView}
                           className={`inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium transition-colors ${
                             showFormattedView
@@ -4327,14 +4422,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                               : 'text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100'
                           }`}
                           title={showFormattedView
-                            ? 'Showing the formatted conversation. Switch back to the raw terminal.'
-                            : 'Show the formatted conversation (tool calls and replies) instead of the raw terminal.'}
+                            ? 'Showing Formatted conversation. Click to inspect the Raw terminal.'
+                            : 'Showing Raw terminal. Retained terminal snapshots may have no scrollback; click to open the complete Formatted conversation.'}
                         >
-                          {showFormattedView ? <Terminal className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
-                          <span>{showFormattedView ? 'Raw' : 'Formatted'}</span>
+                          {showFormattedView ? <Braces className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
+                          <span>{showFormattedView ? 'Formatted' : 'Raw'}</span>
                         </button>
                       )}
-                      {selectedTerminalIsTmux && (
+                      {selectedTerminalIsTmux && !showFormattedView && (
                         <>
                           <button
                             type="button"
@@ -4617,6 +4712,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                               <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
                                 {entry.type.replace(/_/g, ' ')}
                               </span>
+                              {entry.toolName && (
+                                <span className="max-w-48 shrink truncate font-mono text-[10px] text-red-200/80" title={entry.toolName}>
+                                  {entry.toolName}
+                                </span>
+                              )}
                               <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
                                 {compactTerminalErrorMessage(entry.message)}
                               </span>
@@ -4639,16 +4739,21 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                               </button>
                             </div>
                             {isOpen && (
-                              <div className="mt-1 max-h-40 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200">
-                                {entry.message}
-                              </div>
+                              <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-40" />
                             )}
                           </div>
                         )
                       })}
                     </div>
                     )}
-                    {selectedTerminalIsSynthetic || showFormattedView ? (
+                    {selectedTerminalView?.execution_tree_placeholder ? (
+                      <TerminalWaitingPane
+                        className="min-w-0 flex-1 overflow-hidden overscroll-contain"
+                        contentRef={terminalOutputRef as React.RefObject<HTMLDivElement | null>}
+                        xtermTheme={rawXtermTheme}
+                        message="This asynchronous agent is running. Its detailed terminal will appear here as soon as the runtime publishes it."
+                      />
+                    ) : selectedTerminalIsSynthetic || showFormattedView ? (
                     // Clean view always renders the real event stream. Never
                     // substitute the legacy parsed-row card: it is not the
                     // conversation UI and can carry stale sibling metadata.

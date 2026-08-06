@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestNormalizeReportHumanInputSourcePreservesReviewerIdentity(t *testing.T) {
+	for input, want := range map[string]string{
+		"strategy-auditor": "strategy_auditor",
+		"Strategy Auditor": "strategy_auditor",
+		"goal-advisor":     "goal_advisor",
+		"unknown":          "pulse",
+	} {
+		if got := normalizeReportHumanInputSource(input); got != want {
+			t.Fatalf("normalizeReportHumanInputSource(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -87,6 +100,69 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	}
 	if block := formatAnsweredReportHumanInputsForAgent(ctx, workspacePath); block != "" {
 		t.Fatalf("consumed answer should not be re-injected, got:\n%s", block)
+	}
+}
+
+func TestAnswerHumanInputRequestToolUsesValidatedDecisionLifecycle(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/chat-answer"
+	inputID := "quality-scorecard-status"
+
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID:  inputID,
+		Source:   "pulse",
+		Question: "Should the quality scorecard be turned back on?",
+		Options: []ReportHumanInputOption{
+			{ID: "turn_on", Title: "Turn it back on"},
+			{ID: "keep_off", Title: "Keep it off"},
+		},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	tools, executors, categories := createReportHumanInputTools()
+	found := false
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name == "answer_human_input_request" {
+			found = true
+			break
+		}
+	}
+	if !found || categories["answer_human_input_request"] != "human_tools" {
+		t.Fatalf("answer tool is not registered in human_tools: found=%v category=%q", found, categories["answer_human_input_request"])
+	}
+	executor, ok := executors["answer_human_input_request"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("answer_human_input_request executor is missing or has the wrong type")
+	}
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"workspace_path":     workspacePath,
+		"input_id":           inputID,
+		"selected_option_id": "invented_option",
+	}); err == nil || !strings.Contains(err.Error(), "is not valid") {
+		t.Fatalf("invalid option error = %v, want validation failure", err)
+	}
+	pending, err := listReportHumanInputs(ctx, workspacePath, "pending", "")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("invalid tool call changed the pending decision: inputs=%+v err=%v", pending, err)
+	}
+
+	result, err := executor(ctx, map[string]interface{}{
+		"workspace_path":     workspacePath,
+		"input_id":           inputID,
+		"selected_option_id": "turn_on",
+	})
+	if err != nil {
+		t.Fatalf("answer tool: %v", err)
+	}
+	if !strings.Contains(result, `"status":"answered"`) || !strings.Contains(result, `"selected_option_id":"turn_on"`) {
+		t.Fatalf("answer tool result does not report the transition: %s", result)
+	}
+	answered, err := listReportHumanInputs(ctx, workspacePath, "answered", "")
+	if err != nil || len(answered) != 1 || answered[0].SelectedOptionID != "turn_on" {
+		t.Fatalf("answered decision mismatch: inputs=%+v err=%v", answered, err)
 	}
 }
 

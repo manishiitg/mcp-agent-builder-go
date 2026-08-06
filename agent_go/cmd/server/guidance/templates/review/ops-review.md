@@ -94,5 +94,5 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
 Finish with a short executive summary followed by every evidence-backed
 recommendation in severity order. Identify which exact changes require user
-approval before `/pulse-fixer` can apply them. Do not truncate the result to a
+approval before `/engineering-review` can apply them. Do not truncate the result to a
 Top 3.

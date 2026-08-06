@@ -62,7 +62,7 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 		t.Fatalf("load imported review: %v", err)
 	}
 	if len(reviews) != 2 {
-		t.Fatalf("imported reviews = %+v, want both historical reviews consolidated under workflow_review", reviews)
+		t.Fatalf("imported reviews = %+v, want both historical store reviews consolidated under Engineering Review", reviews)
 	}
 	reviewBySource := map[string]PulseReviewArtifactRecord{}
 	for _, review := range reviews {

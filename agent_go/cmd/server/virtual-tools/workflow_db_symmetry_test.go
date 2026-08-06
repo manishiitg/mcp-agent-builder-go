@@ -57,3 +57,23 @@ func TestQueryWorkflowDBStillOffersDescribe(t *testing.T) {
 		t.Fatal("action=describe was removed; schema inspection has no replacement")
 	}
 }
+
+func TestQueryWorkflowDBAdvertisesQueryCompatibilityAlias(t *testing.T) {
+	encoded, err := json.Marshal(workflowDBQueryToolDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape struct {
+		Function struct {
+			Parameters struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"parameters"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(encoded, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shape.Function.Parameters.Properties["query"]; !ok {
+		t.Fatal("query_workflow_db does not advertise its query compatibility alias")
+	}
+}

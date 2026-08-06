@@ -240,7 +240,15 @@ func (api *StreamingAPI) handleGetTerminal(w http.ResponseWriter, r *http.Reques
 	// as a lightweight refresh — if the pane content changed (e.g. after Claude
 	// Code context compaction), ChunkIndex increments, the list-poll returns the
 	// new value, and the frontend re-fetches automatically.
-	shouldCaptureTmux := shouldCaptureTerminalPaneForDetail(snapshot, r)
+	// The live-attach transcript already contains the seed plus every streamed
+	// byte and therefore owns the retained Raw scrollback. Do not replace it with
+	// a late capture-pane snapshot when the terminal settles: alternate-screen
+	// CLIs often expose only their final viewport through tmux at that point.
+	preserveSettledStream := !snapshot.Active &&
+		wantsHistoryTerminalContent(r) &&
+		strings.EqualFold(strings.TrimSpace(snapshot.ContentSource), "tmux_stream") &&
+		strings.TrimSpace(snapshot.Content) != ""
+	shouldCaptureTmux := shouldCaptureTerminalPaneForDetail(snapshot, r) && !preserveSettledStream
 	debugTerminal := terminalDebugEnabled(r)
 	debugSource := terminalDebugSource(r)
 	captureSkipReason := terminalCaptureSkipReason(snapshot, r, shouldCaptureTmux)

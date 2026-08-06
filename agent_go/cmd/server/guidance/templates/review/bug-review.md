@@ -60,4 +60,4 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
 Finish with a short executive summary followed by all confirmed bugs in severity
 order, what was tested, what remains untested, and which findings are ready for
-`/pulse-fixer`. Do not truncate the findings to a Top 3.
+`/engineering-review`. Do not truncate the findings to a Top 3.

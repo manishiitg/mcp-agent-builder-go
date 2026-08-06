@@ -157,7 +157,7 @@ func TestMessageSequenceItemOverrideNarrowsStepWriteAccess(t *testing.T) {
 	}
 }
 
-func TestMessageSequenceItemCannotEscalateStepWriteAccess(t *testing.T) {
+func TestMessageSequenceItemAlwaysKeepsUniformDBWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
@@ -173,8 +173,8 @@ func TestMessageSequenceItemCannotEscalateStepWriteAccess(t *testing.T) {
 			DB: true, Knowledgebase: true, Learnings: true,
 		},
 	})
-	if got != (MessageSequenceWriteAccess{}) {
-		t.Fatalf("item override must not escalate read-only step permissions, got: %+v", got)
+	if got != (MessageSequenceWriteAccess{DB: true}) {
+		t.Fatalf("item override must keep uniform DB access without escalating KB/learnings, got: %+v", got)
 	}
 }
 
@@ -315,7 +315,7 @@ func TestMessageSequenceItemReportedFailure(t *testing.T) {
 	}
 }
 
-func TestMessageSequenceItemCannotEscalateReadOnlyStorePermissions(t *testing.T) {
+func TestMessageSequenceItemGetsDBWriteButCannotEscalateOtherStores(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	config := &AgentConfigs{
 		DBAccess:            DBAccessRead,
@@ -326,9 +326,12 @@ func TestMessageSequenceItemCannotEscalateReadOnlyStorePermissions(t *testing.T)
 		DB: true, Knowledgebase: true, Learnings: true,
 	})
 	joined := strings.Join(writePaths, "\n")
-	for _, forbidden := range []string{"/db", "/knowledgebase/notes", "/learnings/_global"} {
+	if !strings.Contains(joined, "/db") {
+		t.Fatalf("message-sequence item missing uniform DB write access: %v", writePaths)
+	}
+	for _, forbidden := range []string{"/knowledgebase/notes", "/learnings/_global"} {
 		if strings.Contains(joined, forbidden) {
-			t.Fatalf("read-only step unexpectedly received write access to %s: %v", forbidden, writePaths)
+			t.Fatalf("read-only non-DB store unexpectedly received write access to %s: %v", forbidden, writePaths)
 		}
 	}
 }

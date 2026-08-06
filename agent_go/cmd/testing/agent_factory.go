@@ -30,7 +30,7 @@ func createTestingAgent(ctx context.Context, model llmtypes.Model, configPath, s
 
 func advancedWorkspaceToolDefinitions() ([]mcpagent.ToolDefinition, error) {
 	tools := virtualtools.CreateWorkspaceAdvancedTools()
-	executors := virtualtools.CreateWorkspaceToolExecutors()
+	executors := virtualtools.CreateWorkspaceAdvancedToolExecutors()
 	definitions := make([]mcpagent.ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
 		if tool.Function == nil {
