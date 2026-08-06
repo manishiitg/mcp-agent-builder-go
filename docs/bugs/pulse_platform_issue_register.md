@@ -22,6 +22,17 @@ PLAT-028 (CDP tab argument normalization).
 Electron runtime verification then added and closed PLAT-034: completed Raw
 tmux panes were replacing their recorded stream with a final-screen capture,
 which destroyed scrollback at the live-to-settled boundary.
+Tectonicus Pulse then supplied new shared cost-reconciliation and changelog
+coverage evidence, and added PLAT-036 (context-usage saturation) and PLAT-037
+(learning-freshness attribution).
+Hetzner SSH then confirmed the remaining readable-diff gap in PLAT-033 and
+added PLAT-038 (per-attempt pre-validation evidence retention). Its advisor
+findings also exposed PLAT-039: a missing durable route made product
+recommendations appear as engineering repairs.
+The subsequent Hetzner manual-trigger investigation added PLAT-040: the UI
+silently discarded a busy response, while manual Pulse and full schedules were
+incorrectly sharing one durable workflow lease despite chat/schedule
+concurrency being an explicit product contract.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -96,10 +107,15 @@ Rules:
 | [PLAT-027-A](pulse_platform/plat-027.md) | Keep a live asynchronous child visible after parent completion | Codex | `implemented` | terminal execution-tree projection |
 | [PLAT-028-A](pulse_platform/plat-028.md) | Remove a recovered CDP tab from final page-action arguments | Codex | `implemented` | browser executor argument normalization |
 | [PLAT-029-A](pulse_platform/plat-029.md) | Close stale live metadata before attaching to a missing tmux | Codex | `implemented` | terminal live-attach lifecycle |
-| [PLAT-031-A](pulse_platform/plat-031.md) | Persist one immutable execution identity across cost-ledger date shards | Claude Code | `implemented` | execution-cost persistence and attribution |
+| [PLAT-031-A](pulse_platform/plat-031.md) | Persist one immutable execution identity across cost-ledger date shards | Codex | `runtime_reverify` | execution-keyed cost/evaluation persistence and projection |
 | [PLAT-032-A](pulse_platform/plat-032.md) | Include child-agent calls in parent step telemetry | Claude Code | `implemented` | child dispatch telemetry and usage aggregation |
 | [PLAT-033-A](pulse_platform/plat-033.md) | Replace placeholder changelog refs with truthful artifact evidence | Claude Code | `implemented` | managed mutation/changelog writer |
 | [PLAT-034-A](pulse_platform/plat-034.md) | Retain Raw tmux scrollback after process completion | Codex | `done` | terminal live-attach and chat-history persistence |
+| [PLAT-036-A](pulse_platform/plat-036.md) | Suppress context percentage when coding-CLI usage is aggregate rather than a context snapshot | Codex | `runtime_reverify` | coding-CLI adapters and cost telemetry writer |
+| [PLAT-037-A](pulse_platform/plat-037.md) | Attribute learning freshness to the actual writer | Unassigned | `new` | learnings freshness ledger writer |
+| [PLAT-038-A](pulse_platform/plat-038.md) | Retain complete pre-validation evidence for every attempt | Codex | `runtime_reverify` | shared validation artifact writer |
+| [PLAT-039-A](pulse_platform/plat-039.md) | Preserve and enforce advisor recommendation routes | Codex | `runtime_reverify` | advisor artifact/lifecycle projection |
+| [PLAT-040-A](pulse_platform/plat-040.md) | Let a chat/manual Pulse coexist with one full schedule and show trigger failures | Codex | `runtime_reverify` | scheduler lease lanes and Schedule UI |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -148,7 +164,7 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-005 `get_api_spec` multi-name contract | P1 | RTS Latency | **fixed in mcpagent; runtime reverify** |
 | PLAT-006 Workflow-step shell cwd contract | P1 | RTS Latency | **reverify** implemented fix |
 | PLAT-007 Workflow image verification | P1 | Instagram | implemented; runtime/E2E reverify |
-| PLAT-008 Phase cost pricing | P1 | Build-in-public, RTS Latency | **core pricing runtime verified; see PLAT-019** |
+| PLAT-008 Phase cost pricing | P1 | Build-in-public, RTS Latency, Tectonicus | **core pricing runtime verified; phase/daily-to-execution reconciliation remains open** |
 | PLAT-009 `get_cost_summary` run resolution | P1 | Build-in-public, Social Media, RTS Latency | **implementation repaired; runtime reverify** |
 | PLAT-010 Finding identity split | P1 | RTS Latency | **implementation completed; runtime reverify** |
 | PLAT-011 LLM role visibility | P2 | Build-in-public, RTS Latency | **runtime evidence positive; full UI acceptance pending** |
@@ -170,11 +186,16 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-027 Async todo-task turn falsely completes its parent and hides the live child | P0 | Social Media | **completion gate runtime verified; placeholder 404 fixed and tested 2026-08-04; rebuilt UI reverify remains** |
 | PLAT-028 Recovered CDP tab forwarded as action argument | P1 | Social Media | **implemented and executor-tested 2026-08-04; runtime reverify remains** |
 | PLAT-029 Missing tmux remains live and reconnects forever | P0 | Social Media | **implemented and regression-tested 2026-08-04; rebuilt runtime reverify remains** |
-| PLAT-031 Cost ledger loses run identity across UTC midnight | P1 | RTS Latency | **writer-side fix implemented 2026-08-05 (`mcp-agent-builder-go` 1bfa745d5): sticky-first-write ExecutionID survives a UTC date-shard rotation, numeric schedule-message indices no longer bucket under a step-shaped phase; full per-execution aggregate separation and the query layer remain PLAT-009's; runtime reverify remains** |
+| PLAT-031 Cost ledger loses run identity across UTC midnight | P1 | RTS Latency, Hetzner SSH | **execution-keyed cost/evaluation ledger implemented 2026-08-06: date/group files are shards only; immutable execution/evaluation IDs own their records, rotation updates only archived path metadata, and server projections preserve that identity. Historical folder-only rows remain explicitly legacy; runtime reverify remains** |
 | PLAT-032 Child-agent calls omitted from parent telemetry | P1 | Social Media | **root cause fixed 2026-08-05 (`mcp-agent-builder-go` cdc3d1a76): async sub-agent dispatch now propagates the parent step's timing-capture ID to the child context; parent/child/total breakdown and failed-child/E2E tests not built; the separate failed-child status claim remains unreproduced; runtime reverify remains** |
-| PLAT-033 Managed changelog contains placeholder refs | P1 | Social Media | **implemented 2026-08-05 (`mcp-agent-builder-go` cdc3d1a76) for the two reproduced offenders (update_step_config, write_workflow_manifest); shared mechanism now prefers real before/after snapshots over sha256("[]"); fail-closed on unsupported fields and per-caller audit of the other ~13 changelog call sites not done; runtime reverify remains** |
+| PLAT-033 Managed changelog contains placeholder refs | P1 | Social Media, Tectonicus, Hetzner SSH | **partially implemented 2026-08-05: truthful target/snapshot refs for the two reproduced writers, plus deterministic value-free `workflow.json` field-path evidence for `write_workflow_manifest`; Tectonicus still shows broad coverage/provenance gaps across managed mutation history, so the complete caller audit remains open and runtime reverify is pending** |
 | PLAT-034 Completed Raw tmux terminal loses scrollback | P1 | Social Media / Electron | **fixed and runtime verified 2026-08-05 (`mcp-agent-builder-go` b984e6c5c); retained stream survives completion and remains scrollable** |
 | PLAT-035 Retained tmux follow-up stays globally busy after returning to its prompt | P0 | Social Media, LinkedIn | **stream-driven fix implemented and regression-tested 2026-08-05; runtime reverify after rebuild remains** |
+| PLAT-036 Context-usage percentage always saturates | P2 | Tectonicus | **implemented 2026-08-05; coding-CLI aggregate usage now marks the percentage unavailable; runtime reverify remains** |
+| PLAT-037 Learning freshness misattributes out-of-band writes | P2 | Tectonicus | **new; freshness ledger assigns edits to the next step rather than the writer** |
+| PLAT-038 Pre-validation attempts overwrite each other | P1 | Cross-mode validation | **implemented 2026-08-05; every new validation invocation retains a run-local attempt artifact while the compatibility latest pointer remains** |
+| PLAT-039 Advisor recommendations default to engineering repairs | P1 | Hetzner SSH | **implemented 2026-08-06; route persistence, backend validation, lifecycle compatibility, and legacy UI fallback complete; runtime reverify remains** |
+| PLAT-040 Full schedule silently blocked by chat/Pulse | P1 | Hetzner SSH | **implemented 2026-08-06; manual Pulse and producing schedules now use separate durable lanes, only a real full workflow blocks another schedule, and trigger errors are visible; runtime reverify remains** |
 
 ### Social Media classification correction — 2026-08-05
 
@@ -406,6 +427,7 @@ priority and historical run context.
 | [PLAT-026](pulse_platform/plat-026.md) | [PLAT-027](pulse_platform/plat-027.md) | [PLAT-028](pulse_platform/plat-028.md) | [PLAT-029](pulse_platform/plat-029.md) |
 | [PLAT-030](pulse_platform/plat-030.md) | [PLAT-031](pulse_platform/plat-031.md) | [PLAT-032](pulse_platform/plat-032.md) | [PLAT-033](pulse_platform/plat-033.md) |
 | [PLAT-034](pulse_platform/plat-034.md) | [PLAT-035](pulse_platform/plat-035.md) |  |  |
+| [PLAT-036](pulse_platform/plat-036.md) | [PLAT-037](pulse_platform/plat-037.md) | [PLAT-038](pulse_platform/plat-038.md) | [PLAT-039](pulse_platform/plat-039.md) |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

@@ -208,3 +208,33 @@ func TestChatAndScheduleDoNotBlockEachOther(t *testing.T) {
 		t.Fatal("an ordinary chat must not claim the scheduled bypass")
 	}
 }
+
+func TestOnlyFullWorkflowExecutionBlocksSchedule(t *testing.T) {
+	for name, tc := range map[string]struct {
+		exec *TrackedWorkflowExecution
+		want bool
+	}{
+		"interactive chat": {
+			exec: &TrackedWorkflowExecution{Status: trackedExecutionStatusRunning, Kind: "workflow_builder_task"},
+			want: false,
+		},
+		"Pulse reviewer": {
+			exec: &TrackedWorkflowExecution{Status: trackedExecutionStatusRunning, Kind: "background_task", PhaseID: "strategy-auditor"},
+			want: false,
+		},
+		"full workflow": {
+			exec: &TrackedWorkflowExecution{Status: trackedExecutionStatusRunning, Kind: "full_workflow"},
+			want: true,
+		},
+		"completed full workflow": {
+			exec: &TrackedWorkflowExecution{Status: trackedExecutionStatusCompleted, Kind: "full_workflow"},
+			want: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := trackedExecutionBlocksScheduledWorkflow(tc.exec); got != tc.want {
+				t.Fatalf("trackedExecutionBlocksScheduledWorkflow() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

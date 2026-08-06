@@ -4,9 +4,71 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
+
+func TestWorkflowManifestChangelogChangesIsStableAndValueFree(t *testing.T) {
+	previous := `{
+  "label": "Old label",
+  "capabilities": {
+    "selected_skills": ["browser"],
+    "slack_webhook_secret_name": "old-secret-value"
+  },
+  "unchanged": true
+}`
+	current := `{
+  "label": "New label",
+  "capabilities": {
+    "selected_skills": ["browser", "ffmpeg"],
+    "slack_webhook_secret_name": "new-secret-value"
+  },
+  "new_setting": "enabled",
+  "unchanged": true
+}`
+
+	got := workflowManifestChangelogChanges(previous, current)
+	want := []step_based_workflow.PlanFieldChange{
+		{Field: "workflow.json.capabilities.selected_skills", OldValue: "present", NewValue: "changed"},
+		{Field: "workflow.json.capabilities.slack_webhook_secret_name", OldValue: "present", NewValue: "changed"},
+		{Field: "workflow.json.label", OldValue: "present", NewValue: "changed"},
+		{Field: "workflow.json.new_setting", OldValue: "absent", NewValue: "added"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("changes = %#v, want %#v", got, want)
+	}
+
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal changes: %v", err)
+	}
+	for _, value := range []string{"old-secret-value", "new-secret-value", "New label"} {
+		if strings.Contains(string(encoded), value) {
+			t.Fatalf("changelog evidence leaked manifest value %q: %s", value, encoded)
+		}
+	}
+}
+
+func TestWorkflowManifestChangelogChangesCreationAndCorruptPriorState(t *testing.T) {
+	created := workflowManifestChangelogChanges("", `{"label":"New workflow","capabilities":{"enabled":true}}`)
+	wantCreated := []step_based_workflow.PlanFieldChange{
+		{Field: "workflow.json", OldValue: "absent", NewValue: "added"},
+	}
+	if !reflect.DeepEqual(created, wantCreated) {
+		t.Fatalf("creation changes = %#v, want %#v", created, wantCreated)
+	}
+
+	corrupt := workflowManifestChangelogChanges("not-json", `{"label":"New workflow"}`)
+	wantCorrupt := []step_based_workflow.PlanFieldChange{
+		{Field: "workflow.json", OldValue: "present", NewValue: "changed"},
+	}
+	if !reflect.DeepEqual(corrupt, wantCorrupt) {
+		t.Fatalf("corrupt prior changes = %#v, want %#v", corrupt, wantCorrupt)
+	}
+}
 
 func TestValidateManifestCDPPorts(t *testing.T) {
 	manifest := NewWorkflowManifest("Multi-profile browser")
@@ -24,6 +86,23 @@ func TestValidateManifestCDPPorts(t *testing.T) {
 	manifest.Capabilities.CDPPorts = []int{9222, 9333, 9444, 9555, 9666}
 	if err := ValidateManifest(manifest); err == nil {
 		t.Fatal("more than four CDP ports should be rejected")
+	}
+}
+
+func TestValidateManifestAdvisorSpecialization(t *testing.T) {
+	manifest := NewWorkflowManifest("Specialized advisors")
+	manifest.Pulse = &WorkflowPulseConfig{AdvisorSpecialization: &WorkflowAdvisorSpecialization{
+		Version:         1,
+		StrategyAuditor: "Inspect acquisition concentration within the current strategy.",
+		GoalAdvisor:     "Explore credible channels outside the current strategy.",
+	}}
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("valid advisor specialization rejected: %v", err)
+	}
+
+	manifest.Pulse.AdvisorSpecialization.GoalAdvisor = ""
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "goal_advisor") {
+		t.Fatalf("missing Goal Advisor specialization should be rejected, got %v", err)
 	}
 }
 

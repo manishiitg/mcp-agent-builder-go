@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -22,6 +23,32 @@ func filedReviewConcern(t *testing.T, workspacePath, pulseRunID, module, text st
 	}
 	if len(concerns) != 1 {
 		t.Fatalf("concerns = %+v, want one", concerns)
+	}
+	return concerns[0]
+}
+
+func filedAdvisorConcern(t *testing.T, workspacePath, pulseRunID, module, text, route, nextCheck string) RunConcern {
+	t.Helper()
+	marker := pulseFindingDetailMarker{
+		Concern: text,
+		Module:  module,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:        "workflow_issue",
+			RecommendedRoute: route,
+			NextCheck:        nextCheck,
+		},
+	}
+	raw, err := json.Marshal(marker)
+	if err != nil {
+		t.Fatalf("marshal advisor marker: %v", err)
+	}
+	if _, err := RecordRunConcerns(context.Background(), workspacePath, pulseRunID, "", module, ConcernPhaseReview,
+		pulseFindingJSONPrefix+" "+string(raw)+"\nCONCERNS: "+text); err != nil {
+		t.Fatalf("record advisor concern: %v", err)
+	}
+	concerns, err := LoadOpenRunConcerns(context.Background(), workspacePath, 10)
+	if err != nil || len(concerns) != 1 {
+		t.Fatalf("load advisor concern: concerns=%+v err=%v", concerns, err)
 	}
 	return concerns[0]
 }
@@ -569,8 +596,9 @@ func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	pulseRunID := "pulse-advisor-routing"
-	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.StrategyAuditorID,
-		"current allocation over-concentrates on reciprocal engagement")
+	nextCheck := "after three completed outcome-bearing runs, compare follower growth with the current baseline"
+	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.StrategyAuditorID,
+		"current allocation over-concentrates on reciprocal engagement", pulseFindingRouteEvidenceWait, nextCheck)
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		t.Fatalf("open workflow db: %v", err)
@@ -597,7 +625,7 @@ func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 		t.Fatalf("actionable advisor proposal was silently parked without a decision: %v", err)
 	}
 
-	proposal.NextCheck = "after three completed outcome-bearing runs, compare follower growth with the current baseline"
+	proposal.NextCheck = nextCheck
 	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
 		[]PulseFindingDisposition{proposal}, ""); err != nil {
 		t.Fatalf("evidence-waiting advisor proposal was rejected: %v", err)
@@ -608,8 +636,8 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	pulseRunID := "pulse-goal-decision"
-	concern := filedReviewConcern(t, workspacePath, pulseRunID, pulsemodules.GoalAdvisorID,
-		"a new distribution channel could materially increase reach")
+	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.GoalAdvisorID,
+		"a new distribution channel could materially increase reach", pulseFindingRouteDecisionRequired, "")
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		t.Fatalf("open workflow db: %v", err)

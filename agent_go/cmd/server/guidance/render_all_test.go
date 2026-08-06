@@ -36,6 +36,29 @@ func readPulseDesignSpec(t *testing.T) string {
 	return ""
 }
 
+func TestSpecializeAdvisorsRequiresApprovalAndBoundedActivation(t *testing.T) {
+	rendered, err := renderFromRegistry("specialize-advisors", tmplData{Focus: "social acquisition"}, allKinds)
+	if err != nil {
+		t.Fatalf("render specialize-advisors: %v", err)
+	}
+	for _, want := range []string{
+		"Strategy Auditor specialization",
+		"Goal Advisor specialization",
+		"advisor-specialization-<UTC timestamp>",
+		"advisor_specialization_approval_input_id",
+		"`workflow.json` directly",
+		"social acquisition",
+		"DELTA-ONLY CONTRACT",
+		"If the matching base contract already asks for it, remove it",
+		"references/strategy-auditor.md",
+		"references/goal-advisor.md",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("specialize-advisors guidance missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func containsNormalizedText(haystack, needle string) bool {
 	return strings.Contains(
 		strings.Join(strings.Fields(haystack), " "),
@@ -275,6 +298,10 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 	}
 
 	for _, want := range []string{
+		"execution_id",
+		"evaluation_id",
+		"archived_run_folder",
+		"legacy fallback",
 		"group_folder",
 		"by_model",
 		"authoritative LLM total",
@@ -290,6 +317,10 @@ func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T
 		}
 	}
 	for _, want := range []string{
+		"execution_id",
+		"evaluation_id",
+		"archived_run_folder",
+		"legacy fallback",
 		"group_folder",
 		"run_folder",
 		"by_model",
@@ -696,6 +727,8 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"does not wait for Bug Review",
 		"normally runs more frequently than",
 		"bounded in-plan recommendation",
+		"PULSE_FINDING_JSON",
+		"recommended_route=none",
 	} {
 		if !strings.Contains(auditor, want) {
 			t.Fatalf("strategy-auditor guidance missing %q:\n%s", want, auditor)
@@ -710,7 +743,8 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"`strategy_auditor`",
 		"activity and outcomes diverge",
 		"Missing telemetry is",
-		"Never make one reviewer due, skipped, or delayed because another reviewer",
+		"Never make one reviewer due merely because another reviewer",
+		"Select **at most two** due modules",
 		"Strategy Auditor and Goal Advisor must not consume each",
 		"Strategy Auditor more frequently than Goal Advisor",
 		"Goal Advisor selectively",
@@ -1232,6 +1266,8 @@ func TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence(t *testing.T) {
 		"timestamped, group/run-scoped rows",
 		"Measurement plan",
 		"Rollback condition",
+		"PULSE_FINDING_JSON",
+		"recommended_route=none",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("goal-advisor guidance missing %q:\n%s", want, rendered)

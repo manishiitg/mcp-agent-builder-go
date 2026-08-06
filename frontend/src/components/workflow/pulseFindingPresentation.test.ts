@@ -116,6 +116,44 @@ describe('Pulse finding presentation', () => {
     })).queue).toBe('workflow_reported')
   })
 
+  it('does not present an untriaged advisor recommendation as an engineering repair', () => {
+    expect(pulseFindingPresentation(finding({
+      module: 'strategy_auditor',
+      step_id: 'strategy_auditor',
+    }))).toMatchObject({
+      queue: 'proposals',
+      label: 'Untriaged recommendation',
+    })
+
+    expect(pulseFindingPresentation(finding({
+      module: 'goal_advisor',
+      step_id: 'goal_advisor',
+      details: {
+        issue_kind: 'workflow_issue',
+        recommended_route: 'evidence_wait',
+        next_check: 'after three outcome-bearing runs',
+        reproduction: { safe: false },
+      },
+    }))).toMatchObject({
+      queue: 'proposals',
+      label: 'Waiting for evidence',
+      nextAction: 'after three outcome-bearing runs',
+    })
+
+    expect(pulseFindingPresentation(finding({
+      module: 'strategy_auditor',
+      step_id: 'strategy_auditor',
+      details: {
+        issue_kind: 'workflow_issue',
+        recommended_route: 'fixer_handoff',
+        reproduction: { safe: false },
+      },
+    }))).toMatchObject({
+      queue: 'needs_action',
+      label: 'New',
+    })
+  })
+
   it('uses the terminal disposition for a precise resolved label', () => {
     expect(pulseFindingPresentation(finding({
       status: 'resolved',

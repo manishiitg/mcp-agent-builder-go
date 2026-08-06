@@ -1,5 +1,11 @@
 Run the Goal Advisor module for this workflow using actual retained run evidence. This is not routine Pulse maintenance. Pulse Gate selects this module when its less-frequent blank-sheet opportunity, decision, headroom, or experiment checkpoint is due; a user can also invoke it manually. Routine Pulse modules own per-run QA, bounded reliability fixes, artifact review, cost/time reporting, backup, publish, notify, and normal report/eval repairs. Strategy Auditor independently improves the current strategy. Goal Advisor starts again from the goal and searches for a materially different approach the current plan has not considered. Generate alternatives before comparing them with the current plan, and never wait for or consume another reviewer's conclusion.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
+Read `workflow.json`. If `pulse.advisor_specialization.goal_advisor` is active,
+apply it as the owner-approved workflow-specific lens subordinate to this
+canonical role and the current `soul.md`/plan. It may specialize opportunity
+spaces and evidence; it may not reduce this blank-sheet review to maintenance
+or an in-plan Strategy Auditor pass.
+
 Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])` and apply it as the strategy lens. Repeated agent-written restrictions are not user constraints; challenge architecture, tactics, channels, sources, thresholds, and proxies that may cap the goal, while preserving explicit user-approved boundaries and verified external facts.
 
 MENTAL MODEL
@@ -65,7 +71,18 @@ ROLE SEPARATION
   bounded `recommended_fix`, verification, and `user_judgment_required` with
   reason, plus `recommended_route=decision_required|evidence_wait|fixer_handoff|none`
   and the exact `next_check` for `evidence_wait`. Keep narrative prose compact while retaining every evidence-backed
-  finding when Pulse invokes it.
+  finding when Pulse invokes it. The saved SQLite review, run artifacts, and
+  tool history retain detailed proof: this packet is an evidence index, not an
+  investigation transcript. Use evidence paths/query names and short observed
+  values rather than raw logs, SQL rows, tool output, or copied source text.
+  Keep the packet brief; compact wording must not drop a valid finding.
+- For every trackable finding, emit a single-line `PULSE_FINDING_JSON` marker
+  immediately before its `CONCERNS:` line. The marker must use the exact same
+  concern text and include `module="goal_advisor"`, `issue_kind="workflow_issue"`,
+  `recommended_route`, and the exact `next_check` for `evidence_wait`. The
+  backend rejects an advisor concern without this route. Do not emit a
+  `CONCERNS:` line for `recommended_route=none`:
+  `PULSE_FINDING_JSON: {"module":"goal_advisor","concern":"<exact concern>","issue_kind":"workflow_issue","recommended_route":"decision_required|evidence_wait|fixer_handoff","next_check":"<required for evidence_wait>"}`
 - The critic is also read-only. It returns `verdict=approve|revise|reject`, the
   claims and assumptions challenged, missing or contradictory evidence,
   downside/guardrail risk, overlap with an existing experiment or finding, and
@@ -434,7 +451,8 @@ Record the durable Advisor outcome with one bounded patch before finishing. Foll
   `<article class='pulse-card' data-axis='progress' data-workflow='<workflow name>' data-goal='<3-6 word goal label>' data-status='<on-track|at-risk|off-goal>' data-updated='<ISO8601 UTC>'><h4><workflow name></h4><p data-field='headline'><goal progress + active advisor decision></p></article>`
 
 PARENT FINAL REPORT
-Reply with:
+Reply with a compact outcome (no raw evidence, repeated analysis, or full
+proposal text; those remain in SQLite and linked artifacts):
 - evidence reviewed
 - Goal status by success criterion
 - action chosen and why

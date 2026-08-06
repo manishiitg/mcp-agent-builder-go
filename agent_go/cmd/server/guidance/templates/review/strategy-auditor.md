@@ -8,6 +8,11 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 Use `{{.RunFolder}}` as the newest evidence anchor, then compare it with the
 smallest useful retained window.{{end}}
 
+Read `workflow.json`. If `pulse.advisor_specialization.strategy_auditor` is
+active, apply it as the owner-approved workflow-specific lens subordinate to
+this canonical role and the current `soul.md`/plan. It may specialize what to
+inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
+
 1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
    `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
    `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`, and

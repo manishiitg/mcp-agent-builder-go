@@ -82,6 +82,9 @@ func scheduleStateLockKeyFromRuntimeKey(runtimeKey string) string {
 	if len(parts) < 3 || parts[0] != "workflow" {
 		return runtimeKey
 	}
+	if parts[2] == manualWorkflowPulseScheduleID {
+		return strings.Join([]string{"workflow-pulse", parts[1]}, scheduleScopeSeparator)
+	}
 	return strings.Join(parts[:2], scheduleScopeSeparator)
 }
 
@@ -92,6 +95,9 @@ func scheduleStateScope(sctx *ScheduleContext) (scopeType, scopeID, lockKey stri
 	}
 	if sctx != nil {
 		scopeID = filepath.Clean(strings.TrimSpace(sctx.WorkspacePath))
+		if sctx.Schedule.ID == manualWorkflowPulseScheduleID {
+			return "workflow", scopeID, strings.Join([]string{"workflow-pulse", scopeID}, scheduleScopeSeparator)
+		}
 	}
 	return "workflow", scopeID, strings.Join([]string{"workflow", scopeID}, scheduleScopeSeparator)
 }
@@ -4501,7 +4507,7 @@ func (s *SchedulerService) findActiveNonBuilderExecutionForWorkspace(workspacePa
 	}
 
 	tracked := s.api.findRunningTrackedExecutionForWorkspaceWhere(workspacePath, func(exec *TrackedWorkflowExecution) bool {
-		return exec.PhaseID != workflowtypes.WorkflowStatusWorkflowBuilder
+		return trackedExecutionBlocksScheduledWorkflow(exec)
 	})
 	if tracked == nil {
 		return nil

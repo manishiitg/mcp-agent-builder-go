@@ -43,6 +43,20 @@ describe('report human input context formatting', () => {
     ])
   })
 
+  it('renders both advisor specialization texts as separate sections', () => {
+    const sections = parseReportHumanInputContext(
+      'Proposal: Specialize both reviewers. Strategy Auditor specialization: Check channel concentration. Goal Advisor specialization: Explore partnerships and referral loops.',
+    )
+
+    expect(sections.map(section => section.label)).toEqual([
+      'Proposal',
+      'Strategy auditor specialization',
+      'Goal advisor specialization',
+    ])
+    expect(sections[1].body).toBe('Check channel concentration.')
+    expect(sections[2].body).toBe('Explore partnerships and referral loops.')
+  })
+
   it('keeps consumed inputs in decision history so their outcome remains visible', () => {
     const consumed = {
       ...input('consumed'),

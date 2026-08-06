@@ -270,6 +270,19 @@ func TestPulseWorklistRequiresCompleteModuleSet(t *testing.T) {
 	}
 }
 
+func TestPulseWorklistCapsDueModulesAtTwoPerPass(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleWorkflowReview:  {Module: pulseModuleWorkflowReview, Due: true, Reason: "Engineering evidence requires review."},
+		pulseModuleLLMOpsReview:    {Module: pulseModuleLLMOpsReview, Due: true, Reason: "Operational evidence requires review."},
+		pulseModuleStrategyAuditor: {Module: pulseModuleStrategyAuditor, Due: true, Reason: "Strategy evidence requires review."},
+	})
+	if _, err := recordPulseWorklist(ctx, "Workflow/example", "pulse-run-cap", decisions); err == nil || !strings.Contains(err.Error(), "at most 2 due modules") {
+		t.Fatalf("three due modules error = %v", err)
+	}
+}
+
 func TestTrustedPulseWorklistKeepsFirstCompleteGateDecision(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)

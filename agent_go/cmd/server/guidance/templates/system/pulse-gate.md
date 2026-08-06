@@ -52,6 +52,17 @@ Every skip needs reason, evidence, and `next_check_at`, positive `cooldown_runs`
 or `next_check_after_run_id`. Name evidence that overrides cadence.
 Missing baseline means `baseline pending`, not healthy. Use bounded adaptive cadence.
 
+## Per-pass review cost cap
+
+Select **at most two** due modules in one scheduled Pulse pass. When more than
+two lenses independently qualify, rank them by the nearest actionable outcome:
+current production failure or verification first, then aged open repair work,
+then material new evidence, then discovery-only advisory work. Select the top
+two; defer every other eligible lens with a plain reason that it lost this
+capacity ranking and a concrete next-check boundary. A deferred lens is not
+clean, completed, or forgotten — it remains eligible on its next boundary.
+Never select a third module merely because it is independently due.
+
 Make cadence proportional to the workflow's real schedule. An hourly workflow
 must not buy the same unchanged deep review every hour: use material-change,
 failure, awaiting-verification, answered-decision, and checkpoint evidence, then
@@ -73,12 +84,20 @@ health/advisory reviews whose artifacts and evidence did not materially change;
 give each an exact backlog-drained, artifact-change, or next-valid-run check.
 Do not repeatedly spend a pass rediscovering unchanged findings.
 
-Select every module with actionable repair/verification work or genuinely new
-trigger evidence. Strategy Auditor and Goal Advisor run independently in a
-bounded read-only batch. After they finish, selected Engineering/LLM-Ops lanes
-run as one ordered review-and-fix sequence with a persisted pre-mutation review
-checkpoint. A residual Fixer runs only for still-non-terminal independent or
-recovery work.
+An answered `report_human_inputs` decision with source `pulse` and an id starting
+`advisor-specialization-` is actionable configuration work. Select Strategy
+Auditor as due (within the normal two-module cap) so the consolidated Fixer can
+activate, revise, or reject it. This ownership choice is only a route to the
+writer-capable Fixer; the Strategy Auditor must still perform its own independent
+current-strategy review and must not treat the proposed lens as active before the
+config tool succeeds.
+
+Within the two-module cap, select the modules with actionable
+repair/verification work or genuinely new trigger evidence. Strategy Auditor
+and Goal Advisor run independently in a bounded read-only batch when selected.
+After they finish, selected Engineering/LLM-Ops lanes run as one ordered
+review-and-fix sequence with a persisted pre-mutation review checkpoint. A
+residual Fixer runs only for still-non-terminal independent or recovery work.
 When work must wait for a real evidence/user/external boundary, record that
 boundary instead of inventing a capacity cooldown.
 
@@ -114,12 +133,10 @@ QA checkpoint. These triggers do not automatically make Ops or Strategy due.
 Catalog changes override the LLM/Ops cooldown; never silently change models or
 tiers.
 
-Never make one reviewer due, skipped, or delayed because another reviewer has
-or has not run. When evidence is unreliable, select every independently due
-lens and let that reviewer return `execution_problem` or `insufficient_evidence`
-within its own result. Strategy Auditor and Goal Advisor must not consume each
-other's conclusions; agreement is corroboration discovered only during later
-consolidation. A clean run or green eval cannot suppress a measured miss.
+Never make one reviewer due merely because another reviewer has or has not run.
+When evidence is unreliable, select the highest-priority eligible lenses within
+the two-module cap and let each return `execution_problem` or
+`insufficient_evidence` within its own result. Strategy Auditor and Goal Advisor must not consume each other's conclusions; agreement is corroboration discovered only during later consolidation. A clean run or green eval cannot suppress a measured miss.
 Implementation correctness stays Engineering Review work; efficiency, cost,
 model, and runtime reliability stay LLM/Ops work; business usefulness stays
 Strategy Auditor work.

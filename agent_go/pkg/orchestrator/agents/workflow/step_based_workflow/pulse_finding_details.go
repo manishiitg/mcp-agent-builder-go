@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 const pulseFindingDetailsSchema = `CREATE TABLE IF NOT EXISTS pulse_finding_details (
@@ -63,17 +64,19 @@ type PulseFindingReproduction struct {
 // would otherwise be trapped in forensic Markdown. issue_kind=harness_issue is
 // rendered as a dedicated platform-owned card in Pulse.
 type PulseFindingDetails struct {
-	FindingID      string                     `json:"finding_id,omitempty"`
-	TargetKey      string                     `json:"target_key,omitempty"`
-	IssueKind      string                     `json:"issue_kind,omitempty"`
-	Classification string                     `json:"classification,omitempty"`
-	Severity       string                     `json:"severity,omitempty"`
-	Summary        string                     `json:"summary,omitempty"`
-	Impact         string                     `json:"impact,omitempty"`
-	Workaround     string                     `json:"workaround,omitempty"`
-	Evidence       []string                   `json:"evidence,omitempty"`
-	Reproduction   PulseFindingReproduction   `json:"reproduction"`
-	Platform       *PulseHarnessPlatformIssue `json:"platform,omitempty"`
+	FindingID        string                     `json:"finding_id,omitempty"`
+	TargetKey        string                     `json:"target_key,omitempty"`
+	IssueKind        string                     `json:"issue_kind,omitempty"`
+	RecommendedRoute string                     `json:"recommended_route,omitempty"`
+	NextCheck        string                     `json:"next_check,omitempty"`
+	Classification   string                     `json:"classification,omitempty"`
+	Severity         string                     `json:"severity,omitempty"`
+	Summary          string                     `json:"summary,omitempty"`
+	Impact           string                     `json:"impact,omitempty"`
+	Workaround       string                     `json:"workaround,omitempty"`
+	Evidence         []string                   `json:"evidence,omitempty"`
+	Reproduction     PulseFindingReproduction   `json:"reproduction"`
+	Platform         *PulseHarnessPlatformIssue `json:"platform,omitempty"`
 }
 
 type PulseHarnessPlatformIssue struct {
@@ -94,6 +97,8 @@ func normalizePulseFindingDetails(details PulseFindingDetails) PulseFindingDetai
 	details.FindingID = strings.TrimSpace(details.FindingID)
 	details.TargetKey = strings.TrimSpace(details.TargetKey)
 	details.IssueKind = strings.TrimSpace(details.IssueKind)
+	details.RecommendedRoute = strings.TrimSpace(details.RecommendedRoute)
+	details.NextCheck = strings.TrimSpace(details.NextCheck)
 	details.Classification = strings.TrimSpace(details.Classification)
 	details.Severity = strings.TrimSpace(details.Severity)
 	details.Summary = strings.TrimSpace(details.Summary)
@@ -106,6 +111,63 @@ func normalizePulseFindingDetails(details PulseFindingDetails) PulseFindingDetai
 	details.Reproduction.Observed = strings.TrimSpace(details.Reproduction.Observed)
 	details.Reproduction.Limitations = strings.TrimSpace(details.Reproduction.Limitations)
 	return details
+}
+
+const (
+	pulseFindingRouteDecisionRequired = "decision_required"
+	pulseFindingRouteEvidenceWait     = "evidence_wait"
+	pulseFindingRouteFixerHandoff     = "fixer_handoff"
+	pulseFindingRouteNone             = "none"
+)
+
+func isPulseAdvisorModule(module string) bool {
+	module = pulsemodules.Normalize(module)
+	return module == pulsemodules.StrategyAuditorID || module == pulsemodules.GoalAdvisorID
+}
+
+// validatePulseAdvisorFindingRoutes makes the advisor-to-lifecycle handoff a
+// stored contract rather than prose the next agent has to infer. An advisor
+// concern is not an engineering repair by default: it must identify whether it
+// needs a decision, future evidence, or an explicit Fixer handoff.
+func validatePulseAdvisorFindingRoutes(module, summary string) error {
+	module = pulsemodules.Normalize(module)
+	if !isPulseAdvisorModule(module) {
+		return nil
+	}
+	concerns := ParseConcernLines(summary)
+	if len(concerns) == 0 {
+		return nil
+	}
+	markers := map[string]pulseFindingDetailMarker{}
+	for _, marker := range ParsePulseFindingDetailMarkers(summary) {
+		key := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
+		if _, duplicate := markers[key]; duplicate {
+			return fmt.Errorf("%s concern %q has duplicate PULSE_FINDING_JSON routing markers", module, marker.Concern)
+		}
+		marker.Module = pulsemodules.Normalize(marker.Module)
+		if marker.Module != module {
+			return fmt.Errorf("%s concern %q must use module=%q in PULSE_FINDING_JSON; got %q", module, marker.Concern, module, marker.Module)
+		}
+		switch marker.RecommendedRoute {
+		case pulseFindingRouteDecisionRequired, pulseFindingRouteFixerHandoff:
+		case pulseFindingRouteEvidenceWait:
+			if marker.NextCheck == "" {
+				return fmt.Errorf("%s concern %q uses recommended_route=evidence_wait without an exact next_check", module, marker.Concern)
+			}
+		case pulseFindingRouteNone:
+			return fmt.Errorf("%s concern %q uses recommended_route=none but is still emitted as CONCERNS; omit the CONCERNS line for a non-trackable conclusion", module, marker.Concern)
+		default:
+			return fmt.Errorf("%s concern %q must set recommended_route to decision_required, evidence_wait, fixer_handoff, or none", module, marker.Concern)
+		}
+		markers[key] = marker
+	}
+	for _, concern := range concerns {
+		key := strings.ToLower(strings.Join(strings.Fields(concern), " "))
+		if _, ok := markers[key]; !ok {
+			return fmt.Errorf("%s concern %q is missing its PULSE_FINDING_JSON routing marker", module, concern)
+		}
+	}
+	return nil
 }
 
 // ParsePulseFindingDetailMarkers extracts one-line JSON records emitted by a

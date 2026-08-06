@@ -14,10 +14,45 @@ const (
 )
 
 type DailyGroupTokenUsageFile struct {
-	Date        string                     `json:"date"`
-	GroupFolder string                     `json:"group_folder"`
-	UpdatedAt   time.Time                  `json:"updated_at"`
-	RunFolders  map[string]*TokenUsageFile `json:"run_folders"`
+	Date        string    `json:"date"`
+	GroupFolder string    `json:"group_folder"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	// Executions is the authoritative v2 ledger.  Its key is the immutable
+	// execution ID, never the rotating runs/iteration-0 path.  RunFolders is
+	// retained only so existing, pre-v2 files and external readers remain
+	// readable during the migration.
+	Executions map[string]*ExecutionTokenUsage `json:"executions,omitempty"`
+	RunFolders map[string]*TokenUsageFile      `json:"run_folders,omitempty"`
+}
+
+// ExecutionTokenUsage is one immutable execution's cost aggregate. RunFolder
+// records where it started; ArchivedRunFolder is filled when iteration-0 is
+// rotated. Neither path is an identity or a map key.
+type ExecutionTokenUsage struct {
+	RunFolder         string          `json:"run_folder"`
+	ArchivedRunFolder string          `json:"archived_run_folder,omitempty"`
+	TokenUsage        *TokenUsageFile `json:"token_usage"`
+}
+
+func (e *ExecutionTokenUsage) EffectiveRunFolder() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.ArchivedRunFolder) != "" {
+		return e.ArchivedRunFolder
+	}
+	return e.RunFolder
+}
+
+func CloneExecutionTokenUsage(src *ExecutionTokenUsage) *ExecutionTokenUsage {
+	if src == nil {
+		return nil
+	}
+	return &ExecutionTokenUsage{
+		RunFolder:         src.RunFolder,
+		ArchivedRunFolder: src.ArchivedRunFolder,
+		TokenUsage:        CloneTokenUsageFile(src.TokenUsage),
+	}
 }
 
 type DailyPhaseTokenUsageFile struct {
@@ -252,6 +287,11 @@ func EnsureTokenUsageFileInitialized(tokenFile *TokenUsageFile) {
 func EnsureDailyGroupTokenUsageFilePricing(dailyFile *DailyGroupTokenUsageFile) {
 	if dailyFile == nil {
 		return
+	}
+	for _, execution := range dailyFile.Executions {
+		if execution != nil {
+			EnsureTokenUsageFilePricing(execution.TokenUsage)
+		}
 	}
 	for _, tokenFile := range dailyFile.RunFolders {
 		EnsureTokenUsageFilePricing(tokenFile)

@@ -239,6 +239,18 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
+    command: 'specialize-advisors',
+    description: 'Propose workflow-specific Strategy Auditor and Goal Advisor lenses for approval',
+    icon: <Target className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: 'workshop',
+    source: 'builtin',
+    execute: (ctx) => {
+      submitGuidedWorkflowCommand(ctx, 'specialize-advisors')
+    }
+  },
+  {
     command: 'review-code',
     description: 'Review saved scripts (main.py) against step descriptions to detect drift',
     icon: <FileText className="w-4 h-4" />,

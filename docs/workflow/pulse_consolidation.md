@@ -437,3 +437,25 @@ The toolbar **Plan edits** popup (the granular `planning/changelog/*.json` audit
 **Consolidate** control — drop edits older than 7/30/90/180 days — backed by
 `POST /workflow/plan-changelog/prune`. The server prunes (deletes whole `changelog-*.json`
 files older than the cutoff) because `planning/` is shell-guarded from the agent.
+
+## Workflow-specific advisor specialization (2026-08-06)
+
+Strategy Auditor and Goal Advisor keep stable product-wide contracts, but can now
+receive separate owner-approved workflow lenses. `/specialize-advisors` proposes
+exactly two reusable Markdown texts and records them in one durable Pulse decision.
+Its guidance loads both canonical reviewer contracts first and enforces a
+delta-only filter: generic review procedure already present in the base prompts is
+removed, leaving only stable domain evidence semantics, failure traps, invariants,
+tradeoffs, and opportunity spaces that a general reviewer would otherwise miss.
+Nothing changes until the owner selects **Activate** and the agent calls
+`update_workflow_config(advisor_specialization_approval_input_id="...")`.
+An answered specialization decision is routed by the next Pulse Gate to the
+writer-capable consolidated Fixer; a manual Workshop chat may activate it
+immediately after the answer with the same tool.
+
+The config tool resolves the exact approved decision text rather than accepting
+replacement prose, writes both lenses together, versions the result, and stores it
+under `workflow.json` `pulse.advisor_specialization`. Strategy Auditor receives only
+the current-strategy lens; Goal Advisor receives only the blank-sheet opportunity
+lens. Engineering and Ops never receive either. Canonical reviewer contracts and
+the current owner-approved soul/plan always override a conflicting specialization.

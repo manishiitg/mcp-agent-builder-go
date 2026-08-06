@@ -1814,14 +1814,18 @@ export const EmployeeDashboard: React.FC = () => {
                   <div className="space-y-4">
                     {(() => {
                       const phaseCostTotal = costTrend.rows.reduce((sum, r) => sum + r.phase, 0)
-                      const grandTotal = (totalKnownCost || 0) + phaseCostTotal
                       return (
                         <div className="rounded-xl border border-border bg-muted/30 px-4 py-3">
-                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total cost</div>
-                          <div className="mt-2 text-2xl font-semibold text-foreground">{formatUsd(grandTotal > 0 ? grandTotal : null)}</div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Selected run cost</div>
+                          <div className="mt-2 text-2xl font-semibold text-foreground">{formatUsd(totalKnownCost)}</div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {formatUsd(executionCost)} execution · {formatUsd(evaluationCost)} evaluation · {formatUsd(phaseCostTotal > 0 ? phaseCostTotal : null)} builder
+                            {formatUsd(executionCost)} execution · {formatUsd(evaluationCost)} evaluation
                           </div>
+                          {phaseCostTotal > 0 && (
+                            <div className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                              {formatUsd(phaseCostTotal)} builder/Pulse across all recorded days — separate from this run
+                            </div>
+                          )}
                         </div>
                       )
                     })()}
@@ -1841,7 +1845,7 @@ export const EmployeeDashboard: React.FC = () => {
                     {costTrend.rows.length >= 1 && (
                       <div className="rounded-xl border border-border bg-card px-4 py-3">
                         <div className="mb-2 flex items-center justify-between">
-                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost over time</div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost over time · all recorded activity</div>
                           <div className="text-[11px] text-muted-foreground">
                             {costTrend.rows.length} day{costTrend.rows.length !== 1 ? 's' : ''}
                           </div>
@@ -1869,7 +1873,7 @@ export const EmployeeDashboard: React.FC = () => {
                     {costTrend.rows.length >= 1 && (
                       <div className="overflow-hidden rounded-xl border border-border">
                         <div className="border-b border-border bg-muted/30 px-4 py-3">
-                          <div className="text-sm font-medium text-foreground">Cost by day</div>
+                          <div className="text-sm font-medium text-foreground">Cost by day · all recorded activity</div>
                         </div>
                         <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-x-4 border-b border-border bg-muted/20 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           <div className="w-7"></div>

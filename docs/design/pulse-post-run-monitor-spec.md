@@ -763,10 +763,15 @@ a retry/duplicate/serial call was justified, and the bounded recommendation.
 Do not label every alternative tool choice as a defect.
 
 For raw ledgers under `costs/execution/` and `costs/evaluation/`, preserve the
-full bucket identity: `date + scope + group_folder + run_folder`. The same step
-ID in two groups is two separate rows. Within each bucket and model, `by_model`
-is the authoritative LLM total and `by_step_and_model` is attribution already
-included in that total; never add them together. Reconcile
+immutable record identity: `execution_id` or `evaluation_id`. `date + scope +
+group_folder` locates the ledger shard; `run_folder` and
+`archived_run_folder` are mutable display metadata, not identity. In particular,
+never merge two records merely because both say `iteration-0/<group>`: rotation
+reuses that active path. `run_folders` is a legacy fallback only when no
+ID-keyed record exists. The same step ID in two groups is still two separate
+rows. Within each execution record and model, `by_model` is the authoritative LLM total and
+`by_step_and_model` is attribution already included in that total;
+never add them together. Reconcile
 `unattributed = max(0, by_model - sum(by_step_and_model))` per model. An explicit
 `workflow_orchestrator` row is already attributed. Report attribution overflow,
 missing buckets, and unpriced calls instead of estimating. Report a positive

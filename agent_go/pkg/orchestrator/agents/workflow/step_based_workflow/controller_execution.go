@@ -2049,6 +2049,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					// Check if pre-validation already passes (LLM may have run main.py or produced outputs).
 					// If outputs are valid AND main.py exists, skip the fix loop — no need to re-run.
 					preValResults, _ := RunPreValidation(ctx, getValidationSchema(step), stepExecutionPath, hcpo.BaseOrchestrator)
+					if preValResults != nil && hcpo.selectedRunFolder != "" {
+						preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
+						SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+							PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "initial-check", ExecutionAttempt: retryAttempt, ValidationAttempt: 1})
+					}
 					mainPyRelPath := stepExecutionPath + "/code/main.py"
 					_, mainPyExistsErr := hcpo.ReadWorkspaceFile(ctx, mainPyRelPath)
 					if preValResults != nil && preValResults.OverallPass && mainPyExistsErr == nil {
@@ -2093,6 +2098,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 
 						// Check pre-validation — did the LLM produce valid outputs?
 						fixPreValResults, _ := RunPreValidation(ctx, getValidationSchema(step), stepExecutionPath, hcpo.BaseOrchestrator)
+						if fixPreValResults != nil && hcpo.selectedRunFolder != "" {
+							preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
+							SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, fixPreValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+								PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "repair-check", ExecutionAttempt: retryAttempt, ValidationAttempt: fixIter + 1})
+						}
 						mainPyRelPath := stepExecutionPath + "/code/main.py"
 						_, mainPyErr := hcpo.ReadWorkspaceFile(ctx, mainPyRelPath)
 
@@ -2372,7 +2382,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Persist pre-validation results for Pulse Bug Review and diagnostics.
 				if hcpo.selectedRunFolder != "" {
 					preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+					mode := "agentic"
+					if isScriptedMode {
+						mode = "scripted"
+					}
+					SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValidationResults, preValidationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+						PreValidationAttempt{ExecutionMode: mode, ValidationPhase: "final-gate", ExecutionAttempt: retryAttempt, ValidationAttempt: 1})
 				}
 
 				// Build validation response based on pre-validation results

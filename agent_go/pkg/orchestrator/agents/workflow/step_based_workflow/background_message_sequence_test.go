@@ -132,6 +132,12 @@ func TestParseBackgroundMessageSequenceContinuesOperationalReviewIntoFixer(t *te
 	if !strings.Contains(items[len(items)-1].Message, "same conversation") || !strings.Contains(items[len(items)-1].Message, "record_pulse_result") {
 		t.Fatalf("combined Fixer turn lacks continuation/lifecycle contract: %s", items[len(items)-1].Message)
 	}
+	if !strings.Contains(items[len(items)-1].Message, "Do not repeat the review") {
+		t.Fatalf("combined Fixer turn must not produce a duplicate final consolidation: %s", items[len(items)-1].Message)
+	}
+	if !strings.Contains(items[1].Message, "evidence index") || !strings.Contains(items[1].Message, "Keep the review brief") {
+		t.Fatalf("consolidation lacks compact evidence-index contract: %s", items[1].Message)
+	}
 }
 
 func TestParseBackgroundMessageSequenceRejectsUnknownWorkflowReviewLane(t *testing.T) {

@@ -153,7 +153,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED FINDING DETAILS: an injected multi-lane contract may require one compact PULSE_FINDING_JSON marker before every CONCERNS line solely to preserve its owning module. Outside that contract, add this marker only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
+		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED FINDING DETAILS: an injected multi-lane contract may require one compact PULSE_FINDING_JSON marker before every CONCERNS line solely to preserve its owning module. Strategy Auditor and Goal Advisor also require this marker before every CONCERNS line to preserve recommended_route (and next_check for evidence_wait); a missing advisor route rejects the review. Outside those contracts, add this marker only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
 		artifactContract += "LIFECYCLE HISTORY: call get_pulse_state(view=\"backlog\") for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
 	}
 	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
@@ -199,8 +199,8 @@ type backgroundMessageSequenceItem struct {
 
 func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) ([]backgroundMessageSequenceItem, error) {
 	available := map[string]backgroundMessageSequenceItem{
-		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence; do not propose product strategy and do not consolidate yet."},
-		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links; do not evaluate strategy completeness."},
+		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence pointers only: never paste raw logs, SQL rows, tool output, or repeated context into the response. Do not propose product strategy and do not consolidate yet."},
+		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links with evidence pointers; do not quote raw tool output or repeat the engineering lane, and do not evaluate strategy completeness."},
 	}
 	if len(lanes) == 0 {
 		lanes = []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
@@ -225,12 +225,12 @@ func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) (
 			items = append(items, available[lane])
 		}
 	}
-	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause, retain all distinct evidence pointers, separate verification verdicts from new findings, and return the complete priority-ordered human-readable review under the supplied artifact contract. Do not introduce new investigation unless needed to resolve a direct contradiction."})
+	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause, retain distinct evidence pointers, and separate verification verdicts from new findings. Return one compact evidence index, not an investigation transcript: a brief executive verdict, then one short structured entry per finding (claim, impact, next action, evidence pointers). Do not paste logs, SQL rows, tool output, repeated reasoning, or source excerpts; SQLite, lifecycle rows, run artifacts, and tool history retain the full proof. Keep the review brief while retaining every valid finding by writing it compactly. Do not introduce new investigation unless needed to resolve a direct contradiction."})
 	if includeFixer {
 		items = append(items, backgroundMessageSequenceItem{
 			ID:      "fix",
 			Title:   "Apply and verify fixes",
-			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The backend has now persisted your consolidated review and filed its trackable concerns. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the persisted review and complete lifecycle backlog, consume verification verdicts first, and build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome; do not repeat CONCERNS lines because the review checkpoint already filed them.",
+			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The backend has now persisted your consolidated review and filed its trackable concerns. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the persisted review and complete lifecycle backlog, consume verification verdicts first, and build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome only: changed, verified, and still blocked with evidence pointers. Do not repeat the review, CONCERNS lines, logs, or raw proof because the review/lifecycle records already retain them.",
 		})
 	}
 	return items, nil
@@ -2964,7 +2964,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
 {{if eq .WorkshopMode "workshop"}}
 - **Plan modification**: `+"`create_plan`"+`, `+"`add_<type>_step`"+`, `+"`update_<type>_step`"+`, `+"`delete_plan_steps`"+`, `+"`cleanup_orphan_step_configs`"+`, todo-task route tools, `+"`update_validation_schema`"+`.
-- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, and the per-run monitor (`+"`post_run_monitor`"+`). Do NOT edit `+"`workflow.json`"+` manually.
+- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, the per-run monitor (`+"`post_run_monitor`"+`), and activation of an owner-approved advisor specialization decision. Do NOT edit `+"`workflow.json`"+` manually.
 - **Schedule management**: `+"`list_schedules`"+`, `+"`create_schedule`"+`, `+"`create_calendar_schedule`"+`, `+"`update_schedule`"+`, `+"`delete_schedule`"+`, `+"`trigger_schedule`"+`, `+"`get_schedule_runs`"+`. Cron / message-authoring rules, normal Run schedules plus Pulse, the `+"`/pulse-setup`"+` setup path, and unattended-message discipline — all live in the `+"`workflow-tools`"+` ref doc. Workflow schedules always use the workshop path; do not create direct `+"`mode=\"workflow\"`"+` schedules. **Whenever you create a recurring schedule, also pair it with a backup** so unattended runs persist their state off-box — see `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`"+`.
 {{end}}
 - **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
@@ -3227,7 +3227,7 @@ func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedW
 func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent DefinitionToolRegistrar, logger loggerv2.Logger) {
 	if err := mcpAgent.RegisterCustomTool(
 		"get_cost_summary",
-		"Show token usage and cost breakdown for the current run plus builder/Pulse overhead. Displays per-step, per-model, and phase-level totals with USD costs when priced.",
+		"Show token usage and cost breakdown for one execution run. Builder/Pulse usage is shown separately as cumulative reference only and is never part of that run's total.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3264,6 +3264,7 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent Defini
 
 			var result strings.Builder
 			result.WriteString(fmt.Sprintf("## Cost Summary — %s\n\n", runFolder))
+			result.WriteString("Run totals below cover only this execution run. Builder/Pulse totals, when present, are cumulative workflow-wide reference and must not be added to this run.\n\n")
 
 			if runMissingReason != "" {
 				result.WriteString("### Run Cost\n\n")
@@ -3332,18 +3333,18 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent Defini
 			phaseTokenPath := orchestrator.ResolvePhaseTokenUsagePath("")
 			phaseContent, phaseErr := iwm.controller.ReadWorkspaceFile(ctx, phaseTokenPath)
 			if phaseErr != nil {
-				result.WriteString("\n### Builder/Pulse Overhead (phase-level costs)\n\n")
+				result.WriteString("\n### Cumulative Builder/Pulse Reference (not part of this run)\n\n")
 				result.WriteString(fmt.Sprintf("missing evidence: no phase token usage data found at %s\n", phaseTokenPath))
 			} else {
 				var phaseFile orchestrator.PhaseTokenUsageFile
 				if err := json.Unmarshal([]byte(phaseContent), &phaseFile); err != nil {
-					result.WriteString("\n### Builder/Pulse Overhead (phase-level costs)\n\n")
+					result.WriteString("\n### Cumulative Builder/Pulse Reference (not part of this run)\n\n")
 					result.WriteString(fmt.Sprintf("missing evidence: failed to parse %s: %v\n", phaseTokenPath, err))
 				} else if len(phaseFile.ByPhaseAndModel) == 0 {
-					result.WriteString("\n### Builder/Pulse Overhead (phase-level costs)\n\n")
+					result.WriteString("\n### Cumulative Builder/Pulse Reference (not part of this run)\n\n")
 					result.WriteString(fmt.Sprintf("missing evidence: no by_phase_and_model entries in %s\n", phaseTokenPath))
 				} else {
-					result.WriteString("\n### Builder/Pulse Overhead (phase-level costs)\n\n")
+					result.WriteString("\n### Cumulative Builder/Pulse Reference (not part of this run)\n\n")
 					result.WriteString("| Phase | Model | Input | Output | Cost |\n")
 					result.WriteString("|-------|-------|-------|--------|------|\n")
 
@@ -3371,7 +3372,7 @@ func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent Defini
 							))
 						}
 					}
-					result.WriteString(fmt.Sprintf("\n**Phase total: $%.4f**\n", phaseTotalCost))
+					result.WriteString(fmt.Sprintf("\n**Cumulative builder/Pulse reference: $%.4f (not included in run total)**\n", phaseTotalCost))
 				}
 			}
 
@@ -4185,6 +4186,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			workspacePath := iwm.controller.GetWorkspacePath()
 			marker := pulseReviewerCompletionMarker(todoID)
 			stageInstructions := instructions
+			if specialization := iwm.advisorSpecializationInstruction(execCtx, module); specialization != "" {
+				stageInstructions = strings.TrimSpace(stageInstructions) + "\n\n" + specialization
+			}
 			if isPulseReviewer {
 				candidateModules := []string{module}
 				if module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
@@ -6913,7 +6917,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_workflow_config — read-only view of workflow-level settings (MCP servers, skills, secrets, LLM config)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_workflow_config",
-		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), workflow-scoped notification content instructions and one-way destinations, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
+		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), workflow-scoped notification content instructions and one-way destinations, active owner-approved advisor specialization, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -7142,6 +7146,21 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			sb.WriteString(fmt.Sprintf("- run_retention_count: %d%s\n", runRetentionCount, runRetentionNote))
 
+			// --- Owner-approved advisor specialization ---
+			sb.WriteString("\n### Advisor Specialization\n")
+			if content, err := ctrl.ReadWorkspaceFile(ctx, "workflow.json"); err == nil {
+				specialization, parseErr := readWorkflowAdvisorSpecialization(content)
+				if parseErr == nil && specialization != nil {
+					sb.WriteString(fmt.Sprintf("- version: %d\n- approved decision: %s\n", specialization.Version, specialization.ApprovedInputID))
+					sb.WriteString("- Strategy Auditor:\n  " + strings.ReplaceAll(strings.TrimSpace(specialization.StrategyAuditor), "\n", "\n  ") + "\n")
+					sb.WriteString("- Goal Advisor:\n  " + strings.ReplaceAll(strings.TrimSpace(specialization.GoalAdvisor), "\n", "\n  ") + "\n")
+				} else {
+					sb.WriteString("No workflow-specific advisor specialization is active.\n")
+				}
+			} else {
+				sb.WriteString("Could not read workflow.json.\n")
+			}
+
 			// Preset-level defaults
 			sb.WriteString("\n**Preset Defaults**:\n")
 			writeLLMDefault := func(label string, llm *AgentLLMConfig) {
@@ -7187,7 +7206,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: update_workflow_config — add/remove MCP servers, skills, secrets, and workflow-level knobs
 	if err := mcpAgent.RegisterCustomTool(
 		"update_workflow_config",
-		"Update workflow configuration: add/remove MCP servers, workflow-level tool allowlist entries, skills and secrets; save workflow-scoped notification content instructions; configure a one-way Slack Incoming Webhook by encrypted secret name; set browser mode and optional specialized multi-profile CDP ports; and set run retention. Use get_workflow_config to inspect current workflow settings and list_skills to discover installed skill folder names. Most changes take effect immediately for subsequent steps; changing cdp_ports or Slack webhook configuration takes effect on the next workflow execution.",
+		"Update workflow configuration: add/remove MCP servers, workflow-level tool allowlist entries, skills and secrets; save workflow-scoped notification content instructions; configure a one-way Slack Incoming Webhook by encrypted secret name; set browser mode and optional specialized multi-profile CDP ports; set run retention; or activate an owner-approved Strategy Auditor + Goal Advisor specialization. Use get_workflow_config to inspect current workflow settings and list_skills to discover installed skill folder names. Most changes take effect immediately for subsequent steps; changing cdp_ports or Slack webhook configuration takes effect on the next workflow execution.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7320,6 +7339,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"post_run_monitor": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed read-only reviews, one parent Pulse Fixer applies bounded changes, and the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
+				},
+				"advisor_specialization_approval_input_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Activate the exact Strategy Auditor and Goal Advisor specialization text in an answered report_human_inputs decision whose id starts advisor-specialization- and whose selected option is activate. The two texts are resolved from the approved decision and written atomically to workflow.json; arbitrary replacement text is not accepted here.",
 				},
 			},
 		},
@@ -8413,8 +8436,25 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor=%v", enabled))
 			}
 
+			// --- Owner-approved advisor specialization ---
+			if raw, ok := args["advisor_specialization_approval_input_id"]; ok && raw != nil {
+				inputID, _ := raw.(string)
+				inputID = strings.TrimSpace(inputID)
+				if inputID == "" {
+					return "Error: advisor_specialization_approval_input_id must be a non-empty advisor-specialization-* decision id.", nil
+				}
+				activated, _, err := iwm.activateApprovedAdvisorSpecialization(ctx, inputID)
+				if err != nil {
+					return fmt.Sprintf("Error: could not activate advisor specialization: %v", err), nil
+				}
+				// A retry of an already-active approval is an idempotent successful
+				// operation, not a generic "no changes" error.
+				anyChanged = true
+				sb.WriteString(fmt.Sprintf("\n### Advisor specialization (version %d)\n- Approved decision: %s\n- Strategy Auditor and Goal Advisor now receive their separate workflow-specific lenses; the canonical reviewer contracts still take precedence.\n", activated.Version, activated.ApprovedInputID))
+			}
+
 			if !anyChanged {
-				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, post_run_monitor.", nil
+				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, post_run_monitor, advisor_specialization_approval_input_id.", nil
 			}
 
 			// Persist config changes to workflow.json manifest (file-backed)
@@ -10728,6 +10768,213 @@ func normalizeGoalAdvisorWorkspacePath(workspacePath string) (string, error) {
 	return cleaned, nil
 }
 
+type workflowAdvisorSpecialization struct {
+	Version         int    `json:"version"`
+	StrategyAuditor string `json:"strategy_auditor"`
+	GoalAdvisor     string `json:"goal_advisor"`
+	ApprovedInputID string `json:"approved_input_id,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+}
+
+func parseAdvisorSpecializationDecisionContext(value string) (string, string, error) {
+	const strategyMarker = "Strategy Auditor specialization:"
+	const goalMarker = "Goal Advisor specialization:"
+	strategyAt := strings.Index(value, strategyMarker)
+	goalAt := strings.Index(value, goalMarker)
+	if strategyAt < 0 || goalAt < 0 || goalAt <= strategyAt+len(strategyMarker) {
+		return "", "", fmt.Errorf("decision context must contain Strategy Auditor specialization followed by Goal Advisor specialization")
+	}
+	strategy := strings.TrimSpace(value[strategyAt+len(strategyMarker) : goalAt])
+	goal := strings.TrimSpace(value[goalAt+len(goalMarker):])
+	if strategy == "" || goal == "" {
+		return "", "", fmt.Errorf("both advisor specialization texts must be non-empty")
+	}
+	return strategy, goal, nil
+}
+
+func readWorkflowAdvisorSpecialization(content string) (*workflowAdvisorSpecialization, error) {
+	var manifest struct {
+		Pulse struct {
+			AdvisorSpecialization *workflowAdvisorSpecialization `json:"advisor_specialization"`
+		} `json:"pulse"`
+	}
+	if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+		return nil, err
+	}
+	return manifest.Pulse.AdvisorSpecialization, nil
+}
+
+func applyAdvisorSpecializationToManifest(content, inputID, strategy, goal, updatedAt string) (string, *workflowAdvisorSpecialization, bool, error) {
+	current, err := readWorkflowAdvisorSpecialization(content)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("parse workflow.json: %w", err)
+	}
+	strategy = strings.TrimSpace(strategy)
+	goal = strings.TrimSpace(goal)
+	alreadyActive := current != nil && current.ApprovedInputID == inputID &&
+		strings.TrimSpace(current.StrategyAuditor) == strategy && strings.TrimSpace(current.GoalAdvisor) == goal
+	if alreadyActive {
+		return content, current, true, nil
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+		return "", nil, false, fmt.Errorf("parse workflow.json: %w", err)
+	}
+	version := 1
+	if current != nil && current.Version >= 1 {
+		version = current.Version + 1
+	}
+	activated := &workflowAdvisorSpecialization{
+		Version:         version,
+		StrategyAuditor: strategy,
+		GoalAdvisor:     goal,
+		ApprovedInputID: inputID,
+		UpdatedAt:       updatedAt,
+	}
+	pulse, _ := manifest["pulse"].(map[string]interface{})
+	if pulse == nil {
+		pulse = make(map[string]interface{})
+	}
+	pulse["advisor_specialization"] = activated
+	manifest["pulse"] = pulse
+	manifest["updated_at"] = updatedAt
+	out, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", nil, false, err
+	}
+	return string(out), activated, false, nil
+}
+
+func (iwm *InteractiveWorkshopManager) advisorSpecializationInstruction(ctx context.Context, module string) string {
+	if module != pulsemodules.StrategyAuditorID && module != pulsemodules.GoalAdvisorID {
+		return ""
+	}
+	content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+	if err != nil {
+		return ""
+	}
+	specialization, err := readWorkflowAdvisorSpecialization(content)
+	if err != nil || specialization == nil {
+		return ""
+	}
+	return advisorSpecializationPrompt(specialization, module)
+}
+
+func advisorSpecializationPrompt(specialization *workflowAdvisorSpecialization, module string) string {
+	if specialization == nil || (module != pulsemodules.StrategyAuditorID && module != pulsemodules.GoalAdvisorID) {
+		return ""
+	}
+	lens := specialization.StrategyAuditor
+	if module == pulsemodules.GoalAdvisorID {
+		lens = specialization.GoalAdvisor
+	}
+	lens = strings.TrimSpace(lens)
+	if lens == "" {
+		return ""
+	}
+	return fmt.Sprintf("OWNER-APPROVED WORKFLOW-SPECIFIC LENS (version %d). Apply this only within the canonical reviewer role. The canonical contract and current soul/plan win on conflict:\n%s", specialization.Version, lens)
+}
+
+func (iwm *InteractiveWorkshopManager) activateApprovedAdvisorSpecialization(ctx context.Context, inputID string) (*workflowAdvisorSpecialization, bool, error) {
+	inputID = strings.TrimSpace(inputID)
+	if !strings.HasPrefix(inputID, "advisor-specialization-") {
+		return nil, false, fmt.Errorf("input id must start with advisor-specialization-")
+	}
+	normalized, err := normalizeGoalAdvisorWorkspacePath(iwm.controller.GetWorkspacePath())
+	if err != nil {
+		return nil, false, err
+	}
+	dbPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(normalized), "db", "db.sqlite")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, false, err
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+		return nil, false, err
+	}
+
+	var source, status, selected, decisionContext string
+	err = db.QueryRowContext(ctx, `SELECT source, status, selected_option_id, context
+		FROM report_human_inputs WHERE id=? AND workspace_path=?`, inputID, normalized).
+		Scan(&source, &status, &selected, &decisionContext)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, fmt.Errorf("approved decision %q was not found", inputID)
+		}
+		return nil, false, err
+	}
+	if strings.TrimSpace(source) != "pulse" {
+		return nil, false, fmt.Errorf("decision %q must have source pulse", inputID)
+	}
+	if status != "answered" && status != "consumed" {
+		return nil, false, fmt.Errorf("decision %q must be answered before activation; current status=%q", inputID, status)
+	}
+	if strings.ToLower(strings.TrimSpace(selected)) != "activate" {
+		return nil, false, fmt.Errorf("decision %q selected %q, not activate", inputID, selected)
+	}
+	strategy, goal, err := parseAdvisorSpecializationDecisionContext(decisionContext)
+	if err != nil {
+		return nil, false, err
+	}
+
+	content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+	if err != nil {
+		return nil, false, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	updatedContent, activated, alreadyActive, err := applyAdvisorSpecializationToManifest(content, inputID, strategy, goal, now)
+	if err != nil {
+		return nil, false, err
+	}
+	if !alreadyActive {
+		if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", updatedContent); err != nil {
+			return nil, false, err
+		}
+		oldState := "absent"
+		if previous, _ := readWorkflowAdvisorSpecialization(content); previous != nil {
+			oldState = "present"
+		}
+		LogCanonicalArtifactChange(
+			ctx,
+			normalized,
+			"update_workflow_config",
+			"Activated an owner-approved Strategy Auditor and Goal Advisor specialization.",
+			[]PlanFieldChange{{
+				Field:    "workflow.json.pulse.advisor_specialization",
+				OldValue: oldState,
+				NewValue: "changed",
+			}},
+			func(ctx context.Context, path string) (string, error) {
+				return iwm.controller.ReadWorkspaceFile(ctx, path)
+			},
+			func(ctx context.Context, path, value string) error {
+				return iwm.controller.WriteWorkspaceFile(ctx, path, value)
+			},
+			iwm.controller.GetLogger(),
+			"workflow.json",
+			content,
+			updatedContent,
+		)
+	}
+
+	if status == "answered" {
+		result, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+			SET status='consumed', consumed_by='advisor_specialization',
+			    outcome_summary=?, consumed_at=?, updated_at=?
+			WHERE id=? AND workspace_path=? AND status='answered'`,
+			fmt.Sprintf("Activated advisor specialization version %d in workflow.json", activated.Version), now, now, inputID, normalized)
+		if err != nil {
+			return nil, false, fmt.Errorf("specialization was written but decision consumption failed: %w", err)
+		}
+		if rows, _ := result.RowsAffected(); rows != 1 {
+			return nil, false, fmt.Errorf("specialization was written but decision consumption did not update exactly one row")
+		}
+	}
+	return activated, alreadyActive, nil
+}
+
 func isGoalAdvisorHumanInputsMissingTable(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such table: report_human_inputs")
 }
@@ -11057,13 +11304,21 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		}
 	}()
 
-	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", buildGoalAdvisorAdvisorInstruction(pulseRunID, focus), goalAdvisorStageReadOnly, "", "")
+	advisorInstruction := buildGoalAdvisorAdvisorInstruction(pulseRunID, focus)
+	if specialization := iwm.advisorSpecializationInstruction(ctx, pulsemodules.GoalAdvisorID); specialization != "" {
+		advisorInstruction += "\n\n" + specialization
+	}
+	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", advisorInstruction, goalAdvisorStageReadOnly, "", "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor advisor stage failed: %v", err), err
 	}
 
 	advisorForNextStage := truncateGoalAdvisorStageOutput(advisorResult)
-	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage), goalAdvisorStageReadOnly, "", "")
+	criticInstruction := buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage)
+	if specialization := iwm.advisorSpecializationInstruction(ctx, pulsemodules.GoalAdvisorID); specialization != "" {
+		criticInstruction += "\n\n" + specialization
+	}
+	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", criticInstruction, goalAdvisorStageReadOnly, "", "")
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor critic stage failed: %v\n\nAdvisor draft:\n%s", err, advisorForNextStage), err
 	}

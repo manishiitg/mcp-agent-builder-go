@@ -636,7 +636,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 					},
 				}
 				hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, isNestedExecution, results)
-				hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, results, schema)
+				hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, item.ID, attempt, results, schema)
 				return "", err
 			}
 			if results == nil {
@@ -658,7 +658,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 				}
 			}
 			hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, isNestedExecution, results)
-			hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, results, schema)
+			hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, item.ID, attempt, results, schema)
 			if results.OverallPass {
 				if attempt == 0 {
 					return "prevalidation passed", nil
@@ -687,14 +687,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 	}
 }
 
-// saveMessageSequencePreValidationLog preserves the latest gate result in the
-// same compact log used by regular steps. Each later attempt overwrites the
-// previous one, so Pulse gets durable evidence without accumulating per-attempt
-// log files.
+// saveMessageSequencePreValidationLog preserves the latest gate result and the
+// individual repair attempts. ItemID belongs in the phase so two validation
+// gates in one message-sequence step cannot overwrite each other.
 func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequencePreValidationLog(
 	ctx context.Context,
 	step *MessageSequencePlanStep,
 	stepPath string,
+	itemID string,
+	attempt int,
 	results *WorkspaceVerificationResult,
 	schema *ValidationSchema,
 ) {
@@ -702,7 +703,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequencePreValidationLog(
 		return
 	}
 	preValidationLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "message_sequence", ValidationPhase: "message-sequence-" + itemID, ExecutionAttempt: 1, ValidationAttempt: attempt + 1})
 }
 
 // summarizeMessageSequencePrevalidationErrors renders a one-line, comma-joined

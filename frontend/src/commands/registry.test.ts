@@ -15,13 +15,27 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor']) {
+    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
     for (const retiredCommand of ['review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
+  })
+
+  it('routes advisor specialization through canonical approval guidance', () => {
+    const command = findCommand('specialize-advisors', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'emphasize acquisition concentration and novel channels',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+    } as CommandContext)
+
+    expect(submitted).toContain('kind="specialize-advisors"')
+    expect(submitted).toContain('emphasize acquisition concentration and novel channels')
   })
 
   it('routes Engineering Review to the single review-and-fix sequence', () => {

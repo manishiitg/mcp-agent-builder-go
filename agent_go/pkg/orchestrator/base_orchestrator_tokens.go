@@ -566,8 +566,8 @@ func stepAggregationKey(data *StepTokenData) string {
 }
 
 // PersistTokenUsage saves token usage into the daily group cost bucket under costs/.
-// The daily file is keyed by scope + group + UTC date, and contains one aggregate
-// TokenUsageFile per run folder for that date.
+// The daily file is sharded by scope + group + UTC date, while records inside it
+// are keyed by immutable execution ID. The run folder is only display metadata.
 func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFolder string,
 	stepTokenData *StepTokenData, modelTokenData *ModelTokenData) error {
 	if iterationFolder == "" {
@@ -598,6 +598,7 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 		Date:        CostDateKey(now),
 		GroupFolder: ExtractGroupFolderFromRunFolder(runFolder),
 		UpdatedAt:   now,
+		Executions:  make(map[string]*ExecutionTokenUsage),
 		RunFolders:  make(map[string]*TokenUsageFile),
 	}
 	existingContent, err := bo.ReadWorkspaceFile(ctx, filePath)
@@ -616,8 +617,30 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 		}
 	}
 
-	// Start from the existing aggregate for this run folder inside the daily file.
-	tokenFile := CloneTokenUsageFile(dailyFile.RunFolders[runFolder])
+	// The immutable bridge execution ID is the authoritative aggregation key.
+	// The old run_folders map uses iteration-0/... and is deliberately not read
+	// here: after rotation that path is reused, so reading it would merge an old
+	// execution into the new one before this write even begins.
+	executionID := ""
+	if stepTokenData != nil {
+		executionID = strings.TrimSpace(stepTokenData.ExecutionID)
+	}
+	var executionEntry *ExecutionTokenUsage
+	var tokenFile *TokenUsageFile
+	if executionID != "" {
+		executionEntry = CloneExecutionTokenUsage(dailyFile.Executions[executionID])
+		if executionEntry == nil {
+			executionEntry = &ExecutionTokenUsage{RunFolder: runFolder}
+		}
+		if executionEntry.RunFolder == "" {
+			executionEntry.RunFolder = runFolder
+		}
+		tokenFile = CloneTokenUsageFile(executionEntry.TokenUsage)
+	} else {
+		// A legacy caller with no execution identity retains the old behavior.
+		// New workflow execution bridges always provide one.
+		tokenFile = CloneTokenUsageFile(dailyFile.RunFolders[runFolder])
+	}
 	if tokenFile == nil {
 		tokenFile = &TokenUsageFile{
 			CreatedAt:      now,
@@ -636,8 +659,9 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 	}
 	tokenFile.UpdatedAt = now
 
-	if stepTokenData != nil {
-		stampExecutionID(tokenFile, stepTokenData.ExecutionID)
+	if executionID != "" {
+		tokenFile.ExecutionID = executionID
+		tokenFile.PriorExecutionIDs = nil
 	}
 
 	// Merge new model token data if provided
@@ -658,7 +682,12 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 	}
 
 	dailyFile.UpdatedAt = now
-	dailyFile.RunFolders[runFolder] = tokenFile
+	if executionID != "" {
+		executionEntry.TokenUsage = tokenFile
+		dailyFile.Executions[executionID] = executionEntry
+	} else {
+		dailyFile.RunFolders[runFolder] = tokenFile
+	}
 
 	// Marshal to JSON
 	jsonData, err := json.MarshalIndent(dailyFile, "", "  ")

@@ -37,6 +37,89 @@ func assertToolListDoesNotContain(t *testing.T, tools []string, tool string) {
 	}
 }
 
+func TestParseAdvisorSpecializationDecisionContext(t *testing.T) {
+	strategy, goal, err := parseAdvisorSpecializationDecisionContext(`Proposal:
+Specialize the reviewers.
+Strategy Auditor specialization:
+Inspect current-channel concentration and funnel leakage.
+Goal Advisor specialization:
+Explore partnerships and product-led referral loops.`)
+	if err != nil {
+		t.Fatalf("parse specialization context: %v", err)
+	}
+	if strategy != "Inspect current-channel concentration and funnel leakage." {
+		t.Fatalf("strategy = %q", strategy)
+	}
+	if goal != "Explore partnerships and product-led referral loops." {
+		t.Fatalf("goal = %q", goal)
+	}
+
+	if _, _, err := parseAdvisorSpecializationDecisionContext("Strategy Auditor specialization: only one"); err == nil {
+		t.Fatal("missing Goal Advisor section should fail")
+	}
+}
+
+func TestApplyAdvisorSpecializationToManifestIsVersionedAndIdempotent(t *testing.T) {
+	base := `{"schema_version":1,"id":"demo","label":"Demo","capabilities":{},"schedules":[]}`
+	updated, specialization, already, err := applyAdvisorSpecializationToManifest(
+		base,
+		"advisor-specialization-20260806T120000Z",
+		"Inspect the current funnel.",
+		"Explore a new distribution channel.",
+		"2026-08-06T12:00:00Z",
+	)
+	if err != nil || already {
+		t.Fatalf("first activation err=%v already=%v", err, already)
+	}
+	if specialization.Version != 1 || specialization.ApprovedInputID == "" {
+		t.Fatalf("unexpected specialization: %#v", specialization)
+	}
+
+	unchanged, same, already, err := applyAdvisorSpecializationToManifest(
+		updated,
+		specialization.ApprovedInputID,
+		specialization.StrategyAuditor,
+		specialization.GoalAdvisor,
+		"2026-08-06T12:01:00Z",
+	)
+	if err != nil || !already {
+		t.Fatalf("idempotent activation err=%v already=%v", err, already)
+	}
+	if unchanged != updated || same.Version != 1 {
+		t.Fatalf("idempotent activation changed manifest or version")
+	}
+
+	_, next, already, err := applyAdvisorSpecializationToManifest(
+		updated,
+		"advisor-specialization-20260806T130000Z",
+		"Inspect cohorts inside the current strategy.",
+		"Explore an ecosystem partnership.",
+		"2026-08-06T13:00:00Z",
+	)
+	if err != nil || already || next.Version != 2 {
+		t.Fatalf("replacement activation err=%v already=%v version=%d", err, already, next.Version)
+	}
+}
+
+func TestAdvisorSpecializationPromptIsModuleScoped(t *testing.T) {
+	specialization := &workflowAdvisorSpecialization{
+		Version:         2,
+		StrategyAuditor: "STRATEGY-LENS-UNIQUE",
+		GoalAdvisor:     "GOAL-LENS-UNIQUE",
+	}
+	strategy := advisorSpecializationPrompt(specialization, "strategy_auditor")
+	goal := advisorSpecializationPrompt(specialization, "goal_advisor")
+	if !strings.Contains(strategy, "STRATEGY-LENS-UNIQUE") || strings.Contains(strategy, "GOAL-LENS-UNIQUE") {
+		t.Fatalf("strategy prompt was not isolated: %s", strategy)
+	}
+	if !strings.Contains(goal, "GOAL-LENS-UNIQUE") || strings.Contains(goal, "STRATEGY-LENS-UNIQUE") {
+		t.Fatalf("goal prompt was not isolated: %s", goal)
+	}
+	if got := advisorSpecializationPrompt(specialization, "workflow_review"); got != "" {
+		t.Fatalf("engineering review received advisor specialization: %q", got)
+	}
+}
+
 func TestWorkshopStageAgentIdentityIsDistinctAndSafe(t *testing.T) {
 	first := newWorkshopStageAgentIdentity("Pulse reviewer - artifact review")
 	second := newWorkshopStageAgentIdentity("Pulse reviewer - artifact review")

@@ -60,6 +60,9 @@ func (s *tokenUsageFileStore) parseDailyGroupTokenUsageFile(content string) (*Da
 	if dailyFile.RunFolders == nil {
 		dailyFile.RunFolders = make(map[string]*TokenUsageFile)
 	}
+	if dailyFile.Executions == nil {
+		dailyFile.Executions = make(map[string]*ExecutionTokenUsage)
+	}
 	EnsureDailyGroupTokenUsageFilePricing(&dailyFile)
 	return &dailyFile, nil
 }
@@ -141,6 +144,7 @@ func (s *tokenUsageFileStore) ensureRunMigrated(ctx context.Context, iterationFo
 		Date:        CostDateKey(migrateAt),
 		GroupFolder: ExtractGroupFolderFromRunFolder(runFolder),
 		UpdatedAt:   s.now(),
+		Executions:  make(map[string]*ExecutionTokenUsage),
 		RunFolders:  make(map[string]*TokenUsageFile),
 	}
 
@@ -195,7 +199,7 @@ func (s *tokenUsageFileStore) readRun(ctx context.Context, iterationFolder strin
 		}
 	}
 
-	if tokenFile := CloneTokenUsageFile(dailyFile.RunFolders[runFolder]); tokenFile != nil {
+	if tokenFile := dailyTokenUsageForRunFolder(dailyFile, runFolder, false); tokenFile != nil {
 		return tokenFile
 	}
 
@@ -262,13 +266,33 @@ func (s *tokenUsageFileStore) readRunAcrossDates(ctx context.Context, iterationF
 				s.warnf(fmt.Sprintf("⚠️ Failed to parse daily token usage file %s: %v", filepath.Join(dirPath, name), parseErr))
 				continue
 			}
-			for storedRunFolder, tokenFile := range daily.RunFolders {
+			matchedCanonical := false
+			for _, execution := range daily.Executions {
+				if execution == nil || execution.TokenUsage == nil {
+					continue
+				}
+				storedRunFolder := execution.EffectiveRunFolder()
 				matches := storedRunFolder == runFolder
 				if matchGroupedChildren && strings.HasPrefix(storedRunFolder, strings.TrimRight(runFolder, "/")+"/") {
 					matches = true
 				}
 				if matches {
-					merged = MergeTokenUsageFiles(merged, tokenFile)
+					matchedCanonical = true
+					merged = MergeTokenUsageFiles(merged, execution.TokenUsage)
+				}
+			}
+			// Use a shard's v1 projection only when it has no v2 record for this
+			// requested run, avoiding double-counting while still preserving an
+			// unrelated historical run in a mixed migration-day shard.
+			if !matchedCanonical {
+				for storedRunFolder, tokenFile := range daily.RunFolders {
+					matches := storedRunFolder == runFolder
+					if matchGroupedChildren && strings.HasPrefix(storedRunFolder, strings.TrimRight(runFolder, "/")+"/") {
+						matches = true
+					}
+					if matches {
+						merged = MergeTokenUsageFiles(merged, tokenFile)
+					}
 				}
 			}
 		}
@@ -277,6 +301,115 @@ func (s *tokenUsageFileStore) readRunAcrossDates(ctx context.Context, iterationF
 		return emptyTokenUsageFile()
 	}
 	return merged
+}
+
+func dailyTokenUsageForRunFolder(daily *DailyGroupTokenUsageFile, runFolder string, matchGroupedChildren bool) *TokenUsageFile {
+	if daily == nil {
+		return nil
+	}
+	runFolder = strings.Trim(filepath.ToSlash(filepath.Clean(strings.TrimSpace(runFolder))), "/")
+	var merged *TokenUsageFile
+	for _, execution := range daily.Executions {
+		if execution == nil || execution.TokenUsage == nil {
+			continue
+		}
+		storedRunFolder := execution.EffectiveRunFolder()
+		matches := storedRunFolder == runFolder
+		if matchGroupedChildren && strings.HasPrefix(storedRunFolder, strings.TrimRight(runFolder, "/")+"/") {
+			matches = true
+		}
+		if matches {
+			merged = MergeTokenUsageFiles(merged, execution.TokenUsage)
+		}
+	}
+	if merged != nil {
+		return merged
+	}
+	return CloneTokenUsageFile(daily.RunFolders[runFolder])
+}
+
+// ArchiveRunCostPaths updates only the display path of execution-keyed cost
+// records after the workflow rotates iteration-0 to an immutable backup
+// folder. The execution ID and its token totals are never moved or merged.
+// Legacy run_folders projections are intentionally left untouched.
+func (bo *BaseOrchestrator) ArchiveRunCostPaths(ctx context.Context, fromRunFolder, toRunFolder string) error {
+	tokenFileMutex.Lock()
+	defer tokenFileMutex.Unlock()
+	return newBaseOrchestratorTokenUsageStore(bo).archiveRunCostPaths(ctx, fromRunFolder, toRunFolder)
+}
+
+func (s *tokenUsageFileStore) archiveRunCostPaths(ctx context.Context, fromRunFolder, toRunFolder string) error {
+	fromRunFolder = strings.Trim(filepath.ToSlash(filepath.Clean(strings.TrimSpace(fromRunFolder))), "/")
+	toRunFolder = strings.Trim(filepath.ToSlash(filepath.Clean(strings.TrimSpace(toRunFolder))), "/")
+	if fromRunFolder == "" || fromRunFolder == "." || toRunFolder == "" || toRunFolder == "." || fromRunFolder == toRunFolder {
+		return nil
+	}
+
+	for _, scope := range []CostScope{CostScopeExecution, CostScopeEvaluation} {
+		root := filepath.Join(s.workspacePath, "costs", string(scope))
+		groups, err := s.listFiles(ctx, root)
+		if err != nil {
+			continue // no ledger exists for this scope yet
+		}
+		for _, group := range groups {
+			group = filepath.Base(strings.TrimSpace(group))
+			if group == "" {
+				continue
+			}
+			dir := filepath.Join(root, group)
+			files, err := s.listFiles(ctx, dir)
+			if err != nil {
+				continue
+			}
+			for _, name := range files {
+				name = filepath.Base(strings.TrimSpace(name))
+				if filepath.Ext(name) != ".json" {
+					continue
+				}
+				path := filepath.Join(dir, name)
+				content, err := s.readFile(ctx, path)
+				if err != nil || strings.TrimSpace(content) == "" {
+					continue
+				}
+				daily, err := s.parseDailyGroupTokenUsageFile(content)
+				if err != nil {
+					continue
+				}
+				changed := false
+				for _, execution := range daily.Executions {
+					if execution == nil || strings.TrimSpace(execution.ArchivedRunFolder) != "" {
+						continue
+					}
+					if archivedPathForRunFolder(execution.RunFolder, fromRunFolder, toRunFolder) != "" {
+						execution.ArchivedRunFolder = archivedPathForRunFolder(execution.RunFolder, fromRunFolder, toRunFolder)
+						changed = true
+					}
+				}
+				if !changed {
+					continue
+				}
+				encoded, err := json.MarshalIndent(daily, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal archived cost ledger %s: %w", path, err)
+				}
+				if err := s.writeFile(ctx, path, string(encoded)); err != nil {
+					return fmt.Errorf("update archived cost ledger %s: %w", path, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func archivedPathForRunFolder(runFolder, fromRunFolder, toRunFolder string) string {
+	runFolder = strings.Trim(filepath.ToSlash(filepath.Clean(strings.TrimSpace(runFolder))), "/")
+	if runFolder == fromRunFolder {
+		return toRunFolder
+	}
+	if strings.HasPrefix(runFolder, fromRunFolder+"/") {
+		return toRunFolder + strings.TrimPrefix(runFolder, fromRunFolder)
+	}
+	return ""
 }
 
 func (s *tokenUsageFileStore) ensurePhaseMigrated(ctx context.Context) {

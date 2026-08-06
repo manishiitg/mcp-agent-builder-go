@@ -178,6 +178,36 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	if got := scheduleStateLockKeyFromRuntimeKey(multiAgentKey); got != multiAgentKey {
 		t.Fatalf("multi-agent lock key = %q, want %q", got, multiAgentKey)
 	}
+	pulseKey := workflowScheduleRuntimeKey("/tmp/Workflow/demo", manualWorkflowPulseScheduleID)
+	wantPulse := strings.Join([]string{"workflow-pulse", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
+	if got := scheduleStateLockKeyFromRuntimeKey(pulseKey); got != wantPulse {
+		t.Fatalf("Pulse lock key = %q, want %q", got, wantPulse)
+	}
+}
+
+func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	svc := NewSchedulerService(nil)
+	svc.stateStore = store
+	manifest := &WorkflowManifest{ID: "demo"}
+	pulse := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: manualWorkflowPulseScheduleID})
+	daily := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: "daily"})
+	now := time.Now().UTC()
+
+	if err := svc.claimScheduleRun(context.Background(), pulse, "pulse-run", now); err != nil {
+		t.Fatalf("claim Pulse lane: %v", err)
+	}
+	if err := svc.claimScheduleRun(context.Background(), daily, "daily-run", now); err != nil {
+		t.Fatalf("workflow schedule should coexist with Pulse/chat lane: %v", err)
+	}
+	if err := svc.claimScheduleRun(context.Background(), daily, "second-daily-run", now); err == nil {
+		t.Fatal("second workflow schedule unexpectedly acquired the workflow lane")
+	}
 }
 
 func TestStopRunningJobCancelsBeforeSessionStarts(t *testing.T) {
@@ -2411,7 +2441,6 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 			Due:    true,
 			Reason: "Activity increased while the business outcome stayed flat.",
 		},
-		pulseModuleGoalAdvisor: {Module: pulseModuleGoalAdvisor, Due: true, Reason: "Goal drift persisted across runs."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -2419,7 +2448,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 	s := NewSchedulerService(nil)
 	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
 	got := postRunStepLabels(steps)
-	want := []string{"workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
+	want := []string{"workflow-review", "strategy-auditor", "pulse-fixer", "dashboard", "finalize"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("selected labels = %#v, want %#v", got, want)
 	}
@@ -2435,7 +2464,7 @@ func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
 			t.Fatalf("combined operational reviewer/fixer protocol missing %q: %s", required, workflowQuery)
 		}
 	}
-	for index, module := range []string{pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
+	for index, module := range []string{pulseModuleStrategyAuditor} {
 		index++
 		query := steps[index].query
 		for _, required := range []string{

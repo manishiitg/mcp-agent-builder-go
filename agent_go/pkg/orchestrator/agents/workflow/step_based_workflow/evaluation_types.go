@@ -183,6 +183,9 @@ type EvaluationStepScore struct {
 // apply a worst-case rule (any material criterion failing => overall short),
 // not a weighted average.
 type EvaluationReport struct {
+	// EvaluationID is the immutable identity of this evaluation attempt. The
+	// target run folder is display metadata only because iteration-0 rotates.
+	EvaluationID    string                 `json:"evaluation_id,omitempty"`
 	TargetRunFolder string                 `json:"target_run_folder"`
 	GeneratedAt     string                 `json:"generated_at"`
 	StepScores      []*EvaluationStepScore `json:"step_scores"`
