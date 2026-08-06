@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   Bug,
   CheckCircle2,
-  ChevronDown,
   Circle,
   Clock3,
   FileCheck2,
@@ -177,32 +176,34 @@ export function PulseFindingCard({
                 {presentation.label}
               </span>
             </div>
-            <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.7fr)]">
-              <div className="rounded-md border bg-muted/20 px-2.5 py-2">
-                <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Problem and impact</div>
-                <p className="mt-1 whitespace-pre-wrap text-[10px] leading-4 text-foreground">{problem}</p>
-                {impact && impact !== problem && (
-                  <p className="mt-1 text-[10px] leading-4 text-muted-foreground"><b className="text-foreground">Impact:</b> {impact}</p>
-                )}
-              </div>
-              <div className="rounded-md border bg-muted/20 px-2.5 py-2">
-                <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {presentation.queue === 'waiting_proof'
-                    ? <Clock3 className="h-3 w-3 shrink-0 text-amber-500" />
-                    : presentation.queue === 'resolved'
-                      ? <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-                      : <AlertTriangle className="h-3 w-3 shrink-0" />}
-                  What happens next
+            {expanded && (
+              <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.7fr)]">
+                <div className="rounded-md border bg-muted/20 px-2.5 py-2">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Problem and impact</div>
+                  <p className="mt-1 whitespace-pre-wrap text-[10px] leading-4 text-foreground">{problem}</p>
+                  {impact && impact !== problem && (
+                    <p className="mt-1 text-[10px] leading-4 text-muted-foreground"><b className="text-foreground">Impact:</b> {impact}</p>
+                  )}
                 </div>
-                <p className="mt-1 text-[10px] leading-4 text-foreground">{presentation.nextAction}</p>
-                {(finding.external_owner || finding.reopen_condition) && (
-                  <p className="mt-1 text-[9px] leading-4 text-muted-foreground">
-                    {finding.external_owner && <>Owner: {readable(finding.external_owner)}. </>}
-                    {finding.reopen_condition && <>Reopen when: {finding.reopen_condition}</>}
-                  </p>
-                )}
+                <div className="rounded-md border bg-muted/20 px-2.5 py-2">
+                  <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {presentation.queue === 'waiting_proof'
+                      ? <Clock3 className="h-3 w-3 shrink-0 text-amber-500" />
+                      : presentation.queue === 'resolved'
+                        ? <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                        : <AlertTriangle className="h-3 w-3 shrink-0" />}
+                    What happens next
+                  </div>
+                  <p className="mt-1 text-[10px] leading-4 text-foreground">{presentation.nextAction}</p>
+                  {(finding.external_owner || finding.reopen_condition) && (
+                    <p className="mt-1 text-[9px] leading-4 text-muted-foreground">
+                      {finding.external_owner && <>Owner: {readable(finding.external_owner)}. </>}
+                      {finding.reopen_condition && <>Reopen when: {finding.reopen_condition}</>}
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] text-muted-foreground">
               <span><b className="font-semibold text-foreground/80">Reported by</b> {reporter}</span>
               <span>·</span>
@@ -212,10 +213,6 @@ export function PulseFindingCard({
                   <RotateCcw className="h-2.5 w-2.5" /> Recurred {issue.seen_count}×
                 </span>
               )}
-              <span className="ml-auto inline-flex items-center gap-1 font-medium text-primary">
-                {expanded ? 'Hide fix, checks & history' : 'View fix, checks & history'}
-                <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-              </span>
             </div>
           </div>
         </div>

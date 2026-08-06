@@ -420,7 +420,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		// Run pre-validation if schema exists
 		if validationSchema != nil {
 			hcpo.GetLogger().Info(fmt.Sprintf("🔍 Running pre-validation after execution (attempt %d/%d)", retryAttempt, maxRetryAttempts))
-			preValidationPassed, formattedResults := hcpo.runTodoTaskPreValidation(ctx, step, stepIndex, todoTaskStepPath, stepExecutionPath)
+			preValidationPassed, formattedResults := hcpo.runTodoTaskPreValidation(ctx, step, stepIndex, todoTaskStepPath, stepExecutionPath, retryAttempt)
 
 			if preValidationPassed {
 				hcpo.GetLogger().Info("✅ Todo task step complete (pre-validation passed)")
@@ -1929,6 +1929,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
 	stepIndex int,
 	stepPath string,
 	stepExecutionPath string,
+	retryAttempt int,
 ) (bool, string) {
 	// Get validation schema from step
 	validationSchema := step.GetValidationSchema()
@@ -1973,7 +1974,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
 	// Persist pre-validation results for Pulse Bug Review and diagnostics.
 	if hcpo.selectedRunFolder != "" {
 		preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+			PreValidationAttempt{ExecutionMode: "todo_task", ValidationPhase: "final-gate", ExecutionAttempt: retryAttempt, ValidationAttempt: 1})
 	}
 
 	// Format results for feedback

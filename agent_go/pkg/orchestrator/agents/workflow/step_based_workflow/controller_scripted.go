@@ -1092,7 +1092,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 			hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, false, preValResults)
 			if hcpo.selectedRunFolder != "" {
 				preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-				SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+				SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+					PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "saved-script", ExecutionAttempt: 1, ValidationAttempt: 1})
 			}
 		}
 		if preValResults != nil && preValResults.OverallPass {
@@ -1131,7 +1132,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 		hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, false, preValResults)
 		if hcpo.selectedRunFolder != "" {
 			preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-			SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+			SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, preValResults, getValidationSchema(step), hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+				PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "saved-script", ExecutionAttempt: 1, ValidationAttempt: 1})
 		}
 	}
 	if preValResults != nil && !preValResults.OverallPass {

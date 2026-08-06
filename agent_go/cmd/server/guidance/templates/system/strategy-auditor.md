@@ -143,7 +143,12 @@ counterfactual still fails.
 
 ### Required reviewer artifact
 
-Return compact artifact-form Markdown containing:
+Return compact artifact-form Markdown containing. The saved SQLite review,
+run artifacts, and tool history retain detailed proof: this artifact is an
+evidence index, not a transcript. Keep every field below to one or two compact
+sentences, use evidence paths/query names plus short observed values rather than
+raw output, and do not paste logs, SQL rows, source excerpts, or extended
+reasoning. Keep the artifact brief while retaining every valid finding:
 
 ```text
 module: strategy_auditor
@@ -171,6 +176,17 @@ verification. A `strategy_flaw`
 recommendation explains what must improve within the current strategy but does
 not approve or apply a plan edit. A clean review returns an empty finding-id
 manifest.
+
+For every trackable finding, emit these adjacent single-line markers with the
+same concern text:
+
+```text
+PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"<exact concern>","issue_kind":"workflow_issue","recommended_route":"decision_required|evidence_wait|fixer_handoff","next_check":"<required for evidence_wait>"}
+CONCERNS: <exact concern>
+```
+
+The backend rejects a Strategy Auditor concern without this route. Do not emit
+`CONCERNS:` when `recommended_route=none`; that is a non-trackable conclusion.
 
 The Twitter-style pattern must be discoverable generically: if action volume is
 high, most actions repeatedly target the same existing entities from one source,

@@ -998,6 +998,39 @@ func RecordPulseFindingDispositionsTx(
 		if concernExists != 1 {
 			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_state(view=\"backlog\") item's fingerprint field, not from its issue.id", fingerprint, findingID)
 		}
+		if isPulseAdvisorModule(module) {
+			var detailJSON string
+			err := db.QueryRowContext(ctx, `SELECT detail_json FROM pulse_finding_details WHERE fingerprint=?`, fingerprint).Scan(&detailJSON)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil && strings.TrimSpace(detailJSON) != "" {
+				var details PulseFindingDetails
+				if err := json.Unmarshal([]byte(detailJSON), &details); err != nil {
+					return fmt.Errorf("decode routing contract for finding %q: %w", findingID, err)
+				}
+				details = normalizePulseFindingDetails(details)
+				switch details.RecommendedRoute {
+				case pulseFindingRouteDecisionRequired:
+					if disposition.Disposition != FindingDispositionAwaitingUser {
+						return fmt.Errorf("%s finding %q is routed decision_required and must use awaiting_user with a linked pending decision; got %s", module, findingID, disposition.Disposition)
+					}
+				case pulseFindingRouteEvidenceWait:
+					if disposition.Disposition != FindingDispositionProposalOnly {
+						return fmt.Errorf("%s finding %q is routed evidence_wait and must use proposal_only; got %s", module, findingID, disposition.Disposition)
+					}
+					if disposition.NextCheck != details.NextCheck {
+						return fmt.Errorf("%s finding %q must preserve the routed next_check exactly; got %q, want %q", module, findingID, disposition.NextCheck, details.NextCheck)
+					}
+				case pulseFindingRouteFixerHandoff:
+					if disposition.Disposition == FindingDispositionProposalOnly || disposition.Disposition == FindingDispositionAwaitingUser {
+						return fmt.Errorf("%s finding %q is routed fixer_handoff and cannot be parked as %s", module, findingID, disposition.Disposition)
+					}
+				case pulseFindingRouteNone:
+					return fmt.Errorf("%s finding %q was routed none and must not have been filed as an active concern", module, findingID)
+				}
+			}
+		}
 		// Prove the decision exists and is still open. A claimed id is not
 		// evidence: an already-answered or invented question would leave the
 		// finding parked on a decision the operator can never make.

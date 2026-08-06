@@ -62,6 +62,22 @@ this module only and cannot block later reviewers. The operational agent records
 its selected lane results; the residual Fixer records only still-unresolved
 independent module results.
 
+### Compact response contract
+
+SQLite lifecycle rows, saved review records, run artifacts, and tool history are
+the proof store. A reviewer response is an evidence index for people and the
+next turn, **not** an investigation transcript. Do not paste raw logs, SQL
+rows, full tool results, source excerpts, or reasoning already captured in a
+prior lane. Use exact paths, query names, IDs, and short observed values as
+evidence pointers instead.
+
+For an operational consolidated review, return a 2–3 sentence executive verdict
+followed by one compact entry per valid finding: claim, impact, next action, and
+evidence pointers. Merge the same root cause but retain every distinct valid
+finding. Keep it brief; compact wording must never cause a finding to disappear.
+The final Fixer turn is only a short change/verification/blocker outcome. It
+must not repeat or reconsolidate the review.
+
 If a saved review has status `contract_failed`, the backend retained its raw
 Markdown but quarantined its invalid structured verification markers. Do not
 copy, repair, or route those markers. Mark that module `failed` with the exact
@@ -189,6 +205,18 @@ approach before that exact approval. Engineering may reach
 `awaiting_user` only for an exceptional repair that changes business meaning,
 affects real users or money, or leaves a genuinely balanced choice not settled
 by `soul.md`.
+
+Reconcile answered advisor-specialization decisions separately from finding
+dispositions. For a `report_human_inputs` row with source `pulse` and id prefix
+`advisor-specialization-`: on `activate`, call
+`update_workflow_config(advisor_specialization_approval_input_id="<id>")` so the
+tool resolves and activates the exact approved pair; never copy or rewrite the
+texts yourself. On `reject`, preserve the current specialization and consume the
+decision with that outcome. On `revise`, call
+`get_workflow_command_guidance(kind="specialize-advisors", focus="<the owner's revision note>")`,
+create the replacement proposal it specifies, then consume the old decision only
+after the replacement exists. These decisions are configuration work, not Pulse
+findings, and must not be converted into duplicate issues.
 
 `awaiting_user` remains in the decision queue and requires a still-pending
 `create_human_input_request`, passed as `human_input_id`. Create the decision

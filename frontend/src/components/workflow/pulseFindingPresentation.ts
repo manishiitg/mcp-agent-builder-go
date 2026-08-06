@@ -189,6 +189,29 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
     }
   }
 
+  const advisorModule = finding.step_id || finding.module
+  const advisorFinding = finding.phase === 'review'
+    && ['strategy_auditor', 'goal_advisor'].includes(advisorModule || '')
+  if (advisorFinding && finding.details?.recommended_route !== 'fixer_handoff') {
+    if (finding.details?.recommended_route === 'evidence_wait') {
+      return {
+        label: 'Waiting for evidence',
+        queue: 'proposals',
+        tone: 'info',
+        nextAction: finding.details.next_check?.trim()
+          || 'Pulse must record the exact future evidence boundary before revisiting this recommendation.',
+      }
+    }
+    return {
+      label: 'Untriaged recommendation',
+      queue: 'proposals',
+      tone: 'info',
+      nextAction: finding.details?.recommended_route === 'decision_required'
+        ? 'Pulse must create and link the decision card before asking you to act.'
+        : 'Pulse must classify this recommendation as a decision, evidence wait, or technical handoff before acting.',
+    }
+  }
+
   return {
     label: 'New',
     queue: 'needs_action',

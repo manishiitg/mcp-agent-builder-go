@@ -2,6 +2,8 @@ package step_based_workflow
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -205,5 +207,62 @@ func TestSavePreValidationLogPassNoConcern(t *testing.T) {
 	}
 	if len(concerns) != 0 {
 		t.Fatalf("expected no concerns for a passing result, got %+v", concerns)
+	}
+}
+
+func TestSavePreValidationLogRetainsEveryScriptedAndMessageSequenceAttempt(t *testing.T) {
+	hcpo, _ := newPreValidationConcernTestOrchestrator(t)
+	ctx := context.Background()
+	logPath := hcpo.GetWorkspacePath() + "/runs/" + hcpo.selectedRunFolder
+
+	scriptedStep := "read-credentials"
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, scriptedStep, scriptedStep,
+		targetingAuditFailure("$.credentials", "missing credentials"), nil,
+		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "repair-check", ExecutionAttempt: 1, ValidationAttempt: 1})
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, scriptedStep, scriptedStep,
+		&WorkspaceVerificationResult{OverallPass: true, Summary: ValidationSummary{TotalChecks: 1, PassedChecks: 1}}, nil,
+		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "repair-check", ExecutionAttempt: 1, ValidationAttempt: 2})
+
+	messageStep := "collect-input"
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, messageStep, messageStep,
+		targetingAuditFailure("$.input", "missing input"), nil,
+		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "message_sequence", ValidationPhase: "message-sequence-verify", ExecutionAttempt: 1, ValidationAttempt: 1})
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, logPath, messageStep, messageStep,
+		&WorkspaceVerificationResult{OverallPass: true, Summary: ValidationSummary{TotalChecks: 1, PassedChecks: 1}}, nil,
+		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "message_sequence", ValidationPhase: "message-sequence-verify", ExecutionAttempt: 1, ValidationAttempt: 2})
+
+	read := func(path string) PreValidationLogEntry {
+		t.Helper()
+		raw, err := hcpo.ReadWorkspaceFile(ctx, path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var entry PreValidationLogEntry
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return entry
+	}
+
+	for _, tc := range []struct {
+		step, phase, mode string
+	}{
+		{scriptedStep, "repair-check", "scripted"},
+		{messageStep, "message-sequence-verify", "message_sequence"},
+	} {
+		base := fmt.Sprintf("%s/runs/%s/logs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, tc.step)
+		failed := read(fmt.Sprintf("%s/pre_validation_%s_execution_001_attempt_001.json", base, tc.phase))
+		passed := read(fmt.Sprintf("%s/pre_validation_%s_execution_001_attempt_002.json", base, tc.phase))
+		latest := read(base + "/pre_validation.json")
+		if failed.OverallPass || failed.ValidationAttempt != 1 || failed.ExecutionMode != tc.mode || len(failed.Errors) == 0 {
+			t.Fatalf("failed %s attempt was not retained accurately: %+v", tc.mode, failed)
+		}
+		if !passed.OverallPass || passed.ValidationAttempt != 2 || !latest.OverallPass || latest.ValidationAttempt != 2 {
+			t.Fatalf("latest %s result should be the passing second attempt: passed=%+v latest=%+v", tc.mode, passed, latest)
+		}
 	}
 }

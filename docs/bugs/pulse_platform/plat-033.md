@@ -142,3 +142,70 @@ code (stashed and re-ran).
 fresh `update_step_config` call produces a `before_ref`/`after_ref` pair that
 differ when a field actually changed, that `changes` is non-empty, and that
 `write_workflow_manifest` entries target `workflow.json`.
+
+## Follow-up: manifest changes still lack a readable field diff (2026-08-05)
+
+**Source finding:** `PUL-988DF96A` in `Workflow/hetznerssh`, reported by
+Artifact Review on 2026-08-02.
+
+This is a valid remaining part of PLAT-033, not a workflow-only process
+problem. The current `WriteWorkflowManifest` call passes the fixed reason
+`"workflow.json was written directly; recorded so artifact drift review can
+see the change."` and `changes: nil`. The earlier repair makes its target and
+before/after hashes truthful, but a human reading the changelog still cannot
+tell *which* manifest fields changed without reconstructing the JSON or using
+Git.
+
+The reviewer is right about that outcome, but its suggested remedy (ask each
+future caller to write a better sentence) is not sufficient: this shared
+writer already has both JSON documents and should compute the evidence
+deterministically.
+
+**Required follow-up:** parse the previous and persisted `workflow.json`,
+produce a stable, secret-safe list of changed JSON paths, and pass it as
+`PlanFieldChange` evidence. Values for secret-bearing fields must be redacted
+or omitted; field paths plus `added`/`removed`/`changed` status are enough for
+the changelog. Keep the current content hashes as the authoritative exact
+boundary. A no-op must still produce no entry.
+
+**Acceptance:** a real manifest write records target `workflow.json`, distinct
+content refs, and deterministic changed-path evidence; changing one nested
+field does not claim unrelated paths; secret values do not appear in the
+changelog; and an unchanged write creates no entry.
+
+## Follow-up implementation (2026-08-05, Codex; runtime reverify pending)
+
+`WriteWorkflowManifest` now derives its `changes[]` evidence from the JSON it
+already read and the JSON it just persisted. It emits sorted leaf paths such as
+`workflow.json.capabilities.selected_skills`, with only lifecycle markers
+(`absent → added`, `present → changed`, or `removed → absent`). It does **not**
+copy old or new JSON values into the changelog, including for secret-bearing
+fields. Arrays are represented as one changed path so an insertion or reorder
+does not manufacture a long, unstable index diff.
+
+The fixed writer records the short reason “Recorded workflow.json field changes
+for artifact drift review.” and leaves the existing before/after content hashes
+as the authoritative exact mutation boundary. An unchanged manifest still emits
+no entry.
+
+**Tests:** `TestWorkflowManifestChangelogChangesIsStableAndValueFree` covers
+nested scalar and array changes, deterministic order, and no value leakage;
+`TestWorkflowManifestChangelogChangesCreationAndCorruptPriorState` covers a
+new manifest and an unparseable historic manifest. Runtime reverify on the next
+manifest mutation should confirm a non-empty `changes[]` list alongside the
+already-fixed `workflow.json` target and distinct refs.
+
+## Tectonicus coverage evidence — 2026-08-05
+
+Tectonicus Pulse found that **159 of 231** managed changelog entries have none
+of `changes[]`, `before_ref`, or `after_ref`. The exact historic callers cannot
+be truthfully backfilled; doing so would fabricate mutation provenance. The
+finding does prove that fixing two reproduced callers was not enough to satisfy
+the ticket's "every sanctioned mutation" acceptance condition.
+
+**Remaining implementation boundary:** audit every managed mutation writer,
+make each either emit an actual target plus before/after snapshot and changed
+fields or fail closed, and add a table-driven coverage test that registers every
+sanctioned mutation tool/caller. New entries must be complete; old incomplete
+entries remain explicitly historical/unknown. This is platform-owned work, not
+a Tectonicus workflow repair.

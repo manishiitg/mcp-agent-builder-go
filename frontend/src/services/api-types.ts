@@ -572,6 +572,8 @@ export interface PulseFindingDetails {
   finding_id?: string
   target_key?: string
   issue_kind?: 'harness_issue' | 'workflow_bug' | 'external_dependency' | 'evidence_gap' | string
+  recommended_route?: 'decision_required' | 'evidence_wait' | 'fixer_handoff' | 'none' | string
+  next_check?: string
   classification?: string
   severity?: string
   summary?: string
@@ -2832,7 +2834,20 @@ export interface WorkflowManifest {
   updated_at?: string
   run_retention_count?: number
   post_run_monitor?: boolean
+  pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
+}
+
+export interface WorkflowPulseConfig {
+  advisor_specialization?: WorkflowAdvisorSpecialization
+}
+
+export interface WorkflowAdvisorSpecialization {
+  version: number
+  strategy_auditor: string
+  goal_advisor: string
+  approved_input_id?: string
+  updated_at?: string
 }
 
 export interface WorkflowCapabilities {

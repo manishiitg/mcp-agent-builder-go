@@ -77,7 +77,7 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 		Name:     "workflow-commands",
 		Description: "Workflow workshop slash-command flows — canonical procedural guidance for design-plan, improve-evaluation, " +
 			"review-code, review-artifact-drift, bug-review, ops-review, strategy-auditor, define-success, pulse, pulse-setup, engineering-review, " +
-			"improve-knowledge, improve-learnings, improve-database, improve-report, goal-advisor, design-plan. Match this skill when the user " +
+			"improve-knowledge, improve-learnings, improve-database, improve-report, goal-advisor, specialize-advisors, design-plan. Match this skill when the user " +
 			"invokes one of those slash commands or describes the same intent in chat, then read the matching file under " +
 			"references/.",
 		Intro:  "This skill bundles the workshop's canonical slash-command procedures. Match it when the user invokes one of these commands (e.g. `/design-plan`, `/improve-evaluation`) or describes the same intent in plain chat. Read the single matching file under `references/` — the prose there is your instructions for the turn, follow it verbatim.",

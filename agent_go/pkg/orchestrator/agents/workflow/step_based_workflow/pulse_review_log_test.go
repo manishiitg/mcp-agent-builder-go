@@ -96,6 +96,24 @@ PULSE_VERIFICATION_JSON: {"finding_id":"ISS-10","fingerprint":"fp-10","attempt_i
 	}
 }
 
+func TestRecordPulseReviewQuarantinesAdvisorConcernWithoutRoute(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	artifact := "## Verdict\nThe current tactic is too concentrated.\n\nCONCERNS: the target mix cannot create enough new reach\n"
+
+	err := RecordPulseReview(ctx, ws, "strategy_auditor", "strategy-review", "pulse-1", "", artifact)
+	if err == nil || !strings.Contains(err.Error(), "missing its PULSE_FINDING_JSON routing marker") {
+		t.Fatalf("expected advisor route contract failure, got %v", err)
+	}
+	record, loadErr := LoadPulseReviewArtifactForRun(ctx, ws, "strategy-review", "strategy_auditor")
+	if loadErr != nil {
+		t.Fatalf("load quarantined advisor review: %v", loadErr)
+	}
+	if record.Status != pulseReviewStatusContractFailed {
+		t.Fatalf("advisor review status = %q, want contract_failed", record.Status)
+	}
+}
+
 func TestPulseReviewVerificationAllowlistComesFromChangedUnverifiedAttempts(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()

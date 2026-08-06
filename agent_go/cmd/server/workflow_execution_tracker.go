@@ -161,6 +161,21 @@ func trackedExecutionBlocksNewWorkflowBuilderChat(exec *TrackedWorkflowExecution
 	return true
 }
 
+// trackedExecutionBlocksScheduledWorkflow distinguishes producing workflow
+// executions from interactive chats and Pulse/reviewer stages. A schedule has
+// its own durable single-run lock, so only another actual full-workflow run
+// should prevent it from starting; chats are intentionally a separate lane.
+func trackedExecutionBlocksScheduledWorkflow(exec *TrackedWorkflowExecution) bool {
+	if exec == nil || exec.Status != trackedExecutionStatusRunning {
+		return false
+	}
+	kind := normalizeTrackedExecutionKind(exec.Kind)
+	if kind == "" {
+		kind = inferTrackedExecutionKind(exec.Source, exec.PhaseID, exec.Name, exec.Metadata)
+	}
+	return kind == "full_workflow"
+}
+
 func trackedExecutionToActive(exec *TrackedWorkflowExecution) ActiveWorkflowExecution {
 	if exec == nil {
 		return ActiveWorkflowExecution{}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +75,10 @@ type WorkflowManifest struct {
 	// compliance). Unset/false = off (no monitor pass, no extra cost).
 	PostRunMonitor *bool `json:"post_run_monitor,omitempty"`
 
+	// Pulse contains owner-approved workflow-specific review lenses. These
+	// specialize the stable reviewer contracts; they never replace them.
+	Pulse *WorkflowPulseConfig `json:"pulse,omitempty"`
+
 	// Backup is declarative configuration for builder-agent managed backup.
 	// Operational status is written separately to backup/status.json so normal
 	// backup attempts do not churn workflow.json.
@@ -90,6 +95,18 @@ type WorkflowManifest struct {
 	// (never serialized): set during ReadWorkflowManifest, used to avoid clobbering
 	// the on-disk config on write-back and to flag the issue.
 	MalformedConfig []string `json:"-"`
+}
+
+type WorkflowPulseConfig struct {
+	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
+}
+
+type WorkflowAdvisorSpecialization struct {
+	Version         int    `json:"version"`
+	StrategyAuditor string `json:"strategy_auditor"`
+	GoalAdvisor     string `json:"goal_advisor"`
+	ApprovedInputID string `json:"approved_input_id,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
 // MonitorEnabled reports whether the post-run monitor should run for this
@@ -305,6 +322,18 @@ func ValidateManifest(m *WorkflowManifest) error {
 	if m.RunRetentionCount != nil {
 		if *m.RunRetentionCount < 1 || *m.RunRetentionCount > MaxRunRetentionCount {
 			return fmt.Errorf("run_retention_count must be between 1 and %d", MaxRunRetentionCount)
+		}
+	}
+	if m.Pulse != nil && m.Pulse.AdvisorSpecialization != nil {
+		specialization := m.Pulse.AdvisorSpecialization
+		if specialization.Version < 1 {
+			return fmt.Errorf("pulse.advisor_specialization.version must be >= 1")
+		}
+		if strings.TrimSpace(specialization.StrategyAuditor) == "" {
+			return fmt.Errorf("pulse.advisor_specialization.strategy_auditor is required")
+		}
+		if strings.TrimSpace(specialization.GoalAdvisor) == "" {
+			return fmt.Errorf("pulse.advisor_specialization.goal_advisor is required")
 		}
 	}
 
@@ -581,6 +610,88 @@ func stripOptionalConfigBlocks(content []byte) ([]byte, []string) {
 	return stripped, dropped
 }
 
+// workflowManifestChangelogChanges returns a stable, value-free description of
+// a workflow.json mutation. The changelog already carries content hashes as
+// the authoritative change boundary; copying values here would make a human
+// diff easier at the cost of leaking secrets such as webhook or token values.
+// Field paths plus lifecycle markers are sufficient for Artifact Review.
+//
+// Arrays deliberately appear as one changed field. Their order and contents
+// are meaningful to a manifest, but producing index-level entries would be
+// noisy and unstable when an item is inserted or reordered.
+func workflowManifestChangelogChanges(previous, current string) []step_based_workflow.PlanFieldChange {
+	var before, after interface{}
+	beforeOK := strings.TrimSpace(previous) != ""
+	if beforeOK && json.Unmarshal([]byte(previous), &before) != nil {
+		// An old corrupt artifact is still evidence that the whole manifest was
+		// replaced, but it cannot support a truthful field-level comparison.
+		return []step_based_workflow.PlanFieldChange{manifestChangelogChange("workflow.json", true, true)}
+	}
+	if err := json.Unmarshal([]byte(current), &after); err != nil {
+		// current is produced by json.MarshalIndent above, so this path is only a
+		// defensive fallback. Never omit the fact that a write occurred.
+		return []step_based_workflow.PlanFieldChange{manifestChangelogChange("workflow.json", beforeOK, true)}
+	}
+
+	var changes []step_based_workflow.PlanFieldChange
+	collectWorkflowManifestChangelogChanges(&changes, "workflow.json", before, beforeOK, after, true)
+	return changes
+}
+
+func collectWorkflowManifestChangelogChanges(changes *[]step_based_workflow.PlanFieldChange, path string, before interface{}, beforeOK bool, after interface{}, afterOK bool) {
+	if !beforeOK || !afterOK {
+		if beforeOK != afterOK {
+			*changes = append(*changes, manifestChangelogChange(path, beforeOK, afterOK))
+		}
+		return
+	}
+
+	beforeObject, beforeIsObject := before.(map[string]interface{})
+	afterObject, afterIsObject := after.(map[string]interface{})
+	if beforeIsObject && afterIsObject {
+		keys := make(map[string]struct{}, len(beforeObject)+len(afterObject))
+		for key := range beforeObject {
+			keys[key] = struct{}{}
+		}
+		for key := range afterObject {
+			keys[key] = struct{}{}
+		}
+		orderedKeys := make([]string, 0, len(keys))
+		for key := range keys {
+			orderedKeys = append(orderedKeys, key)
+		}
+		sort.Strings(orderedKeys)
+		for _, key := range orderedKeys {
+			beforeValue, beforePresent := beforeObject[key]
+			afterValue, afterPresent := afterObject[key]
+			collectWorkflowManifestChangelogChanges(changes, path+"."+key, beforeValue, beforePresent, afterValue, afterPresent)
+		}
+		return
+	}
+
+	// Collections are an atomic artifact-level field for changelog purposes.
+	// Values are never persisted in this evidence list.
+	if !reflect.DeepEqual(before, after) {
+		*changes = append(*changes, manifestChangelogChange(path, true, true))
+	}
+}
+
+func manifestChangelogChange(path string, beforeOK, afterOK bool) step_based_workflow.PlanFieldChange {
+	change := step_based_workflow.PlanFieldChange{Field: path}
+	switch {
+	case !beforeOK:
+		change.OldValue = "absent"
+		change.NewValue = "added"
+	case !afterOK:
+		change.OldValue = "removed"
+		change.NewValue = "absent"
+	default:
+		change.OldValue = "present"
+		change.NewValue = "changed"
+	}
+	return change
+}
+
 // WriteWorkflowManifest validates and writes workflow.json to a workspace.
 func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *WorkflowManifest) error {
 	workflowtypes.NormalizePresetLLMConfig(m.Capabilities.LLMConfig)
@@ -615,8 +726,8 @@ func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *Workflo
 	if !previousExists || previous != string(data) {
 		step_based_workflow.LogCanonicalArtifactChange(
 			ctx, workspacePath, "write_workflow_manifest",
-			"workflow.json was written directly; recorded so artifact drift review can see the change.",
-			nil, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			"Recorded workflow.json field changes for artifact drift review.",
+			workflowManifestChangelogChanges(previous, string(data)), workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
 			"workflow.json", previous, string(data),
 		)
 	}

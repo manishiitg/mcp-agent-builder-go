@@ -215,6 +215,11 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 	if len(lines) == 0 {
 		return 0, nil
 	}
+	if phase == ConcernPhaseReview {
+		if err := validatePulseAdvisorFindingRoutes(stepID, summary); err != nil {
+			return 0, err
+		}
+	}
 	db, err := openRunConcernsDB(ctx, workspacePath, true)
 	if err != nil || db == nil {
 		return 0, err

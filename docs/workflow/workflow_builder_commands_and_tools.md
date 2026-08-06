@@ -65,6 +65,7 @@ improve-report
 | `/engineering-review` | Workshop | Run Engineering and LLM/Ops review, consolidate the findings, then apply and verify bounded fixes in one agent sequence. |
 | `/strategy-auditor` | Workshop | Diagnose plan-versus-goal strategy using cross-run evidence and persist the review plus trackable concerns. |
 | `/goal-advisor` | Workshop | Run the native Advisor → Critic → Finalizer pipeline and persist the complete result plus remaining open concerns. |
+| `/specialize-advisors` | Workshop | Propose two reusable workflow-specific lenses—one for Strategy Auditor and one for Goal Advisor—and create an Activate / Revise / Reject decision. Activation is approval-gated and stored in `workflow.json`. |
 | `/improve-knowledge` | Builder, Optimizer | Improve knowledgebase notes with targeted cleanup or cross-step consolidation. |
 | `/improve-learnings` | Builder, Optimizer | Improve global learnings with targeted cleanup or current-plan consolidation. |
 | `/improve-data` | Builder, Optimizer | Improve durable data contracts, schemas, and report compatibility. |

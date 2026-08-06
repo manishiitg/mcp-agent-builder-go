@@ -256,6 +256,14 @@ func RecordPulseReviewForModules(ctx context.Context, workspacePath string, modu
 	if contractErr == nil {
 		contractErr = validatePulseReviewVerificationAllowlistForModules(ctx, workspacePath, canonicalModules, verifications)
 	}
+	if contractErr == nil {
+		for _, module := range canonicalModules {
+			if err := validatePulseAdvisorFindingRoutes(module, artifact); err != nil {
+				contractErr = err
+				break
+			}
+		}
+	}
 	status := pulseReviewStatus(artifact)
 	persistedArtifact := artifact
 	if contractErr != nil {

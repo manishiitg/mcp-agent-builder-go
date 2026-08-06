@@ -54,6 +54,12 @@ const (
 // the 2026-07-29 desync.
 var pulseModuleOrder = pulsemodules.IDs()
 
+// maxPulseGateDueModules is a per-Pulse-pass cost cap. The Gate still records
+// every lens' cadence decision, but may select only this many expensive review
+// perspectives for execution; the rest remain explicitly deferred and due
+// again at their recorded next-check boundary.
+const maxPulseGateDueModules = 2
+
 var validPulseModules = func() map[string]bool {
 	m := make(map[string]bool, len(pulsemodules.All))
 	for _, id := range pulsemodules.IDs() {
@@ -583,6 +589,7 @@ func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
 			len(decisions), len(pulseModuleOrder), pulseModuleList())
 	}
 	seen := map[string]bool{}
+	dueModules := make([]string, 0, maxPulseGateDueModules+1)
 	for _, decision := range decisions {
 		module := normalizePulseModule(decision.Module)
 		if !validPulseModules[module] {
@@ -609,6 +616,13 @@ func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
 		if !decision.Due && nextCheckAt == "" && strings.TrimSpace(decision.NextCheckAfterRunID) == "" && decision.CooldownRuns == 0 {
 			return fmt.Errorf("skipped module %q must include next_check_at, next_check_after_run_id, or cooldown_runs", module)
 		}
+		if decision.Due {
+			dueModules = append(dueModules, module)
+		}
+	}
+	if len(dueModules) > maxPulseGateDueModules {
+		return fmt.Errorf("Pulse Gate may select at most %d due modules per pass to cap review cost; got %d (%s). Defer the lower-priority modules with a reason and next-check boundary",
+			maxPulseGateDueModules, len(dueModules), strings.Join(dueModules, ", "))
 	}
 	missing := []string{}
 	for _, module := range pulseModuleOrder {
@@ -1573,7 +1587,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which perspectives are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. llm_ops_review owns efficiency and runtime operations. strategy_auditor owns product/business adequacy inside the current strategy; goal_advisor owns materially different approaches. Engineering and Ops may share one selected-perspective sequence; Strategy and Goal remain independent agents. Do not pass retired artifact-named modules and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after deciding which perspectives are due or skipped. The decisions array must contain exactly one entry for each current Pulse module: %s. To cap cost, select at most %d due modules in one Pulse pass; defer any lower-priority eligible module with its reason and next-check boundary. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. llm_ops_review owns efficiency and runtime operations. strategy_auditor owns product/business adequacy inside the current strategy; goal_advisor owns materially different approaches. Engineering and Ops may share one selected-perspective sequence; Strategy and Goal remain independent agents. Do not pass retired artifact-named modules and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", "), maxPulseGateDueModules),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,

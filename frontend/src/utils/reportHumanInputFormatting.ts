@@ -30,7 +30,7 @@ export function reportHumanInputHistory(inputs: ReportHumanInput[], limit = 4): 
     .slice(0, limit)
 }
 
-const CONTEXT_MARKER_PATTERN = /(?:^|\s)(Proposal|Exact intended edits(?: if approved)?|Rationale|Expected impact|Risk|Evidence):\s*/gi
+const CONTEXT_MARKER_PATTERN = /(?:^|\s)(Proposal|Strategy Auditor specialization|Goal Advisor specialization|Exact intended edits(?: if approved)?|Rationale|Expected impact|Risk|Evidence):\s*/gi
 
 function displayLabel(value: string): string {
   const normalized = value.trim().toLowerCase()
