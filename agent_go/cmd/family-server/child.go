@@ -227,8 +227,8 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		Provider: provider,
 		// Child Mode now runs the SAME model and reasoning effort as Parent Mode.
 		//
-		// It used to take a deliberately cheaper tier (lowTierModelID — haiku for
-		// Claude Code, composer-2.5 for Cursor) with "low" effort, on the theory
+		// It used to take a deliberately cheaper tier (haiku for Claude Code,
+		// composer-2.5 for Cursor) with "low" effort, on the theory
 		// that short one-at-a-time tutoring turns want latency over depth. That
 		// traded away quality on exactly the judgment that has to be right: how
 		// much to reveal under teaching_mode, whether her answer is actually
@@ -241,8 +241,8 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// never reach the *-KEY.md answer keys, other activities, or the parent's
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
-		ModelID:         selectedModelID(s.FastMode, provider),
-		ReasoningEffort: "high",
+		ModelID:         selectedModelID(provider),
+		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle

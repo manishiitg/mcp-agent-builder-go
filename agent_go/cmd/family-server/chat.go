@@ -609,8 +609,8 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:        provider,
-		ModelID:         selectedModelID(s.FastMode, provider),
-		ReasoningEffort: "high",
+		ModelID:         selectedModelID(provider),
+		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		// Stable SessionID = the conversation id, so the SAME warm tmux session

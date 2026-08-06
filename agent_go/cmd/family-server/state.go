@@ -66,12 +66,13 @@ type familyState struct {
 	// above, not a log. Powers the "This Week" view's busy/free-time display.
 	Schedule ChildSchedule `json:"schedule,omitempty"`
 
-	// FastMode swaps every turn (parent, child, WhatsApp, Pulse) from its
-	// normal tuned model to the provider's cheaper/faster low tier (see
-	// model_tier.go's lowTierModelID) — latency over depth, the opposite
-	// tradeoff Child Mode itself deliberately moved away from (see child.go's
-	// own comment on why it stopped using a low tier by default). Off by
-	// default so nobody gets a quietly worse model without asking for it.
+	// FastMode lowers the REASONING EFFORT on every turn (parent, child,
+	// WhatsApp, Pulse) while keeping the chosen model — see
+	// model_tier.go's selectedReasoningEffort. It used to swap the model for a
+	// cheaper tier instead, which changed the tutor rather than its depth: a
+	// different model phrases and judges differently, on exactly the calls that
+	// have to be right. Off by default so nobody gets quietly shallower answers
+	// without asking for them.
 	FastMode bool `json:"fast_mode,omitempty"`
 }
 

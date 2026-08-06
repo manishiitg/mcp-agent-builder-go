@@ -330,8 +330,8 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider:                  provider,
-		ModelID:                   selectedModelID(s.FastMode, provider),
-		ReasoningEffort:           "high",
+		ModelID:                   selectedModelID(provider),
+		ReasoningEffort:           selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:                filepath.Join(familyDataDir(), "workspace"),
 		SystemPrompt:              parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
 		SessionID:                 convID,
