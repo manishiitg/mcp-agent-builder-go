@@ -225,7 +225,10 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider: provider,
-		// Child Mode now runs the SAME model and reasoning effort as Parent Mode.
+		// Child Mode runs the same MODEL as Parent Mode, but defaults to lower
+		// reasoning effort (see familyState.ChildFastMode) because a child
+		// waiting reads as breakage rather than thinking. The model choice
+		// below is deliberately unchanged — see why:
 		//
 		// It used to take a deliberately cheaper tier (haiku for Claude Code,
 		// composer-2.5 for Cursor) with "low" effort, on the theory
@@ -242,7 +245,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
 		ModelID:         selectedModelID(s, provider),
-		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
+		ReasoningEffort: selectedReasoningEffort(s.childFastMode(), provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle

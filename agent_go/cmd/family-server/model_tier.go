@@ -100,11 +100,14 @@ func handleGetFastMode(w http.ResponseWriter, r *http.Request) {
 	stateMu.Lock()
 	s := loadState()
 	stateMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": s.FastMode})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": s.FastMode, "child_enabled": s.childFastMode()})
 }
 
 type setFastModeRequest struct {
 	Enabled bool `json:"enabled"`
+	// Child is optional and separate: omitted leaves Child Mode's own setting
+	// alone rather than silently coupling it to the parent's toggle.
+	Child *bool `json:"child_enabled,omitempty"`
 }
 
 // POST /api/fast-mode
@@ -121,11 +124,14 @@ func handleSetFastMode(w http.ResponseWriter, r *http.Request) {
 	stateMu.Lock()
 	s := loadState()
 	s.FastMode = req.Enabled
+	if req.Child != nil {
+		s.ChildFastMode = req.Child
+	}
 	err := saveState(s)
 	stateMu.Unlock()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": s.FastMode, "child_enabled": s.childFastMode()})
 }

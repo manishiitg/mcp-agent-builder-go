@@ -82,6 +82,30 @@ type familyState struct {
 	// Per provider rather than one global value because the family can switch
 	// engines, and a model id is only meaningful to the agent that offers it.
 	SelectedModels map[string]string `json:"selected_models,omitempty"`
+
+	// ChildFastMode is Fast Mode for Child Mode specifically, ON by default.
+	// A child waiting is worse than a parent waiting: she is mid-question, and
+	// a pause reads as the app being broken rather than as thinking.
+	//
+	// This is a real trade, and the opposite of the reasoning in child.go's own
+	// comment on why Child Mode stopped using a cheap tier — shallower thinking
+	// is worst at exactly the tutoring judgment that matters (how much to
+	// reveal under teaching_mode, whether her answer is actually right). It is
+	// separate from FastMode, and surfaced in Settings, so it can be turned off
+	// for a child who needs the careful version.
+	//
+	// A pointer because the default is TRUE: a plain bool's zero value would
+	// silently mean "off" for every existing family.
+	ChildFastMode *bool `json:"child_fast_mode,omitempty"`
+}
+
+// childFastMode reports whether Child Mode should trade depth for speed.
+// Unset means on.
+func (s familyState) childFastMode() bool {
+	if s.ChildFastMode == nil {
+		return true
+	}
+	return *s.ChildFastMode
 }
 
 // ScheduleEntry is one recurring weekly commitment — school, tuition, a

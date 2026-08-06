@@ -1728,6 +1728,11 @@ export default function LearningApp() {
   // Pulse config above.
   const [fastMode, setFastMode] = useState(false)
   const [savingFastMode, setSavingFastMode] = useState(false)
+  // Child Mode's own Fast Mode, defaulting ON (see familyState.ChildFastMode's
+  // comment on why: a child waiting reads as breakage, not thinking). True
+  // until the server says otherwise, so Settings doesn't flash "off" for the
+  // instant before the real value loads.
+  const [childFastMode, setChildFastMode] = useState(true)
 
   // Which model the chosen coding agent should use. The list comes from the
   // server (which reads the provider's real catalog) rather than being written
@@ -1778,7 +1783,11 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/fast-mode`)
       .then((r) => r.json())
-      .then((d: { enabled: boolean }) => { if (!cancelled) setFastMode(!!d.enabled) })
+      .then((d: { enabled: boolean; child_enabled: boolean }) => {
+        if (cancelled) return
+        setFastMode(!!d.enabled)
+        setChildFastMode(!!d.child_enabled)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [screen, settingsOpen])
@@ -1790,6 +1799,21 @@ export default function LearningApp() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
+    })
+      .catch(() => {})
+      .finally(() => setSavingFastMode(false))
+  }
+
+  // Separate request from toggleFastMode: this must NOT touch the parent's
+  // own `enabled` value, or turning off Child Fast Mode would silently also
+  // turn off the parent's.
+  const toggleChildFastModeSetting = (enabled: boolean) => {
+    setChildFastMode(enabled)
+    setSavingFastMode(true)
+    fetch(`${FAMILY_API}/api/fast-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: fastMode, child_enabled: enabled }),
     })
       .catch(() => {})
       .finally(() => setSavingFastMode(false))
@@ -4322,7 +4346,7 @@ export default function LearningApp() {
                   )}
 
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
-                  <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, across every chat (web, WhatsApp, and Pulse check-ins). Turn it off again for anything that needs careful judgment.</p>
+                  <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, in your own chat, WhatsApp, and Pulse check-ins. Child Mode has its own setting below, so this does not affect {childName || 'your child'}'s tutor. Turn it off again for anything that needs careful judgment.</p>
                   <label className="fl-pulse-config-row">
                     <input
                       type="checkbox"
@@ -4330,7 +4354,20 @@ export default function LearningApp() {
                       disabled={savingFastMode}
                       onChange={(e) => toggleFastMode(e.target.checked)}
                     />
-                    <span>Use fast mode</span>
+                    <span>Use fast mode for my own chat</span>
+                  </label>
+
+                  <p className="fl-note" style={{ marginTop: '10px' }}>
+                    Same idea for {childName || 'your child'}'s tutor. On by default — a child waiting for a reply reads as the app being broken, not as Quill thinking. Turn it off if she needs the more careful, slower version.
+                  </p>
+                  <label className="fl-pulse-config-row">
+                    <input
+                      type="checkbox"
+                      checked={childFastMode}
+                      disabled={savingFastMode}
+                      onChange={(e) => toggleChildFastModeSetting(e.target.checked)}
+                    />
+                    <span>Use fast mode for {childName || 'her'} chat</span>
                   </label>
 
                   <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
