@@ -363,6 +363,9 @@ export interface ReportHumanInput {
   evidence?: string
   created_by?: string
   answered_by?: string
+  answered_by_kind?: string
+  answered_via?: string
+  answered_session_id?: string
   consumed_by?: string
   outcome_summary?: string
   created_at: string

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	_ "modernc.org/sqlite"
 )
@@ -32,31 +33,34 @@ type ReportHumanInputOption struct {
 }
 
 type ReportHumanInput struct {
-	ID               string                   `json:"id"`
-	WorkspacePath    string                   `json:"workspace_path"`
-	Source           string                   `json:"source"`
-	Priority         string                   `json:"priority"`
-	Question         string                   `json:"question"`
-	Context          string                   `json:"context,omitempty"`
-	Options          []ReportHumanInputOption `json:"options"`
-	AllowFreeText    bool                     `json:"allow_free_text"`
-	Status           string                   `json:"status"`
-	SelectedOptionID string                   `json:"selected_option_id,omitempty"`
-	Note             string                   `json:"note,omitempty"`
-	RunID            string                   `json:"run_id,omitempty"`
-	Evidence         string                   `json:"evidence,omitempty"`
-	CreatedBy        string                   `json:"created_by,omitempty"`
-	AnsweredBy       string                   `json:"answered_by,omitempty"`
-	ConsumedBy       string                   `json:"consumed_by,omitempty"`
-	OutcomeSummary   string                   `json:"outcome_summary,omitempty"`
-	CreatedAt        string                   `json:"created_at"`
-	UpdatedAt        string                   `json:"updated_at"`
-	AnsweredAt       string                   `json:"answered_at,omitempty"`
-	ConsumedAt       string                   `json:"consumed_at,omitempty"`
-	DismissedAt      string                   `json:"dismissed_at,omitempty"`
-	ClaimToken       string                   `json:"claim_token,omitempty"`
-	ClaimedAt        string                   `json:"claimed_at,omitempty"`
-	ClaimExpiresAt   string                   `json:"claim_expires_at,omitempty"`
+	ID                string                   `json:"id"`
+	WorkspacePath     string                   `json:"workspace_path"`
+	Source            string                   `json:"source"`
+	Priority          string                   `json:"priority"`
+	Question          string                   `json:"question"`
+	Context           string                   `json:"context,omitempty"`
+	Options           []ReportHumanInputOption `json:"options"`
+	AllowFreeText     bool                     `json:"allow_free_text"`
+	Status            string                   `json:"status"`
+	SelectedOptionID  string                   `json:"selected_option_id,omitempty"`
+	Note              string                   `json:"note,omitempty"`
+	RunID             string                   `json:"run_id,omitempty"`
+	Evidence          string                   `json:"evidence,omitempty"`
+	CreatedBy         string                   `json:"created_by,omitempty"`
+	AnsweredBy        string                   `json:"answered_by,omitempty"`
+	AnsweredByKind    string                   `json:"answered_by_kind,omitempty"`
+	AnsweredVia       string                   `json:"answered_via,omitempty"`
+	AnsweredSessionID string                   `json:"answered_session_id,omitempty"`
+	ConsumedBy        string                   `json:"consumed_by,omitempty"`
+	OutcomeSummary    string                   `json:"outcome_summary,omitempty"`
+	CreatedAt         string                   `json:"created_at"`
+	UpdatedAt         string                   `json:"updated_at"`
+	AnsweredAt        string                   `json:"answered_at,omitempty"`
+	ConsumedAt        string                   `json:"consumed_at,omitempty"`
+	DismissedAt       string                   `json:"dismissed_at,omitempty"`
+	ClaimToken        string                   `json:"claim_token,omitempty"`
+	ClaimedAt         string                   `json:"claimed_at,omitempty"`
+	ClaimExpiresAt    string                   `json:"claim_expires_at,omitempty"`
 }
 
 type ReportHumanInputCreateRequest struct {
@@ -71,6 +75,9 @@ type ReportHumanInputCreateRequest struct {
 	RunID         string                   `json:"run_id"`
 	Evidence      string                   `json:"evidence"`
 	CreatedBy     string                   `json:"created_by"`
+	CreatedByKind string                   `json:"-"`
+	CreatedVia    string                   `json:"-"`
+	SessionID     string                   `json:"-"`
 }
 
 type ReportHumanInputAnswerRequest struct {
@@ -78,12 +85,30 @@ type ReportHumanInputAnswerRequest struct {
 	SelectedOptionID string `json:"selected_option_id"`
 	Note             string `json:"note"`
 	AnsweredBy       string `json:"answered_by"`
+	AnsweredByKind   string `json:"-"`
+	AnsweredVia      string `json:"-"`
+	SessionID        string `json:"-"`
 }
 
 type ReportHumanInputConsumeRequest struct {
 	WorkspacePath  string `json:"workspace_path"`
 	OutcomeSummary string `json:"outcome_summary"`
 	ConsumedBy     string `json:"consumed_by"`
+	ConsumedByKind string `json:"-"`
+	ConsumedVia    string `json:"-"`
+	SessionID      string `json:"-"`
+}
+
+type reportHumanInputEvent struct {
+	InputID   string
+	EventType string
+	Status    string
+	ActorID   string
+	ActorKind string
+	Channel   string
+	SessionID string
+	Details   string
+	CreatedAt string
 }
 
 func normalizeReportHumanInputWorkspacePath(workspacePath string) (string, error) {
@@ -170,6 +195,9 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 			evidence TEXT NOT NULL DEFAULT '',
 			created_by TEXT NOT NULL DEFAULT '',
 			answered_by TEXT NOT NULL DEFAULT '',
+			answered_by_kind TEXT NOT NULL DEFAULT '',
+			answered_via TEXT NOT NULL DEFAULT '',
+			answered_session_id TEXT NOT NULL DEFAULT '',
 			consumed_by TEXT NOT NULL DEFAULT '',
 			outcome_summary TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -183,6 +211,21 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_human_inputs_status ON report_human_inputs(status, updated_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_human_inputs_source ON report_human_inputs(source, status, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS report_human_input_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_path TEXT NOT NULL,
+			input_id TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			actor_id TEXT NOT NULL DEFAULT '',
+			actor_kind TEXT NOT NULL DEFAULT '',
+			channel TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			details TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_report_human_input_events_lookup
+			ON report_human_input_events(workspace_path, input_id, id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -190,15 +233,56 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	for name, definition := range map[string]string{
-		"claim_token":      "TEXT NOT NULL DEFAULT ''",
-		"claimed_at":       "TEXT NOT NULL DEFAULT ''",
-		"claim_expires_at": "TEXT NOT NULL DEFAULT ''",
+		"claim_token":         "TEXT NOT NULL DEFAULT ''",
+		"claimed_at":          "TEXT NOT NULL DEFAULT ''",
+		"claim_expires_at":    "TEXT NOT NULL DEFAULT ''",
+		"answered_by_kind":    "TEXT NOT NULL DEFAULT ''",
+		"answered_via":        "TEXT NOT NULL DEFAULT ''",
+		"answered_session_id": "TEXT NOT NULL DEFAULT ''",
 	} {
 		if err := ensureReportHumanInputColumn(ctx, db, name, definition); err != nil {
 			return err
 		}
 	}
+	// Historical rows predate trusted channel attribution. Preserve their user
+	// label but classify the provenance honestly instead of leaving an empty
+	// value that callers may mistake for a current verified UI answer.
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+		SET answered_by_kind='legacy_unattributed', answered_via='legacy'
+		WHERE answered_by<>'' AND answered_by_kind=''`); err != nil {
+		return err
+	}
 	return nil
+}
+
+type reportHumanInputEventExecer interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}
+
+func writeReportHumanInputEvent(ctx context.Context, execer reportHumanInputEventExecer, workspacePath string, event reportHumanInputEvent) error {
+	event.ActorKind = normalizeReportHumanInputActorKind(event.ActorKind)
+	event.Channel = strings.TrimSpace(event.Channel)
+	if event.Channel == "" {
+		event.Channel = "unknown"
+	}
+	if event.CreatedAt == "" {
+		event.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := execer.ExecContext(ctx, `INSERT INTO report_human_input_events
+		(workspace_path, input_id, event_type, status, actor_id, actor_kind, channel, session_id, details, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspacePath, strings.TrimSpace(event.InputID),
+		strings.TrimSpace(event.EventType), strings.TrimSpace(event.Status), strings.TrimSpace(event.ActorID),
+		event.ActorKind, event.Channel, strings.TrimSpace(event.SessionID), strings.TrimSpace(event.Details), event.CreatedAt)
+	return err
+}
+
+func normalizeReportHumanInputActorKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "human_ui", "human_via_chat", "agent", "system", "migration":
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return "legacy_unattributed"
+	}
 }
 
 func ensureReportHumanInputColumn(ctx context.Context, db *sql.DB, column, definition string) error {
@@ -285,14 +369,21 @@ func createReportHumanInput(ctx context.Context, workspacePath string, req Repor
 		UpdatedAt:     now,
 	}
 
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	eventType := "created"
 	if existing == nil {
-		_, err = db.ExecContext(ctx, `INSERT INTO report_human_inputs
+		_, err = tx.ExecContext(ctx, `INSERT INTO report_human_inputs
 			(id, workspace_path, source, priority, question, context, options_json, allow_free_text, status, run_id, evidence, created_by, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
 			input.ID, input.WorkspacePath, input.Source, input.Priority, input.Question, input.Context, string(optionsJSON), boolToInt(input.AllowFreeText),
 			input.RunID, input.Evidence, input.CreatedBy, input.CreatedAt, input.UpdatedAt)
 	} else {
-		_, err = db.ExecContext(ctx, `UPDATE report_human_inputs
+		eventType = "refreshed"
+		_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
 			SET source=?, priority=?, question=?, context=?, options_json=?, allow_free_text=?, run_id=?, evidence=?, created_by=?, updated_at=?
 			WHERE id=? AND workspace_path=? AND status='pending'`,
 			input.Source, input.Priority, input.Question, input.Context, string(optionsJSON), boolToInt(input.AllowFreeText),
@@ -300,6 +391,15 @@ func createReportHumanInput(ctx context.Context, workspacePath string, req Repor
 		input.CreatedAt = existing.CreatedAt
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+		InputID: input.ID, EventType: eventType, Status: "pending", ActorID: input.CreatedBy,
+		ActorKind: req.CreatedByKind, Channel: req.CreatedVia, SessionID: req.SessionID, CreatedAt: now,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return getReportHumanInputByID(ctx, db, normalized, id)
@@ -329,7 +429,7 @@ func listReportHumanInputs(ctx context.Context, workspacePath, status, source st
 		args = append(args, normalizeReportHumanInputSource(s))
 	}
 	query := `SELECT id, workspace_path, source, priority, question, context, options_json, allow_free_text, status,
-		selected_option_id, note, run_id, evidence, created_by, answered_by, consumed_by, outcome_summary,
+		selected_option_id, note, run_id, evidence, created_by, answered_by, answered_by_kind, answered_via, answered_session_id, consumed_by, outcome_summary,
 		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at
 		FROM report_human_inputs WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'answered' THEN 1 WHEN 'claimed' THEN 2 WHEN 'dismissed' THEN 3 ELSE 4 END,
@@ -397,17 +497,39 @@ func answerReportHumanInput(ctx context.Context, workspacePath, inputID string, 
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs
-		SET status='answered', selected_option_id=?, note=?, answered_by=?, answered_at=?, updated_at=?
-		WHERE id=? AND workspace_path=?`,
-		selected, note, strings.TrimSpace(req.AnsweredBy), now, now, input.ID, normalized)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
+		SET status='answered', selected_option_id=?, note=?, answered_by=?, answered_by_kind=?, answered_via=?, answered_session_id=?, answered_at=?, updated_at=?
+		WHERE id=? AND workspace_path=?`,
+		selected, note, strings.TrimSpace(req.AnsweredBy), normalizeReportHumanInputActorKind(req.AnsweredByKind),
+		strings.TrimSpace(req.AnsweredVia), strings.TrimSpace(req.SessionID), now, now, input.ID, normalized)
+	if err != nil {
+		return nil, err
+	}
+	// The current row already owns the answer. The append-only audit trail keeps
+	// provenance, not a second permanent copy of potentially sensitive free text.
+	details, _ := json.Marshal(map[string]interface{}{
+		"selected_option_id": selected,
+		"note_present":       note != "",
+	})
+	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+		InputID: input.ID, EventType: "answered", Status: "answered", ActorID: req.AnsweredBy,
+		ActorKind: req.AnsweredByKind, Channel: req.AnsweredVia, SessionID: req.SessionID,
+		Details: string(details), CreatedAt: now,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return getReportHumanInputByID(ctx, db, normalized, input.ID)
 }
 
-func dismissReportHumanInput(ctx context.Context, workspacePath, inputID, answeredBy string) (*ReportHumanInput, error) {
+func dismissReportHumanInput(ctx context.Context, workspacePath, inputID string, req ReportHumanInputAnswerRequest) (*ReportHumanInput, error) {
 	reportHumanInputStoreMu.Lock()
 	defer reportHumanInputStoreMu.Unlock()
 
@@ -431,11 +553,26 @@ func dismissReportHumanInput(ctx context.Context, workspacePath, inputID, answer
 		return nil, fmt.Errorf("input_id %q is %s and cannot be dismissed", inputID, input.Status)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs
-		SET status='dismissed', answered_by=?, dismissed_at=?, updated_at=?
-		WHERE id=? AND workspace_path=?`,
-		strings.TrimSpace(answeredBy), now, now, input.ID, normalized)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
+		SET status='dismissed', answered_by=?, answered_by_kind=?, answered_via=?, answered_session_id=?, dismissed_at=?, updated_at=?
+		WHERE id=? AND workspace_path=?`,
+		strings.TrimSpace(req.AnsweredBy), normalizeReportHumanInputActorKind(req.AnsweredByKind),
+		strings.TrimSpace(req.AnsweredVia), strings.TrimSpace(req.SessionID), now, now, input.ID, normalized)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+		InputID: input.ID, EventType: "dismissed", Status: "dismissed", ActorID: req.AnsweredBy,
+		ActorKind: req.AnsweredByKind, Channel: req.AnsweredVia, SessionID: req.SessionID, CreatedAt: now,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return getReportHumanInputByID(ctx, db, normalized, input.ID)
@@ -469,7 +606,12 @@ func consumeReportHumanInput(ctx context.Context, workspacePath, inputID string,
 		return nil, fmt.Errorf("outcome_summary is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='consumed', consumed_by=?, outcome_summary=?, consumed_at=?, updated_at=?,
 		    claim_token='', claimed_at='', claim_expires_at=''
 		WHERE id=? AND workspace_path=? AND status IN ('answered', 'claimed')`,
@@ -477,12 +619,22 @@ func consumeReportHumanInput(ctx context.Context, workspacePath, inputID string,
 	if err != nil {
 		return nil, err
 	}
+	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+		InputID: input.ID, EventType: "consumed", Status: "consumed", ActorID: req.ConsumedBy,
+		ActorKind: req.ConsumedByKind, Channel: req.ConsumedVia, SessionID: req.SessionID,
+		Details: outcome, CreatedAt: now,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return getReportHumanInputByID(ctx, db, normalized, input.ID)
 }
 
 func getReportHumanInputByID(ctx context.Context, db *sql.DB, workspacePath, inputID string) (*ReportHumanInput, error) {
 	row := db.QueryRowContext(ctx, `SELECT id, workspace_path, source, priority, question, context, options_json, allow_free_text, status,
-		selected_option_id, note, run_id, evidence, created_by, answered_by, consumed_by, outcome_summary,
+		selected_option_id, note, run_id, evidence, created_by, answered_by, answered_by_kind, answered_via, answered_session_id, consumed_by, outcome_summary,
 		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at
 		FROM report_human_inputs WHERE workspace_path=? AND id=?`, workspacePath, strings.TrimSpace(inputID))
 	input, err := scanReportHumanInput(row)
@@ -506,7 +658,7 @@ func scanReportHumanInput(row reportHumanInputScanner) (*ReportHumanInput, error
 	if err := row.Scan(
 		&input.ID, &input.WorkspacePath, &input.Source, &input.Priority, &input.Question, &input.Context,
 		&optionsJSON, &allowFreeText, &input.Status, &input.SelectedOptionID, &input.Note, &input.RunID,
-		&input.Evidence, &input.CreatedBy, &input.AnsweredBy, &input.ConsumedBy, &input.OutcomeSummary,
+		&input.Evidence, &input.CreatedBy, &input.AnsweredBy, &input.AnsweredByKind, &input.AnsweredVia, &input.AnsweredSessionID, &input.ConsumedBy, &input.OutcomeSummary,
 		&input.CreatedAt, &input.UpdatedAt, &input.AnsweredAt, &input.ConsumedAt, &input.DismissedAt,
 		&input.ClaimToken, &input.ClaimedAt, &input.ClaimExpiresAt,
 	); err != nil {
@@ -599,6 +751,9 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			if req.CreatedBy == "" {
 				req.CreatedBy = "agent"
 			}
+			req.CreatedByKind = "agent"
+			req.CreatedVia = "agent_tool"
+			req.SessionID = mcpexecutor.SessionIDFromContext(ctx)
 			input, err := createReportHumanInput(ctx, req.WorkspacePath, req)
 			if err != nil {
 				return "", err
@@ -612,6 +767,9 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			req.SelectedOptionID, _ = args["selected_option_id"].(string)
 			req.Note, _ = args["note"].(string)
 			req.AnsweredBy = GetUserIDFromContext(ctx)
+			req.AnsweredByKind = "human_via_chat"
+			req.AnsweredVia = "agent_chat"
+			req.SessionID = mcpexecutor.SessionIDFromContext(ctx)
 			input, err := answerReportHumanInput(ctx, workspacePath, inputID, req)
 			if err != nil {
 				return "", err
@@ -627,6 +785,9 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			if req.ConsumedBy == "" {
 				req.ConsumedBy = "agent"
 			}
+			req.ConsumedByKind = "agent"
+			req.ConsumedVia = "agent_tool"
+			req.SessionID = mcpexecutor.SessionIDFromContext(ctx)
 			input, err := consumeReportHumanInput(ctx, workspacePath, inputID, req)
 			if err != nil {
 				return "", err
@@ -740,9 +901,12 @@ func (api *StreamingAPI) handleCreateReportHumanInput(w http.ResponseWriter, r *
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	if req.CreatedBy == "" {
-		req.CreatedBy = GetUserIDFromContext(r.Context())
-	}
+	// Actor identity is server-derived. A request body must not be able to forge
+	// who created or answered an operator-facing decision.
+	req.CreatedBy = GetUserIDFromContext(r.Context())
+	req.CreatedByKind = "human_ui"
+	req.CreatedVia = "report_ui"
+	req.SessionID = reportHumanInputRequestSessionID(r)
 	input, err := createReportHumanInput(r.Context(), req.WorkspacePath, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -765,9 +929,10 @@ func (api *StreamingAPI) handleAnswerReportHumanInput(w http.ResponseWriter, r *
 	if req.WorkspacePath == "" {
 		req.WorkspacePath = r.URL.Query().Get("workspace_path")
 	}
-	if req.AnsweredBy == "" {
-		req.AnsweredBy = GetUserIDFromContext(r.Context())
-	}
+	req.AnsweredBy = GetUserIDFromContext(r.Context())
+	req.AnsweredByKind = "human_ui"
+	req.AnsweredVia = "report_ui"
+	req.SessionID = reportHumanInputRequestSessionID(r)
 	input, err := answerReportHumanInput(r.Context(), req.WorkspacePath, mux.Vars(r)["input_id"], req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -782,18 +947,22 @@ func (api *StreamingAPI) handleDismissReportHumanInput(w http.ResponseWriter, r 
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	var req struct {
+	var body struct {
 		WorkspacePath string `json:"workspace_path"`
 		AnsweredBy    string `json:"answered_by"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	if req.WorkspacePath == "" {
-		req.WorkspacePath = r.URL.Query().Get("workspace_path")
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.WorkspacePath == "" {
+		body.WorkspacePath = r.URL.Query().Get("workspace_path")
 	}
-	if req.AnsweredBy == "" {
-		req.AnsweredBy = GetUserIDFromContext(r.Context())
+	req := ReportHumanInputAnswerRequest{
+		WorkspacePath:  body.WorkspacePath,
+		AnsweredBy:     GetUserIDFromContext(r.Context()),
+		AnsweredByKind: "human_ui",
+		AnsweredVia:    "report_ui",
+		SessionID:      reportHumanInputRequestSessionID(r),
 	}
-	input, err := dismissReportHumanInput(r.Context(), req.WorkspacePath, mux.Vars(r)["input_id"], req.AnsweredBy)
+	input, err := dismissReportHumanInput(r.Context(), req.WorkspacePath, mux.Vars(r)["input_id"], req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -815,9 +984,10 @@ func (api *StreamingAPI) handleConsumeReportHumanInput(w http.ResponseWriter, r 
 	if req.WorkspacePath == "" {
 		req.WorkspacePath = r.URL.Query().Get("workspace_path")
 	}
-	if req.ConsumedBy == "" {
-		req.ConsumedBy = GetUserIDFromContext(r.Context())
-	}
+	req.ConsumedBy = GetUserIDFromContext(r.Context())
+	req.ConsumedByKind = "human_ui"
+	req.ConsumedVia = "report_ui"
+	req.SessionID = reportHumanInputRequestSessionID(r)
 	input, err := consumeReportHumanInput(r.Context(), req.WorkspacePath, mux.Vars(r)["input_id"], req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -825,6 +995,22 @@ func (api *StreamingAPI) handleConsumeReportHumanInput(w http.ResponseWriter, r 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "input": input})
+}
+
+func reportHumanInputRequestSessionID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	for _, header := range []string{"X-AgentWorks-Session-ID", "X-Session-ID", "X-Request-ID"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+			return value
+		}
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err == nil {
+		return "http-request-" + hex.EncodeToString(buf)
+	}
+	return fmt.Sprintf("http-request-%d", time.Now().UTC().UnixNano())
 }
 
 func formatAnsweredReportHumanInputsForAgent(ctx context.Context, workspacePath string) string {
@@ -840,8 +1026,8 @@ func formatAnsweredReportHumanInputsForAgent(ctx context.Context, workspacePath 
 		if context != "" {
 			context = " context=" + strconv.Quote(context)
 		}
-		b.WriteString(fmt.Sprintf("- input_id=%s source=%s priority=%s question=%q answer=%q answered_at=%s evidence=%q%s\n",
-			input.ID, input.Source, input.Priority, input.Question, answer, input.AnsweredAt, input.Evidence, context))
+		b.WriteString(fmt.Sprintf("- input_id=%s source=%s priority=%s question=%q answer=%q answered_by=%q actor_kind=%s via=%s answered_at=%s evidence=%q%s\n",
+			input.ID, input.Source, input.Priority, input.Question, answer, input.AnsweredBy, input.AnsweredByKind, input.AnsweredVia, input.AnsweredAt, input.Evidence, context))
 	}
 	b.WriteString("If an answered Goal Advisor plan proposal is approved, apply it only with normal plan modification/config/eval/report tools, then call mark_human_input_consumed with the concrete outcome. If it is rejected or deferred, record that outcome and consume it. After consuming any answer, remove or replace the matching visible Human input requested card in builder/improve.html so Pulse no longer shows it as an active question; keep only a short outcome Decision/Note when useful. Do not edit the SQLite table directly.\n")
 	return strings.TrimSpace(b.String())
@@ -862,8 +1048,8 @@ func formatChiefOfStaffInputsForAgent(inputs []ReportHumanInput) string {
 		if context != "" {
 			context = " context=" + strconv.Quote(context)
 		}
-		b.WriteString(fmt.Sprintf("- workspace_path=%s input_id=%s priority=%s question=%q answer=%q answered_at=%s evidence=%q%s\n",
-			input.WorkspacePath, input.ID, input.Priority, input.Question, reportHumanInputAnswerForAgent(input), input.AnsweredAt, input.Evidence, context))
+		b.WriteString(fmt.Sprintf("- workspace_path=%s input_id=%s priority=%s question=%q answer=%q answered_by=%q actor_kind=%s via=%s answered_at=%s evidence=%q%s\n",
+			input.WorkspacePath, input.ID, input.Priority, input.Question, reportHumanInputAnswerForAgent(input), input.AnsweredBy, input.AnsweredByKind, input.AnsweredVia, input.AnsweredAt, input.Evidence, context))
 	}
 	b.WriteString("Use each answer when it is still relevant. Do not mark an answer consumed merely because you read it. After the requested action or a concrete no-action/deferred/stale decision is complete, call mark_human_input_consumed with the same workspace_path and input_id plus a truthful outcome_summary. If the action cannot be completed safely in this run, leave the answer unconsumed so a later Chief of Staff or workflow Pulse pass can handle it.\n")
 	return strings.TrimSpace(b.String())
@@ -911,7 +1097,12 @@ func claimReportHumanInput(ctx context.Context, workspacePath, inputID, claimTok
 	defer db.Close()
 	now := time.Now().UTC()
 	expiresAt := now.Add(6 * time.Hour)
-	result, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='claimed', claim_token=?, claimed_at=?, claim_expires_at=?, updated_at=?
 		WHERE id=? AND workspace_path=? AND source='chief_of_staff' AND status='answered'`,
 		claimToken, now.Format(time.RFC3339), expiresAt.Format(time.RFC3339), now.Format(time.RFC3339),
@@ -921,6 +1112,16 @@ func claimReportHumanInput(ctx context.Context, workspacePath, inputID, claimTok
 	}
 	affected, _ := result.RowsAffected()
 	if affected != 1 {
+		return nil, false
+	}
+	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+		InputID: inputID, EventType: "claimed", Status: "claimed", ActorID: claimToken,
+		ActorKind: "agent", Channel: "chief_of_staff_schedule", SessionID: claimToken,
+		Details: "answer leased for one Chief of Staff run", CreatedAt: now.Format(time.RFC3339),
+	}); err != nil {
+		return nil, false
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, false
 	}
 	input, err := getReportHumanInputByID(ctx, db, normalized, inputID)
@@ -936,10 +1137,31 @@ func releaseExpiredChiefOfStaffInputClaims(ctx context.Context, workspacePath st
 	}
 	defer db.Close()
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ids, err := reportHumanInputIDs(ctx, tx, `SELECT id FROM report_human_inputs
+		WHERE workspace_path=? AND status='claimed' AND claim_expires_at<>'' AND claim_expires_at<?`, normalized, now)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='answered', claim_token='', claimed_at='', claim_expires_at='', updated_at=?
 		WHERE workspace_path=? AND status='claimed' AND claim_expires_at<>'' AND claim_expires_at<?`, now, normalized, now)
-	return err
+	if err != nil {
+		return err
+	}
+	for _, inputID := range ids {
+		if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+			InputID: inputID, EventType: "claim_released", Status: "answered", ActorID: "scheduler",
+			ActorKind: "system", Channel: "claim_expiry", Details: "expired claim released", CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func releaseChiefOfStaffInputClaims(ctx context.Context, workspacePaths []string, claimToken string) {
@@ -961,13 +1183,61 @@ func releaseChiefOfStaffInputClaims(ctx context.Context, workspacePaths []string
 		normalized, db, err := openReportHumanInputDB(ctx, workspacePath, false)
 		if err == nil && db != nil {
 			now := time.Now().UTC().Format(time.RFC3339)
-			_, _ = db.ExecContext(ctx, `UPDATE report_human_inputs
+			tx, txErr := db.BeginTx(ctx, nil)
+			if txErr == nil {
+				ids, idsErr := reportHumanInputIDs(ctx, tx, `SELECT id FROM report_human_inputs
+					WHERE workspace_path=? AND status='claimed' AND claim_token=?`, normalized, claimToken)
+				if idsErr != nil {
+					txErr = idsErr
+				} else {
+					_, txErr = tx.ExecContext(ctx, `UPDATE report_human_inputs
 				SET status='answered', claim_token='', claimed_at='', claim_expires_at='', updated_at=?
 				WHERE workspace_path=? AND status='claimed' AND claim_token=?`, now, normalized, claimToken)
+					if txErr == nil {
+						for _, inputID := range ids {
+							txErr = writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
+								InputID: inputID, EventType: "claim_released", Status: "answered", ActorID: claimToken,
+								ActorKind: "agent", Channel: "chief_of_staff_schedule", SessionID: claimToken,
+								Details: "unconsumed answer released for a later run", CreatedAt: now,
+							})
+							if txErr != nil {
+								break
+							}
+						}
+					}
+				}
+				if txErr == nil {
+					txErr = tx.Commit()
+				}
+				if txErr != nil {
+					_ = tx.Rollback()
+				}
+			}
 			_ = db.Close()
 		}
 		reportHumanInputStoreMu.Unlock()
 	}
+}
+
+type reportHumanInputRowsQueryer interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}
+
+func reportHumanInputIDs(ctx context.Context, queryer reportHumanInputRowsQueryer, query string, args ...interface{}) ([]string, error) {
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func reportHumanInputAnswerForAgent(input ReportHumanInput) string {

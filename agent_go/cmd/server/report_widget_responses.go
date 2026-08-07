@@ -730,9 +730,8 @@ func (api *StreamingAPI) handleAnswerReportWidgetResponse(w http.ResponseWriter,
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	if req.AnsweredBy == "" {
-		req.AnsweredBy = GetUserIDFromContext(r.Context())
-	}
+	// Never trust actor attribution supplied by the browser payload.
+	req.AnsweredBy = GetUserIDFromContext(r.Context())
 	response, err := answerReportWidgetResponse(r.Context(), req.WorkspacePath, mux.Vars(r)["widget_id"], req)
 	if err != nil {
 		writeReportWidgetResponseError(w, err)

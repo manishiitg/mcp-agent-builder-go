@@ -101,6 +101,7 @@ type FireDecision struct {
 	Decision      string
 	Reason        string
 	RunID         string
+	ScheduledFor  time.Time
 	FiredAt       time.Time
 }
 
@@ -117,7 +118,10 @@ type Store struct {
 	db *sql.DB
 }
 
-const fireDecisionRetentionPerSchedule = 500
+// Five-field cron has one-minute resolution. Retain at least the complete
+// seven-day recovery window for each trigger source so manual fires cannot
+// evict the cron cursor or its occurrence audit trail.
+const fireDecisionRetentionPerSchedule = 10_080
 
 func Open(path string) (*Store, error) {
 	path = strings.TrimSpace(path)
@@ -201,6 +205,7 @@ func (s *Store) init(ctx context.Context) error {
 			decision TEXT NOT NULL,
 			reason TEXT NOT NULL DEFAULT '',
 			run_id TEXT NOT NULL DEFAULT '',
+			scheduled_for TEXT NOT NULL,
 			fired_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_schedule_fire_scope_time
@@ -211,7 +216,47 @@ func (s *Store) init(ctx context.Context) error {
 			return fmt.Errorf("initialize schedule state: %w", err)
 		}
 	}
+	// Existing installations predate occurrence identity. Backfill those rows
+	// from fired_at, which was the only timestamp previously retained.
+	if err := ensureColumn(ctx, s.db, "schedule_fire_decisions", "scheduled_for", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schedule_fire_decisions SET scheduled_for=fired_at WHERE scheduled_for=''`); err != nil {
+		return fmt.Errorf("backfill schedule fire occurrence: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_fire_occurrence
+		ON schedule_fire_decisions(scope_type, scope_id, schedule_id, trigger_source, scheduled_for)`); err != nil {
+		return fmt.Errorf("index schedule fire occurrence: %w", err)
+	}
 	return nil
+}
+
+func ensureColumn(ctx context.Context, db *sql.DB, table, column, definition string) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	return err
 }
 
 func (s *Store) BeginRun(ctx context.Context, run Run) error {
@@ -402,36 +447,44 @@ func (s *Store) RecordFireDecision(ctx context.Context, decision FireDecision) e
 	if decision.FiredAt.IsZero() {
 		decision.FiredAt = time.Now().UTC()
 	}
+	if decision.ScheduledFor.IsZero() {
+		decision.ScheduledFor = decision.FiredAt
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO schedule_fire_decisions (
-		decision_id, scope_type, scope_id, schedule_id, trigger_source, decision, reason, run_id, fired_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, decision.DecisionID, decision.ScopeType, decision.ScopeID,
-		decision.ScheduleID, decision.TriggerSource, decision.Decision, decision.Reason, decision.RunID, formatTime(decision.FiredAt)); err != nil {
+		decision_id, scope_type, scope_id, schedule_id, trigger_source, decision, reason, run_id, scheduled_for, fired_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(scope_type, scope_id, schedule_id, trigger_source, scheduled_for) DO UPDATE SET
+		decision=excluded.decision, reason=excluded.reason, run_id=excluded.run_id, fired_at=excluded.fired_at`,
+		decision.DecisionID, decision.ScopeType, decision.ScopeID,
+		decision.ScheduleID, decision.TriggerSource, decision.Decision, decision.Reason, decision.RunID,
+		formatTime(decision.ScheduledFor), formatTime(decision.FiredAt)); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM schedule_fire_decisions
-		WHERE scope_type = ? AND scope_id = ? AND schedule_id = ?
+		WHERE scope_type = ? AND scope_id = ? AND schedule_id = ? AND trigger_source = ?
 		AND decision_id NOT IN (
 			SELECT decision_id FROM schedule_fire_decisions
-			WHERE scope_type = ? AND scope_id = ? AND schedule_id = ?
+			WHERE scope_type = ? AND scope_id = ? AND schedule_id = ? AND trigger_source = ?
 			ORDER BY fired_at DESC, decision_id DESC LIMIT ?
 		)`, decision.ScopeType, decision.ScopeID, decision.ScheduleID,
-		decision.ScopeType, decision.ScopeID, decision.ScheduleID, fireDecisionRetentionPerSchedule); err != nil {
+		decision.TriggerSource, decision.ScopeType, decision.ScopeID, decision.ScheduleID,
+		decision.TriggerSource, fireDecisionRetentionPerSchedule); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) ListFireDecisions(ctx context.Context, scopeType, scopeID, scheduleID string, limit int) ([]FireDecision, error) {
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 || limit > fireDecisionRetentionPerSchedule {
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT decision_id, scope_type, scope_id, schedule_id,
-		trigger_source, decision, reason, run_id, fired_at
+		trigger_source, decision, reason, run_id, scheduled_for, fired_at
 		FROM schedule_fire_decisions
 		WHERE scope_type = ? AND scope_id = ? AND schedule_id = ?
 		ORDER BY fired_at DESC LIMIT ?`, scopeType, scopeID, scheduleID, limit)
@@ -442,9 +495,13 @@ func (s *Store) ListFireDecisions(ctx context.Context, scopeType, scopeID, sched
 	var decisions []FireDecision
 	for rows.Next() {
 		var decision FireDecision
-		var firedAt string
+		var scheduledFor, firedAt string
 		if err := rows.Scan(&decision.DecisionID, &decision.ScopeType, &decision.ScopeID, &decision.ScheduleID,
-			&decision.TriggerSource, &decision.Decision, &decision.Reason, &decision.RunID, &firedAt); err != nil {
+			&decision.TriggerSource, &decision.Decision, &decision.Reason, &decision.RunID, &scheduledFor, &firedAt); err != nil {
+			return nil, err
+		}
+		decision.ScheduledFor, err = parseTime(scheduledFor)
+		if err != nil {
 			return nil, err
 		}
 		decision.FiredAt, err = parseTime(firedAt)
@@ -454,6 +511,34 @@ func (s *Store) ListFireDecisions(ctx context.Context, scopeType, scopeID, sched
 		decisions = append(decisions, decision)
 	}
 	return decisions, rows.Err()
+}
+
+// LatestFireDecision returns the latest durable occurrence for one trigger
+// source. Cron registration uses it as its restart cursor; manual fires must
+// never move that cursor.
+func (s *Store) LatestFireDecision(ctx context.Context, scopeType, scopeID, scheduleID, triggerSource string) (FireDecision, error) {
+	var decision FireDecision
+	var scheduledFor, firedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT decision_id, scope_type, scope_id, schedule_id,
+		trigger_source, decision, reason, run_id, scheduled_for, fired_at
+		FROM schedule_fire_decisions
+		WHERE scope_type=? AND scope_id=? AND schedule_id=? AND trigger_source=?
+		ORDER BY scheduled_for DESC, fired_at DESC LIMIT 1`,
+		scopeType, scopeID, scheduleID, triggerSource).Scan(
+		&decision.DecisionID, &decision.ScopeType, &decision.ScopeID, &decision.ScheduleID,
+		&decision.TriggerSource, &decision.Decision, &decision.Reason, &decision.RunID, &scheduledFor, &firedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FireDecision{}, ErrRunNotFound
+	}
+	if err != nil {
+		return FireDecision{}, err
+	}
+	decision.ScheduledFor, err = parseTime(scheduledFor)
+	if err != nil {
+		return FireDecision{}, err
+	}
+	decision.FiredAt, err = parseTime(firedAt)
+	return decision, err
 }
 
 func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {

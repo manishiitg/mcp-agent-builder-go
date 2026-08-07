@@ -19,6 +19,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+	"github.com/robfig/cron/v3"
 )
 
 func TestBuildScheduleCronExpressionAlwaysSetsTimezone(t *testing.T) {
@@ -4214,5 +4215,75 @@ func TestPulseDashboardStagePromptNamesTheCommandTool(t *testing.T) {
 		if !strings.Contains(dashboard, want) {
 			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
 		}
+	}
+}
+
+func TestDueCronOccurrencesRetainsEveryRecentOccurrenceAndLatestCatchup(t *testing.T) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse("*/5 * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 7, 10, 17, 0, 0, time.UTC)
+	got := dueCronOccurrences(schedule, after, now)
+	want := []time.Time{
+		time.Date(2026, 8, 7, 10, 5, 0, 0, time.UTC),
+		time.Date(2026, 8, 7, 10, 10, 0, 0, time.UTC),
+		time.Date(2026, 8, 7, 10, 15, 0, 0, time.UTC),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("occurrences=%v, want %v", got, want)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Fatalf("occurrence[%d]=%s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLatestCronOccurrenceReconcilesInterruptedAttempt(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	scheduledFor := time.Date(2026, 8, 7, 10, 30, 0, 0, time.UTC)
+	if err := store.RecordFireDecision(context.Background(), schedulerstate.FireDecision{
+		DecisionID: "attempt", ScopeType: "workflow", ScopeID: "Workflow/demo", ScheduleID: "daily",
+		TriggerSource: "cron", Decision: "attempted", ScheduledFor: scheduledFor, FiredAt: scheduledFor,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSchedulerService(nil)
+	service.stateStore = store
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", SourceType: "workflow", Schedule: WorkflowSchedule{ID: "daily"}}
+	got, ok := service.latestCronOccurrence(sctx)
+	if !ok || !got.Equal(scheduledFor) {
+		t.Fatalf("latest occurrence=(%s,%t), want (%s,true)", got, ok, scheduledFor)
+	}
+	latest, err := store.LatestFireDecision(context.Background(), "workflow", "Workflow/demo", "daily", "cron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Decision != "launch_outcome_unknown" || !strings.Contains(latest.Reason, "may or may not have started") {
+		t.Fatalf("interrupted attempt was not reconciled: %+v", latest)
+	}
+}
+
+func TestDueCronOccurrencesDoesNotDropMinuteOccurrencesWithinRecoveryWindow(t *testing.T) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse("* * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	after := now.Add(-12 * time.Hour)
+	got := dueCronOccurrences(schedule, after, now)
+	if len(got) != 12*60 {
+		t.Fatalf("retained occurrences=%d, want %d", len(got), 12*60)
+	}
+	if !got[0].Equal(after.Add(time.Minute)) || !got[len(got)-1].Equal(now) {
+		t.Fatalf("unexpected occurrence bounds: first=%s last=%s", got[0], got[len(got)-1])
 	}
 }

@@ -33,6 +33,10 @@ The subsequent Hetzner manual-trigger investigation added PLAT-040: the UI
 silently discarded a busy response, while manual Pulse and full schedules were
 incorrectly sharing one durable workflow lease despite chat/schedule
 concurrency being an explicit product contract.
+The Confida QA review added three distinct shared boundaries: PLAT-041 gives
+every expected cron occurrence durable identity before execution, PLAT-042
+records provable human-answer attribution, and PLAT-043 permits bounded
+read-only SQLite integrity PRAGMAs through the guarded database tool.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -116,6 +120,9 @@ Rules:
 | [PLAT-038-A](pulse_platform/plat-038.md) | Retain complete pre-validation evidence for every attempt | Codex | `runtime_reverify` | shared validation artifact writer |
 | [PLAT-039-A](pulse_platform/plat-039.md) | Preserve and enforce advisor recommendation routes | Codex | `runtime_reverify` | advisor artifact/lifecycle projection |
 | [PLAT-040-A](pulse_platform/plat-040.md) | Let a chat/manual Pulse coexist with one full schedule and show trigger failures | Codex | `runtime_reverify` | scheduler lease lanes and Schedule UI |
+| [PLAT-041-A](pulse_platform/plat-041.md) | Persist every expected cron occurrence before execution | Codex | `runtime_reverify` | scheduler tick and durable fire decisions |
+| [PLAT-042-A](pulse_platform/plat-042.md) | Preserve human-answer actor kind and audit events | Codex | `runtime_reverify` | report human-input persistence |
+| [PLAT-043-A](pulse_platform/plat-043.md) | Allow bounded read-only SQLite integrity PRAGMAs | Codex | `runtime_reverify` | guarded workflow DB query policy |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -196,6 +203,9 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-038 Pre-validation attempts overwrite each other | P1 | Cross-mode validation | **implemented 2026-08-05; every new validation invocation retains a run-local attempt artifact while the compatibility latest pointer remains** |
 | PLAT-039 Advisor recommendations default to engineering repairs | P1 | Hetzner SSH | **implemented 2026-08-06; route persistence, backend validation, lifecycle compatibility, and legacy UI fallback complete; runtime reverify remains** |
 | PLAT-040 Full schedule silently blocked by chat/Pulse | P1 | Hetzner SSH | **implemented 2026-08-06; manual Pulse and producing schedules now use separate durable lanes, only a real full workflow blocks another schedule, and trigger errors are visible; runtime reverify remains** |
+| PLAT-041 Expected cron occurrence can disappear without a decision | P0 | Confida QA | **implemented 2026-08-07; occurrence identity, restart cursor, gap classification, and focused tests complete; runtime reverify remains** |
+| PLAT-042 Human answers lack provable actor attribution | P1 | Confida QA | **implemented 2026-08-07; server-derived actor metadata and append-only events complete; runtime reverify remains** |
+| PLAT-043 DB integrity PRAGMAs blocked by read policy | P2 | Confida QA | **implemented 2026-08-07; bounded allowlist and rejection tests complete; runtime reverify remains** |
 
 ### Social Media classification correction — 2026-08-05
 

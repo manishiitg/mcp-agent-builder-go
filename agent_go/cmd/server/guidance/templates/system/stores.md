@@ -98,7 +98,11 @@ Every non-trivial step has a `context_output` file (e.g. `extracted_data.json`).
 
 - `pulse_module_state`, `pulse_module_audit` — Pulse scheduling state and module outcomes.
 - `run_concerns` — the durable record of `CONCERNS:` lines. Rows are written by Go when a step's completion summary is composed; a step raises a concern **only** by emitting its `CONCERNS:` line, never by writing this table. Read-only queries against it are fine.
-- `report_human_inputs` — pending/answered operator questions.
+- `report_human_inputs` — pending/answered operator questions. New answers carry
+  `answered_by`, `answered_by_kind`, `answered_via`, and
+  `answered_session_id`; `report_human_input_events` is the append-only audit
+  trail. Treat older empty attribution fields as `legacy_unattributed` rather
+  than assuming they were human or agent generated.
 - `eval_results` — one row per eval step verdict (`run_folder`, `step_id`, `score`, `max_score`, `reasoning`, `evidence`), mirrored from `evaluation/runs/.../evaluation_report.json` by Go right after that report is built. Exists purely so the report can show eval verdicts via `window.report.query`, same table, same rules as `run_concerns`: read-only, never insert into it from a step or eval step.
 
 **Where the contract lives: `db/README.md`** (you create and maintain it — FolderGuard allows builder shell-writes). One section per table, in this shape:

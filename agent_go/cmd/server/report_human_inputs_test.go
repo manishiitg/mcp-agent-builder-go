@@ -2,10 +2,15 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
 )
 
 func TestNormalizeReportHumanInputSourcePreservesReviewerIdentity(t *testing.T) {
@@ -376,5 +381,75 @@ func TestReportHumanInputRejectsEscapingWorkspacePath(t *testing.T) {
 		Question: "Should this be rejected?",
 	}); err == nil {
 		t.Fatal("expected path traversal workspace_path to be rejected")
+	}
+}
+
+func TestReportHumanInputAnswerPersistsAttributionAndEvent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/attribution"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approve", Question: "Approve?", AllowFreeText: true,
+		CreatedBy: "pulse", CreatedByKind: "agent", CreatedVia: "agent_tool", SessionID: "pulse-run-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	answered, err := answerReportHumanInput(ctx, workspacePath, "approve", ReportHumanInputAnswerRequest{
+		Note: "yes", AnsweredBy: "operator-1", AnsweredByKind: "human_ui", AnsweredVia: "report_ui", SessionID: "chat-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answered.AnsweredBy != "operator-1" || answered.AnsweredByKind != "human_ui" || answered.AnsweredVia != "report_ui" || answered.AnsweredSessionID != "chat-1" {
+		t.Fatalf("answer attribution mismatch: %+v", answered)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "Workflow", "attribution", "db", "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var eventType, actorID, actorKind, channel, sessionID, details string
+	if err := db.QueryRow(`SELECT event_type, actor_id, actor_kind, channel, session_id, details
+		FROM report_human_input_events WHERE input_id='approve' ORDER BY id DESC LIMIT 1`).Scan(
+		&eventType, &actorID, &actorKind, &channel, &sessionID, &details); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "answered" || actorID != "operator-1" || actorKind != "human_ui" || channel != "report_ui" || sessionID != "chat-1" {
+		t.Fatalf("event attribution = %q %q %q %q %q", eventType, actorID, actorKind, channel, sessionID)
+	}
+	if strings.Contains(details, "yes") || !strings.Contains(details, `"note_present":true`) {
+		t.Fatalf("event must record answer shape without duplicating free text: %s", details)
+	}
+}
+
+func TestReportHumanInputHTTPAnswerIgnoresForgedActor(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/http-attribution"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approve", Question: "Approve?", AllowFreeText: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(ReportHumanInputAnswerRequest{
+		WorkspacePath: workspacePath, Note: "yes", AnsweredBy: "forged-user",
+	})
+	req := httptest.NewRequest("POST", "/api/report-human-inputs/approve/answer", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentWorks-Session-ID", "ui-session-1")
+	req = mux.SetURLVars(req, map[string]string{"input_id": "approve"})
+	recorder := httptest.NewRecorder()
+	api := &StreamingAPI{}
+	api.handleAnswerReportHumanInput(recorder, req)
+	if recorder.Code != 200 {
+		t.Fatalf("answer status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	inputs, err := listReportHumanInputs(ctx, workspacePath, "answered", "")
+	if err != nil || len(inputs) != 1 {
+		t.Fatalf("answered inputs=%+v err=%v", inputs, err)
+	}
+	if inputs[0].AnsweredBy == "forged-user" || inputs[0].AnsweredByKind != "human_ui" || inputs[0].AnsweredVia != "report_ui" || inputs[0].AnsweredSessionID != "ui-session-1" {
+		t.Fatalf("HTTP attribution was not server-derived: %+v", inputs[0])
 	}
 }

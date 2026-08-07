@@ -49,6 +49,10 @@ type ScheduleContext struct {
 	PulseEvidenceRunFolder string
 	PulseEvidenceRunStatus string
 	CalendarItem           *CalendarScheduleItem
+	// ScheduledFor is the durable identity of a cron/calendar occurrence. It is
+	// empty for a manual trigger, whose actual trigger time is its identity.
+	ScheduledFor time.Time
+
 }
 
 const manualWorkflowPulseScheduleID = "manual-pulse"
@@ -139,7 +143,12 @@ type registeredJob struct {
 	sctx      *ScheduleContext
 	cronSched cron.Schedule // nil for calendar (one-time) jobs
 	runAt     *time.Time    // non-nil for calendar (one-time) jobs
-	lastFired time.Time     // truncated to the minute — prevents double-fire in the same minute
+	lastFired time.Time     // durable scheduled occurrence cursor, not the wall-clock dispatch time
+}
+
+type dueRegisteredJob struct {
+	job          *registeredJob
+	scheduledFor time.Time
 }
 
 // SchedulerService manages cron job execution using wall-clock polling.
@@ -394,35 +403,87 @@ func (s *SchedulerService) tickLoop(ctx context.Context) {
 
 			s.mu.Lock()
 			parts := make([]string, 0, len(s.jobs))
-			var toFire []*registeredJob
+			var toFire []dueRegisteredJob
+			var missed []dueRegisteredJob
 			for sid, job := range s.jobs {
 				if job.cronSched != nil {
-					next := job.cronSched.Next(job.lastFired)
-					if !next.After(t) {
-						toFire = append(toFire, job)
-						job.lastFired = t.Truncate(time.Minute)
+					occurrences := dueCronOccurrences(job.cronSched, job.lastFired, t)
+					if len(occurrences) > 0 {
+						for _, occurrence := range occurrences[:len(occurrences)-1] {
+							missed = append(missed, dueRegisteredJob{job: job, scheduledFor: occurrence})
+						}
+						latest := occurrences[len(occurrences)-1]
+						toFire = append(toFire, dueRegisteredJob{job: job, scheduledFor: latest})
 					}
 					parts = append(parts, fmt.Sprintf("%s next=%s", sid, job.cronSched.Next(t).UTC().Format(time.RFC3339)))
 				} else if job.runAt != nil {
 					if !job.runAt.After(t) && job.lastFired.Before(*job.runAt) {
-						toFire = append(toFire, job)
-						job.lastFired = t.Truncate(time.Minute)
+						toFire = append(toFire, dueRegisteredJob{job: job, scheduledFor: job.runAt.UTC()})
 					}
 					parts = append(parts, fmt.Sprintf("%s at=%s", sid, job.runAt.UTC().Format(time.RFC3339)))
 				}
 			}
 			s.mu.Unlock()
 
-			scheduleLogf("[SCHEDULER] ❤️ heartbeat now=%s gap=%s jobs=%d due=%d | %s",
-				t.Format(time.RFC3339), gap.Round(time.Second), len(parts), len(toFire), strings.Join(parts, ", "))
+			scheduleLogf("[SCHEDULER] ❤️ heartbeat now=%s gap=%s jobs=%d due=%d missed=%d | %s",
+				t.Format(time.RFC3339), gap.Round(time.Second), len(parts), len(toFire), len(missed), strings.Join(parts, ", "))
 
-			for _, job := range toFire {
-				go s.triggerSchedule(job.sctx)
+			failedOccurrenceLedger := make(map[*registeredJob]bool)
+			for _, due := range missed {
+				occurrenceCtx := *due.job.sctx
+				occurrenceCtx.ScheduledFor = due.scheduledFor
+				if err := s.recordScheduleFireDecision(context.Background(), &occurrenceCtx, "missed_scheduler_gap", "scheduler was not evaluating at the scheduled occurrence; the latest due occurrence will run as catch-up", "", t.UTC()); err != nil {
+					failedOccurrenceLedger[due.job] = true
+				}
+			}
+			for _, due := range toFire {
+				occurrenceCtx := *due.job.sctx
+				occurrenceCtx.ScheduledFor = due.scheduledFor
+				if failedOccurrenceLedger[due.job] {
+					s.logf(&occurrenceCtx, "[SCHEDULER] refusing to advance occurrence scheduled_for=%s because an earlier gap decision could not be recorded", due.scheduledFor.Format(time.RFC3339))
+					continue
+				}
+				if err := s.recordScheduleFireDecision(context.Background(), &occurrenceCtx, "attempted", "scheduler selected this occurrence for execution", "", t.UTC()); err != nil {
+					s.logf(&occurrenceCtx, "[SCHEDULER] refusing to launch occurrence scheduled_for=%s because its durable attempt could not be recorded: %v", due.scheduledFor.Format(time.RFC3339), err)
+					continue
+				}
+				s.mu.Lock()
+				if due.job.lastFired.Before(due.scheduledFor) {
+					due.job.lastFired = due.scheduledFor
+				}
+				s.mu.Unlock()
+				go s.triggerSchedule(due.job.sctx, due.scheduledFor)
 			}
 
 			lastTick = t
 		}
 	}
+}
+
+const maxCronOccurrenceScans = int(workflowScheduleHistoryRetention/time.Minute) + 1
+
+// dueCronOccurrences returns the retained occurrence window after a durable
+// cursor. Cron expressions have one-minute resolution, so a seven-day scan is
+// bounded to at most 10,080 real occurrences. Every occurrence in that window
+// is returned and durably classified; only the newest one executes as catch-up.
+func dueCronOccurrences(schedule cron.Schedule, after, now time.Time) []time.Time {
+	if schedule == nil || !now.After(after) {
+		return nil
+	}
+	if floor := now.Add(-workflowScheduleHistoryRetention); after.Before(floor) {
+		after = floor
+	}
+	occurrences := make([]time.Time, 0, 64)
+	cursor := after
+	for scans := 0; scans < maxCronOccurrenceScans; scans++ {
+		next := schedule.Next(cursor)
+		if next.After(now) || !next.After(cursor) {
+			break
+		}
+		occurrences = append(occurrences, next.UTC())
+		cursor = next
+	}
+	return occurrences
 }
 
 // rescanMultiAgentSchedules discovers multi-agent schedules and loads/unloads as needed.
@@ -647,11 +708,15 @@ func (s *SchedulerService) LoadSchedule(sctx *ScheduleContext) error {
 		}
 		// Wrap with timezone-aware location
 		cronSched = &tzSchedule{inner: cronSched, loc: loc}
+		lastFired := time.Now().Add(-30 * time.Second) // a newly created schedule starts with its next future occurrence
+		if latest, ok := s.latestCronOccurrence(sctx); ok {
+			lastFired = latest
+		}
 
 		s.jobs[runtimeKey] = &registeredJob{
 			sctx:      &sctxCopy,
 			cronSched: cronSched,
-			lastFired: time.Now().Add(-30 * time.Second), // don't fire immediately on registration
+			lastFired: lastFired,
 		}
 		nextRun = getNextRunTime(sched.CronExpression, sched.Timezone)
 	}
@@ -669,6 +734,32 @@ func (s *SchedulerService) LoadSchedule(sctx *ScheduleContext) error {
 	s.logf(sctx, "[SCHEDULER] Registered schedule %s (%s) type=%s cron=%q timezone=%s next_run=%s",
 		sched.ID, sched.Name, scheduleType, sched.CronExpression, sched.Timezone, nextRunStr)
 	return nil
+}
+
+func (s *SchedulerService) latestCronOccurrence(sctx *ScheduleContext) (time.Time, bool) {
+	if sctx == nil {
+		return time.Time{}, false
+	}
+	s.stateStoreMu.RLock()
+	defer s.stateStoreMu.RUnlock()
+	if s.stateStore == nil {
+		return time.Time{}, false
+	}
+	scopeType, scopeID, _ := scheduleStateScope(sctx)
+	decision, err := s.stateStore.LatestFireDecision(context.Background(), scopeType, scopeID, sctx.Schedule.ID, "cron")
+	if err != nil || decision.ScheduledFor.IsZero() {
+		return time.Time{}, false
+	}
+	if decision.Decision == "attempted" {
+		decision.DecisionID = uuid.NewString()
+		decision.Decision = "launch_outcome_unknown"
+		decision.Reason = "the occurrence was durably attempted, but no later launch outcome was recorded before restart; execution may or may not have started"
+		decision.FiredAt = time.Now().UTC()
+		if err := s.stateStore.RecordFireDecision(context.Background(), decision); err != nil {
+			s.logf(sctx, "[SCHEDULER_STATE] failed to reconcile interrupted attempted occurrence scheduled_for=%s: %v", decision.ScheduledFor.Format(time.RFC3339), err)
+		}
+	}
+	return decision.ScheduledFor.UTC(), true
 }
 
 // tzSchedule wraps a cron.Schedule to evaluate in a specific timezone.
@@ -1435,7 +1526,10 @@ func (s *SchedulerService) cancelScheduledSessionWork(sessionID, closeReason str
 }
 
 // triggerSchedule is called by the tick loop when a schedule is due.
-func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext) {
+func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext, scheduledFor time.Time) {
+	triggerCtx := *sctx
+	triggerCtx.ScheduledFor = scheduledFor.UTC()
+	sctx = &triggerCtx
 	schedID := sctx.Schedule.ID
 	runtimeKey := scheduleRuntimeKey(sctx)
 	now := time.Now()
@@ -1570,6 +1664,7 @@ func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext) {
 		freshCtx.CalendarItem = calendarItem
 	}
 	freshCtx.TriggerSource = "cron"
+	freshCtx.ScheduledFor = scheduledFor.UTC()
 
 	// Built-in pre-fire check: if the built-in registered a gating function and
 	// it returns false, skip this tick entirely. No LLM session is spawned.
@@ -4448,19 +4543,23 @@ func (s *SchedulerService) transitionScheduleRun(ctx context.Context, sctx *Sche
 	}
 }
 
-func (s *SchedulerService) recordScheduleFireDecision(ctx context.Context, sctx *ScheduleContext, decision, reason, runID string, firedAt time.Time) {
+func (s *SchedulerService) recordScheduleFireDecision(ctx context.Context, sctx *ScheduleContext, decision, reason, runID string, firedAt time.Time) error {
 	if sctx == nil {
-		return
+		return errors.New("schedule context is required")
 	}
 	s.stateStoreMu.RLock()
 	defer s.stateStoreMu.RUnlock()
 	if s.stateStore == nil {
-		return
+		return errors.New("schedule state store is unavailable")
 	}
 	scopeType, scopeID, _ := scheduleStateScope(sctx)
 	triggerSource := strings.TrimSpace(sctx.TriggerSource)
 	if triggerSource == "" {
 		triggerSource = "cron"
+	}
+	scheduledFor := sctx.ScheduledFor
+	if scheduledFor.IsZero() {
+		scheduledFor = firedAt
 	}
 	if err := s.stateStore.RecordFireDecision(ctx, schedulerstate.FireDecision{
 		DecisionID:    uuid.NewString(),
@@ -4471,10 +4570,13 @@ func (s *SchedulerService) recordScheduleFireDecision(ctx context.Context, sctx 
 		Decision:      decision,
 		Reason:        reason,
 		RunID:         runID,
+		ScheduledFor:  scheduledFor.UTC(),
 		FiredAt:       firedAt,
 	}); err != nil {
 		s.logf(sctx, "[SCHEDULER_STATE] record fire decision=%s failed: %v", decision, err)
+		return err
 	}
+	return nil
 }
 
 // getRuntimeStateLocked returns or creates runtime state. Caller MUST hold runtimeStatesMu write lock.
