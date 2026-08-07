@@ -155,11 +155,3 @@ func TestLoadPulseReviewReceiptsNegativeLimitReturnsCompleteHistory(t *testing.T
 		t.Fatalf("preview=%d complete=%d", len(preview), len(complete))
 	}
 }
-
-func TestLegacyVerificationExtractionSupportsOneWayMigration(t *testing.T) {
-	output := `PULSE_VERIFICATION_JSON: {"finding_id":"ISS-9","fingerprint":"fp-9","attempt_id":"fix-9","verdict":"passed","expected":"new run contains a populated value","observed":"run-12 row contains 42","evidence":["runs/run-12/result.json"]}`
-	got, err := extractLegacyPulseReviewVerifications(output)
-	if err != nil || len(got) != 1 || got[0].FindingID != "ISS-9" {
-		t.Fatalf("verifications=%#v err=%v", got, err)
-	}
-}

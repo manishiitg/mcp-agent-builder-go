@@ -127,4 +127,3 @@ const (
 	// FolderGuardAllowedWriteFolderKey is the context key for the only folder allowed for writes (chat mode)
 	FolderGuardAllowedWriteFolderKey = common.FolderGuardAllowedWriteFolderKey
 )
-

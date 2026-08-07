@@ -20,17 +20,13 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    Read its compact step results first. Deep-read only suspect attempts and the
    artifacts needed to prove or reject a defect.
 3. Launch exactly one reviewer with
-   `call_generic_agent(todo_id="standalone-bug-review",
-   instructions="READ-ONLY REVIEW ...", preferred_tier=3,
-   module="bug_review")`. Do not pass `pulse_run_id` or `review_run_id`; for
-   this standalone command the backend generates both identities, stores the
-   complete Markdown in SQLite, and files its `CONCERNS:` lines into the
-   structured finding lifecycle. The reviewer may inspect artifacts, copied
+   `run_in_background(name="Standalone Bug Review", instruction="READ-ONLY BUG REVIEW ...", agent_type="executor")`.
+   The reviewer may inspect artifacts, copied
    fixtures, scratch DBs, and side-effect-free tests. It must not edit workflow
    files, send external messages, publish, trade, post, mutate production data,
    ask the user, or launch another agent. It may read only matching Bug
    Review/open-finding regions of `builder/improve.html`; it must not format or
-   write the page. `call_generic_agent` returns an `execution_id` immediately;
+   write the page. `run_in_background` returns an `execution_id` immediately;
    end the current turn and resume only from the automatic completion
    notification.
 4. Require: behavioral contract, QA coverage, expected versus observed,
@@ -49,14 +45,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    reproduction when possible; otherwise identify the precise reproduction
    limitation. Harness correctness fixes are platform-owned and do not require
    a user decision unless a genuine product-policy choice remains.
-5. Read the persisted result with `get_pulse_state(view="review")` using the exact
-   `review_run_id` and `module` supplied by the completion notification. Validate and
-   deduplicate that complete result against `builder/improve.html`. As the
-   parent, make one bounded update that appends one compact newest-first Bug
-   Review entry with
-   `data-pulse-section="signals" data-module="bug_review"` to that HTML. Do not
-   modify the workflow, close findings, call Pulse module-state tools, or claim
-   that a recommendation was fixed.
+5. Read the child completion, validate its evidence against the relevant
+   artifacts, and present the compact result to the user. Do not modify the
+   workflow, write Pulse lifecycle state, or claim that a recommendation was fixed.
 
 Finish with a short executive summary followed by all confirmed bugs in severity
 order, what was tested, what remains untested, and which findings are ready for

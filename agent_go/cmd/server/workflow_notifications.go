@@ -64,8 +64,8 @@ type WorkflowNotificationInfoResponse struct {
 	// channel). Display-only — edits go through /notify.
 	RunSummarySlackWebhooks   []string `json:"run_summary_slack_webhooks,omitempty"`
 	PulseSummarySlackWebhooks []string `json:"pulse_summary_slack_webhooks,omitempty"`
-	ExcludeChannels          []string `json:"exclude_channels,omitempty"`
-	BlockRecipients          []string `json:"block_recipients,omitempty"`
+	ExcludeChannels           []string `json:"exclude_channels,omitempty"`
+	BlockRecipients           []string `json:"block_recipients,omitempty"`
 }
 
 func resolveSlackNotificationState(id, label string, capabilities WorkflowCapabilities, secretValue string, secretResolved bool) WorkflowNotificationDestinationInfo {

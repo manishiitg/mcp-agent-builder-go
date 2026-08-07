@@ -44,6 +44,13 @@ The Upwork review added PLAT-044 through PLAT-047 and PLAT-049: false
 finalizer-ownership findings, linked-decision loop closure, typed verdict
 boundary hardening, the open immutable artifact-identity design, and shared
 platform mechanics leaking into workflow artifacts.
+The scheduler audit then added PLAT-050: Pulse review selection, fixing,
+recovery, and tmux polling were duplicated in Go instead of being owned by one
+continuing main-agent conversation.
+The Upwork v1.0.21 migration then exposed PLAT-051: upgrade guidance named an
+internal helper instead of a registered agent tool. Its scheduled follow-up
+also exposed PLAT-052: known consecutive scheduler turns unnecessarily closed
+and resumed the native Claude session.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -136,6 +143,9 @@ Rules:
 | [PLAT-047-A](pulse_platform/plat-047.md) | Design immutable physical identity for grouped run artifacts | Unassigned | `design_required` | run-folder retention and execution identity |
 | [PLAT-048-A](pulse_platform/plat-048.md) | Bound retained tmux to interactive chats and close completed-live processes | Codex | `runtime_reverify` | coding-agent modes, terminal leases/routes, server shutdown |
 | [PLAT-049-A](pulse_platform/plat-049.md) | Keep shared platform mechanics out of workflow artifacts | Codex | `runtime_reverify` | plan guards, review guidance, and version upgrade |
+| [PLAT-050-A](pulse_platform/plat-050.md) | Keep Pulse reasoning in one continuing agent conversation | Codex | `runtime_reverify` | scheduler Pulse orchestration and event-driven completion |
+| [PLAT-051-A](pulse_platform/plat-051.md) | Stamp contract upgrades through a real registered agent tool | Codex | `runtime_reverify` | version-upgrade guidance and Workshop tool surface |
+| [PLAT-052-A](pulse_platform/plat-052.md) | Keep one native CLI alive across known scheduler turns | Codex | `runtime_reverify` | scheduler request lifecycle and coding-agent mode |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -225,6 +235,9 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-047 Grouped run artifacts lack immutable physical identity | P1 | Upwork | **open design item; distinct from the completed PLAT-031 cost identity work** |
 | PLAT-048 Scheduled/main tmux processes outlive their useful session | P0 | Local backend process audit | **implemented; only user-interactive main agents retain tmux, with a one-hour ceiling and live cleanup; runtime reverify remains** |
 | PLAT-049 Shared platform mechanics leak into workflow artifacts | P1 | Upwork + cross-workflow scan | **Builder guard, Engineering Review audit, and idempotent workflow v1.0.21 purification preflight implemented; migration/runtime reverify remains** |
+| PLAT-050 Pulse reasoning split between agent and Go | P1 | Upwork recovery-Fixer investigation | **implemented; one continuing main-agent conversation and event-driven ordering need runtime reverify** |
+| PLAT-051 Upgrade prompt names an unregistered tool | P0 | Upwork | **implemented 2026-08-07: `set_workflow_contract_version` replaces the internal-helper instruction; restart and one v1.0.20 upgrade reverify remain** |
+| PLAT-052 Scheduled turns visibly close/reopen Claude Code | P1 | Upwork | **implemented 2026-08-07: known consecutive scheduler turns retain their native CLI; restart and schedule lifecycle reverify remain** |
 
 ### Social Media classification correction — 2026-08-05
 
@@ -460,6 +473,7 @@ priority and historical run context.
 | [PLAT-040](pulse_platform/plat-040.md) | [PLAT-041](pulse_platform/plat-041.md) | [PLAT-042](pulse_platform/plat-042.md) | [PLAT-043](pulse_platform/plat-043.md) |
 | [PLAT-044](pulse_platform/plat-044.md) | [PLAT-045](pulse_platform/plat-045.md) | [PLAT-046](pulse_platform/plat-046.md) | [PLAT-047](pulse_platform/plat-047.md) |
 | [PLAT-048](pulse_platform/plat-048.md) | [PLAT-049](pulse_platform/plat-049.md) |  |  |
+| [PLAT-050](pulse_platform/plat-050.md) | [PLAT-051](pulse_platform/plat-051.md) | [PLAT-052](pulse_platform/plat-052.md) |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

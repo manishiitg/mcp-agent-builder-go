@@ -176,18 +176,18 @@ func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
 	}
 	prompt := string(raw)
 	for _, want := range []string{
-		"one agent conversation",
-		`module="workflow_review"`,
-		`role="fixer"`,
-		`review_lanes=["workflow_review","llm_ops_review"]`,
-		"Engineering → LLM/Ops → consolidation → Fixer",
-		"Do not pass `pulse_run_id`, `review_run_id`, or `message_sequence`",
+		"continuing Workflow Builder conversation",
+		"pulse_run_id=\"current\"",
+		"Own the review yourself",
+		"Persist typed findings and verification",
+		"normal Workflow Builder tools",
+		"one terminal module result for Engineering and one for Operations",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"STANDALONE PULSE FIXER", "begin_pulse_fixer_run(workspace_path"} {
+	for _, forbidden := range []string{"STANDALONE PULSE FIXER", `role="fixer"`, `review_lanes=[`} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("engineering-review retained obsolete standalone Fixer contract %q", forbidden)
 		}

@@ -93,7 +93,7 @@ func TestCleanupStaleCodingAgentTmuxSessionsKeepsRecentCompletedSession(t *testi
 	}
 }
 
-func TestCleanupStaleCodingAgentTmuxSessionsClosesCompletedScheduleWithoutRestart(t *testing.T) {
+func TestCleanupStaleCodingAgentTmuxSessionsKeepsCompletedScheduleDuringContinuationWindow(t *testing.T) {
 	now := time.Now()
 	store := terminals.NewStore()
 	sessionID := "schedule-cron--123"
@@ -112,14 +112,17 @@ func TestCleanupStaleCodingAgentTmuxSessionsClosesCompletedScheduleWithoutRestar
 	}
 
 	gotArgs := stubTerminalTmuxCommand(t)
-	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(29 * time.Second)); closed != 0 {
-		t.Fatalf("closed before bounded grace = %d, want 0", closed)
+	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(31 * time.Second)); closed != 0 {
+		t.Fatalf("closed during continuation window = %d, want 0", closed)
 	}
-	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(31 * time.Second)); closed != 1 {
-		t.Fatalf("closed after bounded grace = %d, want 1", closed)
+	if len(*gotArgs) != 0 {
+		t.Fatalf("tmux command should not run during continuation window, got %v", *gotArgs)
+	}
+	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(defaultCodingAgentTmuxOrphanIdleTimeout + time.Second)); closed != 1 {
+		t.Fatalf("closed after idle backstop = %d, want 1", closed)
 	}
 	if got := strings.Join(*gotArgs, " "); got != "kill-session -t "+tmuxSession {
-		t.Fatalf("tmux args = %q, want kill-session", got)
+		t.Fatalf("tmux args = %q, want kill-session after idle backstop", got)
 	}
 }
 

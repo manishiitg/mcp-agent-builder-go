@@ -93,11 +93,10 @@ current-strategy review and must not treat the proposed lens as active before th
 config tool succeeds.
 
 Within the two-module cap, select the modules with actionable
-repair/verification work or genuinely new trigger evidence. Strategy Auditor
-and Goal Advisor run independently in a bounded read-only batch when selected.
-After they finish, selected Engineering/LLM-Ops lanes run as one ordered
-review-and-fix sequence with a persisted pre-mutation review checkpoint. A
-residual Fixer runs only for still-non-terminal independent or recovery work.
+repair/verification work or genuinely new trigger evidence. The next main-agent
+Review+Fix turn owns every selected lens, any useful independent specialist
+children, consolidation, repair, verification, and terminal receipts. There is
+no scheduler-launched residual or recovery Fixer.
 When work must wait for a real evidence/user/external boundary, record that
 boundary instead of inventing a capacity cooldown.
 

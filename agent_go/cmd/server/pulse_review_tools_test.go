@@ -14,28 +14,16 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/typed-review-tools"
-	pulseRunID := "pulse-typed-1"
-	reviewRunID := "review-typed-1"
 	const sessionID = "typed-reviewer-session"
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
-	if err := bindTrustedPulseReviewSession(sessionID, reviewRunID, []string{pulseModuleWorkflowReview}); err != nil {
-		t.Fatal(err)
-	}
+	pulseRunID := sessionID
+	reviewRunID := sessionID
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	_, executors, _ := createPulseWorklistTools()
 	recordFinding := executors["record_pulse_finding"].(func(context.Context, map[string]interface{}) (string, error))
 	completeReview := executors["complete_pulse_review"].(func(context.Context, map[string]interface{}) (string, error))
-	if _, err := recordFinding(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "review_run_id": "another-review",
-		"module": pulseModuleWorkflowReview,
-	}); err == nil {
-		t.Fatal("reviewer write with a different review_run_id unexpectedly succeeded")
-	}
-
 	raw, err := recordFinding(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "review_run_id": reviewRunID,
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
@@ -51,7 +39,7 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	// A completion retry may replay the tool call. It must not manufacture a
 	// second recurrence in the same review identity.
 	if _, err := recordFinding(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "review_run_id": reviewRunID,
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
@@ -61,14 +49,14 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	}
 
 	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "review_run_id": reviewRunID,
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "   ", "status": "completed",
 	}); err == nil || !strings.Contains(err.Error(), "non-empty verdict") {
 		t.Fatalf("blank verdict error=%v", err)
 	}
 
 	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "review_run_id": reviewRunID,
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "One correctness issue.", "status": "completed",
 	}); err != nil {
 		t.Fatalf("complete_pulse_review: %v", err)
@@ -87,11 +75,11 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	}
 }
 
-func TestTypedPulseReviewerToolsRequireTrustedRun(t *testing.T) {
+func TestTypedPulseReviewerToolsRequireCurrentConversation(t *testing.T) {
 	_, executors, _ := createPulseWorklistTools()
 	recordFinding := executors["record_pulse_finding"].(func(context.Context, map[string]interface{}) (string, error))
 	if _, err := recordFinding(mcpexecutor.WithSessionID(context.Background(), "untrusted-reviewer"), map[string]interface{}{
-		"workspace_path": "Workflow/demo", "pulse_run_id": "pulse-x", "review_run_id": "review-x", "module": pulseModuleWorkflowReview,
+		"workspace_path": "Workflow/demo", "pulse_run_id": "another-conversation", "module": pulseModuleWorkflowReview,
 	}); err == nil {
 		t.Fatal("untrusted reviewer write unexpectedly succeeded")
 	}

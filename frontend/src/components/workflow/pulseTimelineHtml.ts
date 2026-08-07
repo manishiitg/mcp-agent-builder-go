@@ -18,7 +18,6 @@ export function buildPulseTimelineHtml(content: string): string {
     var kind = el.getAttribute('data-kind') || '';
     if (kind === 'run' || kind === 'maintenance' || kind === 'gate') return 'run_summary';
     if (value.indexOf('goal advisor') !== -1 || kind === 'advisor') return 'goal_advisor';
-    if (kind === 'decision') return 'pulse_fixer';
     if (value.indexOf('artifact') !== -1 || value.indexOf('changelog') !== -1) return 'workflow_review';
     if (value.indexOf('learning') !== -1 || value.indexOf('skill.md') !== -1) return 'workflow_review';
     if (value.indexOf('database') !== -1 || value.indexOf('db.sqlite') !== -1 || value.indexOf('db health') !== -1) return 'workflow_review';

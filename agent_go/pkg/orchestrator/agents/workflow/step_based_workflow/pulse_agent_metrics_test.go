@@ -88,16 +88,16 @@ func TestPulseAgentMetricsMakeMissingUsageExplicit(t *testing.T) {
 	workspacePath := concernsWorkspace(t)
 	costledger.SetDefaultLedger(nil)
 	if err := RecordPulseAgentMetric(context.Background(), workspacePath, PulseAgentMetricRecord{
-		ExecutionID: "pulse-fixer-no-ledger",
+		ExecutionID: "pulse-review-no-ledger",
 		PulseRunID:  "pulse-2",
 		ReviewRunID: "review-2",
-		Module:      "pulse_fixer",
-		Role:        "fixer",
+		Module:      "workflow_review",
+		Role:        "reviewer",
 		Status:      "failed",
 	}); err != nil {
 		t.Fatalf("RecordPulseAgentMetric: %v", err)
 	}
-	metrics, err := LoadPulseAgentMetrics(context.Background(), workspacePath, "pulse-2", "pulse_fixer", "fixer", -1)
+	metrics, err := LoadPulseAgentMetrics(context.Background(), workspacePath, "pulse-2", "workflow_review", "reviewer", -1)
 	if err != nil {
 		t.Fatalf("LoadPulseAgentMetrics: %v", err)
 	}

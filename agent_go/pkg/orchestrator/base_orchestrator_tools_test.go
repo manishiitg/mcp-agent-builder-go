@@ -26,6 +26,21 @@ func TestWorkspaceAdvancedCategoryIncludesProviderMediaTools(t *testing.T) {
 	}
 }
 
+func TestHumanToolsCategoryIncludesDurableWorkflowDecisionTools(t *testing.T) {
+	names := getToolNamesByCategory("human_tools")
+	for _, name := range []string{
+		"human_feedback",
+		"notify_user",
+		"create_human_input_request",
+		"answer_human_input_request",
+		"mark_human_input_consumed",
+	} {
+		if !names[name] {
+			t.Fatalf("human_tools category missing %q", name)
+		}
+	}
+}
+
 func TestBaseOrchestratorPreRegistersDelegationCategoriesWithoutMutatingInput(t *testing.T) {
 	input := map[string]string{"existing": "workspace"}
 	base, err := NewBaseOrchestrator(

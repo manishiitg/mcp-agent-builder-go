@@ -2,8 +2,7 @@
 //
 // It lives outside cmd/server because more than one launch path spends
 // tokens: the chat/query path and delegate() run inside package server, while
-// workflow steps, todo_task sub-agents, call_generic_agent children, and the
-// Pulse / Goal Advisor background stages are created by the orchestrator.
+// workflow steps and background sub-agents are created by the orchestrator.
 // Those orchestrator-created agents previously had no ledger attachment at
 // all, so their spend was invisible. Both sides now construct the same
 // Observer from here — a second copy of attribution logic would drift.
@@ -329,8 +328,7 @@ func InferScope(agentMode, phaseID string) string {
 }
 
 // InferWorkflowScope names the scope for an agent created by the workflow
-// orchestrator: a workflow step, a todo_task sub-agent, a call_generic_agent
-// child, or a Pulse / Goal Advisor background stage.
+// orchestrator: a workflow step or a background sub-agent.
 //
 // hasRunFolder is the signal that separates a live workflow execution from
 // builder-side work: the orchestrator only sets an iteration/run folder once

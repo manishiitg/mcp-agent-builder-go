@@ -18,7 +18,6 @@ import (
 var (
 	pulseWriteAuthorityMu sync.RWMutex
 	delegatePulseWriteFn  func(parentSessionID, childSessionID, pulseRunID string) (func(), error)
-	bindPulseReviewFn     func(childSessionID, reviewRunID string, modules []string) error
 )
 
 // SetPulseWriteAuthorityDelegator installs the server-side delegator. Passing
@@ -30,24 +29,6 @@ func SetPulseWriteAuthorityDelegator(
 	pulseWriteAuthorityMu.Lock()
 	defer pulseWriteAuthorityMu.Unlock()
 	delegatePulseWriteFn = delegate
-}
-
-// SetPulseReviewAuthorityBinder installs the server-side identity binder used
-// after a reviewer child has received run authority.
-func SetPulseReviewAuthorityBinder(bind func(childSessionID, reviewRunID string, modules []string) error) {
-	pulseWriteAuthorityMu.Lock()
-	defer pulseWriteAuthorityMu.Unlock()
-	bindPulseReviewFn = bind
-}
-
-func bindPulseReviewAuthority(childSessionID, reviewRunID string, modules []string) error {
-	pulseWriteAuthorityMu.RLock()
-	bind := bindPulseReviewFn
-	pulseWriteAuthorityMu.RUnlock()
-	if bind == nil {
-		return fmt.Errorf("Pulse review authority binding is not installed")
-	}
-	return bind(childSessionID, reviewRunID, modules)
 }
 
 // pulseWriteAuthorityDelegator returns the installed delegator, if any.

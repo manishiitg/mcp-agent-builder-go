@@ -104,8 +104,8 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 	executor := func(ctx context.Context, args map[string]interface{}) (string, error) {
 		workspacePath, _ := args["workspace_path"].(string)
 		pulseRunID, _ := args["pulse_run_id"].(string)
-		pulseRunID = strings.TrimSpace(pulseRunID)
-		if err := validateTrustedPulseToolRunID(ctx, pulseRunID); err != nil {
+		pulseRunID = pulseRunIDForSession(ctx, pulseRunID)
+		if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
 			return "", err
 		}
 		raw := map[string]interface{}{

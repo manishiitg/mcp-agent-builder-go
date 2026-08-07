@@ -2,19 +2,14 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
 
 ## Execution model
 
-- In Pulse, the parent passes this rendered checklist to one independent `call_generic_agent` reviewer for the Artifact Review module.
-- Outside Pulse, the parent may call `call_generic_agent` once with this checklist as its instructions.
-- If you are already that generic reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
-- Otherwise launch exactly one reviewer with
-  `call_generic_agent(todo_id="standalone-artifact-review",
-  instructions="READ-ONLY REVIEW ...", preferred_tier=2,
-  module="artifact_review")`. Do not pass `pulse_run_id` or `review_run_id`;
-  the backend generates standalone identities, stores the complete Markdown in
-  SQLite, and files its `CONCERNS:` lines into the structured finding lifecycle.
-  The call returns an `execution_id` immediately. End the current turn, wait for
-  the automatic completion notification, then load the persisted result with
-  `get_pulse_state(view="review")` before the parent validates, reports, or records any
-  outcome. Do not poll, sleep, or repeatedly call `query_step`.
+- In Pulse, the parent may include this checklist in the normal Engineering
+  background executor when artifact-drift evidence is selected.
+- Outside Pulse, launch one `run_in_background` executor with this checklist as
+  its read-only instructions.
+- If you are already that background reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
+- The call returns an `execution_id` immediately. End the current turn and wait
+  for the automatic completion notification; do not poll, sleep, or repeatedly
+  call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config, write `builder/improve.html`, mark changelog entries, or mark Pulse module state.
 - Read only the matching Artifact Review cursor, open findings, and relevant
   recent decision/outcome regions in `builder/improve.html`. Do not load HTML

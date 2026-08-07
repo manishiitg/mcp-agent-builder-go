@@ -250,21 +250,14 @@ func (r *Registry) Prune(now time.Time) int {
 }
 
 func policyForSnapshot(snapshot terminals.Snapshot) Policy {
-	// Scheduled executions also use a main-agent owner, but they are not
-	// resumable user chats. Keep their process lifetime bounded even if an
-	// upstream adapter accidentally reports persistent transport metadata.
-	if isScheduledSessionID(snapshot.SessionID) {
-		return PolicyBounded
-	}
+	// A scheduled main agent may be waiting for an asynchronous workflow child.
+	// It must retain its native coding-CLI session so that an eventual
+	// AUTO-NOTIFICATION can continue the same conversation. The idle backstop
+	// owns cleanup once the entire session is actually complete.
 	if snapshot.ExecutionKind == "main_agent" || snapshot.Scope == "main_agent" || strings.HasPrefix(snapshot.OwnerID, "main:") {
 		return PolicyPersistent
 	}
 	return PolicyBounded
-}
-
-func isScheduledSessionID(sessionID string) bool {
-	id := strings.ToLower(strings.TrimSpace(sessionID))
-	return strings.HasPrefix(id, "schedule-") || strings.Contains(id, "-schedule-")
 }
 
 func providerFromTmuxSession(tmuxSession string) string {

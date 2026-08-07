@@ -229,13 +229,7 @@ export const builtinCommands: CommandDefinition[] = [
     requiredWorkshopMode: 'workshop',
     source: 'builtin',
     execute: (ctx) => {
-      const focus = ctx.beforeSlash.trim()
-      ctx.onSubmit(
-        `Call run_goal_advisor_review(focus=${JSON.stringify(focus)}) exactly once. ` +
-        `This dedicated tool starts its own background Advisor → Critic → Finalizer pipeline, so do not wrap it in run_in_background and do not perform the review inline. ` +
-        `The pipeline loads the canonical goal-advisor guidance, persists its complete result and open CONCERNS in SQLite, and updates builder/improve.html only through its bounded finalizer. ` +
-        `After the automatic completion notification, present its complete executive result and mention that it is available in the Pulse popup.`
-      )
+      submitGuidedWorkflowCommand(ctx, 'goal-advisor', { background: true })
     }
   },
   {

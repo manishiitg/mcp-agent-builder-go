@@ -2060,12 +2060,12 @@ the current decision record.
 
 **Status: adopted by operator decision, over the measurement below.**
 
-**2026-08-05 evolution:** the single-writer principle remains, but the
-Engineering/Ops reviewer and its bounded Fixer now share one ordered agent
-sequence. Strategy Auditor and Goal Advisor still run independently first. A
-separate `pulse_fixer` is residual recovery for unfinished independent modules
-or a failed operational sequence, not an unconditional second full pass. The
-history below explains the single-writer decision that this newer shape retains.
+**2026-08-07 evolution:** the single-writer principle remains, but orchestration
+is now owned by the main Pulse agent. Gate is one turn; the optional Review+Fix
+turn chooses and owns any useful specialist children, consolidates evidence,
+repairs, verifies, and writes terminal receipts; Dashboard and Finalize follow.
+Go no longer starts reviewer, residual-Fixer, or recovery sessions. The history
+below explains the earlier single-writer decision that this newer shape retains.
 
 This section has been reversed twice in one day, so read the whole thing before
 touching it.
@@ -2537,16 +2537,14 @@ should be judged against all four: it is not better merely because it is
 cheaper, and it is not successful merely because it closes more findings if
 the workflow's goal does not improve.
 
-### Gate-selected perspectives: shared Engineering/Ops, independent product reviewers
+### Gate-selected perspectives: one agent-owned Review+Fix turn
 
-**Implementation status (2026-08-05): implemented locally, verification in
-progress.** Engineering and LLM/Ops reuse one shared review-and-fix agent, while
-`strategy_auditor` and `goal_advisor` remain independent agents. Workflow Review
-is not one oversized prompt and is not six separately spawned agents. The
-backend now accepts `message_sequence` on background executor agents and on
-both generic-agent entry points. It creates one agent, then sends an opening
-instruction followed by ordered user messages while preserving the same
-conversation history, MCP session, folder guard, and isolated coding workspace.
+**Implementation status (2026-08-07): implemented locally, runtime verification
+pending.** Pulse now stays in the scheduled run's main-agent conversation. Go
+sends Gate, Review+Fix, Dashboard, and Finalize in order. It no longer chooses
+reviewer sessions, launches a residual Fixer/recovery agent, or polls tmux every
+three seconds. The Review+Fix agent reads the worklist, chooses the cheapest
+sufficient approach, and owns any specialist children through completion.
 
 Gate independently decides whether these four perspectives are due:
 
@@ -2564,21 +2562,14 @@ Historical artifact-named modules (`bug_review`, `artifact_review`,
 `report_health`, `eval_health`, and `stores_health`) normalize into Engineering
 Review. They remain readable evidence identities but are never scheduled.
 
-If Engineering or Ops is due, the scheduled sequence is opening evidence/backlog
-collection, one turn for each selected perspective in canonical order,
-semantic deduplication and persisted final review, then one bounded Fixer turn
-in the same conversation and tool session. A skipped perspective is absent rather
-than receiving a no-op turn. In a two-perspective pass, every tracked concern
-names exactly one selected owner in a backend-validated marker. Strategy Auditor
-and Goal Advisor remain independent agents and never consume another reviewer's
-conclusion before forming their own.
-
-Only the final Fixer turn receives the trusted completion marker. A failed turn stops
-the sequence immediately, and `workflow_review` is rejected at launch if the
-scheduled caller omits the exact non-empty `review_lanes`; it cannot silently
-regress to the old all-lenses shape. Independent work still uses separate agents and runs in
-parallel. Ordered turns are only for lenses that intentionally share evidence
-and reasoning state.
+The Review+Fix turn first reconciles retained findings and pending verification,
+then performs only the due lenses, semantically deduplicates their evidence,
+applies approved safe changes, and records one terminal receipt per due module.
+A skipped perspective is absent rather than receiving a no-op turn. Strategy
+Auditor and Goal Advisor remain distinct product lenses; the parent may delegate
+them independently, but owns the resulting proposal/decision routing. If the
+turn ends without every receipt, one compact continuation is sent to the same
+conversation and starts from durable state rather than rediscovering work.
 
 Advisor recommendations have an explicit route. `decision_required` creates a
 linked pending question (`strategy-proposal-*` for Strategy Auditor,
@@ -2965,7 +2956,7 @@ destination stores.
 
 ### Fixer contract
 
-The operational sequence's Fixer turn, and the residual Fixer when needed:
+The main conversation's Review+Fix turn:
 
 1. classifies meaning before changing files or rows;
 2. preserves exact source evidence in Pulse and never discards the only copy;

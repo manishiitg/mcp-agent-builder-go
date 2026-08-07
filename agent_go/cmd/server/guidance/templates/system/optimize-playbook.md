@@ -351,7 +351,7 @@ def call_sub_agent(route_id: str, todo_id: str, instructions: str) -> dict:
 ```
 
 Rules:
-- Only `call_sub_agent` is allowed — never call `call_generic_agent`, never run arbitrary shell or MCP tools directly. If you need a different tool, add it as a new predefined route.
+- Only `call_sub_agent` is allowed — never launch `run_in_background`, never run arbitrary shell or MCP tools directly. If you need a different tool, add it as a new predefined route.
 - `route_id` values must match one of the step's `predefined_routes` — unknown route IDs will fail at runtime.
 - Let unhandled exceptions bubble up. A non-zero exit is the fallback signal — the runtime drops to the LLM orchestrator with no script state carried over. Do not wrap everything in `try/except` that swallows failures; that makes fallback undetectable.
 - Read context dependencies from `sys.argv` (same convention as regular scripted). Write final outputs to `os.environ['STEP_OUTPUT_DIR']` if the step has a validation_schema.

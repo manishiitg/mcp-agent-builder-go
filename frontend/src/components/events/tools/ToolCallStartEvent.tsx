@@ -54,7 +54,7 @@ export const ToolCallStartEventDisplay: React.FC<ToolCallStartEventProps> = ({ e
   }
 
   // If it's a sub-agent tool, use the specialized component
-  if (normalizedToolName === 'call_sub_agent' || normalizedToolName === 'call_generic_agent') {
+  if (normalizedToolName === 'call_sub_agent') {
     return <SubAgentToolCallDisplay event={event} />
   }
 

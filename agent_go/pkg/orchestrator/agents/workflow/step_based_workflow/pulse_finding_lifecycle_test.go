@@ -53,19 +53,6 @@ func filedAdvisorConcern(t *testing.T, workspacePath, pulseRunID, module, text, 
 	return concerns[0]
 }
 
-func TestLoadPulseFindingLifecyclesIncludesLegacyAliasesForCurrentLane(t *testing.T) {
-	workspacePath := concernsWorkspace(t)
-	filedReviewConcern(t, workspacePath, "pulse-1", "knowledgebase_health", "legacy knowledge concern")
-
-	findings, err := LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
-	if err != nil {
-		t.Fatalf("load stores lifecycle: %v", err)
-	}
-	if len(findings) != 1 || findings[0].StepID != "workflow_review" {
-		t.Fatalf("legacy Engineering finding not visible through current lane: %#v", findings)
-	}
-}
-
 func recordFindingDispositions(t *testing.T, workspacePath, module, pulseRunID string, dispositions []PulseFindingDisposition) {
 	t.Helper()
 	ctx := context.Background()
@@ -881,46 +868,3 @@ func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 // the one value the Fixer's own contract tells it to send, against 149 for an
 // omitted filter on social-media. It only did any work by falling back to
 // omitting the module.
-func TestPulseFixerSentinelLoadsEveryModulesBacklog(t *testing.T) {
-	ctx := context.Background()
-	workspacePath := concernsWorkspace(t)
-	pulseRunID := "pulse-consolidated"
-	// Filed directly: filedReviewConcern asserts a single open concern exists,
-	// and this case needs two modules represented at once.
-	for module, text := range map[string]string{
-		"bug_review":    "reply targets repeat across runs",
-		"stores_health": "follower delta writer is missing",
-	} {
-		if _, err := RecordRunConcerns(
-			ctx, workspacePath, pulseRunID, "", module, ConcernPhaseReview, "CONCERNS: "+text,
-		); err != nil {
-			t.Fatalf("record %s concern: %v", module, err)
-		}
-	}
-
-	sentinel, err := LoadPulseFindingLifecycles(ctx, workspacePath, "pulse_fixer", -1)
-	if err != nil {
-		t.Fatalf("load backlog for the fixer sentinel: %v", err)
-	}
-	everything, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
-	if err != nil {
-		t.Fatalf("load complete backlog: %v", err)
-	}
-	if len(sentinel) != len(everything) {
-		t.Fatalf("pulse_fixer returned %d findings, want the complete backlog of %d",
-			len(sentinel), len(everything))
-	}
-	if len(sentinel) != 2 {
-		t.Fatalf("sentinel backlog = %d findings, want both modules", len(sentinel))
-	}
-
-	// A real perspective must still filter, while its retired artifact aliases
-	// remain one Engineering backlog.
-	scoped, err := LoadPulseFindingLifecycles(ctx, workspacePath, "workflow_review", -1)
-	if err != nil {
-		t.Fatalf("load scoped backlog: %v", err)
-	}
-	if len(scoped) != 2 {
-		t.Fatalf("Engineering backlog = %+v, want both retired aliases", scoped)
-	}
-}

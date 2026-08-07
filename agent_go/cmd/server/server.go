@@ -114,6 +114,25 @@ func isMCPBridgeVirtualToolCategory(name string) bool {
 	return mcpBridgeVirtualToolCategories[normalizeMCPBridgeCategory(name)]
 }
 
+// runtimeMCPServers removes legacy custom-tool categories from a workflow's
+// selected-server list. Older workflow.json files stored category labels such
+// as workspace_advanced alongside real MCP servers. Those labels are used when
+// registering direct tools later in setup; they must never be handed to the MCP
+// connection layer as server names.
+func runtimeMCPServers(selected []string) []string {
+	servers := make([]string, 0, len(selected))
+	for _, name := range selected {
+		if isMCPBridgeCustomToolCategory(name) || isMCPBridgeVirtualToolCategory(name) {
+			continue
+		}
+		servers = append(servers, name)
+	}
+	if len(servers) == 0 {
+		return []string{mcpclient.NoServers}
+	}
+	return servers
+}
+
 // stepDelegationRegistry maps a workshop step's ForceCorrelationID ("workshop-step-*") to the
 // delegation IDs spawned within that step. This lets query_step include tool calls from API-based
 // delegation sub-agents that use their own correlation ID ("delegation-<index>-<ts>") instead of
@@ -660,6 +679,9 @@ type QueryRequest struct {
 	// the next cron message waits for turn completion instead of racing a tmux
 	// snapshot that may not have flipped to busy yet.
 	DisableLiveInputDelivery bool `json:"disable_live_input_delivery,omitempty"`
+	// KeepNativeSessionAlive keeps one native coding-CLI process alive while a
+	// scheduler sends its known consecutive turns (upgrade → run → Pulse).
+	KeepNativeSessionAlive bool `json:"keep_native_session_alive,omitempty"`
 	// UserInteractiveContinuation promotes an observed schedule/bot conversation
 	// into an interactive chat without changing its session or native resume ID.
 	UserInteractiveContinuation bool `json:"user_interactive_continuation,omitempty"`
@@ -4330,6 +4352,17 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// This ensures MCP servers with OAuth use user-specific token files
 			UserID: currentUserID,
 		}
+
+		// Legacy manifests may still place built-in tool categories in
+		// SelectedServers. Keep those categories for direct tool registration,
+		// but never attempt to connect to them as MCP servers.
+		selectedServers = runtimeMCPServers(selectedServers)
+		if len(selectedServers) == 1 && selectedServers[0] == mcpclient.NoServers {
+			serverList = mcpclient.NoServers
+		} else {
+			serverList = strings.Join(selectedServers, ",")
+		}
+		agentConfig.ServerName = serverList
 
 		applySharedLLMAgentTuning(&agentConfig, &req, presetLLMConfig)
 

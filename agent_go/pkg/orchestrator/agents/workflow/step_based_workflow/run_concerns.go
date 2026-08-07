@@ -143,25 +143,13 @@ func preValidationConcernFingerprint(stepID string) string {
 	return concernFingerprint(stepID, "prevalidation:step-output-contract")
 }
 
-// existingCanonicalReviewFingerprint preserves the identity of an exact
-// historical finding when a retired reviewer identity is folded into a current
-// lane. Without this bridge the same concern is refiled once under the new lane.
+// existingCanonicalReviewFingerprint preserves the identity of an exact finding
+// in the same current review lane.
 func existingCanonicalReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, module, text string) string {
 	wanted := strings.ToLower(strings.Join(strings.Fields(text), " "))
-	modules := []string{module}
-	for _, retired := range pulsemodules.RetiredIDs {
-		if pulsemodules.Normalize(retired) == module {
-			modules = append(modules, retired)
-		}
-	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(modules)), ",")
-	args := make([]interface{}, 0, len(modules)+1)
-	args = append(args, ConcernPhaseReview)
-	for _, module := range modules {
-		args = append(args, module)
-	}
+	args := []interface{}{ConcernPhaseReview, module}
 	rows, err := db.QueryContext(ctx, `SELECT fingerprint, text FROM run_concerns
-		WHERE phase=? AND step_id IN (`+placeholders+`)`, args...)
+		WHERE phase=? AND step_id=?`, args...)
 	if err != nil {
 		return ""
 	}
@@ -208,7 +196,7 @@ func openRunConcernsDB(ctx context.Context, workspacePath string, create bool) (
 // Best-effort by contract: a step that did its work must not fail because its
 // concern could not be filed. Callers log and continue.
 func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName, stepID, phase, summary string) (int, error) {
-	if phase == ConcernPhaseReview && (pulsemodules.IsValid(stepID) || pulsemodules.IsRetired(stepID)) {
+	if phase == ConcernPhaseReview && pulsemodules.IsValid(stepID) {
 		stepID = pulsemodules.Normalize(stepID)
 	}
 	lines := ParseConcernLines(summary)
@@ -243,16 +231,6 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 		return recorded, err
 	}
 	return recorded, nil
-}
-
-func recordRunConcernLinesAt(
-	ctx context.Context,
-	db pulseFindingLifecycleDB,
-	runFolder, groupName, stepID, phase string,
-	lines []string,
-	observedAt string,
-) (int, error) {
-	return recordRunConcernLinesAtWithFingerprints(ctx, db, runFolder, groupName, stepID, phase, lines, observedAt, nil)
 }
 
 func recordRunConcernLinesAtWithFingerprints(

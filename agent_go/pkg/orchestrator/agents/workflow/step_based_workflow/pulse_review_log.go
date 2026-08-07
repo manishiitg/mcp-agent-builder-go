@@ -93,52 +93,6 @@ type PulseReviewVerificationResult struct {
 	NextCheck   string   `json:"next_check,omitempty"`
 }
 
-const pulseVerificationMarker = "PULSE_VERIFICATION_JSON:"
-
-// extractLegacyPulseReviewVerifications exists only for one-way migration of
-// historical Markdown artifacts. Live reviewers use record_pulse_verification.
-func extractLegacyPulseReviewVerifications(artifact string) ([]PulseReviewVerificationResult, error) {
-	results := []PulseReviewVerificationResult{}
-	seen := map[string]bool{}
-	for lineNumber, raw := range strings.Split(artifact, "\n") {
-		line := strings.TrimSpace(raw)
-		if !strings.HasPrefix(line, pulseVerificationMarker) {
-			continue
-		}
-		var result PulseReviewVerificationResult
-		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, pulseVerificationMarker))), &result); err != nil {
-			return nil, fmt.Errorf("verification marker line %d is invalid JSON: %w", lineNumber+1, err)
-		}
-		result.FindingID = strings.TrimSpace(result.FindingID)
-		result.Fingerprint = strings.TrimSpace(result.Fingerprint)
-		result.AttemptID = strings.TrimSpace(result.AttemptID)
-		result.Verdict = strings.TrimSpace(result.Verdict)
-		result.Expected = strings.TrimSpace(result.Expected)
-		result.Observed = strings.TrimSpace(result.Observed)
-		result.NextCheck = strings.TrimSpace(result.NextCheck)
-		result.Evidence = normalizedLifecycleStrings(result.Evidence)
-		if result.FindingID == "" || result.Fingerprint == "" || result.AttemptID == "" || result.Expected == "" || result.Observed == "" {
-			return nil, fmt.Errorf("verification marker line %d requires finding_id, fingerprint, attempt_id, expected, and observed", lineNumber+1)
-		}
-		switch result.Verdict {
-		case VerificationPassed, VerificationFailed:
-		case VerificationInconclusive:
-			if result.NextCheck == "" {
-				return nil, fmt.Errorf("inconclusive verification marker line %d requires next_check", lineNumber+1)
-			}
-		default:
-			return nil, fmt.Errorf("verification marker line %d verdict must be passed, failed, or inconclusive", lineNumber+1)
-		}
-		key := result.Fingerprint + "\x00" + result.AttemptID
-		if seen[key] {
-			return nil, fmt.Errorf("duplicate verification marker for finding %q attempt %q", result.FindingID, result.AttemptID)
-		}
-		seen[key] = true
-		results = append(results, result)
-	}
-	return results, nil
-}
-
 func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(pulse_review_log)`)
 	if err != nil {
@@ -162,11 +116,55 @@ func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB)
 		if _, err := db.ExecContext(ctx, pulseReviewLogSchema); err != nil {
 			return err
 		}
-	} else if columns["artifact_markdown"] || columns["artifact_path"] || columns["artifact_kind"] {
-		if err := migrateLegacyPulseReviewLog(ctx, db, columns); err != nil {
-			return err
-		}
 	} else {
+		// SQLite cannot remove columns portably. Rebuild the former
+		// artifact/markdown table so raw reviewer prose is genuinely gone rather
+		// than merely ignored by current reads.
+		legacyNarrative := false
+		for _, name := range []string{"artifact_path", "artifact_kind", "artifact_markdown", "content_sha256", "markdown"} {
+			legacyNarrative = legacyNarrative || columns[name]
+		}
+		if legacyNarrative {
+			const legacyTable = "pulse_review_log_legacy_narrative"
+			if _, err := db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_pulse_review_log_module`); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS `+legacyTable); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `ALTER TABLE pulse_review_log RENAME TO `+legacyTable); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, pulseReviewLogSchema); err != nil {
+				return err
+			}
+			value := func(name, fallback string) string {
+				if columns[name] {
+					return name
+				}
+				return fallback
+			}
+			findingCount := "0"
+			if columns["artifact_markdown"] {
+				findingCount = `CASE WHEN TRIM(COALESCE(artifact_markdown, '')) <> '' THEN 1 ELSE 0 END`
+			}
+			copySQL := `INSERT INTO pulse_review_log
+				(module, review_run_id, pulse_run_id, verdict, status, finding_count, verification_count, verifications_json, recorded_at)
+				SELECT ` + strings.Join([]string{
+				value("module", "''"), value("review_run_id", "''"), value("pulse_run_id", "''"),
+				value("verdict", "''"), value("status", "'completed'"), findingCount, "0", "'[]'", value("recorded_at", "''"),
+			}, ", ") + ` FROM ` + legacyTable
+			if _, err := db.ExecContext(ctx, copySQL); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `DROP TABLE `+legacyTable); err != nil {
+				return err
+			}
+			columns = map[string]bool{}
+			for _, name := range []string{"status", "finding_count", "verification_count", "verifications_json"} {
+				columns[name] = true
+			}
+		}
 		for name, definition := range map[string]string{
 			"status":             "TEXT NOT NULL DEFAULT ''",
 			"finding_count":      "INTEGER NOT NULL DEFAULT 0",
@@ -185,94 +183,6 @@ func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB)
 		return err
 	}
 	return nil
-}
-
-// migrateLegacyPulseReviewLog removes the obsolete Markdown artifact columns.
-// Historical reviewer markers are converted once into compact receipt fields;
-// the prose itself is intentionally discarded.
-func migrateLegacyPulseReviewLog(ctx context.Context, db pulseFindingLifecycleDB, columns map[string]bool) error {
-	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS pulse_review_log_v2`); err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(ctx, strings.Replace(pulseReviewLogSchema, "pulse_review_log", "pulse_review_log_v2", 1)); err != nil {
-		return err
-	}
-	markdownExpr := "''"
-	if columns["artifact_markdown"] {
-		markdownExpr = "artifact_markdown"
-	}
-	statusExpr := "''"
-	if columns["status"] {
-		statusExpr = "status"
-	}
-	rows, err := db.QueryContext(ctx, `SELECT _id, module, review_run_id, pulse_run_id, verdict, `+statusExpr+`, recorded_at, `+markdownExpr+` FROM pulse_review_log ORDER BY _id`)
-	if err != nil {
-		return err
-	}
-	type legacyReview struct {
-		id                                                                     int64
-		module, reviewRunID, pulseRunID, verdict, status, recordedAt, markdown string
-	}
-	legacy := []legacyReview{}
-	for rows.Next() {
-		var review legacyReview
-		if err := rows.Scan(&review.id, &review.module, &review.reviewRunID, &review.pulseRunID, &review.verdict, &review.status, &review.recordedAt, &review.markdown); err != nil {
-			rows.Close()
-			return err
-		}
-		legacy = append(legacy, review)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, review := range legacy {
-		verifications, _ := extractLegacyPulseReviewVerifications(review.markdown)
-		encoded, _ := json.Marshal(verifications)
-		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_log_v2
-			(_id, module, review_run_id, pulse_run_id, verdict, status, finding_count, verification_count, verifications_json, recorded_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			review.id, review.module, review.reviewRunID, review.pulseRunID,
-			review.verdict, review.status, len(ParseConcernLines(review.markdown)),
-			len(verifications), string(encoded), review.recordedAt); err != nil {
-			return err
-		}
-	}
-	if _, err := db.ExecContext(ctx, `DROP TABLE pulse_review_log`); err != nil {
-		return err
-	}
-	_, err = db.ExecContext(ctx, `ALTER TABLE pulse_review_log_v2 RENAME TO pulse_review_log`)
-	return err
-}
-
-// extractReviewVerdict exists only for the destructive legacy Markdown
-// migration. Active reviewers finalize through complete_pulse_review.
-//
-// Returns "" when no verdict is found rather than guessing: an empty verdict with
-// a recorded run is still useful — it says the reviewer ran — whereas inventing
-// one would poison the history the Gate is meant to trust.
-func extractReviewVerdict(artifact string) string {
-	lines := strings.Split(artifact, "\n")
-	for i, raw := range lines {
-		line := strings.TrimSpace(raw)
-		lower := strings.ToLower(strings.TrimLeft(line, "#* "))
-		if !strings.HasPrefix(lower, "verdict") {
-			continue
-		}
-		// Inline form: "Verdict: <text>" / "**Verdict:** <text>".
-		if idx := strings.Index(line, ":"); idx >= 0 {
-			if rest := strings.TrimSpace(strings.Trim(line[idx+1:], "* ")); rest != "" {
-				return truncateVerdict(rest)
-			}
-		}
-		// Heading form: text begins on the next non-empty line.
-		for _, next := range lines[i+1:] {
-			if candidate := strings.TrimSpace(next); candidate != "" {
-				return truncateVerdict(candidate)
-			}
-		}
-		return ""
-	}
-	return ""
 }
 
 func truncateVerdict(s string) string {
@@ -419,9 +329,6 @@ func CompletePulseReview(ctx context.Context, workspacePath string, modules []st
 	}
 	if len(canonical) == 0 {
 		return fmt.Errorf("at least one valid module is required")
-	}
-	if _, err := MigrateLegacyPulseReviews(ctx, workspacePath); err != nil {
-		return fmt.Errorf("remove legacy Pulse review transport before writing receipt: %w", err)
 	}
 	db, err := openRunConcernsDB(ctx, workspacePath, true)
 	if err != nil || db == nil {

@@ -164,16 +164,15 @@ Gate does not launch reviewers or call mutation tools, plan modification tools, 
 
 Gate must record exactly one decision for each module. A partial worklist is invalid because omitted modules would otherwise disappear silently.
 
-## Independent Strategy Review And One Sequenced Operational Writer
+## One Agent-Owned Review+Fix Turn
 
-The scheduler first runs at most two independent read-only stages—Strategy
-Auditor and Goal Advisor—with a shared dated `review_run_id` in one bounded
-parallel batch. After they finish, selected Engineering/LLM-Ops lanes run in one
-agent conversation: ordered review turns, one consolidation checkpoint persisted
-before mutation, and one bounded Fixer turn. A residual Fixer runs only when an
-independent module or failed operational sequence remains non-terminal.
-Independent review stages never mutate or mark module state; the operational
-sequence mutates only in its final Fixer turn.
+After Gate, the scheduler sends one Review+Fix message to the same main-agent conversation.
+The agent reads the durable worklist and handles at most the two due perspectives Gate selected.
+It owns review selection, specialist delegation,
+consolidation, repair, verification, and terminal module receipts. Strategy
+Auditor and Goal Advisor remain independent product/business lenses; Engineering
+and Operations may share evidence. Go does not launch reviewer sessions, a
+residual Fixer, or a recovery agent.
 
 1. Read `get_pulse_state` views `module` and `backlog`, the durable
    Gate/worklist, current-run module results, and saved SQLite reviewer records. If every due module already has a
@@ -184,12 +183,11 @@ sequence mutates only in its final Fixer turn.
    partial fix. A `changed_unverified` result is resumed only when its named
    next valid evidence boundary has arrived; until
    then preserve it without reapplying the change or claiming it is fixed.
-2. Run Strategy Auditor and Goal Advisor as independent read-only agents in one
-   bounded parallel batch. No independent reviewer waits for or consumes the
-   other's conclusion. After that batch finishes, run the selected Engineering
-   and LLM/Ops perspectives in one shared agent sequence whose review and
-   consolidation turns remain read-only and whose final Fixer turn is the only
-   operational mutation point. A reviewer that cannot trust its evidence returns an execution
+2. Decide the cheapest sufficient approach. Strategy Auditor and Goal Advisor
+   must reason independently; delegate either as a read-only child only when
+   useful, retain its execution identity, and wait for its automatic completion
+   before consolidating or mutating. Engineering and LLM/Ops may be handled
+   directly from one shared evidence read. A reviewer that cannot trust its evidence returns an execution
    problem or `insufficient_evidence` with an exact next-check boundary; it does
    not defer another reviewer.
    Before starting a reviewer, reconcile that module's complete active backlog
@@ -201,16 +199,11 @@ sequence mutates only in its final Fixer turn.
    four perspectives: `workflow_review` (Engineering), `llm_ops_review`,
    `strategy_auditor`, and `goal_advisor`. Artifact drift, report/eval
    implementation, and store integrity are conditionally loaded Engineering
-   evidence packs, not separately scheduled reviewers. The backend places only
-   due Engineering/Ops perspectives into one continuous context, then adds one
-   consolidation checkpoint and one Fixer turn. The review is persisted before
-   mutation. A skipped lane does not run. Launch the shared operational agent
-   only when at least one operational lane is due. If every module is skipped,
-   launch no reviewer and no Fixer; Dashboard and Finalizer still run. Never combine
-   reviewers in one shell command or use `run_in_background`, background curl,
-   `&`, or `wait`.
-   The shared Markdown report is indexed under every selected perspective before
-   the Fixer turn starts.
+   evidence packs, not separately scheduled reviewers. A skipped lane does not
+   run. If every module is skipped, record terminal skip receipts; Dashboard and
+   Finalizer still run. Never combine reviewers in one shell command, background
+   curl, `&`, or `wait`. Persist typed findings and verification directly; do
+   not create or index a shared Markdown report.
    When both are selected, every trackable finding carries one backend-validated
    Engineering-or-Ops attribution; the lifecycle files it only under that owner.
    This keeps future Gate cadence independent.
@@ -290,14 +283,12 @@ sequence mutates only in its final Fixer turn.
    alternatives, impact, evidence, and safe default; mark only the affected
    modules blocked and do not mutate that target. Do not ask the user to resolve
    an operational conflict that the evidence and precedence rules decide.
-   The operational sequence already runs as one `call_generic_agent` with
-   `role="fixer"`, `module="workflow_review"`, the exact `review_lanes`, and the
-   shared run identities. Start a residual `module="pulse_fixer"` agent only if
-   an independent Strategy/Goal result or failed operational sequence leaves a
-   due module non-terminal.
-   Reviewer Markdown stays immutable evidence. Reviewers never mutate workflow
-   state, and the Fixer creates no HTML recovery ledger.
-7. The Fixer applies bounded repair bundles sequentially with normal direct
+   The main Pulse agent owns the Review+Fix turn. It may delegate genuinely
+   independent read-only analysis, but it waits for those children, consolidates
+   their evidence, and completes the repair lifecycle in the same conversation.
+   Go never launches a residual Fixer or recovery agent. Detailed evidence lives
+   in typed SQLite state; there is no reviewer Markdown or HTML recovery ledger.
+7. The main agent applies bounded repair bundles sequentially with normal direct
    tools; never launch a second mutating maintenance agent. Load
    `read_skill(skills=[{"name":"builder-reference","path":"references/fix-verification.md"}])`. Before mutation,
    capture exact targets, time, hashes/versions, and latest baseline ids; a write
@@ -912,7 +903,7 @@ expensive thinking stays outside the parent context through a read-only strategy
 reviewer followed by a separate read-only critic. The parent Pulse Fixer uses
 their combined evidence to record a proposal, advance the active strategy experiment, or
 apply an exact previously approved proposal. It does not launch
-`run_goal_advisor_review` and does not poll background executions.
+the retired standalone Goal Advisor pipeline and does not poll background executions.
 
 Goal Advisor also challenges consequential assumptions embedded in soul, plan,
 steps, evals, KB, learnings, DB, or reports. It must distinguish user-approved

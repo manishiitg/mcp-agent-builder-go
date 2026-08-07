@@ -925,11 +925,11 @@ func FormatPulseDispositionProblems(findingID string, problems []string) error {
 func lifecycleStatusForDisposition(disposition string) (status, eventType, resolvedBy string) {
 	switch strings.TrimSpace(disposition) {
 	case FindingDispositionFixedVerified, FindingDispositionVerifiedNoChange:
-		return ConcernStatusResolved, "closed", "pulse_fixer"
+		return ConcernStatusResolved, "closed", "workflow_builder"
 	case FindingDispositionChangedUnverified:
 		return ConcernStatusAwaitingVerification, "verification_inconclusive", ""
 	case FindingDispositionRejected:
-		return ConcernStatusRejected, "rejected", "pulse_fixer"
+		return ConcernStatusRejected, "rejected", "workflow_builder"
 	case FindingDispositionFailed:
 		return ConcernStatusOpen, "verification_failed", ""
 	case FindingDispositionProposalOnly:
@@ -1288,7 +1288,7 @@ func LoadPulseReviewVerificationCandidates(
 
 	module = pulsemodules.Normalize(module)
 	acceptedModules := []string{}
-	for _, candidate := range append(pulsemodules.IDs(), pulsemodules.RetiredIDs...) {
+	for _, candidate := range pulsemodules.IDs() {
 		if pulsemodules.Normalize(candidate) == module {
 			acceptedModules = append(acceptedModules, candidate)
 		}
@@ -1358,17 +1358,6 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 		limit = 100
 	}
 	module = pulsemodules.Normalize(module)
-	// "pulse_fixer" is the consolidated Fixer's module sentinel, meaning every
-	// due module rather than a module of that name. The write path has always
-	// understood it; this read path did not, and `module` here is a plain
-	// step_id filter. No concern carries step_id "pulse_fixer" and no attempt is
-	// recorded under it, so the tool that hands the Fixer its queue returned an
-	// empty list for the exact value its own contract tells it to pass — 0 rows
-	// against 149 for an omitted module on social-media, 2026-08-01. The Fixer
-	// only did any work at all by falling back to omitting the filter.
-	if module == pulsemodules.PseudoPulseFixerID {
-		module = ""
-	}
 	// Lead with the step carrying the most unresolved work, and keep its rows
 	// together.
 	//
@@ -1384,20 +1373,6 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	// reordered first, but that backs get_pulse_state(view="module") while the
 	// Fixer reads this query through view="backlog" — so the fix landed on
 	// a path the Fixer never reads and the backlog did not move.
-	legacyModuleAliases := make([]interface{}, 0, len(pulsemodules.RetiredIDs))
-	for _, retired := range pulsemodules.RetiredIDs {
-		if pulsemodules.Normalize(retired) == module {
-			legacyModuleAliases = append(legacyModuleAliases, retired)
-		}
-	}
-	legacyAliasFilter := 0
-	if len(legacyModuleAliases) > 0 {
-		legacyAliasFilter = 1
-	}
-	legacyPlaceholders := strings.TrimRight(strings.Repeat("?,", len(legacyModuleAliases)), ",")
-	if legacyPlaceholders == "" {
-		legacyPlaceholders = "NULL"
-	}
 	query := fmt.Sprintf(`SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count,
 			c.status, c.resolution_note, COALESCE(d.detail_json, '')
@@ -1409,17 +1384,14 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			WHERE status NOT IN ('resolved', 'rejected', 'external_action_required')
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE ?='' OR c.step_id=? OR (?=1 AND c.phase='review' AND c.step_id IN (%s)) OR EXISTS (
+		WHERE ?='' OR c.step_id=? OR EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
-			WHERE af.fingerprint=c.fingerprint AND (a.module=? OR (?=1 AND a.module IN (%s)))
+			WHERE af.fingerprint=c.fingerprint AND a.module=?
 		)
 		ORDER BY COALESCE(cluster.active_count, 0) DESC, COALESCE(cluster.peak_seen, 0) DESC,
-			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`, legacyPlaceholders, legacyPlaceholders)
-	args := []interface{}{module, module, legacyAliasFilter}
-	args = append(args, legacyModuleAliases...)
-	args = append(args, module, legacyAliasFilter)
-	args = append(args, legacyModuleAliases...)
+			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`)
+	args := []interface{}{module, module, module}
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)

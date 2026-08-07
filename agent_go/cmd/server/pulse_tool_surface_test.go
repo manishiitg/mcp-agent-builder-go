@@ -19,8 +19,8 @@ import (
 // close_pulse_fix_attempt, complete_pulse_fix_attempt, consume_human_input,
 // resolve_human_input, and update_human_input, none of which ever existed.
 //
-// begin_pulse_fixer_run and resolve_run_concern are outside the consolidation
-// (they were never part of the eight) and are asserted separately.
+// resolve_run_concern is outside the consolidation (it was never part of the
+// eight) and is asserted separately.
 var pulseConsolidatedToolNames = []string{
 	"get_pulse_state",
 	"record_pulse_worklist",
@@ -92,7 +92,7 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 
 	// The surface is the four plus the two tools that were never part of the
 	// consolidation. Anything else is a tool nobody accounted for.
-	expected := map[string]bool{"begin_pulse_fixer_run": true, "resolve_run_concern": true}
+	expected := map[string]bool{"resolve_run_concern": true}
 	for _, name := range pulseConsolidatedToolNames {
 		expected[name] = true
 	}
@@ -101,7 +101,7 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	}
 	for name := range registered {
 		if !expected[name] {
-			t.Errorf("unexpected Pulse tool %q; the surface is %v plus begin_pulse_fixer_run and resolve_run_concern",
+			t.Errorf("unexpected Pulse tool %q; the surface is %v plus resolve_run_concern",
 				name, pulseConsolidatedToolNames)
 		}
 	}
@@ -112,7 +112,7 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	// Every Pulse tool name follows the one rule, so the agent can derive a name
 	// instead of guessing one.
 	for name := range registered {
-		if name == "begin_pulse_fixer_run" || name == "resolve_run_concern" || name == "complete_pulse_review" {
+		if name == "resolve_run_concern" || name == "complete_pulse_review" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
@@ -161,7 +161,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 
 	// view="backlog" — what get_pulse_finding_backlog returned.
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-view", "", pulseModuleBugReview,
+		ctx, workspacePath, "pulse-view", "", pulseModuleWorkflowReview,
 		step_based_workflow.ConcernPhaseReview, "CONCERNS: the collector writes a null column",
 	); err != nil {
 		t.Fatalf("file concern: %v", err)
@@ -196,13 +196,13 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// loaded from the lifecycle backlog, never from persisted reviewer prose.
 	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
 	if err := step_based_workflow.CompletePulseReview(
-		ctx, workspacePath, []string{pulseModuleBugReview}, reviewRunID, "pulse-view", "Clean.", "completed",
+		ctx, workspacePath, []string{pulseModuleWorkflowReview}, reviewRunID, "pulse-view", "Clean.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
 	raw, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": reviewRunID, "module": pulseModuleBugReview,
+		"review_run_id": reviewRunID, "module": pulseModuleWorkflowReview,
 	})
 	if err != nil {
 		t.Fatalf(`get_pulse_state(view="review"): %v`, err)
@@ -228,7 +228,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// caller looking for a different id — the identity was validated just above.
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleBugReview,
+		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleWorkflowReview,
 	})
 	if err == nil {
 		t.Fatal("missing review returned no error")
@@ -283,8 +283,6 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	if err := initializePulseFinalCommandStates(context.Background(), workspacePath, pulseRunID); err != nil {
 		t.Fatalf("initialize final commands: %v", err)
 	}
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 
 	_, executors, _ := createPulseWorklistTools()
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
@@ -356,8 +354,6 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	sessionID := "merged-reject-session"
 	pulseRunID := "schedule-cron--merged-reject"
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	base := map[string]interface{}{
@@ -401,9 +397,6 @@ func TestSchedulerPulsePromptsNameNoRemovedTool(t *testing.T) {
 	prompts := map[string]string{}
 	for _, step := range postRunMonitorSteps() {
 		prompts[step.label] = step.query
-	}
-	for _, moduleStep := range postRunMonitorModuleSteps("pulse-test") {
-		prompts[moduleStep.module+"-module"] = moduleStep.step.query
 	}
 	for _, step := range postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"}) {
 		prompts[step.label+"-upgrade"] = step.query

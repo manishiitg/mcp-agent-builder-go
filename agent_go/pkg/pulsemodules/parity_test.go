@@ -57,17 +57,6 @@ func TestRegistryIsInternallyConsistent(t *testing.T) {
 		}
 	}
 
-	// Every retired ID must normalize onto a current module, or historical
-	// state would resolve to nothing.
-	for _, r := range RetiredIDs {
-		if IsValid(r) {
-			t.Fatalf("retired ID %q is still listed as a current module", r)
-		}
-		if got := Normalize(r); !IsValid(got) {
-			t.Fatalf("retired ID %q normalizes to %q, which is not a current module", r, got)
-		}
-	}
-
 	// Pseudo IDs are HTML-only classifications and must never be scheduled.
 	for _, p := range PseudoIDs {
 		if IsValid(p) {
@@ -102,7 +91,7 @@ func TestNormalizeAndStepLabelRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAcceptedForReviewReceiptsCoversCurrentAndRetired(t *testing.T) {
+func TestAcceptedForReviewReceiptsCoversCurrentModules(t *testing.T) {
 	accepted := map[string]bool{}
 	for _, id := range AcceptedForReviewReceipts() {
 		accepted[id] = true
@@ -110,11 +99,6 @@ func TestAcceptedForReviewReceiptsCoversCurrentAndRetired(t *testing.T) {
 	for _, m := range All {
 		if !accepted[m.ID] {
 			t.Fatalf("current module %q is not accepted for reviewer artifacts — its results would silently fail to persist", m.ID)
-		}
-	}
-	for _, r := range RetiredIDs {
-		if !accepted[r] {
-			t.Fatalf("retired module %q is not accepted — historical reviewer artifacts become unreadable", r)
 		}
 	}
 }
@@ -215,9 +199,6 @@ func TestFrontendTimelineClassifierEmitsOnlyKnownModules(t *testing.T) {
 		if !known[id] {
 			t.Fatalf("pulseTimelineHtml.ts classifies cards as %q, which the registry does not recognize — those cards would land under a module with no tab", id)
 		}
-		if IsRetired(id) {
-			t.Fatalf("pulseTimelineHtml.ts still emits retired module %q", id)
-		}
 	}
 	if emitted == 0 {
 		t.Fatal("found no module classifications to check — the parser or the file shape changed")
@@ -243,25 +224,12 @@ func TestGuidanceDocsNameCurrentModules(t *testing.T) {
 			t.Fatalf("pulse-gate.md does not name current module %q in its worklist contract", m.ID)
 		}
 	}
-	for _, r := range RetiredIDs {
-		if strings.Contains(gate, r) {
-			t.Fatalf("pulse-gate.md still names retired module %q — Gate would record a module the backend rejects", r)
-		}
-	}
 }
 
-func TestPulseDashboardSkeletonHasOneCoverageChipPerCurrentModule(t *testing.T) {
+func TestPulseDashboardSkeletonKeepsModuleCoverageOutOfTheLightweightJournal(t *testing.T) {
 	skeleton := repoFile(t, "agent_go/cmd/server/guidance/templates/system/review-improve-log-skeleton.md")
 	const chip = `<div class="covitem `
-	if got, want := strings.Count(skeleton, chip), len(All); got != want {
-		t.Fatalf("Pulse coverage chips = %d, want one for each of %d current modules", got, want)
-	}
-	for _, retiredLabel := range []string{">Cost + time<", ">Steps &amp; setup<"} {
-		if strings.Contains(skeleton, retiredLabel) {
-			t.Fatalf("Pulse coverage still contains pre-merge module label %q", retiredLabel)
-		}
-	}
-	if !strings.Contains(skeleton, `class="cl">Engineering review</span>`) {
-		t.Fatal("Pulse coverage is missing the combined correctness review chip")
+	if got := strings.Count(skeleton, chip); got != 0 {
+		t.Fatalf("lightweight Pulse journal still contains %d obsolete coverage chips", got)
 	}
 }

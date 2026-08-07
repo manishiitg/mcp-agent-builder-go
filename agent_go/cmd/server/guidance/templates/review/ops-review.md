@@ -22,16 +22,12 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    to establish recurrence; do not open every trace. Use retained evidence, not
    provider assumptions or generic best practices.
 3. Launch exactly one reviewer with
-   `call_generic_agent(todo_id="standalone-ops-review",
-   instructions="READ-ONLY REVIEW ...", preferred_tier=3,
-   module="llm_ops_review")`. Do not pass `pulse_run_id` or `review_run_id`;
-   for this standalone command the backend generates both identities, stores
-   the complete Markdown in SQLite, and files its `CONCERNS:` lines into the
-   structured finding lifecycle. The reviewer must not edit files or config,
+   `run_in_background(name="Standalone Operations Review", instruction="READ-ONLY OPERATIONS REVIEW ...", agent_type="executor")`.
+   The reviewer must not edit files or config,
    create questions, publish, notify, run the workflow, call Pulse module-state
    tools, or launch another agent. It may read only matching
    LLM/Ops/open-finding regions of `builder/improve.html`; it must not format or
-   write the page. `call_generic_agent` returns an `execution_id` immediately;
+   write the page. `run_in_background` returns an `execution_id` immediately;
    end the current turn and resume only from the automatic completion
    notification.
 4. Require the reviewer to check all of the following agentically:
@@ -89,13 +85,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
-8. Read the persisted result with `get_pulse_state(view="review")` using the exact
-   `review_run_id` and `module` supplied by the completion notification. Validate and
-   deduplicate that result against `builder/improve.html`. As the parent, make
-   one bounded update that refreshes one compact LLM & operations review area
-   with
-   `data-pulse-section="signals" data-module="llm_ops_review"` in that HTML. Do not
-   apply recommendations or create approval cards in this read-only command.
+8. Read the child completion and validate its evidence against the actual
+   artifacts. Do not write Pulse lifecycle state, apply recommendations, or
+   create approval cards in this read-only command.
 
 Finish with a short executive summary followed by every evidence-backed
 recommendation in severity order. Identify which exact changes require user

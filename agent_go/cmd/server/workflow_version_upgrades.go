@@ -259,10 +259,10 @@ Goal: bring every workflow onto the current human-readable, responsive Pulse his
 4. Attribute every dated recent-run row and timeline card with data-date, data-kind, data-pulse-section, and one canonical data-module:
    - Issues and reviews: bug_review, artifact_review, stores_health, eval_health, report_health, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes. Normalize historical learning_health / knowledgebase_health / db_health evidence to stores_health, and historical cost_llm_time evidence to llm_ops_review;
    - Decisions and analysis: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
-   - Fixes and improvements: pulse_fixer for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the review evidence they address.
+   - Fixes and improvements: workflow_builder for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the review evidence they address.
    - Keep every historical question and answer with who asked it: Goal Advisor -> improvements/goal_advisor; a known reviewer -> signals/<reviewer module>; a general Pulse/run question -> reflection/run_summary. Reclassify old reflection/goal_advisor answer cards into improvements/goal_advisor.
    When an old card cannot be attributed to a specific reviewer from real evidence, classify it as run_summary / reflection. Never guess a reviewer and never collapse several module results into one mixed card.
-5. Keep one concise v1.0.11 migration entry under Improvements / pulse_fixer that records the report-shell migration and confirms that historical evidence was preserved. Do not expose secrets.
+5. Keep one concise v1.0.11 migration entry under Improvements / workflow_builder that records the report-shell migration and confirms that historical evidence was preserved. Do not expose secrets.
 6. Validate the final HTML structurally: one schema-2 root, one newest-first anchor, no duplicated Goal card, no date picker, no active hand-authored pending-question card, required metadata on dated records, responsive wrapping, and a single #pulse-agent-handoff block.
 7. Do not edit workflow.json. After this turn, the scheduler independently verifies the schema marker, responsive shell, newest-first anchor, dated-record metadata, migration entry, absence of a date picker, and the single handoff block. It stamps version "1.0.11" through its trusted manifest writer only when those checks pass. Do not change schema_version, alter the plan or schedules, process pending human answers, notify the user, publish, or make unrelated workflow changes in this step.
 
@@ -395,16 +395,6 @@ Report: which eval steps needed changes vs. were already compliant, the old-shap
 	},
 	{
 		from:  workflowContractEvalVerdictSchemaVersion,
-		to:    workflowContractPulseReviewSQLiteVersion,
-		label: "upgrade-1.0.17",
-		query: `WORKFLOW VERSION UPGRADE v1.0.16 -> v1.0.17.
-
-This is a trusted backend migration that removes the obsolete filesystem Pulse review transport. Do not edit or delete review files manually. The backend converts each recognized pulse/reviews/**/*.md review into a compact SQLite receipt, imports explicit CONCERNS lines into the structured finding lifecycle, removes redundant packet files, verifies each transaction, deletes each migrated source file, and stamps workflow.json version 1.0.17. New reviewers emit structured finding, verification, and compact receipt markers only; no review prose or review file is persisted.
-
-If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
-	},
-	{
-		from:  workflowContractPulseReviewSQLiteVersion,
 		to:    workflowContractCompactPulseReportVersion,
 		label: "upgrade-1.0.18",
 		query: `WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18.
@@ -479,7 +469,7 @@ Goal: workflow artifacts contain workflow-specific intent and know-how, while sh
 4. Purify learnings with diff_patch_workspace_file. Keep reusable target-specific execution HOW; remove shared AgentWorks transport/auth/sandbox/session/tool-discovery mechanics, architecture history, and duplicates owned by Soul, Plan, Validation, KB, DB, or Pulse. Purify knowledgebase notes only when a note contains those shared mechanics; preserve durable domain facts and provenance. Never edit knowledgebase/context/.
 5. Re-read every changed file. Verify the inventory signatures are absent from workflow-authored prose, all plan steps/items still validate, the same inputs/outputs/side effects/guards remain represented semantically, and no target-specific know-how was removed. Record one concise changelog reason for the workflow-level migration; do not create one Pulse finding per token or file.
 6. The migration is idempotent: if the inventory is already clean, make no artifact edits. If any occurrence is ambiguous or cannot be rewritten without changing behavior, do not guess and do not stamp the version; report the exact file/step and ambiguity so the blocking preflight is visible.
-7. Only after the clean verification succeeds, update workflow.json "version" to "1.0.21" with write_workflow_manifest. Do not change schema_version, schedules, notifications, publishing, or unrelated workflow behavior.
+7. Only after the clean verification succeeds, call set_workflow_contract_version(version="1.0.21") to update workflow.json "version" to "1.0.21". Do not change schema_version, schedules, notifications, publishing, or unrelated workflow behavior.
 
 Report the candidate count, changed plan fields, changed learning/KB files, verification result, and any blocker, then stop.`,
 	},

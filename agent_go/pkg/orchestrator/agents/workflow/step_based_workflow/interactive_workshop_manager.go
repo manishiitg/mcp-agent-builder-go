@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/guidance"
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
@@ -32,7 +30,6 @@ import (
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/agent/prompt"
 	baseevents "github.com/manishiitg/mcpagent/events"
-	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/mcpagent/mcpclient"
 	"github.com/manishiitg/mcpagent/observability"
@@ -44,8 +41,6 @@ import (
 const maxCDPPortsPerWorkflow = 4
 
 const workshopFixedIteration = "iteration-0"
-
-const pulseReviewerCompletionPrefix = "PULSE_REVIEW_COMPLETE"
 
 const statusPollWindow = 60 * time.Second
 
@@ -118,75 +113,6 @@ func newWorkshopStageAgentIdentity(name string) string {
 	return fmt.Sprintf("%s-%d-%d", sanitizeWorkshopAgentIdentityPart(name), time.Now().UnixNano(), workshopStageAgentIdentityCounter.Add(1))
 }
 
-func pulseReviewerCompletionMarker(todoID string) string {
-	return fmt.Sprintf("%s todo_id=%s", pulseReviewerCompletionPrefix, sanitizeWorkshopAgentIdentityPart(todoID))
-}
-
-func newManualPulseReviewIdentity(now time.Time, todoID, module string) (pulseRunID, reviewRunID string) {
-	now = now.UTC()
-	suffix := fmt.Sprintf(
-		"manual-%s-%s-%d",
-		sanitizeWorkshopAgentIdentityPart(module),
-		sanitizeWorkshopAgentIdentityPart(todoID),
-		now.UnixNano(),
-	)
-	reviewRunID = now.Format("2006-01-02T15-04-05.000Z") + "_" + suffix
-	return "manual-" + suffix, reviewRunID
-}
-
-func newDerivedPulseReviewIdentity(now time.Time, pulseRunID, todoID, module string) (effectivePulseRunID, reviewRunID string) {
-	if strings.TrimSpace(pulseRunID) == "" {
-		return newManualPulseReviewIdentity(now, todoID, module)
-	}
-	now = now.UTC()
-	suffix := fmt.Sprintf(
-		"%s-%s-%s-%d",
-		sanitizeWorkshopAgentIdentityPart(pulseRunID),
-		sanitizeWorkshopAgentIdentityPart(module),
-		sanitizeWorkshopAgentIdentityPart(todoID),
-		now.UnixNano(),
-	)
-	return strings.TrimSpace(pulseRunID), now.Format("2006-01-02T15-04-05.000Z") + "_" + suffix
-}
-
-func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker string) string {
-	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep tool narration compact. Do not emit narrative findings or a Markdown report.\n\n", workspacePath)
-	structuredContract := ""
-	if strings.TrimSpace(resultPath) != "" {
-		structuredContract = `TYPED REVIEW CONTRACT: SQLite lifecycle rows are the only findings source of truth. Do not write or return a Markdown report and do not encode lifecycle records in final-response text.
-
-Call record_pulse_finding once for every trackable finding as soon as it is established. Call record_pulse_verification only for an exact changed_unverified attempt returned by get_pulse_state(view="backlog") whose named evidence boundary has arrived. After all selected lanes are reconciled, call complete_pulse_review exactly once with every selected module. The backend computes counts; the final response is informational only and is neither parsed nor persisted.
-
-BACKLOG RECONCILIATION: compare by affected behavior, expected outcome, and observed failure; reuse the stable concern/finding identity for an existing issue. Ordinary workflow findings use issue_kind=workflow_issue; shared runtime/tool/bridge defects use issue_kind=harness_issue with stable target_key and complete reproduction evidence. Advisor findings use recommended_route=decision_required, evidence_wait, or fixer_handoff; evidence_wait requires next_check. If a conclusion is not trackable, do not call record_pulse_finding for it. LIFECYCLE HISTORY: load the module backlog before final classification.` + "\n\n"
-	}
-	return scopeHeader + structuredContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
-}
-func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
-	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
-	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Process verification outcomes first, then repairs, sequentially. The backend opens the durable fix-attempt record from the disposition you write, so there is no attempt to declare and no attempt_id to carry. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
-	return scope + queue + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
-}
-
-func pulseReviewerCompletionContract(marker string) string {
-	marker = strings.TrimSpace(marker)
-	if marker == "" {
-		return ""
-	}
-	return fmt.Sprintf("\n\nIMPORTANT COMPLETION CONTRACT: This overrides any earlier response-ending instruction or marker. Only after the complete review or fix pass is written, emit this exact final line and nothing after it:\n%s", marker)
-}
-
-func completedPulseReviewerResult(result, marker string) (string, error) {
-	result = strings.TrimSpace(result)
-	if !strings.HasSuffix(result, marker) {
-		return "", fmt.Errorf("reviewer output did not end with %q", marker)
-	}
-	result = strings.TrimSpace(strings.TrimSuffix(result, marker))
-	if result == "" {
-		return "", fmt.Errorf("reviewer output was empty before %q", marker)
-	}
-	return result, nil
-}
-
 const maxBackgroundMessageSequenceItems = 12
 
 // backgroundMessageSequenceItem is one follow-up turn sent to an already
@@ -199,99 +125,10 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
-type pulseReviewBindingContextKey struct{}
-type pulseReviewBinding struct {
-	ReviewRunID string
-	Modules     []string
-}
-
-func withPulseReviewBinding(ctx context.Context, reviewRunID string, modules []string) context.Context {
-	return context.WithValue(ctx, pulseReviewBindingContextKey{}, pulseReviewBinding{ReviewRunID: reviewRunID, Modules: append([]string(nil), modules...)})
-}
-
-func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) ([]backgroundMessageSequenceItem, error) {
-	available := map[string]backgroundMessageSequenceItem{
-		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, DB/knowledgebase/learnings integrity, and artifact ownership purity. Shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics copied into Plan/Learnings/KB are one consolidated workflow-level contract-drift finding; preserve target-specific HOW. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence pointers only: never paste raw logs, SQL rows, tool output, or repeated context into the response. Do not propose product strategy and do not consolidate yet."},
-		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links with evidence pointers; do not quote raw tool output or repeat the engineering lane, and do not evaluate strategy completeness."},
-	}
-	if len(lanes) == 0 {
-		lanes = []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
-	}
-	seen := map[string]bool{}
-	selected := map[string]bool{}
-	for _, lane := range lanes {
-		lane = strings.TrimSpace(lane)
-		if _, ok := available[lane]; !ok {
-			return nil, fmt.Errorf("review_lanes contains unsupported operational lane %q", lane)
-		}
-		if seen[lane] {
-			return nil, fmt.Errorf("review_lanes contains duplicate lane %q", lane)
-		}
-		seen[lane] = true
-		selected[lane] = true
-	}
-	ordered := []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}
-	items := make([]backgroundMessageSequenceItem, 0, len(selected)+1)
-	for _, lane := range ordered {
-		if selected[lane] {
-			items = append(items, available[lane])
-		}
-	}
-	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause and retain distinct evidence pointers. Persist each trackable issue with record_pulse_finding, persist each arrived allowlisted verification with record_pulse_verification, then call complete_pulse_review once for every selected lane. Do not encode records in the response. Keep the final message brief and do not introduce new investigation unless needed to resolve a direct contradiction."})
-	if includeFixer {
-		items = append(items, backgroundMessageSequenceItem{
-			ID:      "fix",
-			Title:   "Apply and verify fixes",
-			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The typed reviewer tools have already filed every finding and compact receipt in SQLite. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the structured lifecycle backlog and reviewer verification records, then build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome only: changed, verified, and still blocked with evidence pointers. Do not repeat findings, logs, or raw proof.",
-		})
-	}
-	return items, nil
-}
-
-func backgroundReviewLanes(args map[string]interface{}) ([]string, error) {
-	raw, exists := args["review_lanes"]
-	if !exists || raw == nil {
-		return nil, nil
-	}
-	values, ok := raw.([]interface{})
-	if !ok {
-		if typed, typedOK := raw.([]string); typedOK {
-			return append([]string(nil), typed...), nil
-		}
-		return nil, fmt.Errorf("review_lanes must be an array of operational module IDs")
-	}
-	lanes := make([]string, 0, len(values))
-	for index, value := range values {
-		lane, ok := value.(string)
-		if !ok || strings.TrimSpace(lane) == "" {
-			return nil, fmt.Errorf("review_lanes[%d] must be a non-empty string", index)
-		}
-		lanes = append(lanes, strings.TrimSpace(lane))
-	}
-	if len(lanes) == 0 {
-		return nil, fmt.Errorf("review_lanes must contain at least one operational module")
-	}
-	return lanes, nil
-}
-
-func defaultBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
-	role, _ := args["role"].(string)
-	module, _ := args["module"].(string)
-	role = strings.ToLower(strings.TrimSpace(role))
-	if (role == "reviewer" || role == "fixer") && strings.EqualFold(strings.TrimSpace(module), "workflow_review") {
-		lanes, err := backgroundReviewLanes(args)
-		if err != nil {
-			return nil, err
-		}
-		return canonicalWorkflowReviewMessageSequence(lanes, role == "fixer")
-	}
-	return nil, nil
-}
-
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
-		return defaultBackgroundMessageSequence(args)
+		return nil, nil
 	}
 	items, ok := raw.([]interface{})
 	if !ok {
@@ -340,7 +177,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    maxBackgroundMessageSequenceItems,
-		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Omit this for module=workflow_review: the backend supplies only the Gate-selected operational lanes from review_lanes, then consolidation; role=fixer adds one bounded Fixer turn after the persisted review checkpoint. Use explicit items when other later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
+		"description": "Optional ordered follow-up turns. The backend sends them sequentially to the same agent after the opening instructions turn, preserving one conversation, MCP session, folder guard, and isolated coding workspace. Use explicit items when later analysis must build on earlier analysis; do not use it to run independent work in parallel.",
 		"items": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -446,35 +283,6 @@ func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 			module, strings.Join(pulsemodules.AcceptedForReviewReceipts(), ", "))
 	}
 	return nil
-}
-
-func pulseReviewResultPath(reviewRunID, module string) (string, error) {
-	if err := ValidatePulseReviewIdentity(reviewRunID, module); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("pulse_review_log:%s:%s", reviewRunID, module), nil
-}
-
-func acquirePulseReviewerSlot(ctx context.Context, slots chan struct{}) error {
-	select {
-	case slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// pulseReviewerPersistenceContext keeps the durable reviewer receipt attached
-// to the child execution identity, but not to the HTTP/MCP request that started
-// it. Coding-agent bridges may legitimately detach or time out that outer
-// request while the tracked reviewer continues. Using the request context for
-// the final SQLite write turned completed reviews into "context canceled" and
-// prevented the Fixer from ever seeing them.
-func pulseReviewerPersistenceContext(execCtx context.Context) (context.Context, context.CancelFunc) {
-	if execCtx == nil {
-		execCtx = context.Background()
-	}
-	return context.WithTimeout(context.WithoutCancel(execCtx), 30*time.Second)
 }
 
 func normalizeWorkshopBuilderRunFolder(runFolder string) string {
@@ -1340,8 +1148,6 @@ type InteractiveWorkshopManager struct {
 	cancelAllServerAgents  func()                    // optional: cancel all running agents in server's bgAgentRegistry
 	listServerAgents       func() []ServerAgentInfo  // optional: list all agents from server's bgAgentRegistry
 	workshopModeOverride   string                    // frontend-selected workshop mode (takes priority over auto-detection)
-	toolAgentSetupMu       sync.Mutex                // protects temporary controller/bridge state while tool agents are created
-	pulseReviewerSlots     chan struct{}             // hard limit for concurrent Pulse reviewer fan-out
 }
 
 func uniqueStringsPreserveOrder(values []string) []string {
@@ -1525,12 +1331,11 @@ func NewInteractiveWorkshopManager(
 	// and are queryable via query_step
 	controller.SetSubAgentNotifier(&workshopSubAgentNotifier{registry: registry})
 	return &InteractiveWorkshopManager{
-		controller:         controller,
-		presetLLM:          presetLLM,
-		sessionID:          sessionID,
-		workflowID:         workflowID,
-		stepRegistry:       registry,
-		pulseReviewerSlots: make(chan struct{}, pulsemodules.ReviewerMaxConcurrency),
+		controller:   controller,
+		presetLLM:    presetLLM,
+		sessionID:    sessionID,
+		workflowID:   workflowID,
+		stepRegistry: registry,
 	}
 }
 
@@ -1602,7 +1407,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// These must always be allowed because SetToolAllowList also gates the code
 		// execution registry (HTTP calls), which blocks execution agents from calling
 		// sub-agents even though the restriction is intended only for the phase agent LLM.
-		"call_sub_agent", "call_generic_agent", "get_sub_agent_conversation", "get_route_description",
+		"call_sub_agent", "get_sub_agent_conversation", "get_route_description",
 	}
 	// Human tools from the single source shared with registration (createCustomTools),
 	// so the allow-list and what's actually registered cannot drift apart.
@@ -1646,7 +1451,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// Variable & config tools
 	variableConfig := []string{
 		"update_variable", "add_group", "update_group", "delete_group",
-		"update_workflow_config",
+		"update_workflow_config", "set_workflow_contract_version",
 	}
 
 	// Schedule tools
@@ -1679,7 +1484,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// confirmation.
 	autoImprovement := []string{
 		"capture_context",
-		"run_goal_advisor_review",
 		"get_workflow_command_guidance", // canonical slash-command prose; see guidance package.
 	}
 
@@ -1691,7 +1495,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"record_pulse_finding",
 		"record_pulse_verification",
 		"complete_pulse_review",
-		"begin_pulse_fixer_run",
 		"record_pulse_worklist",
 		"record_pulse_result",
 		"record_pulse_impact",
@@ -1770,249 +1573,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 	}
 
 	return tools
-}
-
-func filterWorkspaceToolsByName(allTools []llmtypes.Tool, allExecutors map[string]interface{}, allowedToolNames []string) ([]llmtypes.Tool, map[string]interface{}) {
-	allowed := make(map[string]bool, len(allowedToolNames))
-	for _, name := range allowedToolNames {
-		allowed[name] = true
-	}
-
-	var filteredTools []llmtypes.Tool
-	filteredExecutors := make(map[string]interface{})
-
-	for _, tool := range allTools {
-		if tool.Function == nil {
-			continue
-		}
-		name := tool.Function.Name
-		if !allowed[name] {
-			continue
-		}
-		filteredTools = append(filteredTools, tool)
-		if exec, ok := allExecutors[name]; ok {
-			filteredExecutors[name] = guardToolOnlyArtifactWrites(name, exec)
-		}
-	}
-
-	return filteredTools, filteredExecutors
-}
-
-type goalAdvisorStageAccess int
-
-const (
-	goalAdvisorStageReadOnly goalAdvisorStageAccess = iota
-	goalAdvisorStageFinalizerProposal
-	goalAdvisorStageFinalizerApprovedMutation
-	// goalAdvisorStagePulseFixer runs the Pulse Fixer as a stage agent rather
-	// than as the parent turn.
-	//
-	// The parent's model is fixed for its whole scheduled turn, and for a
-	// coding-CLI provider that model is pinned when the CLI process starts — so
-	// while the Fixer *is* the parent it cannot have its own tier. Scheduled
-	// Pulse therefore reviewed on the stronger model and mutated on the weaker
-	// one. A stage agent is a separate process on selectMaintenanceLLM, the
-	// same tier the reviewers use, which puts the mutating step on at least the
-	// reasoning of the step that only read.
-	//
-	// This stays a single sequential writer: one fixer per module, holding
-	// delegated Pulse write authority for exactly one run.
-	goalAdvisorStagePulseFixer
-)
-
-func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
-	return []string{
-		// Workspace/file tools for evidence and bounded HTML/report updates.
-		"execute_shell_command", "diff_patch_workspace_file",
-		"read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db",
-
-		// Dynamic command guidance is builder-owned. Attached reference access
-		// is intrinsic mcpagent identity and therefore is not allow-listed here:
-		// turn_session.go injects read_skill into the per-turn session allow list
-		// itself when it is an intrinsic identity tool, so the builder must not
-		// claim a grant mcpagent already guarantees.
-		"get_workflow_command_guidance",
-
-		// Tool-surface discovery. The allow-list gates the code-execution bridge
-		// too, and it is checked before get_api_spec can reach its virtual-tool
-		// partition — so omitting it left every stage agent unable to find out
-		// which tools it actually has. That turns any denial into a guess: on
-		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
-		// surface and concluded its session was in the wrong workshop mode.
-		// Discovery grants no capability this list does not already grant.
-		"get_api_spec",
-
-		// Read-only workflow state.
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
-		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
-
-		// Report/dashboard shape plus the durable Pulse question flow.
-		"get_report_plan", "upsert_report_widget", "remove_report_widget",
-		"move_report_widget", "toggle_report_widget", "set_report_theme",
-		"set_section_layout", "validate_report_plan", "preview_report_render",
-		"create_human_input_request",
-
-		// Goal Advisor's finalizer persists its decision/evidence route through
-		// the same typed reviewer contract as every other Pulse perspective.
-		"record_pulse_finding", "record_pulse_verification", "complete_pulse_review",
-	}
-}
-
-func goalAdvisorFinalizerProposalToolAgentAllowedToolNames() []string {
-	return goalAdvisorCommonMutationToolAgentAllowedToolNames()
-}
-
-// pulseFixerStageToolAgentAllowedToolNames uses the canonical Workshop writer
-// surface instead of maintaining a second, hand-curated approximation of it.
-// A Fixer is expected to repair any proven workflow implementation defect; a
-// missing plan, route, schedule, skill, model setting, report, evaluation, or
-// store tool must not turn a repairable issue into a false platform blocker.
-//
-// Authority and intent remain separate. The Fixer still receives delegated
-// Pulse write authority for one pulse_run_id, must follow the finding lifecycle,
-// and must not make approval-bound product/strategy changes merely because the
-// underlying Builder tool exists. Those rules belong to the lifecycle and
-// prompt contracts, not to a second tool-permission matrix that can drift.
-func pulseFixerStageToolAgentAllowedToolNames() []string {
-	return append([]string(nil), GetToolsForWorkshopMode("workshop")...)
-}
-
-func goalAdvisorFinalizerApprovedToolAgentAllowedToolNames() []string {
-	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
-	tools = append(tools,
-		// Strategic plan/config/eval changes are only available when code has
-		// verified an approved plan-proposal answer and a critic approve verdict.
-		"create_plan",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
-		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
-		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
-		"update_step_config", "update_validation_schema", "validate_evaluation_plan",
-		"update_variable", "add_group", "update_group", "delete_group",
-		"update_workflow_config", "test_llm", "set_workflow_llm_config",
-		"mark_human_input_consumed",
-	)
-	return tools
-}
-
-// goalAdvisorReadOnlyToolAgentAllowedToolNames is the reviewer surface.
-//
-// "Read-only" here is a contract these agents are held to by their briefs, not
-// a property the tool list establishes. It never was: execute_shell_command is
-// registered with no path parameters, so the folder guard has nothing to
-// validate and cannot stop `sqlite3 db/db.sqlite "UPDATE ..."` or a shell
-// redirect into a workflow file. Only diff_patch_workspace_file is actually
-// filtered when write paths are empty.
-//
-// Narrowing the rest of the list therefore bought the appearance of enforcement
-// rather than enforcement, while creating a failure mode that has shipped twice
-// here: guidance instructs an agent to call a tool it was never given, and the
-// call fails silently. So the list is not the boundary and is not maintained as
-// one.
-//
-// The boundaries that are real and stay real: Pulse write authority is keyed by
-// session id, so a reviewer cannot record module results, open fix attempts, or
-// close findings even holding those tools — it was never lent authority. That
-// is what keeps one writer per Pulse run.
-func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
-	return []string{
-		// Evidence gathering. Reviewers are told to read, not write; the shell
-		// is general-purpose and that instruction is what bounds it.
-		"execute_shell_command", "read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db",
-
-		// Dynamic command guidance is builder-owned. Attached reference access
-		// is intrinsic mcpagent identity and therefore is not allow-listed here:
-		// turn_session.go injects read_skill into the per-turn session allow list
-		// itself when it is an intrinsic identity tool, so the builder must not
-		// claim a grant mcpagent already guarantees.
-		"get_workflow_command_guidance",
-
-		// Tool-surface discovery. The allow-list gates the code-execution bridge
-		// too, and it is checked before get_api_spec can reach its virtual-tool
-		// partition — so omitting it left every stage agent unable to find out
-		// which tools it actually has. That turns any denial into a guess: on
-		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
-		// surface and concluded its session was in the wrong workshop mode.
-		// Discovery grants no capability this list does not already grant.
-		"get_api_spec",
-
-		// Read-only workflow state and report inspection.
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
-		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
-		"get_report_plan", "validate_report_plan", "preview_report_render",
-
-		// Backlog reconciliation. A reviewer must classify each candidate
-		// against what is already tracked, so it needs to read the lifecycle —
-		// including saved reviews, which is how it tells a recurrence from a
-		// genuinely new finding.
-		"get_pulse_state",
-
-		// Narrow, typed reviewer writes. These can create findings, record
-		// allowlisted verification judgments, and finalize the compact receipt;
-		// they cannot mutate workflow artifacts or close/fix lifecycle rows.
-		"record_pulse_finding", "record_pulse_verification", "complete_pulse_review",
-	}
-}
-
-func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent(agent agents.OrchestratorAgent, workspacePath, agentName string, allowedToolNames []string, logger loggerv2.Logger) {
-	if agent == nil || agent.GetBaseAgent() == nil || agent.GetBaseAgent().Agent() == nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: cannot register workshop mutation tools; base agent unavailable", agentName))
-		return
-	}
-	mcpAgentRef := agent.GetBaseAgent()
-	if err := RegisterPlanModificationTools(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-		iwm.controller.WriteWorkspaceFile,
-		iwm.controller.MoveWorkspaceFile,
-		agentName,
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register plan modification tools: %v", agentName, err))
-	}
-	registerInteractiveWorkshopTools(iwm, mcpAgentRef, logger)
-	guidance.RegisterGuidanceTool(mcpAgentRef, "workshop", logger)
-	if err := RegisterEvaluationValidationTools(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-		iwm.controller.WriteWorkspaceFile,
-		iwm.controller.MoveWorkspaceFile,
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register evaluation validation tool: %v", agentName, err))
-	}
-	if err := RegisterReportPlanManagementTools(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-		iwm.controller.WriteWorkspaceFile,
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report plan management tools: %v", agentName, err))
-	}
-	if err := RegisterReportPlanValidationTools(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report validation tool: %v", agentName, err))
-	}
-	if err := RegisterReportRenderPreviewTool(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report preview tool: %v", agentName, err))
-	}
-	agent.GetBaseAgent().SetToolPolicy(allowedToolNames)
-	logger.Info(fmt.Sprintf("🔧 %s: registered workshop mutation tools and applied allow list (%d tools)", agentName, len(allowedToolNames)))
 }
 
 func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool(mcpAgent DefinitionToolRegistrar, workspacePath string, logger loggerv2.Logger) error {
@@ -2156,7 +1716,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 			changelog.Entries[idx].ArtifactReview = &PlanChangelogArtifactReview{
 				Done:          true,
 				ReviewedAt:    reviewedAt,
-				ReviewedBy:    "pulse_fixer",
+				ReviewedBy:    "workflow_builder",
 				Result:        result,
 				ReportEntryID: reportEntryID,
 			}
@@ -2427,55 +1987,6 @@ func configureWorkshopToolAgentBridgeSession(sessionID string) {
 	}
 	common.PopulateMCPBridgeShortEnv(env)
 	common.SetSessionShellEnv(sessionID, env)
-}
-
-func pulseFixerDBCapabilityPreflight(
-	sessionID string,
-	workspacePath string,
-	tools []llmtypes.Tool,
-	executors map[string]interface{},
-) error {
-	sessionID = strings.TrimSpace(sessionID)
-	workspacePath = strings.TrimSpace(workspacePath)
-	if sessionID == "" || workspacePath == "" {
-		return fmt.Errorf("Pulse Fixer DB capability preflight requires a session and workspace")
-	}
-	cfg := common.GetSessionShellConfig(sessionID)
-	if cfg == nil || !cfg.FolderGuardSet {
-		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has no folder guard", sessionID)
-	}
-	if !dbWritePathGranted(cfg.WritePaths, workspacePath) {
-		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q lacks workflow DB write scope", sessionID)
-	}
-	if got := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); got != DBAccessReadWrite {
-		return fmt.Errorf("Pulse Fixer DB capability preflight: session %q has db_access=%q, want %q", sessionID, got, DBAccessReadWrite)
-	}
-	if got := strings.TrimSpace(cfg.Env["MCP_SESSION_ID"]); got != sessionID {
-		return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge session=%q, want %q", got, sessionID)
-	}
-	if scopedURL := buildSessionScopedMCPAPIURL(sessionID); scopedURL != "" {
-		if got := strings.TrimSpace(cfg.Env["MCP_API_URL"]); got != scopedURL {
-			return fmt.Errorf("Pulse Fixer DB capability preflight: shell bridge URL=%q, want %q", got, scopedURL)
-		}
-	}
-
-	hasTool := func(name string) bool {
-		for _, tool := range tools {
-			if tool.Function != nil && tool.Function.Name == name {
-				return true
-			}
-		}
-		return false
-	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
-		if !hasTool(name) {
-			return fmt.Errorf("Pulse Fixer DB capability preflight: required tool %q is not registered", name)
-		}
-		if executor, ok := executors[name]; !ok || executor == nil {
-			return fmt.Errorf("Pulse Fixer DB capability preflight: required executor %q is unavailable", name)
-		}
-	}
-	return nil
 }
 
 // workshopBlockedWritePaths denies writes to canonical files that must only
@@ -2778,7 +2289,7 @@ Each workflow has three separate stores that survive across runs: `+"`learnings/
 
 **Read previous builder conversations** from `+"`builder/`"+` folder (`+"`ls -t {{.AbsWorkspacePath}}/builder/*.json | head -3`"+`) to avoid repeating failed approaches.
 
-**Core loop:** run → eval → classify → review → fix → verify. Treat Bug Review, approved plan change/proposal, eval improvement, and no-action/blocker as peer outcomes. Load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/post-run-monitor.md\"}])`"+` for the parallel read-only reviewer and single Pulse Fixer contract.
+**Core loop:** run → eval → classify → review → fix → verify. Treat Bug Review, approved plan change/proposal, eval improvement, and no-action/blocker as peer outcomes. Load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/post-run-monitor.md\"}])`"+` for the normal background review/fix contract.
 {{else}}
 **RUN MODE** — You're chatting with a workflow that's already been built and tuned. Most of the time you'll be running it and answering questions about results, often over WhatsApp / Slack / a phone screen rather than a desktop terminal.
 
@@ -2920,8 +2431,8 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 {{if or (eq .WorkshopMode "workshop") (eq .WorkshopMode "run")}}
 - **Step execution & inspection**: `+"`execute_step`"+`, `+"`query_step`"+`, `+"`send_step_message`"+`, `+"`debug_step`"+`, `+"`list_executions`"+`, `+"`stop_step`"+`, `+"`stop_all_executions`"+`, `+"`run_in_background`"+`, `+"`run_full_workflow`"+`. {{if eq .WorkshopMode "workshop"}}Workshop also exposes `+"`execute_step(..., fast_path_only=true)`"+` for scripted main.py fast-path testing.{{end}}
 {{end}}{{if eq .WorkshopMode "workshop"}}
-- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Pulse uses parallel read-only reviewers and one parent Pulse Fixer. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
-- **Strategy review & decisions**: `+"`run_goal_advisor_review`"+` runs the dedicated advisor/critic/finalizer pipeline for a manual workshop review. Use `+"`create_human_input_request`"+` for durable approval/clarification cards; scheduled Pulse renders them in `+"`builder/improve.html`"+`.
+- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Pulse uses ordinary `+"`run_in_background`"+` agents: Engineering/Ops can share one executor message sequence, while Strategy and Goal remain independent. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
+- **Strategy review & decisions**: use the guided `+"`/goal-advisor`"+` review in the current conversation. Use `+"`create_human_input_request`"+` for durable approval/clarification cards; scheduled Pulse renders them in `+"`builder/improve.html`"+`.
 {{end}}
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
 {{if eq .WorkshopMode "workshop"}}
@@ -3734,7 +3245,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: run_in_background — spawn independent background agent (not tied to a workflow step)
 	if err := mcpAgent.RegisterCustomTool(
 		"run_in_background",
-		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator with call_generic_agent — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
+		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3897,589 +3408,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register run_in_background tool: %v", err))
 	}
 
-	// Pulse review/fix stages follow the same asynchronous contract as every
-	// other background agent: register before launch, return an execution ID
-	// immediately, and resume the parent through the completion notifier. The
-	// executor is registered on the exact workshop session, preventing another
-	// workflow's todo_task executor from being selected through the global
-	// code-exec registry.
-	if err := mcpAgent.RegisterCustomTool(
-		"call_generic_agent",
-		"Start one isolated Pulse stage asynchronously through the documented MCP API bridge and return its execution_id immediately. role=reviewer is strictly read-only and persists complete Markdown plus structured verification markers in SQLite. role=fixer,module=workflow_review runs Gate-selected operational reviews and bounded repairs as ordered turns in one agent, persisting the consolidated review before mutation. role=fixer,module=pulse_fixer handles only residual non-terminal due modules. Every stage is tracked as a child execution. After launch, end the current turn and await the automatic completion notification; do not poll or enter the next Pulse phase. Read-only incomplete provider snapshots are retried once; writers are never replayed automatically. Do not add a completion marker; this tool owns it.",
-		map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"todo_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Stable reviewer task ID used for correlation.",
-				},
-				"instructions": map[string]interface{}{
-					"type":        "string",
-					"description": "Opening-turn instructions, including workflow path, Pulse run id, module, evidence, and response contract. Do not add a final completion marker; the tool appends its authoritative marker to the last turn.",
-				},
-				"message_sequence": backgroundMessageSequenceSchema(),
-				"review_lanes": map[string]interface{}{
-					"type":        "array",
-					"items":       map[string]interface{}{"type": "string", "enum": []string{pulsemodules.WorkflowReviewID, pulsemodules.LLMOpsReviewID}},
-					"description": "For a scheduled shared operational reviewer, the exact non-empty perspective IDs selected by Pulse Gate: Engineering Review and/or LLM/Ops. The backend creates one ordered turn per selected perspective plus consolidation; omitted perspectives do not run.",
-				},
-				"preferred_tier": map[string]interface{}{
-					"type":        "integer",
-					"enum":        []int{1, 2, 3},
-					"description": "Required intended reasoning tier. Pulse reviewers execute with the workflow maintenance model.",
-				},
-				"pulse_run_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Scheduled Pulse worklist run ID. When supplied, review_run_id and module are also required. Omit both IDs and pass module alone for a standalone persisted review.",
-				},
-				"review_run_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Exact scheduler-provided dated review ID (YYYY-MM-DDTHH-MM-SS.mmmZ_<pulse-id>). Required with pulse_run_id; omit for a standalone persisted review.",
-				},
-				"module": map[string]interface{}{
-					"type":        "string",
-					"description": "Reviewer: exact canonical module. Combined scheduled operational review/fix: workflow_review with role=fixer and review_lanes. Residual scheduled Fixer: pulse_fixer. Standalone/manual Fixer may still pass one canonical module.",
-				},
-				"role": map[string]interface{}{
-					"type":        "string",
-					"enum":        []string{"reviewer", "fixer"},
-					"description": "Defaults to reviewer: read-only, returns findings, changes nothing. Use fixer with module=workflow_review and review_lanes for the combined operational review/fix sequence; use module=pulse_fixer only for residual non-terminal due modules or one canonical module for a standalone manual repair. A Fixer stage is lent bounded Pulse write authority for this run only.",
-				},
-			},
-			"required": []string{"todo_id", "instructions", "preferred_tier"},
-		},
-		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			// Capture the caller's MCP session id here, while it is still on the
-			// request context. Execution runs on a context derived from the
-			// long-lived workshop session instead, which does not carry it, so
-			// reading it later finds nothing. A fixer child's authority is lent
-			// from this session, so losing it refuses every delegation.
-			parentMCPSessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
-			todoID, _ := args["todo_id"].(string)
-			todoID = strings.TrimSpace(todoID)
-			if todoID == "" {
-				return "", fmt.Errorf("todo_id is required")
-			}
-			instructions, _ := args["instructions"].(string)
-			instructions = strings.TrimSpace(instructions)
-			if instructions == "" {
-				return "", fmt.Errorf("instructions are required")
-			}
-			messageSequence, err := parseBackgroundMessageSequence(args)
-			if err != nil {
-				return "", err
-			}
-			reviewLanes, err := backgroundReviewLanes(args)
-			if err != nil {
-				return "", err
-			}
-			preferredTier, ok := args["preferred_tier"].(float64)
-			if !ok || preferredTier < 1 || preferredTier > 3 {
-				return "", fmt.Errorf("preferred_tier is required and must be 1, 2, or 3")
-			}
-			pulseRunID, _ := args["pulse_run_id"].(string)
-			pulseRunID = strings.TrimSpace(pulseRunID)
-			reviewRunID, _ := args["review_run_id"].(string)
-			reviewRunID = strings.TrimSpace(reviewRunID)
-			module, _ := args["module"].(string)
-			module = strings.TrimSpace(module)
-			role, _ := args["role"].(string)
-			role = strings.ToLower(strings.TrimSpace(role))
-			if role == "" {
-				role = "reviewer"
-			}
-			if role != "reviewer" && role != "fixer" {
-				return "", fmt.Errorf("role must be reviewer or fixer")
-			}
-			isFixer := role == "fixer"
-			looksLikeScheduledPulseReview := strings.Contains(strings.ToLower(instructions), "pulse_run_id") ||
-				strings.Contains(strings.ToLower(instructions), "pulse run id")
-			if module != "" && module != "pulse_fixer" && pulseRunID == "" && reviewRunID == "" && !looksLikeScheduledPulseReview {
-				pulseRunID, reviewRunID = newManualPulseReviewIdentity(time.Now(), todoID, module)
-			}
-			// A trusted recovery caller may already own a pulse_run_id while
-			// lacking a review identity. Keep its authority bound to that run and
-			// derive only the missing review identity.
-			if module != "" && pulseRunID != "" && reviewRunID == "" {
-				_, reviewRunID = newDerivedPulseReviewIdentity(time.Now(), pulseRunID, todoID, module)
-			}
-			pulseMetadataCount := 0
-			for _, value := range []string{pulseRunID, reviewRunID, module} {
-				if value != "" {
-					pulseMetadataCount++
-				}
-			}
-			if (pulseMetadataCount != 0 || looksLikeScheduledPulseReview) && pulseMetadataCount != 3 {
-				return "", fmt.Errorf("scheduled Pulse reviews require pulse_run_id, review_run_id, and module together; standalone reviews pass module alone and keep scheduler identity fields out of reviewer instructions")
-			}
-			isPulseStage := pulseMetadataCount == 3
-			isReviewFixer := isPulseStage && isFixer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0
-			isPulseReviewer := isPulseStage && (!isFixer || isReviewFixer)
-			if isPulseReviewer && module == pulsemodules.WorkflowReviewID {
-				if len(reviewLanes) == 0 {
-					return "", fmt.Errorf("scheduled workflow_review requires the exact non-empty review_lanes selected by Pulse Gate")
-				}
-				if len(messageSequence) == 0 {
-					return "", fmt.Errorf("workflow_review requires selected review lanes plus consolidation in one agent session")
-				}
-			}
-			if isFixer && !isPulseStage {
-				return "", fmt.Errorf("role=fixer requires pulse_run_id, review_run_id, and module together")
-			}
-			if isFixer && module == "pulse_fixer" {
-				// pulse_fixer is a stage identity, not a review module. Its child is
-				// trusted for the run and must close every due canonical module.
-			} else if isPulseStage {
-				if _, err := pulseReviewResultPath(reviewRunID, module); err != nil {
-					return "", err
-				}
-			}
-
-			// role=fixer runs the module's Fixer as a stage agent instead of
-			// inline in the parent turn. The parent's model is pinned for its
-			// whole turn, so an inline Fixer mutates on whatever tier the parent
-			// got — weaker than the reviewers on codex. A stage runs on
-			// selectMaintenanceLLM, the reviewer tier.
-			stageAccess := goalAdvisorStageReadOnly
-			stagePulseRunID := ""
-			if isFixer {
-				stageAccess = goalAdvisorStagePulseFixer
-				stagePulseRunID = pulseRunID
-			}
-			var resultPath string
-			if isPulseReviewer {
-				var pathErr error
-				resultPath, pathErr = pulseReviewResultPath(reviewRunID, module)
-				if pathErr != nil {
-					return "", pathErr
-				}
-				if iwm.pulseReviewerSlots == nil {
-					iwm.toolAgentSetupMu.Lock()
-					if iwm.pulseReviewerSlots == nil {
-						iwm.pulseReviewerSlots = make(chan struct{}, pulsemodules.ReviewerMaxConcurrency)
-					}
-					iwm.toolAgentSetupMu.Unlock()
-				}
-			}
-
-			execCtx, cancel, ctxErr := iwm.newExecContext()
-			if ctxErr != nil {
-				return "", ctxErr
-			}
-			executionPrefix := "generic-agent"
-			reviewName := "Generic agent: " + strings.ReplaceAll(todoID, "-", " ")
-			if isPulseStage {
-				executionPrefix = "pulse-review"
-				reviewName = "Pulse reviewer: " + strings.ReplaceAll(todoID, "-", " ")
-				if isFixer {
-					executionPrefix = "pulse-fixer"
-					reviewName = "Pulse fixer: " + strings.ReplaceAll(todoID, "-", " ")
-				}
-			}
-			reviewExecID := fmt.Sprintf("%s-%s-%d", executionPrefix, sanitizeWorkshopAgentIdentityPart(todoID), time.Now().UnixNano())
-			agentSessionID := fmt.Sprintf("workshop-review-%d", time.Now().UnixNano())
-			queuedAt := time.Now().UTC()
-			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
-
-			trackedStepID := "generic-agent:" + todoID
-			if isPulseStage {
-				trackedStepID = "pulse-review:" + todoID
-				if isFixer {
-					trackedStepID = "pulse-fixer:" + todoID
-				}
-			}
-			reviewExec := &WorkshopStepExecution{
-				ID:             reviewExecID,
-				StepID:         trackedStepID,
-				AgentSessionID: agentSessionID,
-				Status:         WorkshopStepRunning,
-				cancel:         cancel,
-			}
-			iwm.stepRegistry.Register(reviewExec)
-			executionType := "generic-agent"
-			executionKind := "generic_agent"
-			if isPulseStage {
-				executionType = "pulse-reviewer"
-				executionKind = "pulse_reviewer"
-				if isFixer {
-					executionType = "pulse-fixer"
-					executionKind = "pulse_fixer"
-				}
-			}
-			reviewMeta := map[string]string{
-				"execution_type": executionType,
-				"todo_id":        todoID,
-			}
-			if isPulseStage {
-				if isFixer {
-					reviewMeta["pulse_fixer"] = "true"
-				} else {
-					reviewMeta["pulse_reviewer"] = "true"
-				}
-				reviewMeta["pulse_run_id"] = pulseRunID
-				reviewMeta["review_run_id"] = reviewRunID
-				reviewMeta["module"] = module
-				if len(reviewLanes) > 0 {
-					reviewMeta["review_lanes"] = strings.Join(reviewLanes, ",")
-				}
-				if resultPath != "" {
-					reviewMeta["review_result_path"] = resultPath
-				}
-			}
-			parentExecutionID := currentWorkshopParentExecutionID(ctx)
-			if parentExecutionID == "" && strings.TrimSpace(iwm.mainSessionID) != "" {
-				parentExecutionID = "main:" + strings.TrimSpace(iwm.mainSessionID)
-			}
-			if iwm.executionNotifier != nil {
-				iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
-					ID:                reviewExecID,
-					ParentExecutionID: parentExecutionID,
-					Name:              reviewName,
-					Kind:              executionKind,
-					Metadata:          reviewMeta,
-					Cancel:            cancel,
-				})
-			}
-			execCtx = virtualtools.WithBackgroundAgentID(execCtx, reviewExecID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, reviewExecID)
-
-			workspacePath := iwm.controller.GetWorkspacePath()
-			marker := pulseReviewerCompletionMarker(todoID)
-			stageInstructions := instructions
-			if specialization := iwm.advisorSpecializationInstruction(execCtx, module); specialization != "" {
-				stageInstructions = strings.TrimSpace(stageInstructions) + "\n\n" + specialization
-			}
-			reviewModules := []string{module}
-			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
-				reviewModules = append([]string(nil), reviewLanes...)
-			}
-			if isPulseReviewer {
-				modulesJSON, _ := json.Marshal(reviewModules)
-				stageInstructions = strings.TrimSpace(stageInstructions) + fmt.Sprintf(
-					"\n\nTYPED TOOL IDENTITY (copy exactly into every reviewer write): workspace_path=%q, pulse_run_id=%q, review_run_id=%q, selected modules=%s. record_pulse_finding.module must be one selected module. complete_pulse_review.modules must contain the complete selected list. The backend validates verification identities against the live backlog; do not invent them.",
-					workspacePath, pulseRunID, reviewRunID, string(modulesJSON),
-				)
-			}
-			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, marker)
-			if isFixer && !isReviewFixer {
-				stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, marker)
-			}
-			stageSequence := append([]backgroundMessageSequenceItem(nil), messageSequence...)
-			if len(stageSequence) > 0 {
-				// The completion marker belongs only to the last response. Keeping it
-				// out of the opening and intermediate turns prevents an early lens
-				// from looking terminal to the trusted persistence boundary.
-				stageInstruction = buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, "")
-				if isFixer && !isReviewFixer {
-					stageInstruction = buildPulseFixerInstruction(workspacePath, instructions, "")
-				}
-				last := len(stageSequence) - 1
-				stageSequence[last].Message = strings.TrimSpace(stageSequence[last].Message) + pulseReviewerCompletionContract(marker)
-			}
-			persistFailure := func(message string) error {
-				if !isPulseReviewer {
-					return nil
-				}
-				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
-				defer persistCancel()
-				return CompletePulseReview(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, message, "failed")
-			}
-			verifyReviewReceipts := func() error {
-				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
-				defer persistCancel()
-				for _, reviewModule := range reviewModules {
-					receipt, err := LoadPulseReviewReceiptForRun(persistCtx, workspacePath, reviewRunID, reviewModule)
-					if err != nil {
-						return fmt.Errorf("module %s did not call complete_pulse_review: %w", reviewModule, err)
-					}
-					if receipt.Status != "completed" {
-						return fmt.Errorf("module %s review receipt has status %q, want completed", reviewModule, receipt.Status)
-					}
-				}
-				return nil
-			}
-
-			go func() {
-				var toolResult string
-				var toolErr error
-				var stageStartedAt time.Time
-				combinedReviewPersisted := false
-				// Finalize and notify before releasing the execution context. Calling
-				// cancel first would misclassify a successful completion as cancelled.
-				defer cancel()
-				defer func() {
-					skipNotify := finalizeExecStatus(reviewExec, execCtx, &toolResult, &toolErr)
-					if !skipNotify && iwm.executionNotifier != nil {
-						iwm.executionNotifier.OnExecutionComplete(reviewExecID, reviewName, toolResult, reviewMeta, toolErr)
-					}
-				}()
-
-				toolResult, toolErr = func() (string, error) {
-					if isPulseReviewer {
-						if err := acquirePulseReviewerSlot(execCtx, iwm.pulseReviewerSlots); err != nil {
-							return "", fmt.Errorf("wait for Pulse reviewer slot: %w", err)
-						}
-						defer func() { <-iwm.pulseReviewerSlots }()
-					}
-					stageStartedAt = time.Now().UTC()
-
-					var incompleteErr error
-					maxAttempts := 2
-					if isFixer {
-						// A writer may already have checkpointed mutations before an
-						// incomplete final response. Re-running the entire conversation is
-						// not a safe completion retry.
-						maxAttempts = 1
-					}
-					for attempt := 1; attempt <= maxAttempts; attempt++ {
-						stageName := "Generic agent - " + todoID
-						if isPulseStage {
-							stageName = "Pulse reviewer - " + todoID
-						}
-						if stageAccess == goalAdvisorStagePulseFixer {
-							stageName = "Pulse fixer - " + todoID
-						}
-						if attempt > 1 {
-							stageName += " - completion retry"
-						}
-						var observer backgroundMessageSequenceObserver
-						if isReviewFixer {
-							observer = func(turn backgroundMessageSequenceItem, reviewResult string) error {
-								if turn.ID != "consolidate" {
-									return nil
-								}
-								if err := verifyReviewReceipts(); err != nil {
-									return err
-								}
-								combinedReviewPersisted = true
-								return nil
-							}
-						}
-						reviewCtx := withPulseReviewBinding(execCtx, reviewRunID, reviewModules)
-						result, runErr := iwm.runGoalAdvisorStageAgentSequenceObserved(reviewCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID, observer)
-						if runErr != nil {
-							if !combinedReviewPersisted {
-								if writeErr := persistFailure(runErr.Error()); writeErr != nil {
-									return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", runErr, resultPath, writeErr)
-								}
-							}
-							if isPulseReviewer {
-								if isReviewFixer && combinedReviewPersisted {
-									return "", fmt.Errorf("%w; completed operational review retained at %s for residual Fixer recovery", runErr, resultPath)
-								}
-								return "", fmt.Errorf("%w; failure recorded at %s", runErr, resultPath)
-							}
-							return "", runErr
-						}
-						completed, completionErr := completedPulseReviewerResult(result, marker)
-						if completionErr == nil {
-							if isReviewFixer {
-								if !combinedReviewPersisted {
-									return "", fmt.Errorf("combined operational reviewer reached Fixer completion without persisting its review checkpoint")
-								}
-								return completed, nil
-							}
-							if !isPulseReviewer {
-								return completed, nil
-							}
-							if receiptErr := verifyReviewReceipts(); receiptErr != nil {
-								incompleteErr = receiptErr
-								logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d omitted typed completion: %v", todoID, attempt, receiptErr))
-								continue
-							}
-							return fmt.Sprintf("Pulse reviewer completed and was persisted in SQLite.\nmodule: %s\nreview_run_id: %s\nCall get_pulse_state(view=\"review\", review_run_id=%q, module=%q) before applying or recording fixes.", module, reviewRunID, reviewRunID, module), nil
-						}
-						incompleteErr = completionErr
-						logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned incomplete output: %v", todoID, attempt, completionErr))
-					}
-					finalErr := fmt.Errorf("Pulse reviewer %q did not complete its typed SQLite receipt after two attempts: %w", todoID, incompleteErr)
-					if writeErr := persistFailure(finalErr.Error()); writeErr != nil {
-						return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", finalErr, resultPath, writeErr)
-					}
-					if isPulseReviewer {
-						return "", fmt.Errorf("%w; failure recorded at %s", finalErr, resultPath)
-					}
-					return "", finalErr
-				}()
-				if isPulseStage {
-					completedAt := time.Now().UTC()
-					status := "completed"
-					if toolErr != nil {
-						status = "failed"
-					}
-					queueDuration := completedAt.Sub(queuedAt)
-					duration := time.Duration(0)
-					startedAtText := ""
-					if !stageStartedAt.IsZero() {
-						queueDuration = stageStartedAt.Sub(queuedAt)
-						duration = completedAt.Sub(stageStartedAt)
-						startedAtText = stageStartedAt.Format(time.RFC3339Nano)
-					}
-					metricCtx, metricCancel := pulseReviewerPersistenceContext(execCtx)
-					metricErr := RecordPulseAgentMetric(metricCtx, workspacePath, PulseAgentMetricRecord{
-						ExecutionID:     reviewExecID,
-						AgentSessionID:  agentSessionID,
-						PulseRunID:      pulseRunID,
-						ReviewRunID:     reviewRunID,
-						Module:          module,
-						Role:            role,
-						Status:          status,
-						QueuedAt:        queuedAt.Format(time.RFC3339Nano),
-						StartedAt:       startedAtText,
-						CompletedAt:     completedAt.Format(time.RFC3339Nano),
-						QueueDurationMS: queueDuration.Milliseconds(),
-						DurationMS:      duration.Milliseconds(),
-					})
-					metricCancel()
-					if metricErr != nil {
-						logger.Warn(fmt.Sprintf("⚠️ Failed to persist Pulse agent metrics for %s: %v", reviewExecID, metricErr))
-					}
-				}
-			}()
-
-			logger.Info(fmt.Sprintf("🚀 Workshop: %s started asynchronously, execution_id=%q", strings.ToLower(reviewName), reviewExecID))
-			return fmt.Sprintf("%s started in the background.\nexecution_id: %q\nEnd the current turn and await the automatic completion notification; do not poll or enter the next Pulse phase.", reviewName, reviewExecID), nil
-		},
-		"workflow",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register workshop call_generic_agent tool: %v", err))
-	}
-
-	// Tool: run_goal_advisor_review — dedicated strategic review background pipeline.
-	if err := mcpAgent.RegisterCustomTool(
-		"run_goal_advisor_review",
-		"Start the dedicated background Goal Advisor pipeline. Use this for Pulse-selected strategic review: goal recovery, healthy 10x/headroom exploration, advancing or measuring the one active advisor experiment, approved proposal application, and Chief of Staff strategic recommendations. The pipeline runs advisor -> critic -> finalizer in separate background agents. It is analysis-first: advisor and critic never format HTML, and the finalizer may make only one bounded in-place Advisor log update when state materially changes. The durable experiment lifecycle lives in builder/improve.html; the parent Pulse turn should capture the returned execution_id and end its turn. Automatic completion notification will resume the session so it can record record_pulse_result; do not poll query_step/list_executions while waiting.",
-		map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"pulse_run_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional Pulse run id from the current Pulse Gate/worklist.",
-				},
-				"focus": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional focus from the Pulse Gate evidence or user request.",
-				},
-			},
-		},
-		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			pulseRunID := ""
-			if val, ok := args["pulse_run_id"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					pulseRunID = strings.TrimSpace(s)
-				}
-			}
-			focus := ""
-			if val, ok := args["focus"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					focus = strings.TrimSpace(s)
-				}
-			}
-
-			name := "Goal Advisor Review"
-			execID := fmt.Sprintf("goal-advisor-%05d", time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
-			if ctxErr != nil {
-				return "Session was stopped — execution skipped", nil
-			}
-
-			agentSessionID := fmt.Sprintf("workshop-goal-advisor-%d", time.Now().UnixNano())
-			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ForceCorrelationIDKey, agentSessionID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.IsSubAgentContextKey, true)
-
-			exec := &WorkshopStepExecution{
-				ID:             execID,
-				StepID:         "goal-advisor",
-				AgentSessionID: agentSessionID,
-				Status:         WorkshopStepRunning,
-				cancel:         cancel,
-			}
-			iwm.stepRegistry.Register(exec)
-
-			if iwm.executionNotifier != nil {
-				iwm.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
-					ID:                execID,
-					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
-					Name:              name,
-					Cancel:            cancel,
-				})
-			}
-			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
-			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
-
-			go func() {
-				var result string
-				var execErr error
-				eventBridge := iwm.controller.GetContextAwareBridge()
-				defer func() {
-					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
-					if eventBridge != nil {
-						isCancelled := skipNotify || execCtx.Err() != nil
-						endEvent := &orchestrator_events.OrchestratorAgentEndEvent{
-							BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
-							AgentType:     "workshop-background-task",
-							AgentName:     name,
-							Success:       execErr == nil,
-						}
-						if execErr != nil {
-							if isCancelled {
-								endEvent.Result = fmt.Sprintf("Cancelled: %v", execErr)
-							} else {
-								endEvent.Result = fmt.Sprintf("Failed: %v", execErr)
-							}
-						} else {
-							endEvent.Result = result
-						}
-						eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-							Type:          orchestrator_events.OrchestratorAgentEnd,
-							Timestamp:     time.Now(),
-							Data:          endEvent,
-							CorrelationID: agentSessionID,
-						})
-					}
-					if !skipNotify && iwm.executionNotifier != nil {
-						iwm.executionNotifier.OnExecutionComplete(execID, name, result, nil, execErr)
-					}
-				}()
-
-				if eventBridge != nil {
-					startEvent := &orchestrator_events.OrchestratorAgentStartEvent{
-						BaseEventData: baseevents.BaseEventData{Timestamp: time.Now(), Component: "orchestrator"},
-						AgentType:     "workshop-background-task",
-						AgentName:     name,
-					}
-					eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
-						Type:          orchestrator_events.OrchestratorAgentStart,
-						Timestamp:     time.Now(),
-						Data:          startEvent,
-						CorrelationID: agentSessionID,
-					})
-				}
-
-				result, execErr = iwm.runGoalAdvisorReviewPipeline(execCtx, pulseRunID, focus)
-			}()
-
-			focusInfo := ""
-			if focus != "" {
-				focusInfo = fmt.Sprintf("\nFocus: %s", focus)
-			}
-			logger.Info(fmt.Sprintf("✨ Workshop: goal advisor review started in background, execution_id=%q, pulse_run_id=%q", execID, pulseRunID))
-			return fmt.Sprintf("Goal Advisor review started in background.\nexecution_id: %q%s\nYou will be automatically notified when it completes.", execID, focusInfo), nil
-		},
-		"workflow",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register run_goal_advisor_review tool: %v", err))
-	}
-
 	// Tool 2: query_step — execution status + structured MCP tool call visibility
 	// When running: shows status + captured structured tool calls (auto-enriched)
 	// When done/failed/cancelled: shows result
 	if err := mcpAgent.RegisterCustomTool(
 		"query_step",
-		"One-off live status check for a tracked execution. For a workflow step, pass step_id and the backend resolves its latest execution automatically. For call_generic_agent/Pulse reviewers, pass the execution_id from the start notification; step_id is not required. When running, shows registry status and structured MCP tool calls captured so far. Important: coding CLI providers can show terminal/TUI activity before structured tool_call events exist, so 'no tool calls observed yet' does NOT mean the execution failed to start or is stuck. When a coding-CLI provider runs in tmux, query_step also captures the latest terminal lines and the tmux session name. After one running-status check, end the current agent turn; automatic completion notification will resume the session. Never alternate query_step and list_executions as a polling loop. Do not stop or re-run solely because no tool calls are listed. Pass tool_call_id to get full input/output for a specific tool call. Use debug_step for workflow-step file insights.",
+		"One-off live status check for a tracked execution. For a workflow step, pass step_id and the backend resolves its latest execution automatically. For a background task, pass the execution_id from its start notification; step_id is not required. When running, shows registry status and structured MCP tool calls captured so far. Important: coding CLI providers can show terminal/TUI activity before structured tool_call events exist, so 'no tool calls observed yet' does NOT mean the execution failed to start or is stuck. When a coding-CLI provider runs in tmux, query_step also captures the latest terminal lines and the tmux session name. After one running-status check, end the current agent turn; automatic completion notification will resume the session. Never alternate query_step and list_executions as a polling loop. Do not stop or re-run solely because no tool calls are listed. Pass tool_call_id to get full input/output for a specific tool call. Use debug_step for workflow-step file insights.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -4489,7 +3423,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"execution_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Exact tracked execution ID. Use this without step_id for call_generic_agent and Pulse reviewer executions; it can also disambiguate workflow-step executions.",
+					"description": "Exact tracked execution ID. Use this without step_id for a background task; it can also disambiguate workflow-step executions.",
 				},
 				"tool_call_id": map[string]interface{}{
 					"type":        "string",
@@ -4975,13 +3909,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool 3: stop_step — cancel a running step
 	if err := mcpAgent.RegisterCustomTool(
 		"stop_step",
-		"Cancel a tracked workflow step, call_generic_agent execution, or Pulse reviewer only after query_step currently reports that exact execution_id as running. A wait timeout does not prove the execution is still running because completion notifications can be delayed. Never use this as cleanup for completed, failed, or already-cancelled work; those states are rejected.",
+		"Cancel a tracked workflow step or background task only after query_step currently reports that exact execution_id as running. A wait timeout does not prove the execution is still running because completion notifications can be delayed. Never use this as cleanup for completed, failed, or already-cancelled work; those states are rejected.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"execution_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Exact execution_id returned by a start call or shown in a generic-agent/Pulse-reviewer start notification.",
+					"description": "Exact execution_id returned by a start call or shown in a background-task start notification.",
 				},
 			},
 			"required": []string{"execution_id"},
@@ -7255,7 +6189,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"post_run_monitor": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed read-only reviews, one parent Pulse Fixer applies bounded changes, and the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
+					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed review/fix work, ordinary background agents perform the selected work, and the parent consolidates results before the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
 				},
 				"advisor_specialization_approval_input_id": map[string]interface{}{
 					"type":        "string",
@@ -8382,6 +7316,68 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register update_workflow_config tool: %v", err))
+	}
+
+	// === Tool: set_workflow_contract_version ===
+	// Workflow-contract upgrades need one explicit, narrow way to acknowledge
+	// that their migration work and verification completed. WriteWorkflowManifest
+	// is an internal server helper, not an agent tool; exposing that helper name
+	// in a prompt made agents search for a tool that could never exist.
+	if err := mcpAgent.RegisterCustomTool(
+		"set_workflow_contract_version",
+		"Stamp workflow.json with a completed workflow contract version. Use only as the final action of a scheduler-requested WORKFLOW VERSION UPGRADE, after every requested migration check has passed. This changes only workflow.json.version and updated_at; it cannot change plans, schedules, capabilities, or notifications.",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"version": map[string]interface{}{
+					"type":        "string",
+					"pattern":     `^\d+\.\d+\.\d+$`,
+					"description": "The exact target contract version stated by the scheduler upgrade instruction, for example 1.0.21.",
+				},
+			},
+			"required": []string{"version"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			version, _ := args["version"].(string)
+			version = strings.TrimSpace(version)
+			parts := strings.Split(version, ".")
+			if len(parts) != 3 {
+				return "Error: version must be a semantic version such as 1.0.21.", nil
+			}
+			for _, part := range parts {
+				if part == "" {
+					return "Error: version must be a semantic version such as 1.0.21.", nil
+				}
+				if _, err := strconv.Atoi(part); err != nil {
+					return "Error: version must be a semantic version such as 1.0.21.", nil
+				}
+			}
+
+			content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+			if err != nil {
+				return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
+			}
+			var manifest map[string]interface{}
+			if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+				return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
+			}
+			if current, _ := manifest["version"].(string); strings.TrimSpace(current) == version {
+				return fmt.Sprintf("Workflow contract version is already %s.", version), nil
+			}
+			manifest["version"] = version
+			manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+			updated, err := json.MarshalIndent(manifest, "", "  ")
+			if err != nil {
+				return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
+			}
+			if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(updated)); err != nil {
+				return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
+			}
+			return fmt.Sprintf("Workflow contract version stamped %s.", version), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register set_workflow_contract_version tool: %v", err))
 	}
 
 	// === Schedule management tools ===
@@ -10449,226 +9445,6 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 	return result, nil
 }
 
-func buildGoalAdvisorStageHeader(pulseRunID, focus string) string {
-	var sb strings.Builder
-	if strings.TrimSpace(pulseRunID) != "" {
-		sb.WriteString("Pulse run id: ")
-		sb.WriteString(strings.TrimSpace(pulseRunID))
-		sb.WriteString("\n")
-	}
-	if strings.TrimSpace(focus) != "" {
-		sb.WriteString("Focus from Pulse Gate: ")
-		sb.WriteString(strings.TrimSpace(focus))
-		sb.WriteString("\n")
-	}
-	return strings.TrimSpace(sb.String())
-}
-
-func buildGoalAdvisorAdvisorInstruction(pulseRunID, focus string) string {
-	var sb strings.Builder
-	sb.WriteString("Goal Advisor pipeline stage 1/3: ADVISOR DRAFT.\n\n")
-	if header := buildGoalAdvisorStageHeader(pulseRunID, focus); header != "" {
-		sb.WriteString(header)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString(`
-Use ` + "`get_workflow_command_guidance(kind=\"goal-advisor\", focus=\"Pulse-selected Goal Advisor module; expert strategy advisor, not routine maintenance\")`" + ` as the strategy playbook, but this stage is read-only.
-
-Read the workflow evidence yourself: builder/improve.html including the Pulse Gate/worklist, soul/soul.md, latest run/eval evidence, planning/changelog, report/dashboard evidence, and answered human inputs in db/db.sqlite/report_human_inputs.
-
-Analysis budget:
-- Spend this stage on goal reality, strategy ceiling, credible alternatives, and experiment evidence.
-- From builder/improve.html read only verdicts, the active .advisor-experiment, recent Goal Advisor entries, and answered outcomes. Ignore legacy Chief of Staff recommendation cards. Use targeted search/extraction when it is large.
-- Do not inspect CSS, visual design, unrelated timeline history, or page formatting. Do not load HTML style/skeleton guidance.
-- Return the strategic verdict even if the report markup is imperfect; formatting belongs to Report Health.
-
-Strict boundaries for this Advisor stage:
-- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or record_pulse_result.
-- Do NOT modify plan/config/eval/report/HTML files.
-- Produce an evidence-backed draft only. The Critic and Finalizer stages decide what survives.
-
-Think like an expert operator in the workflow's domain: look for why goals are not moving, strategy assumptions the user missed, better measurement, new channels/approaches, or places where the plan is capped even when execution is clean. Also apply a 10x counterfactual when this is a healthy-headroom review: estimate the current strategy ceiling and ask what materially different approach could change the order of magnitude. Treat 10x as a thinking lens, not a promise.
-
-Before drafting, inspect builder/improve.html for .advisor-experiment cards. Exactly one experiment may be active. Active statuses are proposed, deferred, approved, running, measuring, and blocked; terminal statuses are adopted, rejected, and retired. If one is active, advance or measure that same experiment instead of inventing another. If none is active, at most one new thesis may survive this draft.
-
-Return a concise structured draft with these sections:
-- Review mode: recovery | headroom | active_experiment | approved_answer.
-- Active experiment: stable id + status, or none.
-- Verdict: no_action | apply_approved_answer | propose_user_decision | log_advisor_idea | blocked.
-- Plain-language takeaway.
-- Goal alignment: cite the exact success criterion or objective.
-- Evidence used: concrete paths/run ids/report widgets/HTML cards.
-- Current baseline and current strategy ceiling.
-- 10x thesis: the one highest-leverage materially different approach, or none with reason.
-- Advisor hypothesis: what the current plan may be missing.
-- Bounded experiment: exact intended plan/config/eval/report edits if any, primary success metric, guardrails, review checkpoint, and rollback condition.
-- Expected impact.
-- Risks, assumptions, and what could falsify this idea.
-- User decision needed: yes/no; if yes, proposed options approve/reject/defer with short descriptions.
-- Routine-maintenance deferrals: any bug/KB/DB/learning/report issue that should go to Pulse modules instead.
-`)
-	return strings.TrimSpace(sb.String())
-}
-
-func buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorOutput string) string {
-	var sb strings.Builder
-	sb.WriteString("Goal Advisor pipeline stage 2/3: INDEPENDENT CRITIC.\n\n")
-	if header := buildGoalAdvisorStageHeader(pulseRunID, focus); header != "" {
-		sb.WriteString(header)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString("Advisor draft to critique:\n\n")
-	sb.WriteString(advisorOutput)
-	sb.WriteString(`
-
-Your job is to challenge the Advisor draft before anything is logged, proposed, or applied.
-
-Strict boundaries for this Critic stage:
-- Read evidence yourself when needed; do not rely only on the Advisor's wording.
-- Do NOT launch nested maintenance reviewers or call mark_human_input_consumed, create_human_input_request, notify_user, backup, publish, or record_pulse_result.
-- Do NOT modify plan/config/eval/report/HTML files.
-
-Critique against these checks:
-- Is the proposal aligned with soul/soul.md objective and success criteria?
-- Is every important claim backed by concrete run/eval/report/HTML/db evidence?
-- Is this really strategy/measurement work, or should routine Pulse Bug Review/KB/DB/learning/report modules handle it?
-- Does it hallucinate unavailable data, user intent, external facts, costs, or success?
-- Is the 10x thesis materially different from incremental tuning, while still being grounded enough to test? Treat 10x as a thinking lens, not a promised result.
-- Did the Advisor preserve the current successful baseline and define a primary metric, guardrails, review checkpoint, and rollback condition?
-- Does builder/improve.html already contain an active .advisor-experiment? If yes, reject any second active proposal and require the existing stable id to be advanced or closed.
-- Are the intended edits specific enough to be applied safely later?
-- Does it introduce unacceptable risk, scope creep, or cost?
-- Does it need user approval, or is it only an observation?
-
-Return a structured critic verdict:
-- Verdict: approve | revise | reject | needs_user | no_action.
-- Critical objections.
-- Missing evidence.
-- What to remove or downgrade.
-- What the Finalizer is allowed to do.
-- What the Finalizer must not do.
-- If user approval is needed, the exact question/options that are safe to present.
-`)
-	return strings.TrimSpace(sb.String())
-}
-
-type goalAdvisorApprovedPlanProposal struct {
-	ID               string
-	Context          string
-	Evidence         string
-	SelectedOptionID string
-	Note             string
-}
-
-func formatGoalAdvisorApprovedPlanProposals(proposals []goalAdvisorApprovedPlanProposal) string {
-	if len(proposals) == 0 {
-		return "- none verified in db/db.sqlite/report_human_inputs"
-	}
-	var sb strings.Builder
-	for _, proposal := range proposals {
-		sb.WriteString("- input_id: ")
-		sb.WriteString(proposal.ID)
-		sb.WriteString("\n  selected_option_id: ")
-		sb.WriteString(proposal.SelectedOptionID)
-		if strings.TrimSpace(proposal.Context) != "" {
-			sb.WriteString("\n  context: ")
-			sb.WriteString(proposal.Context)
-		}
-		if strings.TrimSpace(proposal.Note) != "" {
-			sb.WriteString("\n  user_note: ")
-			sb.WriteString(proposal.Note)
-		}
-		if strings.TrimSpace(proposal.Evidence) != "" {
-			sb.WriteString("\n  evidence: ")
-			sb.WriteString(proposal.Evidence)
-		}
-		sb.WriteString("\n")
-	}
-	return strings.TrimSpace(sb.String())
-}
-
-func buildGoalAdvisorFinalizerInstruction(pulseRunID, focus, advisorOutput, criticOutput string, approvedProposals []goalAdvisorApprovedPlanProposal, planMutationToolsEnabled bool) string {
-	var sb strings.Builder
-	sb.WriteString("Goal Advisor pipeline stage 3/3: FINALIZER.\n\n")
-	if header := buildGoalAdvisorStageHeader(pulseRunID, focus); header != "" {
-		sb.WriteString(header)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString("Advisor draft:\n\n")
-	sb.WriteString(advisorOutput)
-	sb.WriteString("\n\nCritic verdict:\n\n")
-	sb.WriteString(criticOutput)
-	sb.WriteString("\n\nCode-enforced mutation gate:\n")
-	if planMutationToolsEnabled {
-		sb.WriteString("- plan/config/eval mutation tools: ENABLED because code verified at least one answered goal_advisor plan-proposal-* request with selected_option_id=approve and the Critic verdict starts with approve.\n")
-		sb.WriteString("- mark_human_input_consumed: ENABLED for the approved proposal ids listed below.\n")
-	} else {
-		sb.WriteString("- plan/config/eval mutation tools: DISABLED. You do not have create/update/delete plan/config/eval tools in this stage.\n")
-		sb.WriteString("- mark_human_input_consumed: DISABLED. Do not claim to consume or apply an answer.\n")
-	}
-	sb.WriteString("Verified approved plan proposals:\n")
-	sb.WriteString(formatGoalAdvisorApprovedPlanProposals(approvedProposals))
-	sb.WriteString(`
-
-You are the only stage allowed to make durable changes, and only within the critic-approved bounds.
-
-Analysis-first close-out budget:
-- The Advisor and Critic results are already complete. Do not repeat their research or turn this stage into an HTML design task.
-- Re-read only the current Advisor experiment/card and the stable insertion anchor immediately before writing.
-- Make at most one targeted builder/improve.html patch: update the existing Advisor card in place, or insert one new semantic Advisor card when a material proposal/state change exists.
-- Do not load review-improve-log-skeleton or html-output, migrate the page, rewrite CSS, restyle unrelated cards, reorder history, or regenerate the full file. Route format problems to Report Health.
-- If the verdict is no_action and no experiment, assumption, question outcome, or recommendation status changed, do not edit builder/improve.html merely to log activity.
-- Update builder/card.progress.html only when goal status, active experiment, or the Advisor decision materially changed.
-
-Follow this decision policy:
-- If the Critic verdict is reject or no_action: do not change the workflow. Add at most a short skipped/rejected note to builder/improve.html if useful.
-- If the Critic verdict is revise and the safe revision is obvious: log/propose only the narrowed version. Do not start a new advisor loop.
-- If plan/config/eval mutation tools are ENABLED: apply only the verified approved plan-proposal ids listed above, only within the Critic-approved bounds, call mark_human_input_consumed with the concrete outcome for each applied id, and remove or replace the matching visible question card in builder/improve.html with a short outcome.
-- If plan/config/eval mutation tools are DISABLED: do not apply plan/config/eval changes; write only report/proposal updates or create/refine human-input requests.
-- If the proposal is new and material: do not change the plan. Create or refresh a create_human_input_request(source="goal_advisor", input_id="plan-proposal-...", options approve/reject/defer) with exact intended edits, rationale, expected impact, risk, and evidence.
-- If the idea is useful but not ready for a user decision: log it as a proposal-only Advisor idea in builder/improve.html with evidence and risk.
-
-Experiment lifecycle contract:
-- Read the current Advisor card in builder/improve.html before writing. It is the durable experiment source of truth.
-- Never leave more than one active .advisor-experiment. Active statuses: proposed, deferred, approved, running, measuring, blocked. Terminal statuses: adopted, rejected, retired.
-- Use one stable card for its full lifecycle:
-  <div class="entry decision major advisor-experiment" data-advisor-experiment-id="advisor-exp-<stable-slug>" data-input-id="plan-proposal-<stable-slug>" data-status="<status>" data-review-after="<ISO date/time, run id, or outcome milestone>">.
-- The visible card must include Current baseline, Current strategy ceiling, 10x thesis, Bounded experiment, Primary success metric, Guardrails, Review checkpoint, Rollback condition, Evidence, and Outcome when measuring/terminal.
-- A new material thesis becomes proposed and uses the matching stable plan-proposal slug. Approved edits move that same card to running. At the checkpoint move it to measuring; then adopt only with metric improvement and intact guardrails, reject on user rejection, retire when disproved/stale/rolled back, or block with a concrete unblock condition.
-- Update the existing card in place. Do not append lifecycle duplicates. A deferred answer keeps the same experiment active with a future review checkpoint.
-
-Do not launch nested maintenance reviewers. Learning, KB, and DB health are separate generic read-only Pulse reviews.
-Do not call record_pulse_result; the parent Pulse turn records the module result after reading your completion.
-
-When writing builder/improve.html, show both:
-- Advisor proposal/takeaway.
-- Critic verdict/objections.
-
-Overwrite builder/card.progress.html with a compact progress card when useful.
-
-Finish with a concise summary: changed/applied/proposed/skipped/blocked, critic verdict, evidence paths, files touched, and any human input request ids created or consumed.
-For each finding, proposal, measurement gap, or unblock condition that remains
-open after this finalizer, add one separate ` + "`CONCERNS: <plain-language issue with the affected strategy/artifact named>`" + `
-line. Do not emit a CONCERNS line for no-action observations or work completed
-and verified during this pipeline. The trusted backend indexes these lines into
-the structured Pulse finding lifecycle.
-`)
-	return strings.TrimSpace(sb.String())
-}
-
-func goalAdvisorCriticApprovesPlanMutation(criticOutput string) bool {
-	for _, line := range strings.Split(criticOutput, "\n") {
-		trimmed := strings.TrimSpace(strings.TrimLeft(line, "-*• \t"))
-		lower := strings.ToLower(trimmed)
-		if !strings.HasPrefix(lower, "verdict:") {
-			continue
-		}
-		verdict := strings.TrimSpace(strings.TrimPrefix(lower, "verdict:"))
-		return strings.HasPrefix(verdict, "approve")
-	}
-	return false
-}
-
 func normalizeGoalAdvisorWorkspacePath(workspacePath string) (string, error) {
 	cleaned := strings.Trim(filepath.ToSlash(strings.TrimSpace(workspacePath)), "/")
 	if cleaned == "" {
@@ -10761,21 +9537,6 @@ func applyAdvisorSpecializationToManifest(content, inputID, strategy, goal, upda
 		return "", nil, false, err
 	}
 	return string(out), activated, false, nil
-}
-
-func (iwm *InteractiveWorkshopManager) advisorSpecializationInstruction(ctx context.Context, module string) string {
-	if module != pulsemodules.StrategyAuditorID && module != pulsemodules.GoalAdvisorID {
-		return ""
-	}
-	content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
-	if err != nil {
-		return ""
-	}
-	specialization, err := readWorkflowAdvisorSpecialization(content)
-	if err != nil || specialization == nil {
-		return ""
-	}
-	return advisorSpecializationPrompt(specialization, module)
 }
 
 func advisorSpecializationPrompt(specialization *workflowAdvisorSpecialization, module string) string {
@@ -10892,356 +9653,13 @@ func (iwm *InteractiveWorkshopManager) activateApprovedAdvisorSpecialization(ctx
 	return activated, alreadyActive, nil
 }
 
-func isGoalAdvisorHumanInputsMissingTable(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such table: report_human_inputs")
-}
-
-func (iwm *InteractiveWorkshopManager) approvedGoalAdvisorPlanProposals(ctx context.Context, workspacePath string) ([]goalAdvisorApprovedPlanProposal, error) {
-	normalized, err := normalizeGoalAdvisorWorkspacePath(workspacePath)
-	if err != nil {
-		return nil, err
-	}
-	dbPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(normalized), "db", "db.sqlite")
-	if _, err := os.Stat(dbPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
-		return nil, err
-	}
-
-	rows, err := db.QueryContext(ctx, `SELECT id, context, evidence, selected_option_id, note
-		FROM report_human_inputs
-		WHERE workspace_path = ?
-			AND source = 'goal_advisor'
-			AND status = 'answered'
-			AND id LIKE 'plan-proposal-%'
-		ORDER BY answered_at DESC, updated_at DESC`, normalized)
-	if err != nil {
-		if isGoalAdvisorHumanInputsMissingTable(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer rows.Close()
-
-	var proposals []goalAdvisorApprovedPlanProposal
-	for rows.Next() {
-		var proposal goalAdvisorApprovedPlanProposal
-		if err := rows.Scan(&proposal.ID, &proposal.Context, &proposal.Evidence, &proposal.SelectedOptionID, &proposal.Note); err != nil {
-			return nil, err
-		}
-		selected := strings.ToLower(strings.TrimSpace(proposal.SelectedOptionID))
-		if selected != "approve" && selected != "approved" {
-			continue
-		}
-		proposals = append(proposals, proposal)
-	}
-	return proposals, rows.Err()
-}
-
-func truncateGoalAdvisorStageOutput(value string) string {
-	const maxChars = 20_000
-	value = strings.TrimSpace(value)
-	if len(value) <= maxChars {
-		return value
-	}
-	half := maxChars / 2
-	return strings.TrimSpace(value[:half] + "\n\n... [Goal Advisor stage output truncated for next-stage review] ...\n\n" + value[len(value)-half:])
-}
-
 func (iwm *InteractiveWorkshopManager) createUnattendedWorkshopAgentConfig(agentName string, maxTurns int, llmConfig *orchestrator.LLMConfig, agentKind string) *agents.OrchestratorAgentConfig {
 	config := iwm.controller.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
 	iwm.controller.applyWorkflowTransportToAgentConfig(config, nil, agentKind)
 	return config
 }
 
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgent(ctx context.Context, name string, instruction string, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
-	return iwm.runGoalAdvisorStageAgentSequence(ctx, name, instruction, nil, access, pulseRunID, parentSessionID)
-}
-
-// runGoalAdvisorStageAgentSequence creates one background agent and sends an
-// opening instruction followed by ordered user messages. This is deliberately
-// not implemented as multiple runGoalAdvisorStageAgent calls: doing that would
-// create separate agents, sessions, coding workspaces, and context windows.
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string) (string, error) {
-	return iwm.runGoalAdvisorStageAgentSequenceObserved(ctx, name, instruction, messageSequence, access, pulseRunID, parentSessionID, nil)
-}
-
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequenceObserved(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, access goalAdvisorStageAccess, pulseRunID string, parentSessionID string, observer backgroundMessageSequenceObserver) (string, error) {
-	logger := iwm.controller.GetLogger()
-	workspacePath := iwm.controller.GetWorkspacePath()
-	stageAgentIdentity := newWorkshopStageAgentIdentity(name)
-	// Every advisor/reviewer stage owns a separate execution entry. Without a
-	// goroutine-local execution owner, parallel stages can inherit the parent
-	// main-agent identity and replace its activity in the UI.
-	if parentExecutionID, _ := ctx.Value(orchestrator_events.ParentExecutionIDKey).(string); strings.TrimSpace(parentExecutionID) == "" {
-		ctx = context.WithValue(ctx, orchestrator_events.ParentExecutionIDKey, stageAgentIdentity)
-	}
-	ctx = context.WithValue(ctx, orchestrator_events.IsSubAgentContextKey, true)
-	knowledgebasePath := getKnowledgebasePath(workspacePath)
-	readPaths := []string{
-		workspacePath,
-		fmt.Sprintf("%s/runs", workspacePath),
-		fmt.Sprintf("%s/learnings", workspacePath),
-		fmt.Sprintf("%s/planning", workspacePath),
-		fmt.Sprintf("%s/evaluation", workspacePath),
-		knowledgebasePath,
-		"Chats",
-	}
-	writePaths := []string{}
-	allowedToolNames := goalAdvisorReadOnlyToolAgentAllowedToolNames()
-	switch access {
-	case goalAdvisorStageFinalizerProposal:
-		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = goalAdvisorFinalizerProposalToolAgentAllowedToolNames()
-	case goalAdvisorStageFinalizerApprovedMutation:
-		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
-	case goalAdvisorStagePulseFixer:
-		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = pulseFixerStageToolAgentAllowedToolNames()
-	}
-
-	if access == goalAdvisorStagePulseFixer && strings.TrimSpace(pulseRunID) == "" {
-		return "", fmt.Errorf("a Pulse Fixer stage requires the pulse_run_id it is writing for")
-	}
-
-	// Agent creation temporarily mutates controller folder-guard and bridge state.
-	// Serialize only this setup window; the independent agents execute in parallel
-	// after their session-specific guards have been materialized.
-	iwm.toolAgentSetupMu.Lock()
-	setupRestored := false
-	prevReadPaths, prevWritePaths := iwm.controller.GetFolderGuardPaths()
-	prevReadPaths = append([]string(nil), prevReadPaths...)
-	prevWritePaths = append([]string(nil), prevWritePaths...)
-	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
-	restoreSetup := func() {
-		if setupRestored {
-			return
-		}
-		iwm.controller.SetWorkspacePathForFolderGuard(prevReadPaths, prevWritePaths)
-		setupRestored = true
-		iwm.toolAgentSetupMu.Unlock()
-	}
-	defer restoreSetup()
-
-	llmConfigToUse := iwm.controller.selectMaintenanceLLM(name)
-	if llmConfigToUse == nil {
-		return "", fmt.Errorf("no valid LLM configuration found for %s", name)
-	}
-
-	config := iwm.createUnattendedWorkshopAgentConfig(fmt.Sprintf("Background: %s", name), 100, llmConfigToUse, "Pulse reviewer / Goal Advisor stage")
-	config.IsolateCodingAgentWorkspace = true
-	config.UseCodeExecutionMode = false
-	config.EnableParallelToolExecution = true
-	config.CodingAgentKeepAlive = len(messageSequence) > 0
-	config.ServerNames = []string{mcpclient.NoServers}
-	toolAgentSessionID, releaseToolAgentSession := iwm.configureWorkshopToolAgentSessionWithID(config, stageAgentIdentity, readPaths, writePaths)
-	defer releaseToolAgentSession()
-	if access == goalAdvisorStagePulseFixer {
-		// Do not rely on the write-path inference used by ordinary workshop
-		// helpers. The Fixer is the single DB writer for this pass, so make its
-		// logical capability explicit and verify the complete tool/session surface
-		// before starting an expensive provider turn.
-		configureWorkflowDBSession(toolAgentSessionID, workspacePath, DBAccessReadWrite, false)
-	}
-
-	// Reviewers now persist through narrow typed SQLite tools, while Fixers also
-	// hold the broader lifecycle writer surface. Both need run-bound authority
-	// on the physical child session that actually makes the MCP call. Tool
-	// allow-listing keeps reviewer authority limited to finding, verification,
-	// and receipt writes.
-	if strings.TrimSpace(pulseRunID) != "" {
-		releaseAuthority, err := lendPulseWriteAuthority(parentSessionID, toolAgentSessionID, pulseRunID)
-		if err != nil {
-			return "", fmt.Errorf("start Pulse stage %q: %w", name, err)
-		}
-		defer releaseAuthority()
-		if binding, ok := ctx.Value(pulseReviewBindingContextKey{}).(pulseReviewBinding); ok && binding.ReviewRunID != "" {
-			if err := bindPulseReviewAuthority(toolAgentSessionID, binding.ReviewRunID, binding.Modules); err != nil {
-				return "", fmt.Errorf("bind Pulse reviewer identity for stage %q: %w", name, err)
-			}
-		}
-	}
-
-	toolsToRegister, executorsToUse := filterWorkspaceToolsByName(iwm.controller.WorkspaceTools, iwm.controller.WorkspaceToolExecutors, allowedToolNames)
-	if access == goalAdvisorStagePulseFixer {
-		if err := pulseFixerDBCapabilityPreflight(toolAgentSessionID, workspacePath, toolsToRegister, executorsToUse); err != nil {
-			return "", err
-		}
-	}
-	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
-		return newWorkflowBackgroundTaskAgent(cfg, log, tracer, eventBridge)
-	}
-
-	if cab, ok := iwm.controller.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-		cab.PushContext(stageAgentIdentity, 0, stageAgentIdentity, fmt.Sprintf("Background: %s", name))
-	}
-	agent, err := iwm.controller.CreateAndSetupStandardAgentWithConfig(
-		ctx,
-		config,
-		stageAgentIdentity,
-		0, 0,
-		stageAgentIdentity,
-		createAgentFunc,
-		toolsToRegister,
-		executorsToUse,
-		true,
-	)
-	if cab, ok := iwm.controller.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-		cab.PopContext()
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to create %s agent: %w", name, err)
-	}
-	if len(messageSequence) > 0 {
-		defer closeBackgroundMessageSequenceAgent(agent, config, name)
-	}
-
-	iwm.registerWorkshopMutationToolsForToolAgent(agent, workspacePath, stageAgentIdentity, allowedToolNames, logger)
-	// Pulse reviewers and Fixers run here, and their prompts tell them to load
-	// fix-verification, strategy-auditor, pulse-bug-review, llm-selection, and
-	// review-artifact-drift. That used to work through the global
-	// get_reference_doc tool, which needed no attachment. read_skill replaced it
-	// and resolves only against attached skills, so with none attached every
-	// such call returns "available skills: " — an empty list. This stage runs in
-	// an isolated tmp cwd with no MCP servers and no shell built-ins, so a
-	// reference doc it cannot load is a reference doc it cannot get at all.
-	//
-	// AttachReferenceSurface rather than MaterializeReferenceSkill alone: the
-	// five docs this prompt names are split across two bundles —
-	// review-artifact-drift lives in allKinds (workflow-commands), the rest in
-	// referenceKinds (builder-reference). Attaching only the reference bundle
-	// leaves the agent able to load four of five and silently short of the
-	// fifth.
-	//
-	// "workshop", not "run", even though these stages execute against a live
-	// workflow: the mode selects which doc set is bundled, not where the agent
-	// runs, and strategy-auditor, llm-selection, and review-artifact-drift are
-	// workshop-only. read_skill is in additionalBridgeTools, so the content is
-	// reachable over the bridge even though projection lands in an isolated cwd.
-	if base := agent.GetBaseAgent(); base != nil {
-		missingSkills, surfaceErr := missingWorkshopReferenceSurfaceSkills(base.AttachedSkills())
-		if surfaceErr != nil {
-			logger.Warn(fmt.Sprintf("⚠️ %s: failed to build reference surface: %v", stageAgentIdentity, surfaceErr))
-		} else if err := base.ApplyIdentity(ctx, missingSkills); err != nil {
-			logger.Warn(fmt.Sprintf("⚠️ %s: failed to attach reference surface: %v", stageAgentIdentity, err))
-		}
-	}
-	if err := iwm.controller.applyPostSetupToAgent(agent, stageAgentIdentity+"-agent"); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Post-setup configuration failed for %s: %v", stageAgentIdentity, err))
-	}
-	restoreSetup()
-
-	templateVars := map[string]string{
-		"WorkspacePath":    workspacePath,
-		"AbsWorkspacePath": absPromptWorkspacePath(workspacePath),
-		"Instruction":      instruction,
-		"SkillPrompt":      "",
-		"SecretPrompt":     "",
-		"BrowserPrompt":    "",
-	}
-
-	logger.Info(fmt.Sprintf("✨ Running Goal Advisor stage agent: %q (access=%d, turns=%d)", name, access, 1+len(messageSequence)))
-	result, err := executeBackgroundMessageSequenceObserved(ctx, agent, templateVars, instruction, messageSequence, observer)
-	if err != nil {
-		return "", fmt.Errorf("%s agent failed: %w", name, err)
-	}
-	return result, nil
-}
-
-// missingWorkshopReferenceSurfaceSkills returns the complete workshop
-// reference surface minus any skill identities already attached to the stage.
-// Tool registration and identity assembly are separate concerns, but keeping
-// this boundary idempotent prevents a future caller from making an otherwise
-// valid Pulse stage fail immutable-definition validation because the same
-// skill name was supplied twice.
-func missingWorkshopReferenceSurfaceSkills(existing []*llmtypes.Skill) ([]*llmtypes.Skill, error) {
-	var surface []*llmtypes.Skill
-	if err := guidance.AttachReferenceSurface("workshop", func(skill *llmtypes.Skill) error {
-		surface = append(surface, skill)
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return missingBackgroundSkills(existing, surface), nil
-}
-
-func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.Context, pulseRunID, focus string) (result string, resultErr error) {
-	effectivePulseRunID, reviewRunID := newDerivedPulseReviewIdentity(
-		time.Now(),
-		pulseRunID,
-		"goal-advisor-pipeline",
-		pulsemodules.GoalAdvisorID,
-	)
-	defer func() {
-		if resultErr != nil {
-			if err := CompletePulseReview(ctx, iwm.controller.GetWorkspacePath(), []string{pulsemodules.GoalAdvisorID}, reviewRunID, effectivePulseRunID, resultErr.Error(), "failed"); err != nil {
-				resultErr = fmt.Errorf("%w; persist Goal Advisor failure receipt: %w", resultErr, err)
-			}
-			return
-		}
-		if receipt, err := LoadPulseReviewReceiptForRun(ctx, iwm.controller.GetWorkspacePath(), reviewRunID, pulsemodules.GoalAdvisorID); err != nil {
-			resultErr = fmt.Errorf("Goal Advisor finalizer did not complete its typed SQLite receipt: %w", err)
-			return
-		} else if receipt.Status != "completed" {
-			resultErr = fmt.Errorf("Goal Advisor finalizer receipt has status %q, want completed", receipt.Status)
-			return
-		}
-		result = strings.TrimSpace(result) + fmt.Sprintf("\n\nGoal Advisor findings persisted in SQLite.\nreview_run_id: %s", reviewRunID)
-	}()
-
-	advisorInstruction := buildGoalAdvisorAdvisorInstruction(pulseRunID, focus)
-	if specialization := iwm.advisorSpecializationInstruction(ctx, pulsemodules.GoalAdvisorID); specialization != "" {
-		advisorInstruction += "\n\n" + specialization
-	}
-	advisorResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Advisor", advisorInstruction, goalAdvisorStageReadOnly, "", "")
-	if err != nil {
-		return fmt.Sprintf("Goal Advisor advisor stage failed: %v", err), err
-	}
-
-	advisorForNextStage := truncateGoalAdvisorStageOutput(advisorResult)
-	criticInstruction := buildGoalAdvisorCriticInstruction(pulseRunID, focus, advisorForNextStage)
-	if specialization := iwm.advisorSpecializationInstruction(ctx, pulsemodules.GoalAdvisorID); specialization != "" {
-		criticInstruction += "\n\n" + specialization
-	}
-	criticResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Critic", criticInstruction, goalAdvisorStageReadOnly, "", "")
-	if err != nil {
-		return fmt.Sprintf("Goal Advisor critic stage failed: %v\n\nAdvisor draft:\n%s", err, advisorForNextStage), err
-	}
-
-	criticForNextStage := truncateGoalAdvisorStageOutput(criticResult)
-	approvedProposals, proposalErr := iwm.approvedGoalAdvisorPlanProposals(ctx, iwm.controller.GetWorkspacePath())
-	if proposalErr != nil {
-		iwm.controller.GetLogger().Warn(fmt.Sprintf("⚠️ Goal Advisor: failed to read approved plan proposals; finalizer plan tools disabled: %v", proposalErr))
-		approvedProposals = nil
-	}
-	enablePlanMutationTools := len(approvedProposals) > 0 && goalAdvisorCriticApprovesPlanMutation(criticForNextStage)
-	finalizerAccess := goalAdvisorStageFinalizerProposal
-	if enablePlanMutationTools {
-		finalizerAccess = goalAdvisorStageFinalizerApprovedMutation
-	}
-	finalizerPrompt := buildGoalAdvisorFinalizerInstruction(pulseRunID, focus, advisorForNextStage, criticForNextStage, approvedProposals, enablePlanMutationTools)
-	finalizerPrompt += fmt.Sprintf("\n\nTYPED REVIEW COMPLETION: Persist each trackable conclusion with record_pulse_finding using workspace_path=%q, pulse_run_id=%q, review_run_id=%q, module=%q. Persist any exact allowlisted verification with record_pulse_verification. Then call complete_pulse_review with modules=[%q], a compact verdict, and status=completed. Do not encode records in final text.", iwm.controller.GetWorkspacePath(), effectivePulseRunID, reviewRunID, pulsemodules.GoalAdvisorID, pulsemodules.GoalAdvisorID)
-	parentSessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
-	finalizerCtx := withPulseReviewBinding(ctx, reviewRunID, []string{pulsemodules.GoalAdvisorID})
-	finalizerResult, err := iwm.runGoalAdvisorStageAgent(finalizerCtx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, effectivePulseRunID, parentSessionID)
-	if err != nil {
-		return fmt.Sprintf("Goal Advisor finalizer stage failed: %v\n\nAdvisor draft:\n%s\n\nCritic verdict:\n%s", err, advisorForNextStage, criticForNextStage), err
-	}
-
-	return strings.TrimSpace(fmt.Sprintf("Goal Advisor pipeline complete.\n\n## Advisor draft\n%s\n\n## Critic verdict\n%s\n\n## Finalizer result\n%s", advisorResult, criticResult, finalizerResult)), nil
-}
-
-// WorkflowBackgroundTaskAgent is a standalone agent spawned by run_in_background
+// WorkflowBackgroundTaskAgent is a standalone agent spawned by run_in_background.
 type WorkflowBackgroundTaskAgent struct {
 	*agents.BaseOrchestratorAgent
 }
@@ -11305,7 +9723,7 @@ func validateWorkshopScheduleTimezone(timezone string) error {
 
 // runBackgroundTodoTaskAgent runs a todo task orchestrator as a background agent.
 // Unlike runBackgroundTaskAgent (single-pass), this supports multi-step task management
-// and sub-agent delegation via call_generic_agent. Sub-agent completions auto-notify
+// and sub-agent delegation. Sub-agent completions auto-notify
 // the main workshop agent via the subAgentNotifier already set on the controller.
 func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Context, name, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
 	stepID := fmt.Sprintf("bg-todo-%s-%d", strings.ToLower(strings.ReplaceAll(name, " ", "-")), time.Now().UnixNano()%100000)
@@ -11368,8 +9786,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 
 	// --- LLM: generic run_in_background follows the normal workshop/phase model.
-	// Maintenance-heavy agents (Goal Advisor, Bug Review, KB/DB/report review) use
-	// their own dedicated runners and selectMaintenanceLLM instead.
+	// Background agents use the same normal workshop phase selection. Pulse
+	// review/fix work is ordinary run_in_background work too; it has no hidden
+	// maintenance runner or model-selection path.
 	llmConfigToUse := iwm.controller.selectPhaseLLM("background task agent")
 	if llmConfigToUse == nil && iwm.presetLLM != nil && iwm.presetLLM.Provider != "" && iwm.presetLLM.ModelID != "" {
 		llmConfigToUse = workflowAgentLLMConfig(iwm.presetLLM, iwm.controller.GetFallbacks(), iwm.controller.GetAPIKeys())

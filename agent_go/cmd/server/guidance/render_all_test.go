@@ -172,8 +172,8 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-review-fixer": {
 			wants: []string{
-				"exactly one", "saved review and lifecycle evidence", "automatic notification", `get_pulse_state(view="review")`,
-				"bounded Fixer turn", "residual Fixer", "terminal current-run result", "cannot block later reviewers", "priority-ordered Fix queue",
+				"exactly once", "durable evidence", "automatic completion notifications", `get_pulse_state(view="backlog")`,
+				"normal Workflow Builder tools", "terminal", "cannot erase or block other due work", "priority-ordered Fix queue",
 				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
 				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "plan-proposal-",
 			},
@@ -201,17 +201,6 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 
 func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testing.T) {
 	tests := map[string][]string{
-		"pulse": {
-			"MANUAL ONE-OFF PULSE",
-			// The schedule/config boundary moved out of the intro prose and
-			// into the authoritative "Manual-run boundary" list, so assert on
-			// the bullet rather than the removed sentence.
-			"Do not call schedule create/update/delete/trigger tools",
-			"change `post_run_monitor`",
-			"record_pulse_worklist",
-			"call_generic_agent",
-			"one consolidated Pulse Fixer",
-		},
 		"pulse-setup": {
 			"Set up recurring workflow runs with dynamic Pulse",
 			"update_workflow_config(post_run_monitor=true)",
@@ -240,13 +229,10 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 		},
 		"engineering-review": {
 			"ENGINEERING AND OPERATIONS REVIEW WITH FIXES",
-			"one agent conversation",
-			`module="workflow_review"`,
-			`role="fixer"`,
-			`review_lanes=["workflow_review","llm_ops_review"]`,
-			"Engineering → LLM/Ops → consolidation → Fixer",
-			"do not call `begin_pulse_fixer_run`",
-			"automatic completion notification",
+			"continuing Workflow Builder conversation",
+			"Own the review yourself",
+			"normal Workflow Builder tools",
+			"one terminal module result for Engineering and one for Operations",
 		},
 	}
 
@@ -432,7 +418,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one ordered finalizer turn",
 		"record_pulse_result(command=...)",
 		"not automatically due every Pulse",
-		"Independent Strategy Review And One Sequenced Operational Writer",
+		"One Agent-Owned Review+Fix Turn",
 		"existing unchanged, existing with new evidence, reopened, or genuinely",
 		"every evidence-backed severity-ordered finding row",
 		"structured Fix queue",
@@ -455,13 +441,10 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"only passed post-change proof",
 		"changed_unverified",
 		"awaiting_next_valid_run",
-		"use `run_in_background`",
+		"owns review selection",
 		"READ-ONLY REVIEW",
-		"one `call_generic_agent` with",
-		"`module=\"workflow_review\"`",
-		"residual `module=\"pulse_fixer\"`",
-		"does not launch",
-		"`run_goal_advisor_review`",
+		"main Pulse agent owns the Review+Fix turn",
+		"Go never launches a residual Fixer or recovery agent",
 		"backend independently enforces",
 		"confirm every module marked",
 		"Never silently treat a",
@@ -762,7 +745,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 	for _, want := range []string{
 		"Strategy Auditor and Goal Advisor are independent",
 		"parallel batch",
-		"Complete that read-only batch before the shared operational",
+		"Do not finish this Review+Fix turn until their evidence has been consolidated",
 		"bounded improvements within the current strategic shape",
 		"blank-sheet opportunity",
 	} {
@@ -912,31 +895,16 @@ func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 	monitor := readPulseDesignSpec(t)
 	for _, want := range []string{
-		`independent read-only stages`,
-		`bounded parallel batch`,
-		`at most two independent read-only stages`,
-		`sequence mutates only in its final Fixer turn`,
-		`one honest terminal result for every due module`,
+		`same main-agent conversation`,
+		`cheapest sufficient approach`,
+		`at most the two due perspectives`,
+		`owns review selection`,
+		`terminal module receipts`,
 		`later Dashboard stage`,
 		`must not update ` + "`builder/improve.html`",
 	} {
 		if !strings.Contains(monitor, want) {
 			t.Fatalf("post-run-monitor missing complete reviewer contract %q", want)
-		}
-	}
-
-	pulse, err := renderFromRegistry("pulse", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render pulse: %v", err)
-	}
-	for _, want := range []string{`Run every module this standalone review selects`, `Process modules independently`, `exactly one ` + "`call_generic_agent`" + ` with`, `role="fixer"`} {
-		if !strings.Contains(pulse, want) {
-			t.Fatalf("manual pulse missing complete reviewer contract %q", want)
-		}
-	}
-	for _, forbidden := range []string{"record_pulse_worklist", "record_pulse_result"} {
-		if !strings.Contains(pulse, "do not call\n   `"+forbidden+"`") && !strings.Contains(pulse, "`"+forbidden+"`") {
-			t.Fatalf("manual pulse does not explicitly fence scheduler-only tool %q", forbidden)
 		}
 	}
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
@@ -133,7 +132,7 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 		t.Fatalf("workflow review decision = %q, want due", got)
 	}
 
-	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleBugReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
+	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleWorkflowReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
 	if err != nil {
 		t.Fatalf("mark result: %v", err)
 	}
@@ -141,7 +140,7 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 		t.Fatalf("updated state mismatch: %+v", updated)
 	}
 
-	timedOut, err := markPulseModuleResult(ctx, workspacePath, pulseModuleBugReview, "pulse-run-1", "timed_out", "Bug Review exceeded the scheduler wait limit.", []string{"scheduler timeout"})
+	timedOut, err := markPulseModuleResult(ctx, workspacePath, pulseModuleWorkflowReview, "pulse-run-1", "timed_out", "Bug Review exceeded the scheduler wait limit.", []string{"scheduler timeout"})
 	if err != nil {
 		t.Fatalf("mark timed-out result: %v", err)
 	}
@@ -155,7 +154,7 @@ func TestGetPulseReviewsAPIListsCompactReviewReceipts(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/example"
 	if err := step_based_workflow.CompletePulseReview(
-		context.Background(), workspacePath, []string{pulseModuleBugReview},
+		context.Background(), workspacePath, []string{pulseModuleWorkflowReview},
 		"2026-07-31T08-00-00.000Z_pulse-1", "pulse-1", "A real issue was found.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
@@ -164,7 +163,7 @@ func TestGetPulseReviewsAPIListsCompactReviewReceipts(t *testing.T) {
 	api := &StreamingAPI{}
 	listRequest := httptest.NewRequest(
 		http.MethodGet,
-		"/api/workflow/pulse-reviews?workspace_path=Workflow%2Fexample&module=bug_review",
+		"/api/workflow/pulse-reviews?workspace_path=Workflow%2Fexample&module=workflow_review",
 		nil,
 	)
 	listResponse := httptest.NewRecorder()
@@ -238,19 +237,19 @@ func TestPulseWorklistRequiresCompleteModuleSet(t *testing.T) {
 	workspacePath := "Workflow/example"
 
 	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-run-1", []PulseWorklistDecision{
-		{Module: pulseModuleBugReview, Due: true, Reason: "A step failed."},
+		{Module: pulseModuleWorkflowReview, Due: true, Reason: "A step failed."},
 	}); err == nil {
 		t.Fatal("recordPulseWorklist accepted a partial module list")
 	}
 
 	duplicates := completePulseWorklistDecisions(nil)
-	duplicates[len(duplicates)-1].Module = pulseModuleBugReview
+	duplicates[len(duplicates)-1].Module = pulseModuleWorkflowReview
 	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-run-2", duplicates); err == nil {
 		t.Fatal("recordPulseWorklist accepted duplicate modules")
 	}
 }
 
-func TestPulseWorklistCapsDueModulesAtTwoPerPass(t *testing.T) {
+func TestPulseWorklistLetsGateSelectTheEvidenceJustifiedModules(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
@@ -258,8 +257,8 @@ func TestPulseWorklistCapsDueModulesAtTwoPerPass(t *testing.T) {
 		pulseModuleLLMOpsReview:    {Module: pulseModuleLLMOpsReview, Due: true, Reason: "Operational evidence requires review."},
 		pulseModuleStrategyAuditor: {Module: pulseModuleStrategyAuditor, Due: true, Reason: "Strategy evidence requires review."},
 	})
-	if _, err := recordPulseWorklist(ctx, "Workflow/example", "pulse-run-cap", decisions); err == nil || !strings.Contains(err.Error(), "at most 2 due modules") {
-		t.Fatalf("three due modules error = %v", err)
+	if _, err := recordPulseWorklist(ctx, "Workflow/example", "pulse-run-agentic-selection", decisions); err != nil {
+		t.Fatalf("Gate's three evidence-justified modules were rejected: %v", err)
 	}
 }
 
@@ -269,26 +268,24 @@ func TestTrustedPulseWorklistKeepsFirstCompleteGateDecision(t *testing.T) {
 	workspacePath := "Workflow/example"
 	pulseRunID := "schedule-cron--gate"
 	sessionID := "schedule-cron--gate-recovery"
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	first := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "The run failed a required check."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "The run failed a required check."},
 	})
-	if _, err := recordTrustedPulseWorklistOnce(ctx, workspacePath, pulseRunID, first); err != nil {
+	if _, err := recordPulseWorklistOnce(ctx, workspacePath, pulseRunID, first); err != nil {
 		t.Fatalf("record first worklist: %v", err)
 	}
 
 	late := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: false, Reason: "Late stale decision.", CooldownRuns: 3},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: false, Reason: "Late stale decision.", CooldownRuns: 3},
 	})
-	states, err := recordTrustedPulseWorklistOnce(ctx, workspacePath, pulseRunID, late)
+	states, err := recordPulseWorklistOnce(ctx, workspacePath, pulseRunID, late)
 	if err != nil {
 		t.Fatalf("record late worklist: %v", err)
 	}
 	for _, state := range states {
-		if state.Module == pulseModuleBugReview && state.LastDecision != "due" {
+		if state.Module == pulseModuleWorkflowReview && state.LastDecision != "due" {
 			t.Fatalf("late worklist replaced first Gate decision: %+v", state)
 		}
 	}
@@ -334,17 +331,17 @@ func TestPulseWorklistToolArgumentsFailClosed(t *testing.T) {
 	}{
 		{
 			name: "missing due",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "reason": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "reason": "test"},
 			want: ".due is required and must be boolean",
 		},
 		{
 			name: "decision alias",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "decision": "due", "reason": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "decision": "due", "reason": "test"},
 			want: `unknown field "decision"`,
 		},
 		{
 			name: "status alias",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "status": "due", "reason": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "status": "due", "reason": "test"},
 			want: `unknown field "status"`,
 		},
 	}
@@ -358,155 +355,51 @@ func TestPulseWorklistToolArgumentsFailClosed(t *testing.T) {
 	}
 }
 
-func TestRecordPulseWorklistToolRequiresActiveScheduledRunID(t *testing.T) {
+func TestRecordPulseWorklistToolRequiresACompleteTypedWorklist(t *testing.T) {
 	_, executors, _ := createPulseWorklistTools()
 	execute := executors["record_pulse_worklist"].(func(context.Context, map[string]interface{}) (string, error))
 
-	if _, err := execute(context.Background(), map[string]interface{}{"pulse_run_id": "probe"}); err == nil || !strings.Contains(err.Error(), "active scheduler session") {
-		t.Fatalf("probe run id error = %v", err)
-	}
-
-	ctx := mcpexecutor.WithSessionID(context.Background(), "schedule-manual--trusted")
-	if _, err := execute(ctx, map[string]interface{}{"pulse_run_id": "schedule-manual--trusted"}); err == nil || !strings.Contains(err.Error(), "not authorized") {
-		t.Fatalf("unregistered session error = %v", err)
-	}
-
-	release := registerTrustedPulseSession("schedule-manual--trusted", "schedule-manual--logical")
-	defer release()
-	if _, err := execute(ctx, map[string]interface{}{"pulse_run_id": "schedule-manual--different"}); err == nil || !strings.Contains(err.Error(), "logical Pulse run") {
-		t.Fatalf("mismatched run id error = %v", err)
+	if _, err := execute(context.Background(), map[string]interface{}{"pulse_run_id": "probe"}); err == nil || !strings.Contains(err.Error(), "decisions must be an array") {
+		t.Fatalf("incomplete worklist error = %v", err)
 	}
 }
 
-func TestBeginPulseFixerRunSeedsOnlySelectedModules(t *testing.T) {
+func TestCurrentPulseRunUsesActiveSessionWithoutLease(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/example"
-	if _, err := recordPulseWorklist(context.Background(), workspacePath, "older-pulse", completePulseWorklistDecisions(nil)); err != nil {
-		t.Fatalf("record older worklist: %v", err)
-	}
-
-	_, executors, _ := createPulseWorklistTools()
-	begin := executors["begin_pulse_fixer_run"].(func(context.Context, map[string]interface{}) (string, error))
-	ctx := mcpexecutor.WithSessionID(context.Background(), "manual-fixer-session")
-	raw, err := begin(ctx, map[string]interface{}{
-		"workspace_path": workspacePath,
-		"modules":        []interface{}{pulseModuleBugReview},
-	})
-	if err != nil {
-		t.Fatalf("begin fixer: %v", err)
-	}
-	var payload struct {
-		PulseRunID string `json:"pulse_run_id"`
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.PulseRunID == "" {
-		t.Fatalf("decode begin result: raw=%s err=%v", raw, err)
-	}
-	if err := validateTrustedPulseToolRunID(ctx, payload.PulseRunID); err != nil {
-		t.Fatalf("manual fixer run was not authorized: %v", err)
-	}
-	states, err := getPulseModuleStates(context.Background(), workspacePath)
-	if err != nil {
-		t.Fatalf("get module states: %v", err)
-	}
-	for _, state := range states {
-		switch state.Module {
-		case pulseModuleBugReview:
-			if state.LastPulseRunID != payload.PulseRunID || state.LastDecision != "due" || state.LastResult != "" {
-				t.Fatalf("selected module was not opened for fixing: %+v", state)
-			}
-		case pulseModuleArtifactReview:
-			if state.LastPulseRunID != "older-pulse" {
-				t.Fatalf("unrelated module cadence was overwritten: %+v", state)
-			}
-		}
-	}
-	mark := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
-	if _, err := mark(ctx, map[string]interface{}{
-		"workspace_path": workspacePath,
-		"pulse_run_id":   payload.PulseRunID,
-		"module":         pulseModuleBugReview,
-		"result":         "done",
-		"reason":         "No selected finding required a change.",
-	}); err != nil {
-		t.Fatalf("finish manual fixer: %v", err)
-	}
-	if err := validateTrustedPulseToolRunID(ctx, payload.PulseRunID); err == nil || !strings.Contains(err.Error(), "not authorized") {
-		t.Fatalf("completed manual fixer retained write authority: %v", err)
-	}
-}
-
-// TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns pins the difference
-// between a pass that is working on a module and one that died holding it.
-// social-media stranded five modules as due-with-no-result under a timed-out
-// pass, and a state-only check refused every /pulse-fixer attempt forever.
-func TestBeginPulseFixerRunTakesOverAbandonedButNotLiveRuns(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/example"
-
-	// Claim bug_review for another run and leave it unresolved, exactly as a
-	// pass that died mid-flight does: due, with no terminal result.
-	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Due: true, Reason: "Owning pass selected this module."},
-	})
-	if _, err := recordPulseWorklist(context.Background(), workspacePath, "owning-pulse", decisions); err != nil {
-		t.Fatalf("record owning worklist: %v", err)
-	}
-	states, err := getPulseModuleStates(context.Background(), workspacePath)
-	if err != nil {
-		t.Fatalf("get module states: %v", err)
-	}
-	claimed := false
-	for _, state := range states {
-		if state.Module == pulseModuleWorkflowReview {
-			claimed = state.LastDecision == "due" && state.LastResult == "" && state.LastPulseRunID == "owning-pulse"
-		}
-	}
-	if !claimed {
-		t.Fatalf("precondition failed: bug_review is not an unresolved claim of owning-pulse")
-	}
-
-	_, executors, _ := createPulseWorklistTools()
-	begin := executors["begin_pulse_fixer_run"].(func(context.Context, map[string]interface{}) (string, error))
-	args := map[string]interface{}{
-		"workspace_path": workspacePath,
-		"modules":        []interface{}{pulseModuleBugReview},
-	}
-
-	// While the owning pass still holds authority, refuse.
-	releaseOwner := registerTrustedPulseSession("owning-session", "owning-pulse")
-	ctx := mcpexecutor.WithSessionID(context.Background(), "manual-fixer-session")
-	if _, err := begin(ctx, args); err == nil || !strings.Contains(err.Error(), "already belongs to unresolved Pulse run") {
-		t.Fatalf("live owning run was not protected: %v", err)
-	}
-
-	// Once that pass ends without resolving the module, the claim is abandoned
-	// and the fixer must be able to take it over.
-	releaseOwner()
-	raw, err := begin(ctx, args)
-	if err != nil {
-		t.Fatalf("abandoned run was not taken over: %v", err)
-	}
-	var payload struct {
-		PulseRunID string `json:"pulse_run_id"`
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.PulseRunID == "" {
-		t.Fatalf("decode begin result: raw=%s err=%v", raw, err)
-	}
-	if payload.PulseRunID == "owning-pulse" {
-		t.Fatalf("takeover reused the abandoned run id instead of starting its own")
-	}
-}
-
-func TestTemporaryPulseAuthorizationExpires(t *testing.T) {
-	sessionID := "expired-manual-fixer"
-	runID := "manual-fixer--expired"
-	release := registerTrustedPulseSessionUntil(sessionID, runID, time.Now().UTC().Add(-time.Second))
-	defer release()
+	sessionID := "workflow-builder-current-pulse"
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
-	if err := validateTrustedPulseToolRunID(ctx, runID); err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("expired authorization error = %v", err)
+	_, executors, _ := createPulseWorklistTools()
+	record := executors["record_pulse_worklist"].(func(context.Context, map[string]interface{}) (string, error))
+	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleWorkflowReview: {Due: true, Reason: "Manual engineering review."},
+	})
+	decisionArgs := make([]interface{}, 0, len(decisions))
+	for _, decision := range decisions {
+		decisionArgs = append(decisionArgs, map[string]interface{}{
+			"module": decision.Module, "due": decision.Due, "reason": decision.Reason,
+			"cooldown_runs": decision.CooldownRuns,
+		})
+	}
+	if _, err := record(ctx, map[string]interface{}{
+		"workspace_path": workspacePath,
+		"pulse_run_id":   "current",
+		"decisions":      decisionArgs,
+	}); err != nil {
+		t.Fatalf("record current-session worklist: %v", err)
+	}
+	if err := validatePulseToolRunID(ctx, "current"); err != nil {
+		t.Fatalf("current session should authorize its own Pulse identity: %v", err)
+	}
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get module states: %v", err)
+	}
+	for _, state := range states {
+		if state.LastPulseRunID != sessionID {
+			t.Fatalf("current identity persisted as %q for module %s, want session %q", state.LastPulseRunID, state.Module, sessionID)
+		}
 	}
 }
 
@@ -522,18 +415,16 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		t.Fatalf("record worklist: %v", err)
 	}
 
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, pulseRunID, "", pulseModuleBugReview,
+		ctx, workspacePath, pulseRunID, "", pulseModuleWorkflowReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: stale run binding in planning/step_config.json",
 	); err != nil {
 		t.Fatalf("record reviewer finding: %v", err)
 	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, 10)
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, 10)
 	if err != nil || len(findings) != 1 {
 		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
 	}
@@ -545,10 +436,10 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleBugReview,
+		"module":         pulseModuleWorkflowReview,
 		"result":         "changed",
 		"reason":         "Fixed the stale run binding.",
-		"evidence":       []string{"pulse/reviews/audit/bug_review.md"},
+		"evidence":       []string{"pulse/reviews/audit/workflow_review.md"},
 		"changed_files":  []string{"planning/step_config.json"},
 		"verification":   []string{"targeted binding test passed"},
 		"before_refs":    []string{"step_config:sha256:before"},
@@ -608,7 +499,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 			t.Fatalf("%s = %v, want [%q]", name, values, tc.want)
 		}
 	}
-	lifecycles, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, 10)
+	lifecycles, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, 10)
 	if err != nil {
 		t.Fatalf("load finding lifecycles: %v", err)
 	}
@@ -628,20 +519,18 @@ func TestMarkPulseModuleChangedRequiresAuditProof(t *testing.T) {
 	pulseRunID := "schedule-cron--missing-audit"
 	sessionID := "schedule-cron--missing-audit-session"
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "A verified repair is required."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A verified repair is required."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
 
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	_, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleBugReview,
+		"module":         pulseModuleWorkflowReview,
 		"result":         "changed",
 		"reason":         "Claims a change without proof.",
 	})
@@ -653,25 +542,9 @@ func TestMarkPulseModuleChangedRequiresAuditProof(t *testing.T) {
 		t.Fatalf("get states: %v", err)
 	}
 	for _, state := range states {
-		if state.Module == pulseModuleBugReview && state.LastResult != "" {
+		if state.Module == pulseModuleWorkflowReview && state.LastResult != "" {
 			t.Fatalf("invalid changed result was persisted: %+v", state)
 		}
-	}
-}
-
-func TestTrustedPulseRecoverySessionUsesOriginalLogicalRunID(t *testing.T) {
-	logicalRunID := "schedule-cron--original"
-	releaseInitial := registerTrustedPulseSession("schedule-cron--initial", logicalRunID)
-	defer releaseInitial()
-	releaseRecovery := registerTrustedPulseSession("schedule-cron--recovery", logicalRunID)
-	defer releaseRecovery()
-
-	ctx := mcpexecutor.WithSessionID(context.Background(), "schedule-cron--recovery")
-	if err := validateTrustedPulseToolRunID(ctx, logicalRunID); err != nil {
-		t.Fatalf("recovery session rejected original logical run id: %v", err)
-	}
-	if err := validateTrustedPulseToolRunID(ctx, "schedule-cron--recovery"); err == nil {
-		t.Fatal("recovery physical session id was accepted as the logical run id")
 	}
 }
 
@@ -682,14 +555,14 @@ func TestPulseAgentCannotOverwriteSchedulerTimeout(t *testing.T) {
 	workspacePath := "Workflow/example"
 	pulseRunID := "schedule-cron--timeout"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {Module: pulseModuleBugReview, Due: true, Reason: "Run requires review."},
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Run requires review."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
-	if _, err := markPulseModuleResult(ctx, workspacePath, pulseModuleBugReview, pulseRunID, "timed_out", "Scheduler timeout", nil); err != nil {
+	if _, err := markPulseModuleResult(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "timed_out", "Scheduler timeout", nil); err != nil {
 		t.Fatalf("mark timeout: %v", err)
 	}
-	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleBugReview, pulseRunID, "changed", "Late reviewer result", nil); err == nil {
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "changed", "Late reviewer result", nil); err == nil {
 		t.Fatal("late agent result overwrote scheduler timeout")
 	}
 	state, err := getPulseModuleStates(ctx, workspacePath)
@@ -697,7 +570,7 @@ func TestPulseAgentCannotOverwriteSchedulerTimeout(t *testing.T) {
 		t.Fatalf("get states: %v", err)
 	}
 	for _, module := range state {
-		if module.Module == pulseModuleBugReview && module.LastResult != "timed_out" {
+		if module.Module == pulseModuleWorkflowReview && module.LastResult != "timed_out" {
 			t.Fatalf("bug review result = %q, want timed_out", module.LastResult)
 		}
 	}
@@ -995,7 +868,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	workspacePath := "Workflow/example"
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-run-1", "", pulseModuleBugReview,
+		ctx, workspacePath, "pulse-run-1", "", pulseModuleWorkflowReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: selector keeps targeting the same accounts",
 	); err != nil {
@@ -1004,7 +877,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=bug_review",
+		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=workflow_review",
 		nil,
 	)
 	rec := httptest.NewRecorder()
@@ -1344,12 +1217,10 @@ func TestRecordPulseWorklistPersistsShadowObservationAfterDecision(t *testing.T)
 	pulseRunID := "schedule-cron--shadow"
 	sessionID := "schedule-cron--shadow-session"
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 
 	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleBugReview: {
-			Module:   pulseModuleBugReview,
+		pulseModuleWorkflowReview: {
+			Module:   pulseModuleWorkflowReview,
 			Due:      true,
 			Reason:   "Gate independently found a failed step.",
 			Evidence: []string{"run_metadata.json"},

@@ -41,7 +41,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	add("workshop execution tools",
 		"execute_step", "query_step", "send_step_message", "debug_step", "list_executions",
 		"stop_step", "stop_all_executions", "run_in_background",
-		"run_full_workflow", "run_goal_advisor_review",
+		"run_full_workflow",
 	)
 	add("workshop review/maintenance tools",
 		"update_step_config", "get_step_prompts",
@@ -52,6 +52,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	)
 	add("workshop workflow/config tools",
 		"get_llm_config", "get_workflow_config", "update_workflow_config",
+		"set_workflow_contract_version",
 		"update_variable", "add_group", "update_group", "delete_group",
 		"list_schedules", "create_schedule", "create_calendar_schedule",
 		"update_schedule", "delete_schedule", "trigger_schedule", "get_schedule_runs",
@@ -182,7 +183,7 @@ func TestToolSetInvariants(t *testing.T) {
 	//    be visible in workshop mode, otherwise scheduled Pulse turns can ask
 	//    for record_pulse_result/get_pulse_state and then fail at
 	//    runtime with "not callable in this chat session".
-	for _, n := range []string{"get_pulse_state", "begin_pulse_fixer_run", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern"} {
+	for _, n := range []string{"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern"} {
 		if !pool[n] || cats[n] != "workflow" {
 			t.Fatalf("workflow pool missing Pulse state tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
 		}
@@ -201,7 +202,7 @@ func TestToolSetInvariants(t *testing.T) {
 		"update_workflow_config", "update_step_config", "get_report_plan",
 		"list_schedules", "update_schedule", "get_schedule_runs",
 		"execute_shell_command", "diff_patch_workspace_file",
-		"get_pulse_state", "begin_pulse_fixer_run", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",
+		"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
 	} {
 		if !workshop[n] {
@@ -223,7 +224,7 @@ func TestToolSetInvariants(t *testing.T) {
 	for _, n := range todo_creation_human.GetToolsForWorkshopMode("run") {
 		run[n] = true
 	}
-	for _, n := range []string{"get_pulse_state", "begin_pulse_fixer_run", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern", "mark_changelog_artifact_reviewed"} {
+	for _, n := range []string{"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern", "mark_changelog_artifact_reviewed"} {
 		if run[n] {
 			t.Fatalf("run allow-list must not expose Pulse mutation tool %q", n)
 		}

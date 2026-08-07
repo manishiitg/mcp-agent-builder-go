@@ -9,13 +9,11 @@ action for this reviewer.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 EXECUTION
 
-The parent Workshop/Pulse agent first loads `assumption-audit`, then passes its
-relevant lens and this rendered checklist to
-`call_generic_agent` in an instruction beginning with `READ-ONLY REVIEW` and
-ends its turn after receiving the execution ID. The parent resumes from the
-automatic completion notification, then validates and applies any
-bounded safe edit. Do not create a dedicated KB-maintenance agent or use
-`run_in_background` for this review.
+The parent Workshop/Pulse agent first loads `assumption-audit`, then includes
+this rendered checklist in the normal Engineering/Ops background executor. The
+executor returns compact evidence; the parent consolidates it after the
+automatic completion notification. Do not create a dedicated KB-maintenance
+agent.
 
 This checklist is one of three (learnings, knowledgebase, DB) the parent may
 load together in a single `stores_health` pass — see `post-run-monitor`. If so,

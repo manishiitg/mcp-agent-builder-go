@@ -65,7 +65,7 @@ func TestParseRowsKeepsMultilineToolResultTogether(t *testing.T) {
 	content := "$ codex exec --json\n" +
 		"→ tool: mcp_api_bridge_get_api_spec({})\n" +
 		"✓ result mcp_api_bridge_get_api_spec: auth: Bearer $MCP_API_TOKEN\n" +
-		"POST /tools/custom/call_generic_agent\n" +
+		"POST /tools/custom/call_sub_agent\n" +
 		"\n" +
 		"instructions: string (required)\n" +
 		"[done · 1s · 10 in · 2 out]"
@@ -77,7 +77,7 @@ func TestParseRowsKeepsMultilineToolResultTogether(t *testing.T) {
 	if rows[1].Kind != "tool" {
 		t.Fatalf("row[1].Kind = %q, want tool", rows[1].Kind)
 	}
-	wantResult := "auth: Bearer $MCP_API_TOKEN\nPOST /tools/custom/call_generic_agent\n\ninstructions: string (required)"
+	wantResult := "auth: Bearer $MCP_API_TOKEN\nPOST /tools/custom/call_sub_agent\n\ninstructions: string (required)"
 	if rows[1].Result != wantResult {
 		t.Fatalf("tool result = %q, want %q", rows[1].Result, wantResult)
 	}

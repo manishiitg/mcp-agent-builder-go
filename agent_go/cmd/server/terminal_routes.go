@@ -155,7 +155,6 @@ func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Requ
 	if len(scopes) == 0 {
 		scopes = []string{sessionID}
 	}
-	scopes = api.includePulseRecoveryTerminalScopes(scopes)
 	var snapshots []terminals.Snapshot
 	seenTerminalIDs := make(map[string]struct{})
 	for _, scope := range scopes {
@@ -202,58 +201,6 @@ func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Requ
 	_ = json.NewEncoder(w).Encode(listTerminalsResponse{
 		Terminals: filtered, Total: len(filtered), RuntimeStates: runtimeStates,
 	})
-}
-
-// includePulseRecoveryTerminalScopes projects replacement Pulse sessions into
-// the original Schedule tab. Recovery sessions are deliberately separate for
-// cancellation and tool authority, but they are one user-visible run. Other
-// child kinds (for example independent reviewers) remain separate agents and
-// must not replace the pinned Main agent.
-func (api *StreamingAPI) includePulseRecoveryTerminalScopes(scopes []string) []string {
-	if api == nil || len(scopes) == 0 {
-		return scopes
-	}
-	wantedParents := make(map[string]struct{}, len(scopes))
-	seen := make(map[string]struct{}, len(scopes))
-	out := make([]string, 0, len(scopes)+1)
-	for _, scope := range scopes {
-		scope = strings.TrimSpace(scope)
-		if scope == "" {
-			continue
-		}
-		if _, exists := seen[scope]; exists {
-			continue
-		}
-		seen[scope] = struct{}{}
-		wantedParents[scope] = struct{}{}
-		out = append(out, scope)
-	}
-
-	api.activeSessionsMux.RLock()
-	children := make([]string, 0)
-	for childSessionID, session := range api.activeSessions {
-		if session == nil || strings.TrimSpace(session.SessionKind) != "pulse_recovery" {
-			continue
-		}
-		if _, wanted := wantedParents[strings.TrimSpace(session.ParentSessionID)]; !wanted {
-			continue
-		}
-		childSessionID = strings.TrimSpace(childSessionID)
-		if childSessionID != "" {
-			children = append(children, childSessionID)
-		}
-	}
-	api.activeSessionsMux.RUnlock()
-
-	sort.Strings(children)
-	for _, childSessionID := range children {
-		if _, exists := seen[childSessionID]; exists {
-			continue
-		}
-		seen[childSessionID] = struct{}{}
-		out = append(out, childSessionID)
-	}
-	return out
 }
 
 // handleGetTerminal returns one current view-only terminal snapshot.

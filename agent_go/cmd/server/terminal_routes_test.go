@@ -228,49 +228,6 @@ func TestListTerminalsExposesStatusLineCreatedLiveTerminal(t *testing.T) {
 	}
 }
 
-func TestListTerminalsProjectsPulseRecoveryMainIntoOriginalScheduleTab(t *testing.T) {
-	store := terminals.NewStore()
-	api := &StreamingAPI{
-		terminalStore:  store,
-		activeSessions: map[string]*ActiveSessionInfo{},
-	}
-	originalSessionID := "schedule-manual--pulse-root"
-	recoverySessionID := "schedule-manual--pulse-recovery"
-	reviewerSessionID := "schedule-manual--pulse-reviewer"
-	api.activeSessions[recoverySessionID] = &ActiveSessionInfo{
-		SessionID: recoverySessionID, ParentSessionID: originalSessionID, SessionKind: "pulse_recovery",
-	}
-	api.activeSessions[reviewerSessionID] = &ActiveSessionInfo{
-		SessionID: reviewerSessionID, ParentSessionID: originalSessionID, SessionKind: "pulse_reviewer",
-	}
-
-	for sessionID, tmuxSession := range map[string]string{
-		originalSessionID: "tmux-original-main",
-		recoverySessionID: "tmux-recovery-main",
-		reviewerSessionID: "tmux-reviewer-main",
-	} {
-		store.HandleEvent(sessionID, storeevents.Event{
-			Type: "status_line", SessionID: sessionID, Timestamp: time.Now(),
-			Data: &agentevents.AgentEvent{
-				Type: agentevents.StreamingStatusLine,
-				Data: &agentevents.StreamingStatusLineEvent{Provider: "codex-cli", TmuxSession: tmuxSession},
-			},
-		})
-	}
-
-	response := terminalRouteList(t, api, originalSessionID)
-	gotSessions := make(map[string]bool)
-	for _, terminal := range response.Terminals {
-		gotSessions[terminal.SessionID] = true
-	}
-	if !gotSessions[originalSessionID] || !gotSessions[recoverySessionID] {
-		t.Fatalf("terminal sessions = %#v, want original and recovery", gotSessions)
-	}
-	if gotSessions[reviewerSessionID] {
-		t.Fatalf("independent reviewer main must not replace Schedule main: %#v", gotSessions)
-	}
-}
-
 func TestListTerminalsActiveOnlyFiltersStaleMetadataList(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}

@@ -180,7 +180,7 @@ them to a public one is refused — make the repo private or keep the secrets ou
 ## Git workflow per per-workflow repo
 
 Run Git backup commands in the **parent workflow-builder/Pulse turn only**.
-Do not delegate backup through `run_in_background`, `call_generic_agent`, a
+Do not delegate backup through `run_in_background`, a
 reviewer, or another sub-agent. Delegated tool agents have deliberately narrower
 write access and cannot write the workflow's `.git/` directory; attempting Git
 there produces misleading `FETCH_HEAD` / `index.lock: Operation not permitted`

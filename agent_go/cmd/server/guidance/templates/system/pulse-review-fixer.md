@@ -1,14 +1,29 @@
-## Pulse selected-lane review and sequenced fixing
+## Pulse agent-owned review and fixing
 
-Use only after Gate. The scheduler supplies the due modules, Pulse run ID, and
-dated review run ID. Gate decides separately whether `workflow_review`
-(Engineering Review), `llm_ops_review`, `strategy_auditor`, and `goal_advisor`
-are due. Engineering and LLM/Ops share one context with separate perspective
-turns, a persisted consolidation checkpoint, and then one bounded Fixer turn in
-that same agent; skipped perspectives are not sent. Strategy Auditor and Goal
-Advisor remain independent read-only agents. A residual Fixer runs afterward
-only when those independent modules or a failed operational sequence still lack
-a terminal result.
+Use only after Gate. This is the Review+Fix turn in the same main-agent
+conversation that received Gate and will later receive Dashboard and Finalize.
+Gate decides separately whether `workflow_review` (Engineering Review),
+`llm_ops_review`, `strategy_auditor`, and `goal_advisor` are due. Read that
+durable worklist yourself. Go does not choose reviewers, launch a residual
+Fixer, or create a recovery agent.
+
+## Dispatch model
+
+The first Review+Fix turn is a launcher, not a long-running parent review.
+Use `run_in_background` for every selected child. When Engineering and
+Operations are due, use one `agent_type="executor"` child with a
+`message_sequence`: engineering review, operations review, consolidation, then
+safe repair and verification. It keeps one context and can combine related
+repairs. Strategy Auditor and Goal Advisor are independent executor children;
+never fold either into Engineering/Ops.
+
+Give each child the Pulse run ID, selected lens, Gate evidence, and clear
+normal builder authority. Children must return a compact evidence index and
+truthful change/verification outcome. They do not own final Pulse lifecycle
+receipts. Launch all selected children, then end the parent turn without
+polling. The runtime waits for registered children and the next parent turn
+consolidates their notifications into typed SQLite findings, verifications, and
+one `record_pulse_result` receipt for every due module.
 
 Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
@@ -21,11 +36,12 @@ new finding. Attempt every safe bounded fix in the selected module. Leave a
 finding active only for a concrete blocker, decision, failed check, or future
 evidence checkpoint.
 
-Strategy Auditor and Goal Advisor are independent and may run in one bounded
-parallel batch. Complete that read-only batch before the shared operational
-review-and-fix sequence starts, so no reviewer observes artifacts changing under
-it. The operational lanes remain independent in meaning but intentionally share
-evidence and conversation context with their own Fixer turn.
+Strategy Auditor and Goal Advisor are independent product/business lenses.
+Their background children may run in parallel with the Engineering/Ops child.
+Do not mutate the same artifacts in competing children; the Engineering/Ops
+sequence owns its technical repair phase.
+Engineering and Operations remain independent in meaning but intentionally
+share evidence.
 An unreliable evidence window is classified inside the affected review as an
 execution problem or insufficient evidence; it does not cancel another review.
 For coding-CLI sessions, absent `context_usage_percent` is explicitly
@@ -38,35 +54,23 @@ Goal Advisor is selected only for its own blank-sheet opportunity, answered
 decision, healthy-headroom, or experiment-checkpoint trigger—not as a handler
 for a Strategy Auditor result.
 
-The scheduler invokes at most one shared operational reviewer and at most one
-agent for each selected strategic module. The operational reviewer receives an
-exact `review_lanes` list in canonical order and owns only those lanes. Each
-strategic stage owns only its supplied module. First inspect current-run result,
-active retained backlog, answered decisions, awaiting-verification work, and
-any already-saved reviewer result. Do not launch a reviewer merely because the
-module is due: if saved review and lifecycle evidence already answer the review
-question, stop and leave that evidence for the applicable final Fixer turn. Reviewer
-independent Strategy/Goal stages never mutate, start fix attempts, or mark
-module state. The operational sequence remains read-only through its lane and
-consolidation turns; only its final Fixer turn mutates and marks its selected
-lanes.
+First inspect current-run results, the complete active retained backlog,
+answered decisions, awaiting-verification work, and saved typed review receipts.
+Do not launch a reviewer merely because a module is due: if durable evidence
+already answers the question, send that module directly to the Engineering/Ops
+consolidation-and-repair sequence. Never combine agents in one shell command,
+run background curl, or use `&`/`wait`. Specialist output is evidence for the
+parent consolidation, not permission to omit its final receipt. Reviewer
+failure is truthful evidence for that lens and cannot erase or block other due
+work.
 
-When fresh evidence or an evidence gap genuinely requires a **READ-ONLY REVIEW**,
-make exactly one `call_generic_agent` call for the independent module.
-`workflow_review` instead uses one `role="fixer"` agent for only the Gate-selected
-ordered operational lanes followed by its bounded Fixer turn; pass the exact
-non-empty `review_lanes` list and do not spawn one child per lane.
-Never combine the independent agents in one shell command, run curl
-in the background, use `&`/`wait`, or wait for another module. In coding-agent mode, use the documented API bridge
-shell transport. The call returns an `execution_id` immediately; record it,
-end the current turn, and resume only from its automatic notification of completion.
-Pass exact `pulse_run_id`, dated `review_run_id`, and module. The backend stores
-its complete Markdown and structured verification results directly in SQLite;
-call `get_pulse_state(view="review")` with that review run and module before the review
-stage ends. Reviewer failure is retained as `Review incomplete` evidence for
-this module only and cannot block later reviewers. The operational agent records
-its selected lane results; the residual Fixer records only still-unresolved
-independent module results.
+Persist findings and prior-fix verification through the typed Pulse tools as
+you go. Then reconcile conflicts and semantic duplicates, apply safe approved
+repairs through normal Workflow Builder tools, and record exact proof or the
+future producing-run boundary. Finish by calling `record_pulse_result` exactly
+once for every due module. If no module is due, record the required terminal
+skip receipts and stop. Do not render HTML, back up, publish, or notify in this
+turn.
 
 ### Compact response contract
 
@@ -77,18 +81,12 @@ rows, full tool results, source excerpts, or reasoning already captured in a
 prior lane. Use exact paths, query names, IDs, and short observed values as
 evidence pointers instead.
 
-For an operational consolidated review, return a 2–3 sentence executive verdict
-followed by one compact entry per valid finding: claim, impact, next action, and
-evidence pointers. Merge the same root cause but retain every distinct valid
-finding. Keep it brief; compact wording must never cause a finding to disappear.
-The final Fixer turn is only a short change/verification/blocker outcome. It
-must not repeat or reconsolidate the review.
-
-If a saved review has status `contract_failed`, the backend retained its raw
-Markdown but quarantined its invalid structured verification markers. Do not
-copy, repair, or route those markers. Mark that module `failed` with the exact
-contract error, continue processing every other due module, and leave its
-findings unchanged for a clean reviewer retry on the next pass.
+Return only a compact executive verdict and short change/verification/blocker
+outcome. Every valid finding, check, attempt, and evidence pointer belongs in
+the typed SQLite lifecycle tools, not in a Markdown report or a large final
+response. Merge the same root cause but retain every distinct valid finding.
+If a typed write is rejected, correct that write or record the exact module
+failure; never replace missing structured state with prose.
 
 Give each reviewer scope, Gate evidence, focused guidance, and this response
 contract. Engineering Review conditionally loads execution, artifact-drift,
@@ -262,20 +260,7 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-For selected Engineering/LLM-Ops lanes, call one generic agent with
-`role="fixer"`, `module="workflow_review"`, the exact `review_lanes`, and this
-run's identities. The backend constructs the review turns, persists the
-consolidated review and filed concerns, then sends the bounded Fixer turn to the
-same conversation. It runs on the maintenance tier with write authority limited
-to this Pulse run. Never launch a second operational Fixer.
-
-After that sequence, start `module="pulse_fixer"` only when a due module is
-still non-terminal—normally an independent Strategy/Goal result needing
-lifecycle or decision handling, or recovery from a failed operational sequence.
-It preserves terminal operational results and processes only unresolved due
-modules. If every due module is terminal, skip the residual Fixer entirely.
-
-The Fixer first calls `get_pulse_state(view="backlog")` without a module filter
+The main Review+Fix agent first calls `get_pulse_state(view="backlog")` without a module filter
 and freezes the complete active starting manifest. Due reviewer modules decide
 which reviews ran; they do not narrow the consolidated Fixer's retained
 backlog. Include every owning module represented by that manifest in the Fixer

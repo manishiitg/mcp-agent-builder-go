@@ -23,8 +23,7 @@ func (a *recordingBackgroundSequenceAgent) Execute(_ context.Context, vars map[s
 	if a.failAt > 0 && len(a.instructions) == a.failAt {
 		return "", history, errors.New("turn failed")
 	}
-	history = append(history, llmtypes.MessageContent{})
-	return "result:" + vars["Instruction"], history, nil
+	return "result:" + vars["Instruction"], append(history, llmtypes.MessageContent{}), nil
 }
 
 func (a *recordingBackgroundSequenceAgent) GetType() string { return "test" }
@@ -40,114 +39,16 @@ func (a *recordingBackgroundSequenceAgent) GetBaseAgent() *orchestratoragents.Ba
 func TestParseBackgroundMessageSequence(t *testing.T) {
 	items, err := parseBackgroundMessageSequence(map[string]interface{}{
 		"message_sequence": []interface{}{
-			map[string]interface{}{"id": "first", "title": "First", "message": " inspect "},
-			map[string]interface{}{"id": "final", "message": "consolidate"},
+			map[string]interface{}{"id": "engineering", "title": "Engineering", "message": " inspect "},
+			map[string]interface{}{"id": "fix", "message": "repair"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("parse sequence: %v", err)
 	}
-	want := []backgroundMessageSequenceItem{
-		{ID: "first", Title: "First", Message: "inspect"},
-		{ID: "final", Message: "consolidate"},
-	}
+	want := []backgroundMessageSequenceItem{{ID: "engineering", Title: "Engineering", Message: "inspect"}, {ID: "fix", Message: "repair"}}
 	if !reflect.DeepEqual(items, want) {
 		t.Fatalf("items = %#v, want %#v", items, want)
-	}
-}
-
-func TestParseBackgroundMessageSequenceDefaultsWorkflowReviewerLenses(t *testing.T) {
-	items, err := parseBackgroundMessageSequence(map[string]interface{}{
-		"role":   "reviewer",
-		"module": "workflow_review",
-	})
-	if err != nil {
-		t.Fatalf("parse default workflow review sequence: %v", err)
-	}
-	wantIDs := []string{"engineering", "llm-ops", "consolidate"}
-	gotIDs := make([]string, 0, len(items))
-	for _, item := range items {
-		gotIDs = append(gotIDs, item.ID)
-	}
-	if !reflect.DeepEqual(gotIDs, wantIDs) {
-		t.Fatalf("default workflow review IDs = %#v, want %#v", gotIDs, wantIDs)
-	}
-	engineering := items[0].Message
-	for _, want := range []string{
-		"engineering QA reviewer",
-		"bug-review",
-		"artifact-drift",
-		"improve-report",
-		"improve-evaluation",
-		"DB/knowledgebase/learnings integrity",
-		"wrong business outcome",
-		"Strategy Auditor",
-		"LLM/Ops",
-	} {
-		if !strings.Contains(engineering, want) {
-			t.Fatalf("default engineering lens missing contract %q:\n%s", want, engineering)
-		}
-	}
-}
-
-func TestParseBackgroundMessageSequenceRunsOnlySelectedWorkflowReviewLanes(t *testing.T) {
-	items, err := parseBackgroundMessageSequence(map[string]interface{}{
-		"role":         "reviewer",
-		"module":       "workflow_review",
-		"review_lanes": []interface{}{"llm_ops_review"},
-	})
-	if err != nil {
-		t.Fatalf("parse selected workflow review sequence: %v", err)
-	}
-	gotIDs := make([]string, 0, len(items))
-	for _, item := range items {
-		gotIDs = append(gotIDs, item.ID)
-	}
-	if want := []string{"llm-ops", "consolidate"}; !reflect.DeepEqual(gotIDs, want) {
-		t.Fatalf("selected workflow review IDs = %#v, want %#v", gotIDs, want)
-	}
-	for _, item := range items {
-		if item.ID == "engineering" {
-			t.Fatalf("skipped lane unexpectedly ran: %#v", item)
-		}
-	}
-}
-
-func TestParseBackgroundMessageSequenceContinuesOperationalReviewIntoFixer(t *testing.T) {
-	items, err := parseBackgroundMessageSequence(map[string]interface{}{
-		"role":         "fixer",
-		"module":       "workflow_review",
-		"review_lanes": []interface{}{"workflow_review"},
-	})
-	if err != nil {
-		t.Fatalf("parse combined review/fixer sequence: %v", err)
-	}
-	gotIDs := make([]string, 0, len(items))
-	for _, item := range items {
-		gotIDs = append(gotIDs, item.ID)
-	}
-	if want := []string{"engineering", "consolidate", "fix"}; !reflect.DeepEqual(gotIDs, want) {
-		t.Fatalf("combined sequence IDs = %#v, want %#v", gotIDs, want)
-	}
-	if !strings.Contains(items[len(items)-1].Message, "same conversation") || !strings.Contains(items[len(items)-1].Message, "record_pulse_result") {
-		t.Fatalf("combined Fixer turn lacks continuation/lifecycle contract: %s", items[len(items)-1].Message)
-	}
-	if !strings.Contains(items[len(items)-1].Message, "Do not repeat findings") {
-		t.Fatalf("combined Fixer turn must not produce a duplicate final consolidation: %s", items[len(items)-1].Message)
-	}
-	if !strings.Contains(items[1].Message, "record_pulse_finding") || !strings.Contains(items[1].Message, "complete_pulse_review") {
-		t.Fatalf("consolidation lacks typed-tool result contract: %s", items[1].Message)
-	}
-}
-
-func TestParseBackgroundMessageSequenceRejectsUnknownWorkflowReviewLane(t *testing.T) {
-	_, err := parseBackgroundMessageSequence(map[string]interface{}{
-		"role":         "reviewer",
-		"module":       "workflow_review",
-		"review_lanes": []interface{}{"goal_advisor"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported operational lane") {
-		t.Fatalf("expected unsupported-lane error, got %v", err)
 	}
 }
 
@@ -165,18 +66,18 @@ func TestParseBackgroundMessageSequenceRejectsDuplicateIDs(t *testing.T) {
 
 func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T) {
 	agent := &recordingBackgroundSequenceAgent{}
-	template := map[string]string{"WorkspacePath": "/workflow", "Instruction": "stale"}
+	template := map[string]string{"Instruction": "stale"}
 	result, err := executeBackgroundMessageSequence(context.Background(), agent, template, "open", []backgroundMessageSequenceItem{
-		{ID: "lens", Message: "inspect"},
-		{ID: "final", Message: "consolidate"},
+		{ID: "operations", Message: "inspect ops"},
+		{ID: "fix", Message: "repair"},
 	})
 	if err != nil {
 		t.Fatalf("execute sequence: %v", err)
 	}
-	if result != "result:consolidate" {
+	if result != "result:repair" {
 		t.Fatalf("result = %q", result)
 	}
-	if want := []string{"open", "inspect", "consolidate"}; !reflect.DeepEqual(agent.instructions, want) {
+	if want := []string{"open", "inspect ops", "repair"}; !reflect.DeepEqual(agent.instructions, want) {
 		t.Fatalf("instructions = %#v, want %#v", agent.instructions, want)
 	}
 	if want := []int{0, 1, 2}; !reflect.DeepEqual(agent.historyLens, want) {
@@ -187,57 +88,10 @@ func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T)
 	}
 }
 
-func TestExecuteBackgroundMessageSequenceObserverCheckpointsBeforeNextTurn(t *testing.T) {
-	agent := &recordingBackgroundSequenceAgent{}
-	var checkpoints []string
-	_, err := executeBackgroundMessageSequenceObserved(context.Background(), agent, nil, "open", []backgroundMessageSequenceItem{
-		{ID: "consolidate", Message: "review"},
-		{ID: "fix", Message: "repair"},
-	}, func(turn backgroundMessageSequenceItem, result string) error {
-		checkpoints = append(checkpoints, turn.ID+":"+result)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("execute observed sequence: %v", err)
-	}
-	if want := []string{"opening:result:open", "consolidate:result:review", "fix:result:repair"}; !reflect.DeepEqual(checkpoints, want) {
-		t.Fatalf("checkpoints = %#v, want %#v", checkpoints, want)
-	}
-}
-
-func TestExecuteDefaultWorkflowReviewerSequenceUsesFourOrderedTurns(t *testing.T) {
-	items, err := parseBackgroundMessageSequence(map[string]interface{}{
-		"role":   "reviewer",
-		"module": "workflow_review",
-	})
-	if err != nil {
-		t.Fatalf("parse default workflow reviewer sequence: %v", err)
-	}
-	agent := &recordingBackgroundSequenceAgent{}
-	if _, err := executeBackgroundMessageSequence(context.Background(), agent, nil, "opening evidence map", items); err != nil {
-		t.Fatalf("execute default workflow reviewer sequence: %v", err)
-	}
-	if len(agent.instructions) != 4 {
-		t.Fatalf("reviewer turns = %d, want opening + 3 follow-ups", len(agent.instructions))
-	}
-	if agent.instructions[0] != "opening evidence map" || !strings.HasPrefix(agent.instructions[3], "Now reconcile every selected-lane checkpoint") {
-		t.Fatalf("reviewer turn order was not preserved: %#v", agent.instructions)
-	}
-	if want := []int{0, 1, 2, 3}; !reflect.DeepEqual(agent.historyLens, want) {
-		t.Fatalf("reviewer history lengths = %#v, want %#v", agent.historyLens, want)
-	}
-}
-
 func TestExecuteBackgroundMessageSequenceStopsAtFailedTurn(t *testing.T) {
 	agent := &recordingBackgroundSequenceAgent{failAt: 2}
-	_, err := executeBackgroundMessageSequence(context.Background(), agent, nil, "open", []backgroundMessageSequenceItem{
-		{ID: "broken", Message: "inspect"},
-		{ID: "unreached", Message: "consolidate"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "turn 2 (broken)") {
+	_, err := executeBackgroundMessageSequence(context.Background(), agent, nil, "open", []backgroundMessageSequenceItem{{ID: "review", Message: "inspect"}})
+	if err == nil || !strings.Contains(err.Error(), "turn 2 (review)") {
 		t.Fatalf("expected turn identity in error, got %v", err)
-	}
-	if len(agent.instructions) != 2 {
-		t.Fatalf("executed %d turns after failure, want 2", len(agent.instructions))
 	}
 }

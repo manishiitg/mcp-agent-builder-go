@@ -39,6 +39,12 @@ func codingAgentRequestAllowsPersistentInteractive(req *QueryRequest, sessionID 
 	if strings.TrimSpace(req.ParentSessionID) != "" || strings.TrimSpace(req.SessionKind) != "" || req.IsAutoNotification {
 		return false
 	}
+	// A scheduler knows that its immediately following turn belongs to the same
+	// conversation. Keep the CLI process alive across that boundary rather than
+	// sending Claude Code /exit and spawning a separate --resume process.
+	if req.KeepNativeSessionAlive {
+		return true
+	}
 	// "Make interactive" deliberately keeps the schedule session ID. This
 	// explicit promotion therefore outranks its historical trigger/ID shape.
 	if req.UserInteractiveContinuation {

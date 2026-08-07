@@ -231,60 +231,6 @@ func TestResolveRunConcernRejectsUnknownStatus(t *testing.T) {
 // finding repeated every cycle reads as new every cycle. Reviewer concerns go
 // through the same fingerprinting as step concerns, keyed by current reviewer
 // perspective. Historical artifact-named modules now share Engineering Review.
-func TestReviewerConcernsDedupeByPerspectiveAcrossRuns(t *testing.T) {
-	ws := concernsWorkspace(t)
-	ctx := context.Background()
-	artifact := "## Findings\nStored-data integrity issue found.\n\nCONCERNS: ASTERDM/ATUL rows have NULL pnl_inr\n"
-
-	for _, run := range []string{"pulse-1", "pulse-2"} {
-		if _, err := RecordRunConcerns(ctx, ws, run, "", "db_health", ConcernPhaseReview, artifact); err != nil {
-			t.Fatalf("record %s: %v", run, err)
-		}
-	}
-	// A second retired Engineering alias reporting the same behavior is the same
-	// finding, not a fresh artifact-specific ticket.
-	if _, err := RecordRunConcerns(ctx, ws, "pulse-2", "", "bug_review", ConcernPhaseReview, artifact); err != nil {
-		t.Fatalf("record other module: %v", err)
-	}
-
-	open, err := LoadOpenRunConcerns(ctx, ws, 10)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(open) != 1 {
-		t.Fatalf("expected one Engineering finding, got %d: %#v", len(open), open)
-	}
-	if open[0].SeenCount != 3 || open[0].StepID != "workflow_review" {
-		t.Fatalf("recurring Engineering finding should have count 3, got %#v", open[0])
-	}
-	if open[0].Phase != ConcernPhaseReview {
-		t.Fatalf("phase = %q, want %q", open[0].Phase, ConcernPhaseReview)
-	}
-}
-
-func TestCurrentReviewLaneReusesExactLegacyConcernFingerprint(t *testing.T) {
-	ws := concernsWorkspace(t)
-	ctx := context.Background()
-	artifact := "CONCERNS: knowledge note duplicates transient run state"
-	if _, err := RecordRunConcerns(ctx, ws, "pulse-1", "", "knowledgebase_health", ConcernPhaseReview, artifact); err != nil {
-		t.Fatalf("record legacy concern: %v", err)
-	}
-	if _, err := RecordRunConcerns(ctx, ws, "pulse-2", "", "workflow_review", ConcernPhaseReview, artifact); err != nil {
-		t.Fatalf("record current-lane concern: %v", err)
-	}
-	open, err := LoadOpenRunConcerns(ctx, ws, 10)
-	if err != nil {
-		t.Fatalf("load concerns: %v", err)
-	}
-	if len(open) != 1 || open[0].SeenCount != 2 {
-		t.Fatalf("legacy/current concern was duplicated: %#v", open)
-	}
-}
-
-// Distinct execution/review findings on one step remain separate, but should
-// stay adjacent and outrank an isolated recurrence so a reviewer can reason
-// about their shared boundary together. Prevalidation uses a stronger rule:
-// every failed check on one step is one lifecycle finding.
 func TestRelatedStepConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()

@@ -103,7 +103,7 @@ that in mind:
   specialist that should learn and be validated** (routes carry learning +
   prevalidation + tiering and persist recipes across runs). This is the only
   delegation path that improves over time.
-- **Generic agent** (`call_generic_agent`) — the orchestrator uses it for
+- **Background agent** (`run_in_background`) — the workshop uses it for
   **ad-hoc** work it wants offloaded: isolated context, parallelizable, cheaper
   tier — but **no** learning/prevalidation. Don't create a route for one-off,
   unspecialized work; leave it to the generic agent.

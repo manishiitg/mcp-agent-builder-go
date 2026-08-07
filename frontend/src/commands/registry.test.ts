@@ -88,7 +88,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('focus on repeated targets')
   })
 
-  it('routes Goal Advisor directly to its persisted native background pipeline', () => {
+  it('routes Goal Advisor through the normal guided background review path', () => {
     const command = findCommand('goal-advisor', 'workflow')
     let submitted = ''
 
@@ -98,10 +98,10 @@ describe('Pulse slash commands', () => {
       workshopMode: 'workshop',
     } as CommandContext)
 
-    expect(submitted).toContain('run_goal_advisor_review')
+    expect(submitted).toContain('get_workflow_command_guidance')
     expect(submitted).toContain('challenge feed concentration')
-    expect(submitted).toContain('do not wrap it in run_in_background')
-    expect(submitted).toContain('persists its complete result and open CONCERNS in SQLite')
+    expect(submitted).toContain('BACKGROUND task')
+    expect(submitted).toContain('run_in_background')
   })
 
   it('uses design-plan as the single comprehensive plan review command', () => {

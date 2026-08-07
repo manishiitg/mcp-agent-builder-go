@@ -37,16 +37,16 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("record prior worklist: %v", err)
 	}
-	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, priorRunID, "", pulseModuleBugReview, step_based_workflow.ConcernPhaseReview,
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, priorRunID, "", pulseModuleWorkflowReview, step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: collector omits the populated latency value after a producing run"); err != nil {
 		t.Fatalf("file concern: %v", err)
 	}
-	backlog, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, -1)
+	backlog, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, -1)
 	if err != nil || len(backlog) != 1 {
 		t.Fatalf("load filed concern: count=%d err=%v", len(backlog), err)
 	}
 	finding := backlog[0]
-	_, err = markPulseModuleResultFromAgentWithAuditAndFindings(ctx, workspacePath, pulseModuleBugReview, priorRunID,
+	_, err = markPulseModuleResultFromAgentWithAuditAndFindings(ctx, workspacePath, pulseModuleWorkflowReview, priorRunID,
 		"changed", "Change applied; next producing run is required.", []string{"bounded repair"},
 		PulseModuleAuditInput{ChangedFiles: []string{"planning/step_config.json"}, Verification: []string{"awaiting next run"}},
 		[]step_based_workflow.PulseFindingDisposition{{
@@ -62,7 +62,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	}
 	// The backend opened the attempt from that disposition; the reviewer marker
 	// must name the exact attempt the backend chose.
-	candidates, err := step_based_workflow.LoadPulseReviewVerificationCandidates(ctx, workspacePath, pulseModuleBugReview)
+	candidates, err := step_based_workflow.LoadPulseReviewVerificationCandidates(ctx, workspacePath, pulseModuleWorkflowReview)
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("backend did not open one verifiable attempt: %#v err=%v", candidates, err)
 	}
@@ -76,13 +76,13 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	expected := "run-12 has latency"
 	observed := "run-12 contains latency_ms=42"
 	reviewRunID := "2026-08-01T00-00-00.000Z_bridge-verification"
-	if err := step_based_workflow.RecordPulseReviewVerification(ctx, workspacePath, pulseModuleBugReview, reviewRunID, currentRunID, step_based_workflow.PulseReviewVerificationResult{
+	if err := step_based_workflow.RecordPulseReviewVerification(ctx, workspacePath, pulseModuleWorkflowReview, reviewRunID, currentRunID, step_based_workflow.PulseReviewVerificationResult{
 		FindingID: finding.Issue.ID, Fingerprint: finding.Fingerprint, AttemptID: attemptID, Verdict: step_based_workflow.VerificationPassed,
 		Expected: expected, Observed: observed, Evidence: []string{"runs/run-12/result.json"},
 	}); err != nil {
 		t.Fatalf("record typed verification: %v", err)
 	}
-	if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, []string{pulseModuleBugReview}, reviewRunID, currentRunID, "Prior repair verified.", "completed"); err != nil {
+	if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, []string{pulseModuleWorkflowReview}, reviewRunID, currentRunID, "Prior repair verified.", "completed"); err != nil {
 		t.Fatalf("complete typed review: %v", err)
 	}
 
@@ -92,8 +92,6 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 		t.Fatal("record_pulse_result executor has unexpected type")
 	}
 	const sessionID = "pulse-fixer-bridge-session"
-	release := registerTrustedPulseSession(sessionID, currentRunID)
-	defer release()
 
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tools/custom/record_pulse_result" {
@@ -156,7 +154,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	request := mcp.CallToolRequest{}
 	request.Params.Name = "record_pulse_result"
 	request.Params.Arguments = map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": currentRunID, "module": pulseModuleBugReview,
+		"workspace_path": workspacePath, "pulse_run_id": currentRunID, "module": pulseModuleWorkflowReview,
 		"result": "done", "reason": "Independent reviewer proved the prior repair on run-12.",
 		"evidence": []interface{}{"runs/run-12/result.json"},
 		"finding_dispositions": []interface{}{map[string]interface{}{
@@ -178,7 +176,7 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 		t.Fatalf("unexpected bridge result: %#v", result.Content)
 	}
 
-	closed, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleBugReview, -1)
+	closed, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, -1)
 	if err != nil || len(closed) != 1 || closed[0].Status != step_based_workflow.ConcernStatusResolved {
 		t.Fatalf("review verification did not close through bridge: %#v err=%v", closed, err)
 	}

@@ -1,38 +1,27 @@
 # ENGINEERING AND OPERATIONS REVIEW WITH FIXES
 
-Run the same operational review-and-fix sequence used by scheduled Pulse. This
-is one agent conversation: Engineering review, LLM/Ops review, consolidation,
-then one bounded Fixer turn. Do not launch a separate Fixer and do not run Pulse
-Gate, Strategy Auditor, or Goal Advisor.{{if .Focus}}
+Run the operational Review+Fix contract directly in this continuing Workflow Builder conversation.
+Do not launch a separate Fixer and do not run Pulse Gate,
+Strategy Auditor, Goal Advisor, Dashboard, publish, or notify.{{if .Focus}}
 
 Focus especially on: {{.Focus}}. The focus sets priority; it does not suppress
-other material operational evidence found by the selected lanes.{{end}}{{if .RunFolder}}
+other material Engineering or Operations evidence.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary retained run.{{end}}
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`.
-   Use retained workflow, run, lifecycle, cost, and store evidence. Do not run
-   the workflow merely to create review evidence and do not update
-   `builder/improve.html`; the Dashboard is a later projection of SQLite state.
-2. Launch exactly one agent with
-   `call_generic_agent(todo_id="standalone-engineering-review",
-   instructions="Run the complete Engineering and LLM/Ops operational review,
-   persist its consolidated findings, then apply and verify bounded safe fixes.",
-   preferred_tier=3, module="workflow_review", role="fixer",
-   review_lanes=["workflow_review","llm_ops_review"])`.
-   Do not pass `pulse_run_id`, `review_run_id`, or `message_sequence`. The backend
-   creates the manual Pulse identity and supplies the canonical ordered turns:
-   Engineering → LLM/Ops → consolidation → Fixer. All turns reuse one agent,
-   conversation, MCP session, and mutation authority. Do not perform any review
-   or repair inline in the parent chat and do not call `begin_pulse_fixer_run`.
-3. `call_generic_agent` returns an `execution_id` immediately. End the current
-   turn and resume only from its automatic completion notification. Do not poll
-   the child or launch another Fixer while it is running.
-4. After completion, read the persisted module and backlog state with
-   `get_pulse_state`. Report what the sequence reviewed, what it fixed, what it
-   verified, what remains `changed_unverified`, and any exact user or external
-   boundary still required. Do not manufacture a second lifecycle pass.
-
-The command is complete only when the single sequence has persisted its review
-checkpoint and its Fixer turn has recorded one terminal module result for each
-selected operational lane.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"},{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`.
+2. Use `pulse_run_id="current"`, which resolves to this current Workflow Builder
+   chat. Call `record_pulse_worklist` exactly once: Engineering and Operations are due;
+   Strategy Auditor and Goal Advisor are deferred with explicit next-check
+   boundaries. Then read the complete retained backlog, pending verification,
+   latest meaningful run evidence, plan/store state, and cost/runtime evidence.
+3. Own the review yourself. Use a specialist child only when independent focused
+   analysis is genuinely useful; wait for its automatic completion and
+   consolidate it before mutation. Persist typed findings and verification as
+   they are established. Do not create a Markdown review report.
+4. Deduplicate by root cause, build a compact repair queue, apply safe bounded
+   fixes with normal Workflow Builder tools, and prove each immediately or name
+   its exact future producing-run boundary.
+5. Record one terminal module result for Engineering and one for Operations.
+   Finish with a concise summary of what was reviewed, fixed, verified, left
+   awaiting evidence, or blocked by an exact user/external boundary.
