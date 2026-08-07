@@ -1,0 +1,24 @@
+.execution-activity-feed { display: grid; gap: 6px; margin-bottom: 10px; }
+.execution-activity-event { display: flex; align-items: center; gap: 9px; border: 1px solid var(--execution-event-border, #e5e1d9); border-radius: 10px; padding: 8px 10px; background: var(--execution-event-background, #faf8f3); }
+.execution-tool-group { border: 1px solid var(--execution-event-border, #e5e1d9); border-radius: 10px; background: var(--execution-event-background, #faf8f3); }
+.execution-tool-group > summary { display: flex; align-items: center; gap: 9px; padding: 8px 28px 8px 10px; cursor: pointer; list-style: none; position: relative; }
+.execution-tool-group > summary::-webkit-details-marker { display: none; }
+.execution-tool-group > summary::after { content: '›'; position: absolute; right: 11px; color: var(--execution-event-muted, #9c958c); font-size: 14px; transform: rotate(90deg); transition: transform .15s ease; }
+.execution-tool-group[open] > summary::after { transform: rotate(-90deg); }
+.execution-tool-group > summary > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--execution-event-idle, #a9a39a); }
+.execution-tool-group > summary > span { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 12px; }
+.execution-tool-group > summary strong { color: var(--execution-event-text, #625d56); font-size: 10px; }
+.execution-tool-group > summary small { color: var(--execution-event-muted, #9c958c); font-size: 8px; text-transform: lowercase; }
+.execution-tool-group.is-running > summary > i { background: var(--execution-event-running, #d97757); box-shadow: 0 0 0 3px rgba(217,119,87,.15); animation: execution-event-pulse 1.5s infinite; }
+.execution-tool-group.is-completed > summary > i { background: var(--execution-event-completed, #5ea981); }
+.execution-tool-group.is-failed > summary > i { background: var(--execution-event-failed, #b4573f); }
+.execution-tool-details { display: grid; gap: 5px; padding: 0 7px 7px 25px; }
+.execution-tool-details .execution-activity-event { border-radius: 7px; padding: 6px 8px; background: transparent; }
+.execution-activity-event > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--execution-event-idle, #a9a39a); }
+.execution-activity-event > span { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 12px; }
+.execution-activity-event strong { overflow: hidden; color: var(--execution-event-text, #625d56); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.execution-activity-event small { color: var(--execution-event-muted, #9c958c); font-size: 8px; text-transform: lowercase; }
+.execution-activity-event.is-running > i { background: var(--execution-event-running, #d97757); box-shadow: 0 0 0 3px rgba(217,119,87,.15); animation: execution-event-pulse 1.5s infinite; }
+.execution-activity-event.is-completed > i { background: var(--execution-event-completed, #5ea981); }
+.execution-activity-event.is-failed > i, .execution-activity-event.is-cancelled > i { background: var(--execution-event-failed, #b4573f); }
+@keyframes execution-event-pulse { 50% { opacity: .45; } }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/platformevents"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,6 +26,7 @@ type Store struct {
 	db      *sql.DB
 	dataDir string
 	aead    cipher.AEAD
+	events  *platformevents.Repository
 }
 
 func OpenStore(dataDir string) (*Store, error) {
@@ -52,7 +54,7 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, dataDir: dataDir, aead: aead}
+	s := &Store{db: db, dataDir: dataDir, aead: aead, events: platformevents.NewRepository(db)}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -142,7 +144,49 @@ DELETE FROM messages
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
+	if err := platformevents.Migrate(s.db); err != nil {
+		return fmt.Errorf("migrate execution events: %w", err)
+	}
+	return s.migrateLegacyActivityEvents()
+}
+
+func (s *Store) migrateLegacyActivityEvents() error {
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='activity_events'`).Scan(&exists); err != nil {
+		return fmt.Errorf("inspect legacy activity events: %w", err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	// Preserve events written by the first Video Studio-only implementation,
+	// then remove its product-owned operational table. INSERT OR IGNORE makes a
+	// retry safe if a prior startup copied rows but stopped before the drop.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO execution_events(id,scope_id,type,name,status,execution_id,parent_execution_id,message,created_at)
+		SELECT id,project_id,
+		CASE type
+		 WHEN 'tool_call_start' THEN 'tool_started'
+		 WHEN 'tool_call_end' THEN 'tool_completed'
+		 WHEN 'tool_call_error' THEN 'tool_failed'
+		 WHEN 'background_agent_started' THEN 'run_started'
+		 WHEN 'background_agent_completed' THEN CASE WHEN status='failed' THEN 'run_failed' ELSE 'run_completed' END
+		 WHEN 'background_agent_terminated' THEN 'run_cancelled'
+		 ELSE type END,
+		name,status,execution_id,parent_execution_id,message,created_at FROM activity_events;
+		DROP TABLE activity_events`); err != nil {
+		return fmt.Errorf("migrate legacy activity events: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) AddExecutionEvent(event platformevents.Event) (platformevents.Event, error) {
+	return s.events.Add(event)
+}
+
+func (s *Store) ExecutionEvents(userID, projectID string) ([]platformevents.Event, error) {
+	if _, err := s.Project(userID, projectID); err != nil {
+		return nil, err
+	}
+	return s.events.List(projectID)
 }
 
 func (s *Store) StartWorkflowRun(projectID, name, groupName string, steps []WorkflowStep) (WorkflowRun, error) {
@@ -413,7 +457,7 @@ func (s *Store) UpdateProject(userID, projectID, title, description string) (Pro
 func (s *Store) PresentVideo(projectID, path, title, note string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO presented_videos(project_id,path,title,note,created_at) VALUES(?,?,?,?,?)
-		 ON CONFLICT(project_id,path) DO UPDATE SET title=excluded.title,note=excluded.note`,
+		 ON CONFLICT(project_id,path) DO UPDATE SET title=excluded.title,note=excluded.note,created_at=excluded.created_at`,
 		projectID, path, title, note, dbTime(time.Now()))
 	return err
 }

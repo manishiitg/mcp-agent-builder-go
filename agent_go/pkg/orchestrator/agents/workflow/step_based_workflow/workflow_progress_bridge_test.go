@@ -88,6 +88,12 @@ func TestWorkflowProgressBridgeNotifiesStepStartAndCompletion(t *testing.T) {
 	if notifier.starts[0].ID != notifier.completes[0].id {
 		t.Fatalf("expected start/end IDs to match, got %q and %q", notifier.starts[0].ID, notifier.completes[0].id)
 	}
+	if got := notifier.starts[0].Metadata["step_id"]; got != "search-score-jobs" {
+		t.Fatalf("expected canonical step ID on start, got %q", got)
+	}
+	if got := notifier.completes[0].meta["step_id"]; got != "search-score-jobs" {
+		t.Fatalf("expected canonical step ID on completion, got %q", got)
+	}
 	if got := notifier.completes[0].meta["group_name"]; got != "job-search" {
 		t.Fatalf("expected group metadata, got %q", got)
 	}

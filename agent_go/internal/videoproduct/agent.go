@@ -120,24 +120,61 @@ func registerProductSkills() error {
 }
 
 func videoSystemPrompt(title string) string {
-	return `You are the Video Studio coding agent for the project "` + title + `". You are Claude Code, and this product never switches to another coding agent.
+	return videoSystemPromptAt(title, time.Now())
+}
+
+func videoSystemPromptAt(title string, now time.Time) string {
+	_, offsetSeconds := now.Zone()
+	offsetSign := "+"
+	if offsetSeconds < 0 {
+		offsetSign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	offset := fmt.Sprintf("UTC%s%02d:%02d", offsetSign, offsetSeconds/3600, (offsetSeconds%3600)/60)
+	dateContext := now.Format("Monday, 2 January 2006 at 3:04 PM MST") + " (" + offset + ")"
+
+	return `You are Video Studio, an expert creative director, video producer, and editor for the project "` + title + `". You are one persistent creative collaborator who remembers the project's conversation, references, decisions, and previous work. In ordinary conversation, identify yourself as Video Studio rather than by the underlying coding-agent provider or runtime.
+
+Current local date and time: ` + dateContext + `. Use this when interpreting relative dates such as today, tomorrow, or latest; do not guess when a request depends on another timezone.
 
 The current directory is the complete project workspace. Uploaded references are in uploads/. Files you create yourself in direct chat belong in work/, and direct-chat exports belong in outputs/. Never modify uploads/ or write outside this project.
 
-Workflow stages do NOT write to work/ or outputs/. Every artifact a stage produces lives under runs/<iteration>/<group>/execution/<stage>/, and that is the only place to look for what a workflow actually produced. work/ and outputs/ are commonly empty, so treating them as the source of truth after a workflow run reports that nothing was created when the artifacts exist. Never publish or upload a result unless the user explicitly changes the product requirements in a future version. Use the attached video skills when relevant.
+Workflow stages do NOT write to work/ or outputs/. Every artifact a stage produces lives under runs/<iteration>/<group>/execution/<stage>/, and that is the only place to look for what a workflow actually produced. work/ and outputs/ are commonly empty, so treating them as the source of truth after a workflow run reports that nothing was created when the artifacts exist. Never publish or upload a result unless the user explicitly changes the product requirements in a future version.
 
-For structured production, use the existing workflow tools. The plan holds two pipelines behind one routing step, and a run follows exactly one of them:
+Before specialized production work, read the relevant attached video skills and follow them as the source of truth for creative methods, runtime setup, commands, and validation. Keep this system prompt focused on product behavior; do not invent or duplicate skill-specific procedures.
+
+For structured production, use the existing workflow tools. The plan holds three workflows behind one routing step, and a run follows exactly one of them:
 
 - "cinematic" — story-led films, teasers, launch pieces: research, proposal, script, scene-plan, assets, edit, compose, delivery.
 - "infographic" — product explainers, feature breakdowns, stat and data pieces built from typography and layout: infographic-research, infographic-concept, infographic-copy, infographic-layout, infographic-design, infographic-render, infographic-check.
+- "quality" — independent quality assurance for an existing render: qa-review.
 
-Choosing the pipeline and describing the work are two different things, and they travel in different parameters. When the user's request already makes the kind of video clear, pass route_selections={"route": "cinematic"} or {"route": "infographic"} on run_full_workflow — that is a branch choice, not an instruction, so never encode it in human_inputs and never ask the user to repeat a choice they already made. Omitting route_selections runs the cinematic branch. Use execute_step for an approval-led stage at a time, query_step only when the user asks for live status, and run_full_workflow only after the user has approved running the remaining stages. Always pass a short stable group_name for the video, such as video-product-launch, and reuse it for that video's stages. Every execute_step call must pass human_input containing the current user request plus relevant approved decisions from the conversation. Every run_full_workflow call must pass human_inputs keyed by exact step ID; put the complete current brief under that branch's first step (research, or infographic-research) and add any step-specific approvals under their matching step IDs. Later steps receive earlier validated files through workflow context dependencies, so do not replace those files with repeated chat summaries. The workflow runs in the background, so briefly tell the user it has started instead of polling. Workflow steps have no access to learnings, the knowledge base, or workflow database tools.
+Choose the execution mode yourself; users should describe the video, not the workflow machinery:
 
-When a video is finished and verified, call show_video with its exact path so it appears in the user's Videos panel. A run leaves many video files behind — individual shots, silent intermediates, duplicate copies — and only you know which one the user should actually receive, so name it rather than leaving them to guess. Use the path the render or delivery report states, say in the note if it is a placeholder assembly rather than finished creative, and present only the deliverable, not the intermediates.
+- First decide whether the user is asking for a new production or changing a video that already exists in this project. Treat requests to extend or shorten an existing video, revise its copy, timing, layout, motion, sound, aspect ratio, or visual style as revisions even when the requested change is substantial.
+- Work directly in chat for revisions to an existing composition or render. Reuse its existing source project, make the requested changes, render a new version, run QA, and present it. Do not start run_full_workflow merely because a revision increases the duration or requires several edits; for example, "make this 60 seconds" after a 10-second video is a direct revision, not a new cinematic workflow.
+- Also work directly in chat for quick creations that are one coherent local task and other work that does not need durable specialist-stage handoffs.
+- Use execute_step when the user asks for one specific production stage, when one failed or outdated stage must be retried, or when an approval boundary means only the next stage is currently authorised.
+- Use run_full_workflow for a genuinely new multi-stage production, a deliberate ground-up reconcept that cannot sensibly reuse the existing composition, or when the user asks to continue through all remaining authorised stages of the same production attempt. An explicit request to create or make the video authorises ordinary planning and local production; do not ask for a separate "workflow approval." Ask only for a genuinely missing creative choice, paid generation, publishing, an external upload, or another consequential action not already authorised.
+- Use query_step only when the user asks for live workflow status. Never poll a background run.
+
+AgentWorks already owns branch routing inside run_full_workflow. Choosing the pipeline and describing the work are two different things, and they travel in different parameters. When the user's request makes the visual treatment clear, pass route_selections={"route": "cinematic"}, {"route": "infographic"}, or {"route": "quality"} — that is a branch choice, not an instruction, so never encode it in human_inputs and never ask the user to repeat a choice they already made. Product explainers, feature walkthroughs, UI demonstrations, comparisons, pricing, statistics, and typography-led pieces normally use the infographic branch; story-led films, footage-led promos, product teasers, and mood-led launch pieces normally use cinematic. Use quality when the user asks to inspect, diagnose, approve, or re-check a video that already exists without rebuilding it. For a mixed brief, choose the branch that matches the dominant visual structure. Omitting route_selections uses AgentWorks' configured default route.
+
+Always pass a short stable group_name for the production attempt, such as video-product-launch, and reuse it only while continuing stages or approvals for that same attempt. If a genuine ground-up new version requires another full workflow, use a new versioned group_name such as video-product-launch-v2 so completed stages from the previous version are never presented as current work. Ordinary revisions should remain direct chat edits and do not need a workflow group. Every execute_step call must pass human_input containing the current user request plus relevant approved decisions from the conversation. Every run_full_workflow call must pass human_inputs keyed by exact step ID; put the complete current brief under that branch's first step (research, or infographic-research) and add any step-specific approvals under their matching step IDs. Later steps receive earlier validated files through workflow context dependencies, so do not replace those files with repeated chat summaries. The workflow runs in the background, so briefly tell the user it has started instead of polling. Workflow steps have no access to learnings, the knowledge base, or workflow database tools.
+
+QA is mandatory after every render, whether the video was created through a workflow or directly in chat. Do not call a video ready when rendering merely succeeded. Use the video-quality skill to create a contact sheet, inspect the exact final candidate, and write the required quality-report.json. Fix and re-check failures before presentation; if a check cannot run, the video is not ready.
+
+Only after that report passes, call show_video with the exact video path and qa_report_path so it appears in the user's Videos panel. A run leaves many video files behind — individual shots, silent intermediates, duplicate copies — and only you know which one the user should actually receive, so name it rather than leaving them to guess. The presentation tool verifies that the report passes, contains inspection evidence, and names this exact file. Use the path the QA report states, say in the note if it is a placeholder assembly rather than finished creative, and present only the deliverable, not the intermediates.
 
 Messages beginning with [AUTO-NOTIFICATION] are trusted, system-generated workflow completion turns. They resume this same project session after background work finishes. Read the supplied result and relevant project files, then continue the user's task: give a concise useful update, ask for the next approval when required, or start only a stage the user already approved. Never expose the [AUTO-NOTIFICATION] text or internal workflow/framework guidance to the user, and never poll a completed execution again.
 
-Saved credentials are available only to shell commands as environment variables with their configured names. Never print, echo, inspect, or include secret values in chat. Keep replies user-friendly and concise. When work produces a video, name its path under outputs/.`
+Runtime dependencies are Studio-owned. Follow the selected production skill to install and verify required tooling automatically. Never ask the user to install production dependencies, and do not silently change an approved render runtime because setup failed.
+
+Saved credentials are available only to shell commands as environment variables with their configured names. Never print, echo, inspect, or include secret values in chat.
+
+This product is for video creators, including non-technical users. Keep all implementation details internal unless the user explicitly asks for them. Do not mention shell commands, package installation, tool names, file paths, codecs, frame counts, ffprobe, lint, runtime checks, JSON fields, or other engineering diagnostics in ordinary chat. While working, give only short creative progress updates such as "Building the longer version now." When finished, describe the creative result in plain language, state its approximate duration and format when useful, and tell the user it is ready in the Videos panel. If something fails, explain what the user can do next in ordinary language without dumping command output or internal errors.
+
+When work produces a video, name its path under outputs/ internally, but do not include that path in the user-facing reply unless the user asks for it.`
 }
 
 func shellOutput(cmd *exec.Cmd) (string, error) {
@@ -157,6 +194,23 @@ func shellOutput(cmd *exec.Cmd) (string, error) {
 		return "(command produced no output)", nil
 	}
 	return result, nil
+}
+
+func videoShellIsolator(workspacePath string) *security.Isolator {
+	return &security.Isolator{
+		BaseDir:           workspacePath,
+		WorkDir:           workspacePath,
+		ReadPaths:         []string{"."},
+		WritePaths:        []string{"."},
+		BlockedWritePaths: []string{"uploads", ".claude"},
+		// Video Studio follows AgentWorks' trusted local-agent model. The
+		// ordinary profile keeps the project guards above while allowing the
+		// user's installed CLIs, package caches, and the rest of the native
+		// shell environment. SparkQuill child agents use StrictAllowlist=true;
+		// that isolation model is deliberately not used here.
+		StrictAllowlist: false,
+		AllowNetwork:    true,
+	}
 }
 
 func videoShellTool(workspacePath string, secretEnv []string, emit func(AgentEvent)) agentsession.Tool {
@@ -185,7 +239,7 @@ func videoShellTool(workspacePath string, secretEnv []string, emit func(AgentEve
 			}
 			cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			defer cancel()
-			iso := &security.Isolator{BaseDir: workspacePath, WorkDir: workspacePath, ReadPaths: []string{"."}, WritePaths: []string{"."}, BlockedWritePaths: []string{"uploads", ".claude"}, StrictAllowlist: true, AllowNetwork: true}
+			iso := videoShellIsolator(workspacePath)
 			cmd, cleanup, err := iso.ExecuteIsolated(cctx, command, nil)
 			if err != nil {
 				return "", fmt.Errorf("sandbox setup failed: %w", err)
@@ -207,12 +261,13 @@ func videoShellTool(workspacePath string, secretEnv []string, emit func(AgentEve
 func showVideoTool(store *Store, projectID, workspacePath string, emit func(AgentEvent)) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "show_video", Category: "video_tools",
-		Description: "Show a finished video to the user in the Videos panel. Call this once a video is ready and verified — with the exact project-relative path of the file the user should actually receive, not an intermediate. Re-calling with the same path updates its title and note.",
+		Description: "Show a finished video to the user in the Videos panel. A passing quality-report.json for this exact file is required. Re-calling with the same path updates its title and note.",
 		Params: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-			"path":  map[string]interface{}{"type": "string", "description": "Project-relative path to the video file, e.g. outputs/launch-v01.mp4 or runs/iteration-0/<group>/execution/compose/preview.mp4"},
-			"title": map[string]interface{}{"type": "string", "description": "Short user-facing name for this video"},
-			"note":  map[string]interface{}{"type": "string", "description": "One line telling the user what this is — for example that it is a placeholder assembly rather than finished creative"},
-		}, "required": []string{"path", "title"}},
+			"path":           map[string]interface{}{"type": "string", "description": "Project-relative path to the exact video file named by the QA report"},
+			"qa_report_path": map[string]interface{}{"type": "string", "description": "Project-relative path to the passing quality-report.json created by the video-quality check"},
+			"title":          map[string]interface{}{"type": "string", "description": "Short user-facing name for this video"},
+			"note":           map[string]interface{}{"type": "string", "description": "One line telling the user what this is — required to say placeholder when the QA verdict is placeholder-pass"},
+		}, "required": []string{"path", "qa_report_path", "title"}},
 		Handler: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			callID := fmt.Sprintf("show-video-%d", time.Now().UnixNano())
 			if emit != nil {
@@ -245,11 +300,15 @@ func showVideoTool(store *Store, projectID, workspacePath string, emit func(Agen
 			if info.Size() == 0 {
 				return fail(fmt.Sprintf("%s is empty, so there is nothing to show.", rawPath))
 			}
+			reportPath, _ := args["qa_report_path"].(string)
+			note, _ := args["note"].(string)
+			if err := validateQualityReport(workspacePath, filepath.ToSlash(clean), reportPath, note); err != nil {
+				return fail("Quality assurance has not passed for this video: " + err.Error())
+			}
 			title, _ := args["title"].(string)
 			if title = strings.TrimSpace(title); title == "" {
 				title = filepath.Base(clean)
 			}
-			note, _ := args["note"].(string)
 			if err := store.PresentVideo(projectID, filepath.ToSlash(clean), title, strings.TrimSpace(note)); err != nil {
 				return fail("Could not show that video: " + err.Error())
 			}
@@ -259,6 +318,126 @@ func showVideoTool(store *Store, projectID, workspacePath string, emit func(Agen
 			return fmt.Sprintf("Showing %q to the user in the Videos panel.", title), nil
 		},
 	}
+}
+
+type qualityReportCheck struct {
+	Status   string   `json:"status"`
+	Evidence []string `json:"evidence"`
+}
+
+type qualityReportFrame struct {
+	TimestampSeconds float64 `json:"timestamp_seconds"`
+	Path             string  `json:"path"`
+}
+
+type qualityReport struct {
+	SchemaVersion     int                           `json:"schema_version"`
+	CandidatePath     string                        `json:"candidate_path"`
+	ContactSheetPath  string                        `json:"contact_sheet_path"`
+	Verdict           string                        `json:"verdict"`
+	ReadyToPresent    bool                          `json:"ready_to_present"`
+	Checks            map[string]qualityReportCheck `json:"checks"`
+	SampledFrames     []qualityReportFrame          `json:"sampled_frames"`
+	RecommendedAction string                        `json:"recommended_action"`
+}
+
+func cleanProjectPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("path is missing")
+	}
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimPrefix(raw, "/")))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("path must stay inside the project")
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+// resolveQualityEvidencePath accepts the project-relative paths used by direct
+// chat QA and the execution-relative paths naturally produced by workflow QA
+// stages. A workflow report lives at
+// runs/<iteration>/<group>/execution/<stage>/quality-report.json, so paths such
+// as infographic-render/final.mp4 and infographic-check/frames/frame-1.jpg are
+// relative to that shared execution directory. The returned path is always
+// canonical and project-relative; candidates outside the project are rejected
+// by cleanProjectPath before any filesystem access.
+func resolveQualityEvidencePath(workspacePath, rawPath, reportPath string) (string, error) {
+	clean, err := cleanProjectPath(rawPath)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Stat(filepath.Join(workspacePath, filepath.FromSlash(clean))); statErr == nil && !info.IsDir() {
+		return clean, nil
+	}
+	executionRoot := filepath.ToSlash(filepath.Dir(filepath.Dir(filepath.FromSlash(reportPath))))
+	if filepath.Base(executionRoot) != "execution" {
+		return clean, nil
+	}
+	resolved, err := cleanProjectPath(filepath.ToSlash(filepath.Join(executionRoot, filepath.FromSlash(clean))))
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func validateQualityReport(workspacePath, videoPath, rawReportPath, note string) error {
+	reportPath, err := cleanProjectPath(rawReportPath)
+	if err != nil {
+		return fmt.Errorf("QA report %w", err)
+	}
+	if filepath.Base(reportPath) != "quality-report.json" {
+		return errors.New("QA report must be named quality-report.json")
+	}
+	data, err := os.ReadFile(filepath.Join(workspacePath, filepath.FromSlash(reportPath)))
+	if err != nil {
+		return errors.New("the required quality-report.json does not exist")
+	}
+	var report qualityReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return errors.New("quality-report.json is not valid JSON")
+	}
+	if report.SchemaVersion != 1 {
+		return errors.New("quality-report.json has an unsupported schema version")
+	}
+	candidatePath, err := resolveQualityEvidencePath(workspacePath, report.CandidatePath, reportPath)
+	if err != nil || candidatePath != videoPath {
+		return errors.New("the QA report names a different video")
+	}
+	if !report.ReadyToPresent || (report.Verdict != "pass" && report.Verdict != "placeholder-pass") || report.RecommendedAction != "present" {
+		return errors.New("the QA verdict is not ready to present")
+	}
+	if report.Verdict == "placeholder-pass" && !strings.Contains(strings.ToLower(note), "placeholder") {
+		return errors.New("a placeholder-pass must be clearly labelled as a placeholder")
+	}
+	for _, name := range []string{"technical", "visual", "audio", "content", "captions", "promise"} {
+		check, ok := report.Checks[name]
+		if !ok || (check.Status != "pass" && check.Status != "not_applicable") {
+			return fmt.Errorf("the %s check did not pass", name)
+		}
+		if len(check.Evidence) == 0 {
+			return fmt.Errorf("the %s check has no evidence", name)
+		}
+	}
+	if len(report.SampledFrames) < 4 {
+		return errors.New("fewer than four inspected frames were recorded")
+	}
+	contactSheetPath, err := resolveQualityEvidencePath(workspacePath, report.ContactSheetPath, reportPath)
+	if err != nil {
+		return errors.New("the contact sheet path is invalid")
+	}
+	if info, statErr := os.Stat(filepath.Join(workspacePath, filepath.FromSlash(contactSheetPath))); statErr != nil || info.IsDir() || info.Size() == 0 {
+		return errors.New("the QA contact sheet is missing or empty")
+	}
+	for _, frame := range report.SampledFrames {
+		framePath, pathErr := resolveQualityEvidencePath(workspacePath, frame.Path, reportPath)
+		if pathErr != nil {
+			return errors.New("an inspected frame path is invalid")
+		}
+		if info, statErr := os.Stat(filepath.Join(workspacePath, filepath.FromSlash(framePath))); statErr != nil || info.IsDir() || info.Size() == 0 {
+			return errors.New("an inspected frame is missing or empty")
+		}
+	}
+	return nil
 }
 
 func (r *ClaudeRunner) Run(ctx context.Context, project ProjectContext, emit func(AgentEvent)) (AgentResult, error) {
@@ -284,6 +463,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, project ProjectContext, emit fun
 		Provider: llm.ProviderClaudeCode, ModelID: DefaultClaudeModel, WorkingDir: project.WorkspacePath,
 		SystemPrompt: videoSystemPrompt(project.Project.Title), Tools: tools,
 		Skills: builtinSkills(), SessionID: "video-project-" + project.Project.ID, SessionHandle: handle,
+		ClaudeCodeOAuthToken: project.ProviderToken, RequireProviderToken: true,
 		StreamCallback: func(text string) {
 			if text != "" {
 				emit(AgentEvent{Type: "delta", Text: text})

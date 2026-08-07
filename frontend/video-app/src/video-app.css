@@ -241,8 +241,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 .session-pill.working { border-color: #e8e0fb; color: #6853bb; background: #f8f6ff; }
 .session-pill.working i { background: #8066df; box-shadow: 0 0 0 3px rgba(105,87,215,.12); animation: pulse 1.5s infinite; }
 .project-actions { display: flex; align-items: center; gap: 8px; }
+.mobile-inspector-toggle, .mobile-inspector-header, .mobile-inspector-backdrop { display: none; }
 .compact-button { min-height: 32px; padding: 0 11px; font-size: 10px; }
-.workspace-columns { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(480px, 1fr) minmax(420px, 560px); }
+.workspace-columns { position: relative; display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(480px, 1fr) minmax(420px, 560px); }
 .chat-surface { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #fcfcfe; }
 .messages { min-height: 0; flex: 1; overflow-y: auto; padding: 20px clamp(24px, 5vw, 72px) 24px; scrollbar-color: #d6d8e1 transparent; scrollbar-width: thin; }
 .message { display: flex; max-width: 760px; gap: 11px; margin-bottom: 24px; }
@@ -280,16 +281,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 .inspector-title { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 17px; }
 .inspector-title h2 { margin: 0; color: #343743; font-size: 13px; }
 .inspector-title p { margin: 4px 0 0; color: #a1a4af; font-size: 9px; }
+.refresh-button { width: 30px; height: 30px; border: 1px solid #e4e5eb; background: white; }
+.refresh-button:disabled { cursor: wait; opacity: .65; }
+.refresh-button.is-refreshing svg { animation: refresh-spin .8s linear infinite; }
 .small-add { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #e0e2e9; border-radius: 8px; padding: 7px 9px; color: #565a68; background: white; font-size: 9px; font-weight: 700; }
 .video-list, .asset-list { display: flex; flex-direction: column; gap: 9px; }
 .video-row, .asset-row { display: flex; min-width: 0; align-items: center; gap: 10px; border: 1px solid #e9eaf0; border-radius: 11px; padding: 8px; background: white; transition: border-color .18s ease, box-shadow .18s ease; }
+.video-row.is-active { align-items: stretch; flex-direction: column; }
 .video-row:hover, .asset-row:hover { border-color: #dad7ea; box-shadow: 0 5px 13px rgba(28,31,47,.045); }
-.video-row.clickable { cursor: pointer; }
+.project-video-preview { position: relative; width: 92px; height: 116px; flex: 0 0 auto; overflow: hidden; border-radius: 8px; background: #111; transition: width .2s ease, height .2s ease; }
+.video-row.is-active .project-video-preview { width: 100%; height: auto; }
+.project-video-player { display: block; width: 100%; height: 100%; border-radius: 8px; background: #111; object-fit: cover; }
+.video-row.is-active .project-video-player { height: auto; max-height: 420px; object-fit: contain; }
+.project-video-play { position: absolute; inset: 0; display: grid; width: 100%; height: 100%; border: 0; place-items: center; color: white; background: linear-gradient(180deg, rgba(10,10,16,.04), rgba(10,10,16,.24)); cursor: pointer; }
+.project-video-play svg { box-sizing: content-box; border-radius: 50%; padding: 14px; background: rgba(18,16,28,.68); box-shadow: 0 6px 22px rgba(0,0,0,.24); transition: transform .18s ease, background .18s ease; }
+.project-video-play:hover svg { transform: scale(1.06); background: rgba(169,81,57,.9); }
+.project-video-play:focus-visible { box-shadow: inset 0 0 0 3px rgba(217,119,87,.85); }
+.video-meta { display: flex; min-width: 0; flex: 1; flex-direction: column; padding: 2px 2px 1px; }
 .video-thumb { position: relative; display: grid; width: 74px; height: 47px; flex: 0 0 auto; overflow: hidden; place-items: center; border-radius: 7px; background: linear-gradient(135deg, var(--art-a), var(--art-b)); }
 .video-thumb::before { position: absolute; content: ''; width: 65px; height: 65px; right: -25px; top: -30px; border: 1px solid rgba(255,255,255,.35); border-radius: 50%; box-shadow: 0 0 0 10px rgba(255,255,255,.06); }
 .video-thumb > span { position: relative; z-index: 2; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 50%; color: white; background: rgba(15,16,29,.33); }
 .video-thumb small { position: absolute; z-index: 2; right: 4px; bottom: 3px; border-radius: 4px; padding: 2px 3px; color: white; background: rgba(15,16,29,.48); font-size: 6px; }
-.video-row > div:nth-child(2), .asset-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.asset-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .video-row strong, .asset-row strong { overflow: hidden; color: #4a4e5b; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .video-row span, .asset-row span { margin-top: 3px; color: #a4a7b2; font-size: 8px; }
 .asset-icon { display: inline-flex; width: 36px; height: 36px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 9px; color: #6957c9; background: #efecfc; }
@@ -304,6 +317,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 .workflow-template span { display: grid; gap: 3px; min-width: 0; }
 .workflow-template strong { color: #4d4a44; font-size: 10px; font-weight: 700; }
 .workflow-template small { color: #918c83; font-size: 8px; font-weight: 450; line-height: 1.45; }
+.workflow-catalog { display: grid; gap: 14px; }
+.workflow-card { display: grid; gap: 8px; }
+.workflow-card > header { padding: 0 2px; }
+.workflow-card h3 { margin: 0; color: #49464f; font-size: 11px; }
+.workflow-card header p { margin: 3px 0 0; color: #99949e; font-size: 8px; line-height: 1.45; }
 .tab-running-dot { width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: #d97757; animation: pulse 1.5s infinite; }
 /* Live stage-by-stage progress for a background run. The chat is otherwise
    silent for minutes while stages execute, so this is the only place the work
@@ -319,6 +337,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 .run-progress-step.is-completed i { background: #5ea981; }
 .run-progress-step.is-failed i, .run-progress-step.is-cancelled i { background: #b4573f; }
 .run-progress-step.is-failed strong { color: #a3452c; }
+.activity-message .message-content { width: min(650px, 80%); }
 .asset-drop { display: flex; width: 100%; min-height: 180px; align-items: center; justify-content: center; flex-direction: column; gap: 7px; border: 1px dashed #d8d9e2; border-radius: 12px; color: #989ba9; background: #fafafd; }
 .asset-drop:hover { border-color: #aaa1db; color: #6855c6; background: #faf9ff; }
 .asset-drop strong { margin-top: 5px; color: #5e6270; font-size: 11px; }.asset-drop span { font-size: 9px; }
@@ -357,6 +376,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
 
 @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .55; } 30% { transform: translateY(-4px); opacity: 1; } }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1100px) {
   .project-grid { grid-template-columns: repeat(2, minmax(230px, 1fr)); }
@@ -373,7 +393,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { box-shadow: 
   .app-main { width: calc(100% - 202px); margin-left: 202px; }
   .dashboard-page, .settings-page { margin-right: auto; margin-left: auto; }
   .workspace-columns { grid-template-columns: 1fr; }
-  .project-inspector { display: none; }
+  .project-inspector { position: absolute; z-index: 32; top: 0; right: 0; bottom: 0; display: block; width: min(460px, 100%); border-left: 1px solid #dedbd3; background: #fffefa; box-shadow: -18px 0 42px rgba(42,39,34,.16); transform: translateX(102%); transition: transform .2s ease; }
+  .project-inspector.is-open { transform: translateX(0); }
+  .mobile-inspector-toggle { display: inline-flex; min-width: 52px; height: 34px; align-items: center; justify-content: center; gap: 5px; border: 1px solid #ddd8cf; border-radius: 9px; color: #5b554e; background: #f7f4ee; font-size: 9px; font-weight: 750; }
+  .mobile-inspector-toggle span { display: inline-flex; min-width: 16px; height: 16px; align-items: center; justify-content: center; border-radius: 5px; color: #9f4d36; background: #f1dfd8; font-size: 8px; }
+  .mobile-inspector-backdrop { position: absolute; z-index: 31; inset: 0; display: block; width: 100%; border: 0; background: rgba(42,39,34,.24); }
+  .mobile-inspector-header { display: flex; height: 42px; align-items: center; justify-content: space-between; border-bottom: 1px solid #e9e5dd; padding: 0 12px 0 18px; color: #6e675f; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+  .mobile-inspector-header button { display: inline-grid; width: 30px; height: 30px; border: 0; border-radius: 8px; place-items: center; color: #6e675f; background: transparent; }
+  .project-inspector .inspector-body { height: calc(100% - 100px); }
   .project-header { padding: 0 14px; }
   .project-actions .avatar-stack, .project-actions .secondary-button { display: none; }
 }
@@ -476,8 +503,9 @@ body, .app-shell { background: var(--soft); }
    this is reasoning, not the reply, and giving it a finished message's styling
    made a mid-turn plan read as the answer. Capped in height so a long ramble
    cannot push the composer off screen. */
-.stream-think { margin: 0 0 10px; padding-left: 11px; border-left: 2px solid #e2ded6; }
-.stream-think-label { display: block; margin-bottom: 4px; color: #a8a29a; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.message.final-answer .message-content { border: 1px solid #e4ded5; border-left: 3px solid #d97757; border-radius: 12px; padding: 14px 16px; background: #fffefa; box-shadow: 0 5px 16px rgba(53,48,40,.045); }
+.stream-think { margin: 0 0 12px; border: 1px dashed #d8d2c8; border-radius: 10px; padding: 10px 12px; background: #f1eee8; }
+.stream-think-label { display: block; margin-bottom: 5px; color: #8f887f; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .stream-think-body { max-height: 190px; overflow-y: auto; scrollbar-color: #ddd8cf transparent; scrollbar-width: thin; }
 .stream-think-body .shared-markdown { --chat-md-text: #8a8279; --chat-md-heading: #8a8279; --chat-md-strong: #7d766d; --chat-md-accent: #a8917f; --chat-md-link: #a8917f; padding: 0; font-size: 12px; line-height: 1.6; }
 /* The reply's own emphasis shouldn't make reasoning look authoritative. */

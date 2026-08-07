@@ -73,8 +73,8 @@ func TestWorkflowCompletionDispatchesSyntheticAgentTurn(t *testing.T) {
 		notifications <- notification
 	})
 	notifier.Prepare(run.ID, "execute_step", "launch-film", user.ID)
-	notifier.OnExecutionStart(stepworkflow.WorkshopExecutionStart{ID: "exec-research", Name: "Research"})
-	notifier.OnExecutionComplete("exec-research", "Research", "Created research.md.\nSTATUS: COMPLETED", map[string]string{"step_name": "Research"}, nil)
+	notifier.OnExecutionStart(stepworkflow.WorkshopExecutionStart{ID: "exec-research", Name: "internal-research-agent", Metadata: map[string]string{"step_id": "research"}})
+	notifier.OnExecutionComplete("exec-research", "internal-research-agent", "Created research.md.\nSTATUS: COMPLETED", map[string]string{"step_id": "research", "step_name": "internal-research-agent"}, nil)
 
 	notification := <-notifications
 	if notification.ProjectID != project.ID || notification.UserID != user.ID || notification.RunID != run.ID || notification.FinalStatus != "ready" {

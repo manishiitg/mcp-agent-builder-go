@@ -119,6 +119,22 @@ type Config struct {
 	// today). This exists to A/B the two transports from a live conversation;
 	// see RuntimeConfig.Coding.Transport for the tradeoff.
 	Transport llm.CodingAgentTransport
+	// ClaudeCodeOAuthToken scopes this session to one user's own Claude Code
+	// subscription (`claude setup-token`) instead of whatever login happens to
+	// be on the machine. Reaches the adapter through
+	// RuntimeConfig.Generation.APIKeys.
+	//
+	// Empty is NOT neutral: the provider falls back to the CLI's saved login and
+	// logs "using the CLI saved login", so a missing token silently bills and
+	// authenticates as whoever set up the terminal. Set RequireProviderToken to
+	// refuse the session instead.
+	ClaudeCodeOAuthToken string
+	// RequireProviderToken refuses to start a session for a coding-agent
+	// provider that has no token, rather than letting it fall back to the
+	// machine's saved login. The check belongs here, at session construction:
+	// the CLI session either starts authenticated as this user or does not
+	// start at all.
+	RequireProviderToken bool
 }
 
 func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
@@ -244,9 +260,22 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	// different engine cannot give this one context.
 	handleRestored := cfg.SessionHandle != nil && !cfg.SessionHandle.Empty()
 	holdsPriorContext := resume && (handleRestored || hasWarmInteractiveOwner(sessionID, cfg.Provider))
+
+	// Authenticate as this user, or do not start. Without a token the provider
+	// quietly uses the CLI's saved login, so a missing token is not a degraded
+	// session — it is somebody else's account.
+	oauthToken := strings.TrimSpace(cfg.ClaudeCodeOAuthToken)
+	if cfg.RequireProviderToken && oauthToken == "" {
+		return nil, fmt.Errorf("no Claude Code token configured for this session: add one (claude setup-token) before starting")
+	}
+	generation := mcpagent.GenerationRuntimeConfig{Provider: cfg.Provider, MaxTurns: cfg.MaxTurns}
+	if oauthToken != "" {
+		generation.APIKeys = &mcpagent.AgentAPIKeys{ClaudeCodeOAuthToken: &oauthToken}
+	}
+
 	runtime := mcpagent.RuntimeConfig{
 		Model: model, MCPConfigPath: b.mcpConfigPath, ResumeHandle: cfg.SessionHandle,
-		Generation:    mcpagent.GenerationRuntimeConfig{Provider: cfg.Provider, MaxTurns: cfg.MaxTurns},
+		Generation:    generation,
 		Tools:         mcpagent.ToolRuntimeConfig{CodeExecution: true},
 		Coding:        mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
 		MCP:           mcpagent.MCPRuntimeConfig{SessionID: sessionID},

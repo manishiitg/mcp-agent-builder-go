@@ -15,6 +15,29 @@ import (
 )
 
 func main() {
+	// Video Studio follows AgentWorks' trusted native-shell model, not
+	// SparkQuill child isolation. BuildSafeEnvironment keeps the real PATH,
+	// HOME, and user-installed CLI configuration while stripping server
+	// secrets. This lets the agent install and run local production runtimes
+	// such as HyperFrames through execute_shell_command.
+	os.Setenv("NATIVE_WORKSPACE", "true")
+
+	// Give this product its own tmux namespace, distinct from
+	// multi-llm-provider-go's shared "mlp-*" default that AgentWorks uses
+	// unmodified and from family-server's "sq-*". Without this, the orphan sweep
+	// below would match by prefix alone and could kill a live AgentWorks session
+	// on the same machine. Set all four regardless of which provider is
+	// selected, since that can change at any time.
+	os.Setenv("CLAUDE_CODE_TMUX_SESSION_PREFIX", "video-claude-code")
+	os.Setenv("CURSOR_CLI_INTERACTIVE_SESSION_PREFIX", "video-cursor-cli-int")
+	os.Setenv("CODEX_CLI_INTERACTIVE_SESSION_PREFIX", "video-codex-cli-int")
+	os.Setenv("PI_CLI_INTERACTIVE_SESSION_PREFIX", "video-pi-cli-int")
+
+	// Clean up coding-agent tmux sessions a PAST process left behind — a crash
+	// or a plain restart mid-session orphans whatever was warm at that moment —
+	// then keep sweeping hourly. See tmux_sweep.go.
+	startTmuxSweepLoop()
+
 	config, err := videoproduct.DefaultConfig()
 	if err != nil {
 		log.Fatal(err)

@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/platformevents"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -90,6 +92,7 @@ func NewServer(config Config) (*Server, error) {
 		notifyCtx: notifyCtx, notifyCancel: notifyCancel, notifications: make(chan workflowAutoNotification, 64),
 	}
 	workflow.SetAutoNotificationHandler(s.enqueueWorkflowAutoNotification)
+	workflow.SetExecutionEventHandler(s.recordExecutionEvent)
 	s.notifyWG.Add(1)
 	go s.runWorkflowAutoNotifications()
 	s.routes()
@@ -110,6 +113,30 @@ func (s *Server) enqueueWorkflowAutoNotification(notification workflowAutoNotifi
 	case s.notifications <- notification:
 	case <-s.notifyCtx.Done():
 	}
+}
+
+func (s *Server) recordExecutionEvent(event platformevents.Event) {
+	_, _ = s.store.AddExecutionEvent(event)
+}
+
+func (s *Server) recordAgentExecutionEvent(projectID string, event AgentEvent) {
+	if event.Type != "tool" {
+		return
+	}
+	eventType := platformevents.ToolCompleted
+	if event.Status == "running" {
+		eventType = platformevents.ToolStarted
+	} else if event.Status == "failed" {
+		eventType = platformevents.ToolFailed
+	}
+	name := event.Tool
+	if event.Workflow != "" {
+		name = event.Workflow
+		if event.Step != "" {
+			name += " → " + event.Step
+		}
+	}
+	s.recordExecutionEvent(platformevents.Event{ScopeID: projectID, Type: eventType, Name: name, Status: event.Status, ExecutionID: event.ToolCallID})
 }
 
 func (s *Server) runWorkflowAutoNotifications() {
@@ -165,13 +192,19 @@ func (s *Server) processWorkflowAutoNotification(parent context.Context, notific
 	if err != nil {
 		return
 	}
+	// No token, no resumed turn. There is nobody watching this path to prompt,
+	// and the alternative is billing the machine's login for a background run.
+	providerToken, err := s.store.Secret(notification.UserID, ClaudeCodeTokenSecret)
+	if err != nil || strings.TrimSpace(providerToken) == "" {
+		return
+	}
 	history = append(history, Message{ProjectID: notification.ProjectID, UserID: notification.UserID, Role: "user", Author: "System", Body: notification.Message, CreatedAt: time.Now().UTC()})
 	ctx, cancel := context.WithTimeout(parent, 60*time.Minute)
 	defer cancel()
 	result, runErr := s.runner.Run(ctx, ProjectContext{
 		Project: project, UserID: notification.UserID, WorkspacePath: s.store.ProjectDir(notification.ProjectID),
-		SessionHandle: handle, History: history, SecretEnv: secretEnv,
-	}, func(AgentEvent) {})
+		SessionHandle: handle, History: history, SecretEnv: secretEnv, ProviderToken: providerToken,
+	}, func(event AgentEvent) { s.recordAgentExecutionEvent(notification.ProjectID, event) })
 	if runErr != nil {
 		_, _ = s.store.AddMessage(notification.ProjectID, "", "assistant", "Studio agent", "The workflow finished, but I couldn't continue the conversation automatically. Send me a message and I'll pick up from the completed result.")
 		return
@@ -196,6 +229,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PATCH /api/projects/{projectID}", s.withUser(s.updateProject))
 	s.mux.HandleFunc("DELETE /api/projects/{projectID}", s.withUser(s.archiveProject))
 	s.mux.HandleFunc("GET /api/projects/{projectID}/messages", s.withUser(s.listMessages))
+	s.mux.HandleFunc("GET /api/projects/{projectID}/execution-events", s.withUser(s.listExecutionEvents))
 	s.mux.HandleFunc("GET /api/projects/{projectID}/assets", s.withUser(s.listAssets))
 	s.mux.HandleFunc("POST /api/projects/{projectID}/assets", s.withUser(s.uploadAsset))
 	s.mux.HandleFunc("GET /api/projects/{projectID}/assets/{assetID}/content", s.withUser(s.assetContent))
@@ -211,6 +245,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/secrets", s.withUser(s.listSecrets))
 	s.mux.HandleFunc("PUT /api/secrets/{name}", s.withUser(s.putSecret))
 	s.mux.HandleFunc("DELETE /api/secrets/{name}", s.withUser(s.deleteSecret))
+	s.mux.HandleFunc("GET /api/provider-token", s.withUser(s.getProviderToken))
+	s.mux.HandleFunc("PUT /api/provider-token", s.withUser(s.putProviderToken))
+	s.mux.HandleFunc("DELETE /api/provider-token", s.withUser(s.deleteProviderToken))
 	s.mux.HandleFunc("GET /api/skills", s.withUser(s.listSkills))
 }
 
@@ -391,10 +428,15 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, u User) {
 	if runs == nil {
 		runs = []WorkflowRun{}
 	}
-	pipeline := DefaultPipeline()
+	workflows := make([]map[string]interface{}, 0, len(pipelineRegistry))
+	for _, pipeline := range pipelineRegistry {
+		workflows = append(workflows, map[string]interface{}{
+			"id": pipeline.ID, "name": pipeline.Name, "description": pipeline.Description,
+			"steps": pipeline.Steps(),
+		})
+	}
 	writeJSON(w, 200, map[string]interface{}{
-		"name": pipeline.Name, "description": pipeline.Description,
-		"steps": pipeline.Steps(), "runs": runs,
+		"workflows": workflows, "runs": runs,
 	})
 }
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request, u User) {
@@ -439,6 +481,14 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, u User) {
 		items = []Message{}
 	}
 	writeJSON(w, 200, items)
+}
+
+func (s *Server) listExecutionEvents(w http.ResponseWriter, r *http.Request, u User) {
+	items, err := s.store.ExecutionEvents(u.ID, r.PathValue("projectID"))
+	if !handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, u User) {
@@ -599,10 +649,6 @@ func (s *Server) projectFilePath(userID, projectID, relativePath string) (string
 	if relativePath == "." || filepath.IsAbs(relativePath) {
 		return "", ErrNotFound
 	}
-	parts := strings.Split(relativePath, string(os.PathSeparator))
-	if len(parts) < 2 || (parts[0] != "uploads" && parts[0] != "work" && parts[0] != "outputs" && parts[0] != "runs") {
-		return "", ErrNotFound
-	}
 	root := filepath.Clean(s.store.ProjectDir(projectID))
 	path := filepath.Clean(filepath.Join(root, relativePath))
 	if !strings.HasPrefix(path, root+string(os.PathSeparator)) {
@@ -642,9 +688,6 @@ func readProjectFileNodes(root, relative string) ([]projectFileNode, int64, erro
 	nodes := make([]projectFileNode, 0, len(entries))
 	var total int64
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), ".meta.json") || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
 		path := filepath.ToSlash(filepath.Join(relative, entry.Name()))
 		if entry.IsDir() {
 			children, size, err := readProjectFileNodes(root, path)
@@ -671,14 +714,10 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	root := filepath.Clean(s.store.ProjectDir(projectID))
-	nodes := make([]projectFileNode, 0, 4)
-	for _, folder := range []string{"uploads", "work", "outputs", "runs"} {
-		children, size, err := readProjectFileNodes(root, folder)
-		if err != nil {
-			writeError(w, 500, "could not list project files")
-			return
-		}
-		nodes = append(nodes, projectFileNode{Name: folder, Path: folder, Type: "folder", Size: size, Children: children})
+	nodes, _, err := readProjectFileNodes(root, "")
+	if err != nil {
+		writeError(w, 500, "could not list project files")
+		return
 	}
 	writeJSON(w, 200, nodes)
 }
@@ -738,6 +777,18 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, u User) {
 		writeError(w, 500, "could not load secrets")
 		return
 	}
+	// Refuse the turn here rather than letting the session fall back to whatever
+	// Claude Code login exists on this machine. 428 tells the UI to send the
+	// user to Settings instead of showing a generic failure.
+	providerToken, err := s.store.Secret(u.ID, ClaudeCodeTokenSecret)
+	if errors.Is(err, ErrNotFound) || (err == nil && strings.TrimSpace(providerToken) == "") {
+		writeError(w, 428, "Add your Claude Code token in Settings before starting a session. Run `claude setup-token` to create one.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "could not load your Claude Code token")
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, 500, "streaming is not supported")
@@ -756,7 +807,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, u User) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Minute)
 	defer cancel()
 	go func() {
-		result, err := s.runner.Run(ctx, ProjectContext{Project: p, UserID: u.ID, WorkspacePath: s.store.ProjectDir(projectID), SessionHandle: handle, History: history, SecretEnv: secretEnv}, func(event AgentEvent) {
+		result, err := s.runner.Run(ctx, ProjectContext{Project: p, UserID: u.ID, WorkspacePath: s.store.ProjectDir(projectID), SessionHandle: handle, History: history, SecretEnv: secretEnv, ProviderToken: providerToken}, func(event AgentEvent) {
+			s.recordAgentExecutionEvent(projectID, event)
 			select {
 			case events <- event:
 			case <-ctx.Done():
@@ -870,10 +922,52 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request, u User) {
 		writeError(w, 500, "could not list secrets")
 		return
 	}
-	if names == nil {
-		names = []string{}
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		// The provider token has its own card in Settings; showing it here too
+		// would invite editing it through a path that skips validation.
+		if name != ClaudeCodeTokenSecret {
+			filtered = append(filtered, name)
+		}
 	}
-	writeJSON(w, 200, map[string]any{"names": names})
+	writeJSON(w, 200, map[string]any{"names": filtered})
+}
+
+// providerToken reports whether this user can start a session at all. The
+// response deliberately carries no token value — only whether one is stored.
+func (s *Server) getProviderToken(w http.ResponseWriter, r *http.Request, u User) {
+	token, err := s.store.Secret(u.ID, ClaudeCodeTokenSecret)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		writeError(w, 500, "could not read your Claude Code token")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"configured": strings.TrimSpace(token) != ""})
+}
+
+func (s *Server) putProviderToken(w http.ResponseWriter, r *http.Request, u User) {
+	var in secretInput
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	// Validate before storing. A token that Claude Code rejects would otherwise
+	// be indistinguishable from a working one until the next turn failed.
+	if err := claudeauth.ValidateOAuthToken(r.Context(), in.Value); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.store.PutSecret(u.ID, ClaudeCodeTokenSecret, strings.TrimSpace(in.Value)); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"configured": true})
+}
+
+func (s *Server) deleteProviderToken(w http.ResponseWriter, r *http.Request, u User) {
+	if err := s.store.DeleteSecret(u.ID, ClaudeCodeTokenSecret); err != nil && !errors.Is(err, ErrNotFound) {
+		writeError(w, 500, "could not remove your Claude Code token")
+		return
+	}
+	w.WriteHeader(204)
 }
 
 type secretInput struct {
@@ -883,6 +977,10 @@ type secretInput struct {
 func (s *Server) putSecret(w http.ResponseWriter, r *http.Request, u User) {
 	var in secretInput
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if strings.ToUpper(strings.TrimSpace(r.PathValue("name"))) == ClaudeCodeTokenSecret {
+		writeError(w, 400, "Set your Claude Code token from the Claude Code card in Settings, so it can be validated first.")
 		return
 	}
 	if err := s.store.PutSecret(u.ID, r.PathValue("name"), in.Value); err != nil {

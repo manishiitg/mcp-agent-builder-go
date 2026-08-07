@@ -50,7 +50,7 @@ var cinematicStageDescriptions = map[string]string{
 	"assets":     "This stage is the only one that creates media, and it has exactly two modes. Choose the mode ONLY from the human input for this stage: treat generation as authorised solely when that input explicitly approves generating media or spending on it. Ambiguity, enthusiasm about the plan, or approval of an earlier stage is NOT authorisation.\nMODE A — not explicitly authorised (the default): audit uploads/ against scene-plan.md and write asset-manifest.md listing every asset each scene needs, each marked `reuse` with its exact existing path, or `needs-generation` with the exact description, duration, aspect ratio and consistency controls you would use. Produce nothing yet. Finish by stating plainly what still needs approval.\nMODE B — explicitly authorised: do the same audit, then actually produce every `needs-generation` asset locally with `execute_shell_command` and `ffmpeg` — no paid generation provider is used for this. Solid or gradient backgrounds, drawtext title/caption cards, and sine-tone or silent audio beds are all fair game for a placeholder; match each asset's duration, aspect ratio, and resolution to what the scene plan calls for. Write every file inside this step's own folder, mark it `placeholder: true` in the manifest so nobody downstream mistakes it for finished creative material, and never record an asset as produced unless you created the file and confirmed it exists on disk and is non-empty. If a command fails, record that asset as `failed` with the error rather than describing it as if it existed.\nIn both modes asset-manifest.md must let the compose stage resolve every scene to a concrete file without re-deriving anything: for each asset record the scene id, status (`reuse`, `generated`, `needs-generation`, or `failed`), the exact file path when one exists, and for generated files the duration, resolution, aspect ratio, and whether it is a placeholder.",
 	"edit":       "Create edit-plan.md from the script, scene plan, and asset manifest. Define the precise sequence, clip in/out choices, transitions, pacing, voice/music mix, captions, graphics, color treatment, and stitching rules. Record any blockers before composition.",
 	"compose":    "Assemble the video with ffmpeg from media that already exists. Resolve every input from the exact file paths recorded in asset-manifest.md — do not write generation prompts, do not call media-generation tools, and do not go looking for files elsewhere. Verify each path exists and is readable before using it. If any required asset is missing, `needs-generation`, or `failed`, stop and write render-report.md naming the scenes and assets that are missing and what has to happen next; never substitute a placeholder of your own or reuse an unrelated file for a *missing* asset. An asset the manifest already marks `placeholder: true` is expected right now and is a normal input, not a reason to stop — assemble with it and record in render-report.md that the candidate is a placeholder assembly, not a finished video. Keep intermediate files inside this step folder and create render-report.md describing inputs, commands, versions, duration, resolution, codecs, and the path of every rendered candidate.",
-	"delivery":   "Perform final technical and editorial QA on the rendered candidate: decode integrity, duration, frame size, frame rate, audio, loudness/clipping, black or frozen frames, caption safe areas, legibility, continuity, pacing, factual consistency, and obvious visual defects. If render-report.md says the candidate was assembled from placeholder assets, apply only the technical checks — continuity, legibility, and factual consistency do not apply to a placeholder, and grading it against them is meaningless. Record it as a placeholder-pipeline pass or fail, not a creative verdict on a finished video. Repair safe mechanical issues when possible. Write delivery.md with pass/fail evidence, remaining concerns, and the selected final file. Do not publish.",
+	"delivery":   qualityReviewDescription("render-report.md", "delivery.md"),
 }
 
 var cinematicPipeline = &Pipeline{
@@ -67,7 +67,7 @@ var cinematicPipeline = &Pipeline{
 		{ID: "assets", Title: "Assets", Summary: "Identify or create the approved visuals, footage, and audio.", Output: "asset-manifest.md", RequiresApproval: true, Skills: []string{"video-shot-generation"}},
 		{ID: "edit", Title: "Edit plan", Summary: "Set the sequence, pacing, transitions, captions, and sound.", Output: "edit-plan.md", Skills: []string{"video-editing"}},
 		{ID: "compose", Title: "Compose", Summary: "Assemble the approved material and render the video.", Output: "render-report.md", Skills: []string{"video-editing"}},
-		{ID: "delivery", Title: "Quality check", Summary: "Review the final video for technical and creative issues.", Output: "delivery.md", Skills: []string{"video-quality"}},
+		{ID: "delivery", Title: "Quality check", Summary: "Review the final video for technical and creative issues.", Output: "delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality"}},
 	},
 }
 
@@ -82,12 +82,12 @@ var infographicStageDescriptions = map[string]string{
 	"infographic-layout":   "Turn the approved copy into infographic-layout.md: one entry per panel with its id, on-screen duration, exact text placement, which element is the focal point, the motion intent (hold, push-in, or cross-fade to the next), and the safe-area margins every panel must respect. Confirm the durations sum to the concept's target length. Do not write HTML yet.",
 	"infographic-design":   "This stage BUILDS the panels — it is not a design document and there is no later build stage. Nothing downstream can render a panel you did not create here.\nFor every panel in infographic-layout.md, write one .html file inside this step's own folder and render it to a PNG with headless Chrome, following the html-composition skill: exact canvas size, box-sizing, safe-area margins, and a font stack that degrades honestly. Then open each PNG and confirm it is non-trivial in size and actually shows the panel — a blank page still writes a valid file, so a zero exit code and an existing file prove nothing on their own.\ninfographic-design.md is a RECORD of what you built, written last: for each panel its html path, its png path, and the pixel dimensions you verified. Recording a panel whose file does not exist on disk is a failure, not a plan. If a panel genuinely cannot be built, record it as `failed` with the error rather than describing the design you would have made.",
 	"infographic-render":   "This stage produces the VIDEO. Its deliverable is a playable file at infographic.mp4 in this step's own folder — finishing with panels, notes, or a report but no video is a failure of this stage, not a handoff to a later one. There is no later stage that renders.\nAssemble the panels into that video with ffmpeg, using the exact PNG paths recorded in infographic-design.md. Give each panel the duration infographic-layout.md specifies, apply only the motion layout calls for, and keep intermediates inside this step's folder. Building panels is not this stage's job: if a PNG is missing or unreadable, stop and write infographic-render-report.md naming exactly which panel is missing and what has to happen next, rather than quietly rebuilding it here and running out of scope before the video exists.\nWhen the video is written, verify it with ffprobe — it decodes, and its duration, resolution and frame rate match what layout asked for — then write infographic-render-report.md with the inputs, the exact ffmpeg commands, and the verified duration, resolution and codecs. Report only what you measured on the file, not what the commands were supposed to produce.",
-	"infographic-check":    "Perform final QA on the rendered file: decode integrity, duration against the layout's target, frame size, frame rate, and audio if present. Then check what only matters for this format — every number on screen traces to a source in infographic-research.md, no text is clipped or inside the reserved top/bottom bands, and each panel is on screen long enough to actually read. Write infographic-delivery.md with pass/fail evidence per check, the exact file validated, and any remaining concern. Do not publish.",
+	"infographic-check":    qualityReviewDescription("infographic-render-report.md", "infographic-delivery.md") + " For this format, also verify that every on-screen number traces to infographic-research.md, no text is clipped or enters reserved bands, and every panel remains visible long enough to read.",
 }
 
 var infographicPipeline = &Pipeline{
 	ID:          "infographic",
-	Name:        "Product infographic",
+	Name:        "Product explainer / infographic",
 	Description: "How a product's facts become a laid-out, readable explainer video.",
 	WhenToUse:   "Product explainers, feature breakdowns, stat and data pieces, comparison or pricing videos — anything whose value comes from typography, numbers and layout rather than footage and mood.",
 	Stages: []PipelineStage{
@@ -97,8 +97,40 @@ var infographicPipeline = &Pipeline{
 		{ID: "infographic-layout", Title: "Layout", Summary: "Break the copy into timed panels with placement and motion.", Output: "infographic-layout.md"},
 		{ID: "infographic-design", Title: "Build panels", Summary: "Build each panel in HTML/CSS and render it to an image.", Output: "infographic-design.md", Skills: []string{"html-composition"}},
 		{ID: "infographic-render", Title: "Render", Summary: "Assemble the panels into the finished video.", Output: "infographic-render-report.md", Artifacts: []string{"infographic.mp4"}, Skills: []string{"html-composition"}},
-		{ID: "infographic-check", Title: "Quality check", Summary: "Verify the render, the claims, and the readability.", Output: "infographic-delivery.md", Skills: []string{"video-quality"}},
+		{ID: "infographic-check", Title: "Quality check", Summary: "Verify the render, the claims, and the readability.", Output: "infographic-delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality"}},
 	},
+}
+
+// Quality assurance is also independently routable. This lets a creator ask to
+// inspect or re-check an existing render without rerunning its production
+// workflow. Creation pipelines still end with their own mandatory QA stage.
+var qualityPipeline = &Pipeline{
+	ID:          "quality",
+	Name:        "Video quality assurance",
+	Description: "How a finished video is checked before it is shown or delivered.",
+	WhenToUse:   "Reviewing an existing render, diagnosing a video problem, or re-checking a revised export without rebuilding the production.",
+	Stages: []PipelineStage{
+		{
+			ID:          "qa-review",
+			Title:       "Quality assurance",
+			Summary:     "Inspect the exact video, record evidence, and decide whether it is ready.",
+			Description: qualityReviewDescription("the exact candidate named in the current request", "qa-delivery.md"),
+			Output:      "qa-delivery.md",
+			Artifacts:   []string{"quality-report.json", "qa-contact-sheet.jpg"},
+			Skills:      []string{"video-quality"},
+		},
+	},
+}
+
+func qualityReviewDescription(candidateSource, markdownOutput string) string {
+	return "Perform mandatory post-render QA on the exact candidate identified by " + candidateSource + ". " +
+		"First resolve and record one project-relative candidate path; never validate one file and select another. " +
+		"Run technical checks for file existence, full decode, duration, dimensions, frame rate, streams, loudness/clipping, black frames, frozen sections, and truncated ending. " +
+		"Create qa-contact-sheet.jpg from at least four representative timestamps including the opening and ending, then open and inspect it for broken layouts, missing media, unsafe or unreadable text, visual defects, continuity, pacing, and promise preservation. " +
+		"Check audio, captions, factual claims, names, prices, and calls to action when they are expected; mark a category not_applicable only when the brief genuinely does not require it. " +
+		"If the candidate uses placeholder assets, do the technical gate and label the result placeholder-pass rather than claiming the creative video is finished. Repair safe mechanical issues and re-run the affected checks. " +
+		"Write " + markdownOutput + " for people and quality-report.json for the product. The JSON must contain schema_version 1, candidate_path, contact_sheet_path, verdict (pass, placeholder-pass, revise, or fail), ready_to_present, checks named technical/visual/audio/content/captions/promise with status and evidence, at least four sampled_frames with timestamp_seconds and path, issues, and recommended_action. " +
+		"Only pass or placeholder-pass may set ready_to_present true, every required check must be pass or not_applicable, and recommended_action must be present. Do not publish or call the video complete when any required check is unverified."
 }
 
 // Stage skills are deliberately narrow: a stage agent gets the one skill for
@@ -107,7 +139,7 @@ var infographicPipeline = &Pipeline{
 // registry rejects slashes, so layered names wait on nested discovery.
 
 // pipelineRegistry holds every pipeline the product can run. Routing picks one.
-var pipelineRegistry = []*Pipeline{cinematicPipeline, infographicPipeline}
+var pipelineRegistry = []*Pipeline{cinematicPipeline, infographicPipeline, qualityPipeline}
 
 func init() {
 	// Attach descriptions by stage id so the definitions above stay scannable.
@@ -130,6 +162,21 @@ func init() {
 
 // DefaultPipeline is the branch a run takes when nothing selects one.
 func DefaultPipeline() *Pipeline { return cinematicPipeline }
+
+// PipelineByName resolves persisted run labels back to their pipeline. Keep the
+// former infographic display name as an alias so existing project history still
+// drives the correct creator-facing Workflow panel after the rename.
+func PipelineByName(name string) *Pipeline {
+	for _, pipeline := range pipelineRegistry {
+		if name == pipeline.Name || name == pipeline.ID {
+			return pipeline
+		}
+	}
+	if name == "Product infographic" {
+		return infographicPipeline
+	}
+	return nil
+}
 
 // AllPipelineSteps returns every stage across every pipeline, numbered
 // continuously. A run is seeded with all of them because which branch it takes

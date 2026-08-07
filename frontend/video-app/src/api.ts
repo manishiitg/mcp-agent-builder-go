@@ -1,4 +1,11 @@
+import { createExecutionEventsClient } from '../../packages/execution-events'
+
 const API_BASE = (import.meta.env.VITE_VIDEO_API_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://127.0.0.1:8200'
+const executionEventsClient = createExecutionEventsClient({
+  baseURL: API_BASE,
+  routeForScope: (projectId) => `/api/projects/${projectId}/execution-events`,
+  credentials: 'include',
+})
 
 export interface ApiUser {
   id: string
@@ -76,10 +83,15 @@ export interface ApiWorkflowRun {
   updatedAt: string
 }
 
-export interface ApiWorkflowBundle {
+export interface ApiWorkflowDefinition {
+  id: string
   name: string
   description?: string
   steps: ApiWorkflowStep[]
+}
+
+export interface ApiWorkflowBundle {
+  workflows: ApiWorkflowDefinition[]
   runs: ApiWorkflowRun[]
 }
 
@@ -123,6 +135,7 @@ export const api = {
   projects: () => request<ApiProject[]>('/api/projects'),
   createProject: (title: string, description: string) => request<ApiProject>('/api/projects', { method: 'POST', body: JSON.stringify({ title, description }) }),
   messages: (projectId: string) => request<ApiMessage[]>(`/api/projects/${projectId}/messages`),
+  executionEvents: executionEventsClient,
   assets: (projectId: string) => request<ApiAsset[]>(`/api/projects/${projectId}/assets`),
   files: (projectId: string) => request<ApiProjectFileNode[]>(`/api/projects/${projectId}/files`),
   videos: (projectId: string) => request<ApiVideo[]>(`/api/projects/${projectId}/videos`),
@@ -137,6 +150,9 @@ export const api = {
   secretNames: () => request<{ names: string[] }>('/api/secrets'),
   putSecret: (name: string, value: string) => request<{ name: string }>(`/api/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) }),
   deleteSecret: (name: string) => request<void>(`/api/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  providerToken: () => request<{ configured: boolean }>('/api/provider-token'),
+  putProviderToken: (value: string) => request<{ configured: boolean }>('/api/provider-token', { method: 'PUT', body: JSON.stringify({ value }) }),
+  deleteProviderToken: () => request<void>('/api/provider-token', { method: 'DELETE' }),
 }
 
 export async function streamChat(projectId: string, message: string, handlers: ChatStreamHandlers): Promise<ChatCompleted> {

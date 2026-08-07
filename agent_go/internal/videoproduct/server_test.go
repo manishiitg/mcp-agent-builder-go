@@ -96,6 +96,17 @@ func loginUser(t *testing.T, client *testClient, username, password string) User
 	return user
 }
 
+// seedProviderToken satisfies the gate that stops a session from starting
+// without the user's own Claude Code token. It writes to the vault directly
+// because the HTTP route validates against the real CLI, which a unit test must
+// not depend on.
+func seedProviderToken(t *testing.T, server *Server, userID string) {
+	t.Helper()
+	if err := server.store.PutSecret(userID, ClaudeCodeTokenSecret, "sk-ant-oat01-test-token"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func createProjectForTest(t *testing.T, client *testClient) Project {
 	t.Helper()
 	response := client.request(t, http.MethodPost, "/api/projects", []byte(`{"title":"Launch film","description":"A launch video"}`), "application/json")
@@ -138,6 +149,7 @@ func TestAuthProjectsAndWorkspaceIsolation(t *testing.T) {
 func TestAssetUploadAndClaudeChatStream(t *testing.T) {
 	server, client := newTestServer(t)
 	user := loginUser(t, client, "manish", "12345")
+	seedProviderToken(t, server, user.ID)
 	project := createProjectForTest(t, client)
 
 	var upload bytes.Buffer
@@ -173,6 +185,47 @@ func TestAssetUploadAndClaudeChatStream(t *testing.T) {
 	}
 }
 
+// A session with no token would otherwise fall back to whichever Claude Code
+// login exists on the machine — running, and billing, as someone else. The turn
+// has to be refused before the agent is constructed.
+func TestChatIsRefusedWithoutAClaudeCodeToken(t *testing.T) {
+	_, client := newTestServer(t)
+	loginUser(t, client, "manish", "12345")
+	project := createProjectForTest(t, client)
+
+	response := client.request(t, http.MethodPost, "/api/projects/"+project.ID+"/chat", []byte(`{"message":"Make a short video"}`), "application/json")
+	if response.Code != http.StatusPreconditionRequired {
+		t.Fatalf("chat status = %d, want 428: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "setup-token") {
+		t.Fatalf("error should tell the user how to create a token: %s", response.Body.String())
+	}
+}
+
+// The vault holds the token, but exporting it as a shell variable would let any
+// command the agent runs re-authenticate on its own.
+func TestProviderTokenIsNotExportedToTheShellEnvironment(t *testing.T) {
+	server, client := newTestServer(t)
+	user := loginUser(t, client, "manish", "12345")
+	seedProviderToken(t, server, user.ID)
+	if err := server.store.PutSecret(user.ID, "ELEVENLABS_API_KEY", "voice-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := server.store.SecretEnv(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, ClaudeCodeTokenSecret+"=") {
+			t.Fatalf("provider token leaked into the shell environment: %v", env)
+		}
+	}
+	if len(env) != 1 || !strings.HasPrefix(env[0], "ELEVENLABS_API_KEY=") {
+		t.Fatalf("unrelated secrets should still be exported, got %v", env)
+	}
+}
+
 func TestWorkflowAutoNotificationResumesProjectAgent(t *testing.T) {
 	runner := &autoNotificationRunner{calls: make(chan ProjectContext, 1)}
 	server, err := NewServer(Config{DataDir: t.TempDir(), FrontendOrigin: DefaultFrontendOrigin, Runner: runner})
@@ -182,6 +235,7 @@ func TestWorkflowAutoNotificationResumesProjectAgent(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 	client := &testClient{handler: server.Handler()}
 	user := loginUser(t, client, "manish", "12345")
+	seedProviderToken(t, server, user.ID)
 	project := createProjectForTest(t, client)
 	if _, err := server.store.AddMessage(project.ID, user.ID, "user", user.Name, "Research this launch film"); err != nil {
 		t.Fatal(err)
@@ -246,9 +300,15 @@ func TestProjectFileContentIsWorkspaceScoped(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("traversal response = %d, want 404", response.Code)
 	}
+	if err := os.MkdirAll(filepath.Join(server.store.ProjectDir(project.ID), ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(server.store.ProjectDir(project.ID), ".claude", "settings.json"), []byte(`{"enabled":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	response = client.request(t, http.MethodGet, "/api/projects/"+project.ID+"/files/content?path=.claude%2Fsettings.json", nil, "")
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("private file response = %d, want 404", response.Code)
+	if response.Code != http.StatusOK || response.Body.String() != `{"enabled":true}` {
+		t.Fatalf("hidden project file response = %d %q", response.Code, response.Body.String())
 	}
 }
 
@@ -266,6 +326,9 @@ func TestProjectFilesReturnsAWorkspaceTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "work", ".private"), []byte("hidden"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, ".root-config.json"), []byte("config"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	response := client.request(t, http.MethodGet, "/api/projects/"+project.ID+"/files", nil, "")
 	if response.Code != http.StatusOK {
@@ -275,11 +338,13 @@ func TestProjectFilesReturnsAWorkspaceTree(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &nodes); err != nil {
 		t.Fatal(err)
 	}
-	if len(nodes) != 4 || nodes[0].Path != "uploads" || nodes[1].Path != "work" || nodes[2].Path != "outputs" || nodes[3].Path != "runs" {
-		t.Fatalf("project file roots = %#v", nodes)
-	}
 	data, _ := json.Marshal(nodes)
-	if !strings.Contains(string(data), `"path":"work/notes/brief.md"`) || strings.Contains(string(data), ".private") {
+	for _, expected := range []string{`"path":"work/notes/brief.md"`, `"path":"work/.private"`, `"path":".root-config.json"`, `"path":"workflow.json"`} {
+		if !strings.Contains(string(data), expected) {
+			t.Fatalf("project file tree missing %s: %s", expected, data)
+		}
+	}
+	if len(nodes) <= 4 {
 		t.Fatalf("project file tree = %s", data)
 	}
 }
@@ -307,17 +372,25 @@ func TestProjectCreatesCinematicWorkflowWithIsolatedRegularSteps(t *testing.T) {
 		t.Fatalf("workflow response = %d: %s", response.Code, response.Body.String())
 	}
 	var payload struct {
-		Name  string         `json:"name"`
-		Steps []WorkflowStep `json:"steps"`
-		Runs  []WorkflowRun  `json:"runs"`
+		Workflows []struct {
+			ID    string         `json:"id"`
+			Name  string         `json:"name"`
+			Steps []WorkflowStep `json:"steps"`
+		} `json:"workflows"`
+		Runs []WorkflowRun `json:"runs"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	// The UI shows one pipeline's stages; the plan on disk carries every
-	// pipeline's, behind the routing step.
-	if payload.Name != cinematicWorkflowName || len(payload.Steps) != len(DefaultPipeline().Stages) || len(payload.Runs) != 0 {
+	// The UI is a static catalog of every supported pipeline. It does not change
+	// based on the latest routed run.
+	if len(payload.Workflows) != len(pipelineRegistry) || len(payload.Runs) != 0 {
 		t.Fatalf("unexpected workflow payload: %+v", payload)
+	}
+	for i, pipeline := range pipelineRegistry {
+		if payload.Workflows[i].ID != pipeline.ID || payload.Workflows[i].Name != pipeline.Name || len(payload.Workflows[i].Steps) != len(pipeline.Stages) {
+			t.Fatalf("workflow catalog[%d] = %+v, want %s", i, payload.Workflows[i], pipeline.ID)
+		}
 	}
 	totalStages := 0
 	for _, pipeline := range pipelineRegistry {
@@ -341,6 +414,35 @@ func TestProjectCreatesCinematicWorkflowWithIsolatedRegularSteps(t *testing.T) {
 	}
 	if strings.Count(string(planData), `"type": "routing"`) != 1 {
 		t.Fatalf("plan must contain exactly one routing step: %s", planData)
+	}
+}
+
+func TestWorkflowPanelCatalogDoesNotChangeWithLatestRun(t *testing.T) {
+	server, client := newTestServer(t)
+	loginUser(t, client, "manish", "12345")
+	project := createProjectForTest(t, client)
+	run, err := server.store.BeginWorkflowRun(project.ID, infographicPipeline.Name, "product-explainer", AllPipelineSteps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.store.FinishWorkflowRun(run.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+
+	response := client.request(t, http.MethodGet, "/api/projects/"+project.ID+"/workflows", nil, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("workflow response = %d: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Workflows []struct {
+			ID string `json:"id"`
+		} `json:"workflows"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Workflows) != len(pipelineRegistry) || payload.Workflows[0].ID != cinematicPipeline.ID || payload.Workflows[1].ID != infographicPipeline.ID || payload.Workflows[2].ID != qualityPipeline.ID {
+		t.Fatalf("workflow panel payload = %+v", payload)
 	}
 }
 

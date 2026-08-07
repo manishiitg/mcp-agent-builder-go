@@ -46,3 +46,24 @@ func TestStepConfigEmitsEnabledSkills(t *testing.T) {
 		}
 	}
 }
+
+func TestQualityWorkflowAndCreationGatesUseSharedAgenticContract(t *testing.T) {
+	if got := PipelineByID("quality"); got != qualityPipeline {
+		t.Fatalf("quality route resolved to %#v", got)
+	}
+	if len(qualityPipeline.Stages) != 1 || qualityPipeline.Stages[0].ID != "qa-review" {
+		t.Fatalf("quality workflow = %#v", qualityPipeline.Stages)
+	}
+	for _, stage := range []PipelineStage{
+		cinematicPipeline.Stages[len(cinematicPipeline.Stages)-1],
+		infographicPipeline.Stages[len(infographicPipeline.Stages)-1],
+		qualityPipeline.Stages[0],
+	} {
+		if len(stage.Skills) != 1 || stage.Skills[0] != "video-quality" {
+			t.Fatalf("%s does not use the agentic video-quality skill: %#v", stage.ID, stage.Skills)
+		}
+		if len(stage.Artifacts) != 2 || stage.Artifacts[0] != "quality-report.json" || stage.Artifacts[1] != "qa-contact-sheet.jpg" {
+			t.Fatalf("%s QA evidence contract = %#v", stage.ID, stage.Artifacts)
+		}
+	}
+}

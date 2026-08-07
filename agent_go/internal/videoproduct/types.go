@@ -91,4 +91,7 @@ type ProjectContext struct {
 	SessionHandle []byte
 	History       []Message
 	SecretEnv     []string
+	// ProviderToken is this user's own Claude Code setup token. Empty means the
+	// session must not start — see agentsession.Config.RequireProviderToken.
+	ProviderToken string
 }

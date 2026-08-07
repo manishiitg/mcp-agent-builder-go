@@ -13,6 +13,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/platformevents"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	stepworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
@@ -62,6 +63,7 @@ type WorkflowService struct {
 	mu              sync.Mutex
 	sessions        map[string]*projectWorkflowSession
 	autoNotify      func(workflowAutoNotification)
+	executionEvents func(platformevents.Event)
 }
 
 func NewWorkflowService(store *Store, workspaceAPIURL, mcpConfigPath string) *WorkflowService {
@@ -78,6 +80,15 @@ func (s *WorkflowService) SetAutoNotificationHandler(handler func(workflowAutoNo
 	s.autoNotify = handler
 	for _, state := range s.sessions {
 		state.notifier.setAutoNotificationHandler(handler)
+	}
+}
+
+func (s *WorkflowService) SetExecutionEventHandler(handler func(platformevents.Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionEvents = handler
+	for _, state := range s.sessions {
+		state.notifier.setExecutionEventHandler(handler)
 	}
 }
 
@@ -424,7 +435,7 @@ func (s *WorkflowService) projectSession(ctx ProjectContext) (*projectWorkflowSe
 	if err != nil {
 		return nil, err
 	}
-	notifier := newVideoWorkflowNotifier(s.store, ctx.Project.ID, pipeline, s.autoNotify)
+	notifier := newVideoWorkflowNotifier(s.store, ctx.Project.ID, pipeline, s.autoNotify, s.executionEvents)
 	workshop.SetWorkshopExecutionNotifier(notifier)
 	state := &projectWorkflowSession{session: workshop, notifier: notifier, env: env}
 	s.sessions[ctx.Project.ID] = state
@@ -592,26 +603,37 @@ type workflowAutoNotification struct {
 }
 
 type videoWorkflowNotifier struct {
-	store      *Store
-	projectID  string
-	pipeline   *Pipeline
-	mu         sync.Mutex
-	pending    *workflowLaunch
-	execRuns   map[string]string
-	runModes   map[string]string
-	runGroups  map[string]string
-	runUsers   map[string]string
-	completed  map[string]bool
-	autoNotify func(workflowAutoNotification)
+	store           *Store
+	projectID       string
+	pipeline        *Pipeline
+	mu              sync.Mutex
+	pending         *workflowLaunch
+	execRuns        map[string]string
+	runModes        map[string]string
+	runGroups       map[string]string
+	runUsers        map[string]string
+	completed       map[string]bool
+	autoNotify      func(workflowAutoNotification)
+	executionEvents func(platformevents.Event)
 }
 
-func newVideoWorkflowNotifier(store *Store, projectID string, pipeline *Pipeline, autoNotify func(workflowAutoNotification)) *videoWorkflowNotifier {
-	return &videoWorkflowNotifier{store: store, projectID: projectID, pipeline: pipeline, execRuns: map[string]string{}, runModes: map[string]string{}, runGroups: map[string]string{}, runUsers: map[string]string{}, completed: map[string]bool{}, autoNotify: autoNotify}
+func newVideoWorkflowNotifier(store *Store, projectID string, pipeline *Pipeline, autoNotify func(workflowAutoNotification), executionEvents ...func(platformevents.Event)) *videoWorkflowNotifier {
+	var handler func(platformevents.Event)
+	if len(executionEvents) > 0 {
+		handler = executionEvents[0]
+	}
+	return &videoWorkflowNotifier{store: store, projectID: projectID, pipeline: pipeline, execRuns: map[string]string{}, runModes: map[string]string{}, runGroups: map[string]string{}, runUsers: map[string]string{}, completed: map[string]bool{}, autoNotify: autoNotify, executionEvents: handler}
 }
 
 func (n *videoWorkflowNotifier) setAutoNotificationHandler(handler func(workflowAutoNotification)) {
 	n.mu.Lock()
 	n.autoNotify = handler
+	n.mu.Unlock()
+}
+
+func (n *videoWorkflowNotifier) setExecutionEventHandler(handler func(platformevents.Event)) {
+	n.mu.Lock()
+	n.executionEvents = handler
 	n.mu.Unlock()
 }
 
@@ -664,9 +686,19 @@ func (n *videoWorkflowNotifier) OnExecutionStart(start stepworkflow.WorkshopExec
 		n.execRuns[start.ID] = runID
 	}
 	n.mu.Unlock()
+	stepID := ""
+	if start.Metadata != nil {
+		stepID = strings.TrimSpace(start.Metadata["step_id"])
+	}
+	if pipelineForStage(stepID) == nil {
+		stepID = stageIDFromName(n.pipeline, start.Name)
+	}
+	if n.executionEvents != nil && stepID != "" {
+		n.executionEvents(platformevents.Event{ScopeID: n.projectID, Type: platformevents.RunStarted, Name: start.Name, Status: "running", ExecutionID: start.ID, ParentExecutionID: start.ParentExecutionID})
+	}
 	if runID != "" {
 		_ = n.store.SetWorkflowExecution(runID, start.ID)
-		if stepID := stageIDFromName(n.pipeline, start.Name); stepID != "" {
+		if stepID != "" {
 			_ = n.store.SetWorkflowStep(runID, stepID, "running")
 		}
 	}
@@ -693,10 +725,20 @@ func (n *videoWorkflowNotifier) OnExecutionComplete(execID, name, result string,
 	}
 	stepID := ""
 	if meta != nil {
-		stepID = stageIDFromName(n.pipeline, meta["step_name"])
+		stepID = strings.TrimSpace(meta["step_id"])
+		if pipelineForStage(stepID) == nil {
+			stepID = stageIDFromName(n.pipeline, meta["step_name"])
+		}
 	}
 	if stepID == "" {
 		stepID = stageIDFromName(n.pipeline, name)
+	}
+	if n.executionEvents != nil && stepID != "" {
+		eventType := platformevents.RunCompleted
+		if status == "failed" {
+			eventType = platformevents.RunFailed
+		}
+		n.executionEvents(platformevents.Event{ScopeID: n.projectID, Type: eventType, Name: name, Status: status, ExecutionID: execID, Message: strings.TrimSpace(result)})
 	}
 	if stepID != "" {
 		_ = n.store.SetWorkflowStep(runID, stepID, status)
@@ -811,6 +853,9 @@ func (n *videoWorkflowNotifier) OnExecutionTerminated(execID, name string) {
 	n.mu.Unlock()
 	if runID == "" {
 		return
+	}
+	if n.executionEvents != nil {
+		n.executionEvents(platformevents.Event{ScopeID: n.projectID, Type: platformevents.RunCancelled, Name: name, Status: "cancelled", ExecutionID: execID})
 	}
 	if stepID := stageIDFromName(n.pipeline, name); stepID != "" {
 		_ = n.store.SetWorkflowStep(runID, stepID, "cancelled")

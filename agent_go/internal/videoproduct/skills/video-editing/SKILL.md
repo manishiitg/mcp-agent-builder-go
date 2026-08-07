@@ -7,6 +7,18 @@ description: Edit and assemble video clips with deterministic local tools, inclu
 
 Keep the edit reproducible. Prefer scripts and manifests over one-off manual commands.
 
+## Own the HyperFrames runtime
+
+When the approved production plan selects HyperFrames, install and run the current CLI through `npx --yes hyperframes@latest`. Use that full prefix for every HyperFrames command; do not depend on a global `hyperframes` binary and do not ask the user to install it. The first invocation downloads the latest published package automatically and later invocations reuse npm's cache.
+
+Before authoring or rendering, verify the managed runtime:
+
+```bash
+npx --yes hyperframes@latest doctor --json
+```
+
+`doctor --json` always exits zero. Inspect its checks rather than using the top-level `.ok` as a universal render gate: current releases set `.ok: false` when optional transcription, local TTS, or local music fallbacks are absent. For ordinary local rendering, require Version, Node.js, FFmpeg, FFprobe, and Chrome; require Docker only for `render --docker`, and require optional media helpers only when the approved plan actually uses them. If npm cannot retrieve the package or a capability required by the selected operation is missing, record the exact failure instead of silently switching render runtimes. Never install HyperFrames globally and never change an approved render runtime merely because the global command is absent.
+
 ## Normalize source media
 
 - Inspect every input with `ffprobe` before editing.

@@ -1432,14 +1432,14 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 	case orchestrator_events.OrchestratorAgentStart:
 		if startEvent, ok := event.Data.(*orchestrator_events.OrchestratorAgentStartEvent); ok && workflowProgressTracksAgent(startEvent.AgentType, startEvent.AgentName) {
 			execID := b.workflowProgressExecIDForStart(startEvent.AgentType, startEvent.AgentName, startEvent.StepIndex)
+			stepID := workflowProgressStepID(startEvent)
+			if stepID == "" {
+				stepID = startEvent.AgentName
+			}
 			// Register a running snapshot so query_step can find this step while it's active.
 			// AgentSessionID is intentionally empty: the prefix-scan in collectQueryToolCallSummaries
 			// uses the resolved stepID to find tool calls under sub-<kind>-<stepID>-* sessions.
 			if b.session != nil && b.session.StepRegistry != nil {
-				stepID := workflowProgressStepID(startEvent)
-				if stepID == "" {
-					stepID = startEvent.AgentName
-				}
 				b.session.StepRegistry.Register(&WorkshopStepExecution{
 					ID:        execID,
 					StepID:    stepID,
@@ -1453,6 +1453,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 					ParentExecutionID: b.parentID,
 					Name:              workflowProgressDisplayName(startEvent.AgentName),
 					Kind:              string(workflowProgressExecutionKind(startEvent.AgentType)),
+					Metadata:          map[string]string{"step_id": stepID},
 				})
 			}
 		}
@@ -1499,6 +1500,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 					meta := map[string]string{
 						"execution_type": "workflow-step",
 						"step_name":      stepName,
+						"step_id":        stepID,
 						"agent_type":     agentType,
 						"step_index":     fmt.Sprintf("%d", endEvent.StepIndex),
 					}
@@ -1514,6 +1516,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 							ParentExecutionID: b.parentID,
 							Name:              workflowProgressDisplayName(stepName),
 							Kind:              string(workflowProgressExecutionKind(agentType)),
+							Metadata:          map[string]string{"step_id": stepID},
 						})
 					}
 					b.session.executionNotifier.OnExecutionComplete(progressID, workflowProgressDisplayName(stepName), result, meta, execErr)

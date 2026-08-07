@@ -37,6 +37,7 @@ export interface VideoOutput {
   title: string
   duration: string
   createdAt: string
+  presentedAt: string
   palette: [string, string]
   contentUrl: string
   // The agent's one-line description of what this video is — for example that
@@ -62,10 +63,15 @@ export interface WorkflowRun {
   steps: WorkflowStep[]
 }
 
-export interface ProjectWorkflow {
+export interface WorkflowDefinition {
+  id: string
   name: string
   description?: string
   steps: WorkflowStep[]
+}
+
+export interface ProjectWorkflow {
+  workflows: WorkflowDefinition[]
   runs: WorkflowRun[]
 }
 

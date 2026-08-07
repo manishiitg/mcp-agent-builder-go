@@ -46,13 +46,40 @@ Write a concise machine-readable report containing:
 
 - output path and inspected specifications;
 - pass/fail checks and warnings;
-- sampled frame times;
+- a project-relative `contact_sheet_path` and at least four sampled frame times and paths;
 - unresolved items and the final verdict.
 
-**Running as a workflow stage:** the report is delivery.md inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`, and it must name the exact candidate file you validated. **Working directly in chat:** write it under `work/qa/<output-name>.json`.
+Use this shared contract for every path:
 
-Only mark the candidate `PASS` when all required checks succeed. Fix failures and rerender the smallest affected layer. If a check cannot run locally, label it unverified and tell the user exactly what remains unchecked.
+```json
+{
+  "schema_version": 1,
+  "candidate_path": "outputs/example.mp4",
+  "contact_sheet_path": "work/qa/example/qa-contact-sheet.jpg",
+  "verdict": "pass",
+  "ready_to_present": true,
+  "checks": {
+    "technical": {"status": "pass", "evidence": ["..."]},
+    "visual": {"status": "pass", "evidence": ["..."]},
+    "audio": {"status": "not_applicable", "evidence": ["No audio was requested"]},
+    "content": {"status": "pass", "evidence": ["..."]},
+    "captions": {"status": "not_applicable", "evidence": ["No speech or captions were requested"]},
+    "promise": {"status": "pass", "evidence": ["..."]}
+  },
+  "sampled_frames": [
+    {"timestamp_seconds": 0.1, "path": "work/qa/example/frame-01.jpg"}
+  ],
+  "issues": [],
+  "recommended_action": "present"
+}
+```
+
+All paths are project-relative. Every required check must be `pass` or genuinely `not_applicable`; never use `not_applicable` to hide a check that could not be run. `sampled_frames` must contain at least four inspected frames including the opening and ending. A placeholder candidate uses `verdict: "placeholder-pass"` and must be described as a placeholder when presented.
+
+**Running as a workflow stage:** write the human report named by the stage plus `quality-report.json` and `qa-contact-sheet.jpg` inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`; all three are required outputs. The JSON must name the exact project-relative candidate file you validated. **Working directly in chat:** write `quality-report.json`, `qa-contact-sheet.jpg`, and the sampled frames under `work/qa/<output-name>/`.
+
+Only mark the candidate `PASS` when all required checks succeed. Fix failures and rerender the smallest affected layer. If a check cannot run locally, label it unverified, set `ready_to_present` to false, and tell the user exactly what remains unchecked.
 
 ## Quality gate (binding)
 
-Never mark a video complete because a render step returned without error. `PASS` means you personally opened the exact file the user will receive and every required check above passed against it — not that a prior stage reported success.
+Never mark a video complete because a render step returned without error. `PASS` means you personally opened the exact file the user will receive and every required check above passed against it — not that a prior stage reported success. The `show_video` presentation gate validates this report and refuses a missing, non-passing, mismatched, or evidence-free report.

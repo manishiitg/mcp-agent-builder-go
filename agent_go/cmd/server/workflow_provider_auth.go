@@ -3,16 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/manishiitg/mcpagent/llm"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
 )
 
 const claudeCodeProviderID = "claude-code"
@@ -104,63 +103,10 @@ func (api *StreamingAPI) handleDeleteWorkflowClaudeCodeCredential(w http.Respons
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// validateClaudeCodeOAuthToken defers to the shared checker so workflows and
+// Video Studio cannot drift apart on what counts as a valid token.
 func validateClaudeCodeOAuthToken(parent context.Context, token string) error {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return fmt.Errorf("Claude Code token is required")
-	}
-	configDir, err := os.MkdirTemp("", "claude-auth-check-*")
-	if err != nil {
-		return fmt.Errorf("could not prepare Claude Code credential check")
-	}
-	defer os.RemoveAll(configDir)
-
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", "auth", "status", "--json")
-	cmd.Env = claudeCredentialCheckEnv(os.Environ(), configDir, token)
-	output, err := cmd.Output()
-	if err != nil {
-		if errorsIsCommandNotFound(err) {
-			return fmt.Errorf("Claude Code CLI is not installed")
-		}
-		return fmt.Errorf("Claude Code did not accept the workflow token")
-	}
-	var status struct {
-		LoggedIn   bool   `json:"loggedIn"`
-		AuthMethod string `json:"authMethod"`
-	}
-	if err := json.Unmarshal(output, &status); err != nil {
-		return fmt.Errorf("Claude Code returned an unreadable authentication status")
-	}
-	if !status.LoggedIn || status.AuthMethod != "oauth_token" {
-		return fmt.Errorf("Claude Code did not recognize this as an OAuth token")
-	}
-	return nil
-}
-
-func claudeCredentialCheckEnv(base []string, configDir, token string) []string {
-	blocked := map[string]bool{
-		"ANTHROPIC_API_KEY":       true,
-		"ANTHROPIC_AUTH_TOKEN":    true,
-		"ANTHROPIC_BASE_URL":      true,
-		"CLAUDE_CODE_OAUTH_TOKEN": true,
-		"CLAUDE_CONFIG_DIR":       true,
-	}
-	out := make([]string, 0, len(base)+2)
-	for _, entry := range base {
-		key, _, _ := strings.Cut(entry, "=")
-		if blocked[key] {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return append(out, "CLAUDE_CONFIG_DIR="+configDir, "CLAUDE_CODE_OAUTH_TOKEN="+token)
-}
-
-func errorsIsCommandNotFound(err error) bool {
-	var execErr *exec.Error
-	return errors.As(err, &execErr)
+	return claudeauth.ValidateOAuthToken(parent, token)
 }
 
 func (api *StreamingAPI) loadWorkflowClaudeCodeOAuthToken(ctx context.Context, userID, workflowPath string) (*string, error) {

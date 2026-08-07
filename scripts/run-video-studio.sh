@@ -8,6 +8,10 @@ export VIDEO_STUDIO_DATA_DIR="$video_data_dir"
 export VIDEO_STUDIO_WORKSPACE_API_URL="${VIDEO_STUDIO_WORKSPACE_API_URL:-http://127.0.0.1:8201}"
 export WORKSPACE_API_URL="$VIDEO_STUDIO_WORKSPACE_API_URL"
 export WORKSPACE_DOCS_PATH="$video_data_dir"
+# Video Studio uses AgentWorks-style native shell access for both the main
+# project agent and workflow stages. SparkQuill's strict child sandbox is a
+# different product boundary and is deliberately not enabled here.
+export NATIVE_WORKSPACE=true
 
 (
   cd "$repo_dir/workspace"

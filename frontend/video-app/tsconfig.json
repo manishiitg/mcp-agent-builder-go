@@ -9,7 +9,8 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "resolveJsonModule": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "../shared"]
+  "include": ["src", "../shared", "../packages"]
 }
