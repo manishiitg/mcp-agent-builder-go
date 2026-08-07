@@ -90,13 +90,13 @@ using this routing table:
 
 | Content | Canonical home | Skill treatment |
 |---|---|---|
-| Reusable procedure, selector strategy, auth/API/CLI/tool quirk, parsing/retry/recovery rule, or stable failure signature | `learnings/_global/` | Keep; concise index in `SKILL.md`, detail in a focused reference |
+| Reusable target-system procedure, selector strategy, target-service auth/API/CLI quirk, parsing/retry/recovery rule, or stable failure signature | `learnings/_global/` | Keep; concise index in `SKILL.md`, detail in a focused reference |
 | Business identity, entity fact, or durable subject-matter fact | `knowledgebase/context/` when user-supplied; `knowledgebase/notes/` when workflow-discovered | Remove from the skill; never copy user context or invent a fact |
 | Run output, current metric/value/status, action/result row, or time-varying observation | `db/db.sqlite` or run artifacts | Remove from the skill; never perform a speculative data mutation |
 | Owner goal, preference, cap, threshold, or safety constraint | `soul/soul.md` | Remove the duplicate from the skill; never change the owner value here |
 | Current workflow strategy, cadence, allocation, routing, or step behavior | `planning/plan.json` / `planning/step_config.json` | Remove from the skill; use the current plan as authority |
 | Incident narrative, dated provenance, action/run IDs, fix history, operator decision receipt, or forensic proof | Pulse review/finding/decision history and run evidence | Remove from the skill after the durable Pulse review retains the exact source pointer and evidence |
-| Platform architecture, schema ownership/history, or product documentation | Platform/workflow documentation or the authoritative DB contract | Keep at most the short operational instruction a runner must follow; remove history and rationale |
+| Shared AgentWorks bridge/auth variables or envelopes, api-bridge routing, Folder Guard internals, managed workflow-DB tool syntax, `get_api_spec` workarounds, coding-agent tmux/native-session plumbing, platform architecture/history, or product documentation | Platform prompt/tool schema/documentation | Remove from the workflow skill. Do not retain a shortened copy; the runtime already supplies the authoritative instruction. |
 
 A date, ID, handle, metric, or product name is not automatically invalid: it may
 be part of a stable executable instruction. Judge its role. The test is whether

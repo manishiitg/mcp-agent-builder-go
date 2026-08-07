@@ -201,11 +201,12 @@ func ForStepLabel(label string) string {
 	return ""
 }
 
-// AcceptedForReviewArtifacts is the set of module IDs a reviewer artifact path
-// may use: every current module plus every retired one, so historical results
-// stay readable. Omitting a current module here silently breaks that module's
-// result persistence — the exact 2026-07-29 stores_health defect.
-func AcceptedForReviewArtifacts() []string {
+// AcceptedForReviewReceipts is the set of module IDs a durable reviewer
+// receipt may use: every current module plus every retired one, so historical
+// compact records stay readable. Omitting a current module here silently
+// breaks that module's result persistence — the exact 2026-07-29 stores_health
+// defect.
+func AcceptedForReviewReceipts() []string {
 	out := append(IDs(), RetiredIDs...)
 	return out
 }

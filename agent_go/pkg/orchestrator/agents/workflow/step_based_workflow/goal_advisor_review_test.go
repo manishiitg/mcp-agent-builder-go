@@ -159,7 +159,7 @@ func TestCompletedPulseReviewerResultRequiresFinalMarker(t *testing.T) {
 	}
 }
 
-func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T) {
+func TestBuildPulseReviewerInstructionMakesTypedToolsAuthoritative(t *testing.T) {
 	marker := pulseReviewerCompletionMarker("eval-health")
 	brief := "Return findings.\nEnd with exactly: REVIEW_COMPLETE eval_health"
 	instruction := buildPulseReviewerInstruction("Workflow/example", "pulse_review_log:run:eval_health", brief, marker)
@@ -174,24 +174,17 @@ func TestBuildPulseReviewerInstructionMakesToolMarkerAuthoritative(t *testing.T)
 		t.Fatalf("instruction must explain marker precedence, got:\n%s", instruction)
 	}
 	for _, want := range []string{
-		"ARTIFACT-FIRST RESULT CONTRACT",
-		"pulse_review_log:run:eval_health",
-		"store in SQLite",
-		"do not write a file",
+		"TYPED REVIEW CONTRACT",
+		"record_pulse_finding",
+		"record_pulse_verification",
+		"complete_pulse_review",
+		"final response is informational only",
 		"BACKLOG RECONCILIATION",
-		`get_pulse_state(view="module")`,
 		`get_pulse_state(view="backlog")`,
-		"existing_unchanged",
 		"expected outcome",
 		"observed failure",
-		"never from an ID, fingerprint",
-		"reuse the exact existing CONCERNS payload",
-		"do not emit a separate technical manifest",
-		"STRUCTURED FINDING DETAILS",
-		"PULSE_FINDING_JSON:",
-		"PULSE_VERIFICATION_JSON:",
-		`"attempt_id"`,
-		"never executed by the UI",
+		"reuse the stable concern/finding identity",
+		"Do not write or return a Markdown report",
 	} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("artifact-first instruction missing %q:\n%s", want, instruction)

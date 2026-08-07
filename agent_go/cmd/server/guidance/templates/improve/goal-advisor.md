@@ -76,13 +76,11 @@ ROLE SEPARATION
   investigation transcript. Use evidence paths/query names and short observed
   values rather than raw logs, SQL rows, tool output, or copied source text.
   Keep the packet brief; compact wording must not drop a valid finding.
-- For every trackable finding, emit a single-line `PULSE_FINDING_JSON` marker
-  immediately before its `CONCERNS:` line. The marker must use the exact same
-  concern text and include `module="goal_advisor"`, `issue_kind="workflow_issue"`,
-  `recommended_route`, and the exact `next_check` for `evidence_wait`. The
-  backend rejects an advisor concern without this route. Do not emit a
-  `CONCERNS:` line for `recommended_route=none`:
-  `PULSE_FINDING_JSON: {"module":"goal_advisor","concern":"<exact concern>","issue_kind":"workflow_issue","recommended_route":"decision_required|evidence_wait|fixer_handoff","next_check":"<required for evidence_wait>"}`
+- Persist every trackable finding with `record_pulse_finding`, using
+  `module="goal_advisor"`, `issue_kind="workflow_issue"`, a
+  `recommended_route` of `decision_required`, `evidence_wait`, or
+  `fixer_handoff`, and the exact `next_check` for `evidence_wait`. Do not call
+  the tool for a non-trackable conclusion.
 - The critic is also read-only. It returns `verdict=approve|revise|reject`, the
   claims and assumptions challenged, missing or contradictory evidence,
   downside/guardrail risk, overlap with an existing experiment or finding, and

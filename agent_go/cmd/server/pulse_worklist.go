@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -1404,35 +1403,17 @@ func (api *StreamingAPI) handleGetPulseReviews(w http.ResponseWriter, r *http.Re
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if rawID := strings.TrimSpace(r.URL.Query().Get("id")); rawID != "" {
-		id, err := strconv.ParseInt(rawID, 10, 64)
-		if err != nil || id <= 0 {
-			http.Error(w, "id must be a positive integer", http.StatusBadRequest)
-			return
-		}
-		artifact, err := step_based_workflow.LoadPulseReviewArtifact(r.Context(), workspacePath, id)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, "Pulse review not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "review": artifact})
-		return
-	}
 	module := normalizePulseModule(r.URL.Query().Get("module"))
 	if module != "" && !validPulseModules[module] {
 		http.Error(w, fmt.Sprintf("module %q is not valid", module), http.StatusBadRequest)
 		return
 	}
-	artifacts, err := step_based_workflow.LoadPulseReviewArtifacts(r.Context(), workspacePath, module, false, -1)
+	receipts, err := step_based_workflow.LoadPulseReviewReceipts(r.Context(), workspacePath, module, -1)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": artifacts, "total": len(artifacts)})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "reviews": receipts, "total": len(receipts)})
 }
 
 func (api *StreamingAPI) handleGetPulseAgentMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1561,6 +1542,71 @@ func scanPulseModuleState(row pulseModuleScanner) (*PulseModuleState, error) {
 
 func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[string]string) {
 	moduleEnum := append([]string(nil), pulseModuleOrder...)
+	reviewIdentityProperties := map[string]interface{}{
+		"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+		"pulse_run_id":   map[string]interface{}{"type": "string", "description": "Trusted scheduler-provided Pulse run id."},
+		"review_run_id":  map[string]interface{}{"type": "string", "description": "The current review execution id supplied in the reviewer instruction."},
+		"module":         map[string]interface{}{"type": "string", "enum": moduleEnum},
+	}
+	findingProperties := map[string]interface{}{}
+	for key, value := range reviewIdentityProperties {
+		findingProperties[key] = value
+	}
+	for key, value := range map[string]interface{}{
+		"concern":           map[string]interface{}{"type": "string", "description": "Stable, exact problem statement used for lifecycle recurrence matching."},
+		"issue_kind":        map[string]interface{}{"type": "string", "enum": []string{"workflow_issue", "harness_issue"}},
+		"classification":    map[string]interface{}{"type": "string"},
+		"severity":          map[string]interface{}{"type": "string", "enum": []string{"low", "medium", "high", "critical"}},
+		"summary":           map[string]interface{}{"type": "string"},
+		"impact":            map[string]interface{}{"type": "string"},
+		"evidence":          map[string]interface{}{"type": "array", "minItems": 1, "items": map[string]interface{}{"type": "string"}},
+		"recommended_route": map[string]interface{}{"type": "string", "enum": []string{"decision_required", "evidence_wait", "fixer_handoff"}},
+		"next_check":        map[string]interface{}{"type": "string"},
+		"workaround":        map[string]interface{}{"type": "string"},
+		"target_key":        map[string]interface{}{"type": "string"},
+		"finding_id":        map[string]interface{}{"type": "string"},
+		"reproduction": map[string]interface{}{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]interface{}{
+				"safe": map[string]interface{}{"type": "boolean"}, "setup": map[string]interface{}{"type": "string"},
+				"action": map[string]interface{}{"type": "string"}, "expected": map[string]interface{}{"type": "string"},
+				"observed": map[string]interface{}{"type": "string"}, "limitations": map[string]interface{}{"type": "string"},
+			},
+		},
+	} {
+		findingProperties[key] = value
+	}
+	recordFindingTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "record_pulse_finding",
+		Description: "Persist one complete Pulse reviewer finding directly to the SQLite lifecycle. Call once per trackable finding as soon as it is established. Do not encode findings in the final response. Existing semantic identities recur through the lifecycle instead of creating report artifacts. Dashboard, backup, publish, and notify waiting for their ordered finalizer stage are not findings; report only a real terminal failure after that command ran.",
+		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": findingProperties, "required": []string{"workspace_path", "pulse_run_id", "review_run_id", "module", "concern", "issue_kind", "classification", "severity", "summary", "impact", "evidence"}}),
+	}}
+	verificationProperties := map[string]interface{}{}
+	for key, value := range reviewIdentityProperties {
+		verificationProperties[key] = value
+	}
+	for key, value := range map[string]interface{}{
+		"finding_id": map[string]interface{}{"type": "string"}, "fingerprint": map[string]interface{}{"type": "string"},
+		"attempt_id": map[string]interface{}{"type": "string"}, "verdict": map[string]interface{}{"type": "string", "enum": []string{"passed", "failed", "inconclusive"}},
+		"expected": map[string]interface{}{"type": "string"}, "observed": map[string]interface{}{"type": "string"},
+		"evidence": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "next_check": map[string]interface{}{"type": "string"},
+	} {
+		verificationProperties[key] = value
+	}
+	recordVerificationTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "record_pulse_verification",
+		Description: "Persist one reviewer judgment for an exact changed_unverified finding attempt from get_pulse_state(view=\"backlog\"). The backend rejects identities outside the module's current verification allowlist.",
+		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": verificationProperties, "required": []string{"workspace_path", "pulse_run_id", "review_run_id", "module", "finding_id", "fingerprint", "attempt_id", "verdict", "expected", "observed"}}),
+	}}
+	completeReviewTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "complete_pulse_review",
+		Description: "Finalize compact SQLite receipts after all findings and verifications have been recorded through their tools. Finding and verification counts are computed by the backend. Call exactly once before the review's brief final message; final response text is not persisted or parsed.",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
+			"workspace_path": reviewIdentityProperties["workspace_path"], "pulse_run_id": reviewIdentityProperties["pulse_run_id"], "review_run_id": reviewIdentityProperties["review_run_id"],
+			"modules": map[string]interface{}{"type": "array", "minItems": 1, "uniqueItems": true, "items": map[string]interface{}{"type": "string", "enum": moduleEnum}},
+			"verdict": map[string]interface{}{"type": "string", "description": "Compact overall judgment; not a findings transport."}, "status": map[string]interface{}{"type": "string", "enum": []string{"completed", "failed"}},
+		}, "required": []string{"workspace_path", "pulse_run_id", "review_run_id", "modules", "verdict", "status"}}),
+	}}
 	beginFixerTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -1623,7 +1669,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			Description: fmt.Sprintf("Read Pulse state from the workflow's db/db.sqlite. One read tool with three views; never use Dashboard HTML as the source of truth.\n"+
 				"view=\"module\": per-module cadence and results so Pulse Gate can decide what is due, plus the complete active concern backlog, externally owned suppressed concerns, plan-change backlog, reviewer history, impact ledger, and read-only loop-closure facts. Read this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module or authorize mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily.\n"+
 				"view=\"backlog\": the durable SDLC-style issue backlog — each compact issue, current lifecycle state, fix attempts, verification history, internal fingerprint, and external-action disposition. Optional module filter. issue.id is the stable human-facing finding_id; fingerprint is an internal lifecycle key. A fixer passes both from the same item and never derives sameness from either ID.\n"+
-				"view=\"review\": one saved reviewer result as JSON with its markdown and validated structured verifications. Requires review_run_id and module exactly as reported by the call_generic_agent completion notification; Pulse review Markdown files are no longer created.\n"+
+				"view=\"review\": one compact reviewer receipt as JSON with validated structured verifications. Requires review_run_id and module exactly as reported by the call_generic_agent completion notification; reviewer prose and Markdown are not stored.\n"+
 				"Close a real finding only through a verified finding_disposition on record_pulse_result; resolve_run_concern is limited to acknowledgment or rejection. Modules: %s.", pulseModuleList()),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
@@ -1707,6 +1753,70 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	impactTool, impactExecutor := createRecordPulseImpactTool()
 
 	executors := map[string]interface{}{
+		"record_pulse_finding": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			pulseRunID, _ := args["pulse_run_id"].(string)
+			reviewRunID, _ := args["review_run_id"].(string)
+			module, _ := args["module"].(string)
+			if err := validateTrustedPulseReviewIdentity(ctx, pulseRunID, reviewRunID, module); err != nil {
+				return "", err
+			}
+			reproduction := step_based_workflow.PulseFindingReproduction{}
+			if raw, ok := args["reproduction"].(map[string]interface{}); ok {
+				reproduction.Safe, _ = raw["safe"].(bool)
+				reproduction.Setup, _ = raw["setup"].(string)
+				reproduction.Action, _ = raw["action"].(string)
+				reproduction.Expected, _ = raw["expected"].(string)
+				reproduction.Observed, _ = raw["observed"].(string)
+				reproduction.Limitations, _ = raw["limitations"].(string)
+			}
+			input := step_based_workflow.PulseReviewFindingInput{Concern: stringToolArg(args, "concern"), Module: module, PulseFindingDetails: step_based_workflow.PulseFindingDetails{
+				FindingID: stringToolArg(args, "finding_id"), TargetKey: stringToolArg(args, "target_key"), IssueKind: stringToolArg(args, "issue_kind"),
+				RecommendedRoute: stringToolArg(args, "recommended_route"), NextCheck: stringToolArg(args, "next_check"), Classification: stringToolArg(args, "classification"),
+				Severity: stringToolArg(args, "severity"), Summary: stringToolArg(args, "summary"), Impact: stringToolArg(args, "impact"), Workaround: stringToolArg(args, "workaround"),
+				Evidence: stringSliceFromToolArg(args["evidence"]), Reproduction: reproduction,
+			}}
+			record, err := step_based_workflow.RecordPulseReviewFinding(ctx, workspacePath, pulseRunID, reviewRunID, input)
+			if err != nil {
+				return "", err
+			}
+			encoded, _ := json.Marshal(record)
+			return string(encoded), nil
+		},
+		"record_pulse_verification": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			pulseRunID, _ := args["pulse_run_id"].(string)
+			if err := validateTrustedPulseReviewIdentity(ctx, pulseRunID, stringToolArg(args, "review_run_id"), stringToolArg(args, "module")); err != nil {
+				return "", err
+			}
+			verification := step_based_workflow.PulseReviewVerificationResult{
+				FindingID: stringToolArg(args, "finding_id"), Fingerprint: stringToolArg(args, "fingerprint"), AttemptID: stringToolArg(args, "attempt_id"),
+				Verdict: stringToolArg(args, "verdict"), Expected: stringToolArg(args, "expected"), Observed: stringToolArg(args, "observed"),
+				Evidence: stringSliceFromToolArg(args["evidence"]), NextCheck: stringToolArg(args, "next_check"),
+			}
+			if err := step_based_workflow.RecordPulseReviewVerification(ctx, workspacePath, stringToolArg(args, "module"), stringToolArg(args, "review_run_id"), pulseRunID, verification); err != nil {
+				return "", err
+			}
+			return `{"status":"recorded"}`, nil
+		},
+		"complete_pulse_review": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			pulseRunID, _ := args["pulse_run_id"].(string)
+			verdict := strings.TrimSpace(stringToolArg(args, "verdict"))
+			if verdict == "" {
+				return "", fmt.Errorf("complete_pulse_review requires a non-empty verdict: summarize the overall judgment after recording findings and verifications")
+			}
+			modules := stringSliceFromToolArg(args["modules"])
+			for _, module := range modules {
+				if err := validateTrustedPulseReviewIdentity(ctx, pulseRunID, stringToolArg(args, "review_run_id"), module); err != nil {
+					return "", err
+				}
+			}
+			if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, modules, stringToolArg(args, "review_run_id"), pulseRunID, verdict, stringToolArg(args, "status")); err != nil {
+				return "", err
+			}
+			return `{"status":"completed"}`, nil
+		},
 		"begin_pulse_fixer_run": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
 			sessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
@@ -1786,12 +1896,15 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
-		"begin_pulse_fixer_run": "workflow",
-		"record_pulse_worklist": "workflow",
-		"get_pulse_state":       "workflow",
-		"record_pulse_result":   "workflow",
-		"record_pulse_impact":   "workflow",
-		"resolve_run_concern":   "workflow",
+		"record_pulse_finding":      "workflow",
+		"record_pulse_verification": "workflow",
+		"complete_pulse_review":     "workflow",
+		"begin_pulse_fixer_run":     "workflow",
+		"record_pulse_worklist":     "workflow",
+		"get_pulse_state":           "workflow",
+		"record_pulse_result":       "workflow",
+		"record_pulse_impact":       "workflow",
+		"resolve_run_concern":       "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",
@@ -1824,7 +1937,12 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Concern %s marked %s.", fingerprint, status), nil
 	}
 
-	return []llmtypes.Tool{beginFixerTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, recordVerificationTool, completeReviewTool, beginFixerTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+}
+
+func stringToolArg(args map[string]interface{}, key string) string {
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
 }
 
 // The three reads get_pulse_state merges. One tool with a named view rather
@@ -1934,7 +2052,7 @@ func readPulseReviewView(ctx context.Context, workspacePath, reviewRunID, module
 	if err := step_based_workflow.ValidatePulseReviewIdentity(reviewRunID, module); err != nil {
 		return "", err
 	}
-	artifact, err := step_based_workflow.LoadPulseReviewArtifactForRun(ctx, workspacePath, reviewRunID, module)
+	receipt, err := step_based_workflow.LoadPulseReviewReceiptForRun(ctx, workspacePath, reviewRunID, module)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Absence is the expected answer here, not a fault. The review stage
 		// prompt (scheduler.go) tells a reviewer to reconcile "any already-saved
@@ -1965,12 +2083,15 @@ func readPulseReviewView(ctx context.Context, workspacePath, reviewRunID, module
 		return "", err
 	}
 	payload, err := json.Marshal(map[string]interface{}{
-		"module":        artifact.Module,
-		"review_run_id": artifact.ReviewRunID,
-		"pulse_run_id":  artifact.PulseRunID,
-		"status":        artifact.Status,
-		"verifications": artifact.Verifications,
-		"markdown":      artifact.Markdown,
+		"module":             receipt.Module,
+		"review_run_id":      receipt.ReviewRunID,
+		"pulse_run_id":       receipt.PulseRunID,
+		"status":             receipt.Status,
+		"verdict":            receipt.Verdict,
+		"finding_count":      receipt.FindingCount,
+		"verification_count": receipt.VerificationCount,
+		"verifications":      receipt.Verifications,
+		"note":               "Review findings are stored only in the structured lifecycle backlog; load view=module or view=backlog for actionable issues.",
 	})
 	if err != nil {
 		return "", err

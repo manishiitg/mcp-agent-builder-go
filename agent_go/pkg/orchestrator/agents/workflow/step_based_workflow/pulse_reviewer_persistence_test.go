@@ -68,22 +68,6 @@ func TestNewDerivedPulseReviewIdentityPreservesScheduledPulseID(t *testing.T) {
 	}
 }
 
-func TestPulseReviewResultMarkdownCarriesIdentityAndFindings(t *testing.T) {
-	completedAt := time.Date(2026, 7, 21, 0, 8, 44, 123000000, time.UTC)
-	body := pulseReviewResultMarkdown("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", "eval_health", "completed", "Verdict: clean", completedAt)
-	for _, want := range []string{
-		"Pulse run: `pulse-run-1`",
-		"Review run: `2026-07-21T00-08-44.123Z_pulse-run-1`",
-		"Module: `eval_health`",
-		"Status: `completed`",
-		"Verdict: clean",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("result markdown missing %q:\n%s", want, body)
-		}
-	}
-}
-
 func TestPulseReviewerSlotsEnforceMaximumTwo(t *testing.T) {
 	slots := make(chan struct{}, pulsemodules.ReviewerMaxConcurrency)
 	release := make(chan struct{})

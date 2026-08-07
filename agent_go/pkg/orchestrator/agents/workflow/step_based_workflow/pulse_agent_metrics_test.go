@@ -40,8 +40,8 @@ func TestPulseAgentMetricsCaptureExactExecutionAndJoinReview(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := RecordPulseReview(ctx, workspacePath, "strategy_auditor", "review-1", "pulse-1", "", "## Verdict\nOne strategic gap."); err != nil {
-		t.Fatalf("RecordPulseReview: %v", err)
+	if err := CompletePulseReview(ctx, workspacePath, []string{"strategy_auditor"}, "review-1", "pulse-1", "One strategic gap.", "completed"); err != nil {
+		t.Fatalf("CompletePulseReview: %v", err)
 	}
 	if err := RecordPulseAgentMetric(ctx, workspacePath, PulseAgentMetricRecord{
 		ExecutionID:     "pulse-review-strategy",
@@ -75,9 +75,9 @@ func TestPulseAgentMetricsCaptureExactExecutionAndJoinReview(t *testing.T) {
 		t.Fatalf("metric timing/coverage = %#v", metric)
 	}
 
-	reviews, err := LoadPulseReviewArtifacts(ctx, workspacePath, "strategy_auditor", false, -1)
+	reviews, err := LoadPulseReviewReceipts(ctx, workspacePath, "strategy_auditor", -1)
 	if err != nil {
-		t.Fatalf("LoadPulseReviewArtifacts: %v", err)
+		t.Fatalf("LoadPulseReviewReceipts: %v", err)
 	}
 	if len(reviews) != 1 || reviews[0].Metrics == nil || reviews[0].Metrics.ExecutionID != "pulse-review-strategy" {
 		t.Fatalf("review did not join its metric: %#v", reviews)

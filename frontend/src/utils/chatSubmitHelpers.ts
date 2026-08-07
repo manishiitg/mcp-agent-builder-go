@@ -22,6 +22,10 @@ export function isChatCompatiblePhase(phaseId: string | undefined): boolean {
   return !!phaseId && CHAT_COMPATIBLE_PHASES.has(phaseId)
 }
 
+export function userInteractiveContinuationFlag(tab: Pick<ChatTab, 'metadata'>): true | undefined {
+  return tab.metadata?.userInteractiveContinuation === true ? true : undefined
+}
+
 // ---------------------------------------------------------------------------
 // 1a. determineModeFlag — deduplicate useCodeExecutionMode
 // ---------------------------------------------------------------------------
@@ -145,6 +149,7 @@ export function buildQueryRequestPayload(params: {
 
   return {
     query: queryWithContext,
+    user_interactive_continuation: userInteractiveContinuationFlag(currentTab),
     agent_mode: (isWorkflowPhaseChat
         ? 'workflow_phase'
         : correctAgentMode) as AgentQueryRequest['agent_mode'],

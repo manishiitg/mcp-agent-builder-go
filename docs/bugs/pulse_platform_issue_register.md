@@ -37,6 +37,13 @@ The Confida QA review added three distinct shared boundaries: PLAT-041 gives
 every expected cron occurrence durable identity before execution, PLAT-042
 records provable human-answer attribution, and PLAT-043 permits bounded
 read-only SQLite integrity PRAGMAs through the guarded database tool.
+Local process inspection added PLAT-048: scheduled main agents inherited
+interactive-chat tmux retention, completed-live terminals could not be stopped,
+and shutdown cleanup missed the real Claude session-name prefix.
+The Upwork review added PLAT-044 through PLAT-047 and PLAT-049: false
+finalizer-ownership findings, linked-decision loop closure, typed verdict
+boundary hardening, the open immutable artifact-identity design, and shared
+platform mechanics leaking into workflow artifacts.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -123,6 +130,12 @@ Rules:
 | [PLAT-041-A](pulse_platform/plat-041.md) | Persist every expected cron occurrence before execution | Codex | `runtime_reverify` | scheduler tick and durable fire decisions |
 | [PLAT-042-A](pulse_platform/plat-042.md) | Preserve human-answer actor kind and audit events | Codex | `runtime_reverify` | report human-input persistence |
 | [PLAT-043-A](pulse_platform/plat-043.md) | Allow bounded read-only SQLite integrity PRAGMAs | Codex | `runtime_reverify` | guarded workflow DB query policy |
+| [PLAT-044-A](pulse_platform/plat-044.md) | Reconcile false stage-ownership findings when finalization succeeds | Codex | `runtime_reverify` | review guidance and final-command lifecycle |
+| [PLAT-045-A](pulse_platform/plat-045.md) | Consume an answered decision when its finding reaches an outcome | Codex | `runtime_reverify` | finding and human-input lifecycle |
+| [PLAT-046-A](pulse_platform/plat-046.md) | Reject an empty reviewer verdict at the typed tool boundary | Codex | `runtime_reverify` | typed Pulse reviewer tools |
+| [PLAT-047-A](pulse_platform/plat-047.md) | Design immutable physical identity for grouped run artifacts | Unassigned | `design_required` | run-folder retention and execution identity |
+| [PLAT-048-A](pulse_platform/plat-048.md) | Bound retained tmux to interactive chats and close completed-live processes | Codex | `runtime_reverify` | coding-agent modes, terminal leases/routes, server shutdown |
+| [PLAT-049-A](pulse_platform/plat-049.md) | Keep shared platform mechanics out of workflow artifacts | Codex | `runtime_reverify` | plan guards, review guidance, and version upgrade |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -206,6 +219,12 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-041 Expected cron occurrence can disappear without a decision | P0 | Confida QA | **implemented 2026-08-07; occurrence identity, restart cursor, gap classification, and focused tests complete; runtime reverify remains** |
 | PLAT-042 Human answers lack provable actor attribution | P1 | Confida QA | **implemented 2026-08-07; server-derived actor metadata and append-only events complete; runtime reverify remains** |
 | PLAT-043 DB integrity PRAGMAs blocked by read policy | P2 | Confida QA | **implemented 2026-08-07; bounded allowlist and rejection tests complete; runtime reverify remains** |
+| PLAT-044 Normal finalizer ownership filed as a platform defect | P1 | Upwork | **implemented; stable reason-code reconciliation and runtime reverify remain** |
+| PLAT-045 Resolved finding leaves linked decision open | P1 | Upwork | **implemented transactionally; runtime reverify remains** |
+| PLAT-046 Empty reviewer completion verdict | P2 | Upwork | **storage already rejected it; typed tool boundary hardened and tested; runtime reverify remains** |
+| PLAT-047 Grouped run artifacts lack immutable physical identity | P1 | Upwork | **open design item; distinct from the completed PLAT-031 cost identity work** |
+| PLAT-048 Scheduled/main tmux processes outlive their useful session | P0 | Local backend process audit | **implemented; only user-interactive main agents retain tmux, with a one-hour ceiling and live cleanup; runtime reverify remains** |
+| PLAT-049 Shared platform mechanics leak into workflow artifacts | P1 | Upwork + cross-workflow scan | **Builder guard, Engineering Review audit, and idempotent workflow v1.0.21 purification preflight implemented; migration/runtime reverify remains** |
 
 ### Social Media classification correction — 2026-08-05
 
@@ -438,6 +457,9 @@ priority and historical run context.
 | [PLAT-030](pulse_platform/plat-030.md) | [PLAT-031](pulse_platform/plat-031.md) | [PLAT-032](pulse_platform/plat-032.md) | [PLAT-033](pulse_platform/plat-033.md) |
 | [PLAT-034](pulse_platform/plat-034.md) | [PLAT-035](pulse_platform/plat-035.md) |  |  |
 | [PLAT-036](pulse_platform/plat-036.md) | [PLAT-037](pulse_platform/plat-037.md) | [PLAT-038](pulse_platform/plat-038.md) | [PLAT-039](pulse_platform/plat-039.md) |
+| [PLAT-040](pulse_platform/plat-040.md) | [PLAT-041](pulse_platform/plat-041.md) | [PLAT-042](pulse_platform/plat-042.md) | [PLAT-043](pulse_platform/plat-043.md) |
+| [PLAT-044](pulse_platform/plat-044.md) | [PLAT-045](pulse_platform/plat-045.md) | [PLAT-046](pulse_platform/plat-046.md) | [PLAT-047](pulse_platform/plat-047.md) |
+| [PLAT-048](pulse_platform/plat-048.md) | [PLAT-049](pulse_platform/plat-049.md) |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

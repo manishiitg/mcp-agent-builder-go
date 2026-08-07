@@ -102,9 +102,9 @@ func TestNormalizeAndStepLabelRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAcceptedForReviewArtifactsCoversCurrentAndRetired(t *testing.T) {
+func TestAcceptedForReviewReceiptsCoversCurrentAndRetired(t *testing.T) {
 	accepted := map[string]bool{}
-	for _, id := range AcceptedForReviewArtifacts() {
+	for _, id := range AcceptedForReviewReceipts() {
 		accepted[id] = true
 	}
 	for _, m := range All {

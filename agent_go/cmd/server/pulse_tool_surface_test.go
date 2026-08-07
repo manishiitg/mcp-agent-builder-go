@@ -10,7 +10,7 @@ import (
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
-// pulseConsolidatedToolNames is the complete agent-facing Pulse surface.
+// pulseConsolidatedToolNames is the established Pulse state/fixer surface.
 //
 // Eight tools became four. The naming rule is derivable and exhaustive: a Pulse
 // tool is `get_pulse_*` when it reads and `record_pulse_*` when it writes, and
@@ -28,6 +28,12 @@ var pulseConsolidatedToolNames = []string{
 	"record_pulse_impact",
 }
 
+var pulseReviewerWriteToolNames = []string{
+	"record_pulse_finding",
+	"record_pulse_verification",
+	"complete_pulse_review",
+}
+
 // pulseRemovedToolNames must never reappear. Each was folded into one of the
 // four above; a stale registration would give the agent two ways to say the
 // same thing, which is the condition this consolidation removed.
@@ -40,7 +46,7 @@ var pulseRemovedToolNames = []string{
 	"mark_pulse_final_command_result",
 }
 
-func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
+func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	tools, executors, categories := createPulseWorklistTools()
 	registered := map[string]bool{}
 	for _, tool := range tools {
@@ -61,6 +67,17 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 			t.Errorf("consolidated Pulse tool %q has category %q, want workflow", name, categories[name])
 		}
 	}
+	for _, name := range pulseReviewerWriteToolNames {
+		if !registered[name] {
+			t.Errorf("typed reviewer tool %q is not registered", name)
+		}
+		if _, ok := executors[name]; !ok {
+			t.Errorf("typed reviewer tool %q has no executor", name)
+		}
+		if categories[name] != "workflow" {
+			t.Errorf("typed reviewer tool %q has category %q, want workflow", name, categories[name])
+		}
+	}
 	for _, name := range pulseRemovedToolNames {
 		if registered[name] {
 			t.Errorf("removed Pulse tool %q is still registered", name)
@@ -79,6 +96,9 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 	for _, name := range pulseConsolidatedToolNames {
 		expected[name] = true
 	}
+	for _, name := range pulseReviewerWriteToolNames {
+		expected[name] = true
+	}
 	for name := range registered {
 		if !expected[name] {
 			t.Errorf("unexpected Pulse tool %q; the surface is %v plus begin_pulse_fixer_run and resolve_run_concern",
@@ -92,7 +112,7 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 	// Every Pulse tool name follows the one rule, so the agent can derive a name
 	// instead of guessing one.
 	for name := range registered {
-		if name == "begin_pulse_fixer_run" || name == "resolve_run_concern" {
+		if name == "begin_pulse_fixer_run" || name == "resolve_run_concern" || name == "complete_pulse_review" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
@@ -172,10 +192,11 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 		t.Fatalf(`view="backlog" module rejection must name the closed set: %v`, err)
 	}
 
-	// view="review" — what get_pulse_review_result returned.
+	// view="review" returns only the compact receipt. Findings and proof are
+	// loaded from the lifecycle backlog, never from persisted reviewer prose.
 	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
-	if err := step_based_workflow.RecordPulseReview(
-		ctx, workspacePath, pulseModuleBugReview, reviewRunID, "pulse-view", "", "## Verdict\nClean.",
+	if err := step_based_workflow.CompletePulseReview(
+		ctx, workspacePath, []string{pulseModuleBugReview}, reviewRunID, "pulse-view", "Clean.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
@@ -190,13 +211,16 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &reviewView); err != nil {
 		t.Fatalf("decode review view: %v", err)
 	}
-	for _, key := range []string{"module", "review_run_id", "pulse_run_id", "status", "verifications", "markdown"} {
+	for _, key := range []string{"module", "review_run_id", "pulse_run_id", "status", "verdict", "finding_count", "verification_count", "verifications"} {
 		if _, exists := reviewView[key]; !exists {
-			t.Errorf(`view="review" dropped %q, which get_pulse_review_result returned: %s`, key, raw)
+			t.Errorf(`view="review" dropped compact receipt field %q: %s`, key, raw)
 		}
 	}
-	if markdown, _ := reviewView["markdown"].(string); !strings.Contains(markdown, "Clean.") {
-		t.Errorf(`view="review" did not return the saved reviewer Markdown: %s`, raw)
+	if _, exists := reviewView["markdown"]; exists {
+		t.Errorf(`view="review" unexpectedly returned legacy reviewer prose: %s`, raw)
+	}
+	if verdict, _ := reviewView["verdict"].(string); verdict != "Clean." {
+		t.Errorf(`view="review" verdict = %q, want Clean.`, verdict)
 	}
 
 	// A not-yet-saved review is the expected result of the pre-discovery check the

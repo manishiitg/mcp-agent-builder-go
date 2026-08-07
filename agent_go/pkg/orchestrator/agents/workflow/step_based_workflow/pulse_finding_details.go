@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
@@ -93,6 +95,111 @@ type pulseFindingDetailMarker struct {
 	PulseFindingDetails
 }
 
+// PulseReviewFindingInput is the typed reviewer write contract. Reviewers send
+// this through record_pulse_finding; no final-response text is parsed.
+type PulseReviewFindingInput struct {
+	Concern string `json:"concern"`
+	Module  string `json:"module"`
+	PulseFindingDetails
+}
+
+// PulseReviewFindingRecord identifies the durable lifecycle row written by a
+// record_pulse_finding call.
+type PulseReviewFindingRecord struct {
+	FindingID   string `json:"finding_id"`
+	Fingerprint string `json:"fingerprint"`
+	Status      string `json:"status"`
+}
+
+func validateTypedPulseReviewFinding(input PulseReviewFindingInput) (pulseFindingDetailMarker, error) {
+	marker := pulseFindingDetailMarker{
+		Concern:             strings.TrimSpace(input.Concern),
+		Module:              pulsemodules.Normalize(input.Module),
+		PulseFindingDetails: normalizePulseFindingDetails(input.PulseFindingDetails),
+	}
+	if marker.Concern == "" || marker.Module == "" {
+		return marker, fmt.Errorf("concern and a valid module are required")
+	}
+	if marker.IssueKind != "workflow_issue" && marker.IssueKind != "harness_issue" {
+		return marker, fmt.Errorf("issue_kind must be workflow_issue or harness_issue")
+	}
+	if marker.Classification == "" || marker.Severity == "" || marker.Summary == "" || marker.Impact == "" || len(marker.Evidence) == 0 {
+		return marker, fmt.Errorf("classification, severity, summary, impact, and evidence are required")
+	}
+	if marker.IssueKind == "harness_issue" && (marker.TargetKey == "" || marker.Reproduction.Expected == "" || marker.Reproduction.Observed == "") {
+		return marker, fmt.Errorf("harness_issue requires target_key and reproduction.expected/reproduction.observed")
+	}
+	if isPulseAdvisorModule(marker.Module) {
+		switch marker.RecommendedRoute {
+		case pulseFindingRouteDecisionRequired, pulseFindingRouteFixerHandoff:
+		case pulseFindingRouteEvidenceWait:
+			if marker.NextCheck == "" {
+				return marker, fmt.Errorf("recommended_route=evidence_wait requires next_check")
+			}
+		default:
+			return marker, fmt.Errorf("advisor findings require recommended_route decision_required, evidence_wait, or fixer_handoff")
+		}
+	}
+	return marker, nil
+}
+
+// RecordPulseReviewFinding writes one reviewer finding immediately. The
+// review_run_id is the source boundary used to compute the terminal receipt;
+// pulse_run_id remains the enclosing Pulse execution identity.
+func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, reviewRunID string, input PulseReviewFindingInput) (PulseReviewFindingRecord, error) {
+	marker, err := validateTypedPulseReviewFinding(input)
+	if err != nil {
+		return PulseReviewFindingRecord{}, err
+	}
+	if strings.TrimSpace(pulseRunID) == "" || strings.TrimSpace(reviewRunID) == "" {
+		return PulseReviewFindingRecord{}, fmt.Errorf("pulse_run_id and review_run_id are required")
+	}
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		return PulseReviewFindingRecord{}, err
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		return PulseReviewFindingRecord{}, err
+	}
+	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	fingerprint := pulseFindingCanonicalFingerprint(marker.Module, marker)
+	if historical := existingCanonicalReviewFingerprint(ctx, db, marker.Module, marker.Concern); historical != "" {
+		fingerprint = historical
+	}
+	normalizedConcern := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
+	fingerprints := map[string]string{normalizedConcern: fingerprint}
+	var lastSeenRun string
+	err = db.QueryRowContext(ctx, `SELECT last_seen_run FROM run_concerns WHERE fingerprint=?`, fingerprint).Scan(&lastSeenRun)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return PulseReviewFindingRecord{}, err
+	}
+	// Completion retries can replay tool calls. The same review identity must be
+	// idempotent rather than manufacturing recurrence evidence.
+	if strings.TrimSpace(lastSeenRun) != strings.TrimSpace(reviewRunID) {
+		if _, err := recordRunConcernLinesAtWithFingerprints(ctx, db, reviewRunID, "", marker.Module, ConcernPhaseReview, []string{marker.Concern}, observedAt, fingerprints); err != nil {
+			return PulseReviewFindingRecord{}, err
+		}
+	}
+	if err := recordPulseFindingDetailAt(ctx, db, workspacePath, reviewRunID, marker.Module, marker, fingerprint, observedAt); err != nil {
+		return PulseReviewFindingRecord{}, err
+	}
+	findingID := marker.FindingID
+	if findingID == "" {
+		findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, marker.Module, -1)
+		if loadErr != nil {
+			return PulseReviewFindingRecord{}, loadErr
+		}
+		for _, finding := range findings {
+			if finding.Fingerprint == fingerprint {
+				findingID = finding.FindingID
+				break
+			}
+		}
+	}
+	return PulseReviewFindingRecord{FindingID: findingID, Fingerprint: fingerprint, Status: ConcernStatusOpen}, nil
+}
+
 func normalizePulseFindingDetails(details PulseFindingDetails) PulseFindingDetails {
 	details.FindingID = strings.TrimSpace(details.FindingID)
 	details.TargetKey = strings.TrimSpace(details.TargetKey)
@@ -170,9 +277,8 @@ func validatePulseAdvisorFindingRoutes(module, summary string) error {
 	return nil
 }
 
-// ParsePulseFindingDetailMarkers extracts one-line JSON records emitted by a
-// trusted Pulse reviewer. Invalid records are ignored here; the full Markdown
-// remains available for forensic inspection and the CONCERNS line still files.
+// ParsePulseFindingDetailMarkers supports old run summaries and one-way legacy
+// review migration. Live Pulse reviewers use record_pulse_finding instead.
 func ParsePulseFindingDetailMarkers(summary string) []pulseFindingDetailMarker {
 	var markers []pulseFindingDetailMarker
 	for _, line := range strings.Split(summary, "\n") {
@@ -249,32 +355,40 @@ func recordPulseFindingDetailsAt(
 		if fingerprint == "" {
 			fingerprint = pulseFindingCanonicalFingerprint(stepID, marker)
 		}
-		encoded, err := json.Marshal(marker.PulseFindingDetails)
-		if err != nil {
-			return fmt.Errorf("encode Pulse finding details: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_details
-			(fingerprint, finding_id, issue_kind, target_key, detail_json, source_run_id, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(fingerprint) DO UPDATE SET
-				finding_id=excluded.finding_id,
-				issue_kind=excluded.issue_kind,
-				target_key=excluded.target_key,
-				detail_json=excluded.detail_json,
-				source_run_id=excluded.source_run_id,
-				updated_at=excluded.updated_at`,
-			fingerprint, marker.FindingID, marker.IssueKind, marker.TargetKey,
-			string(encoded), runFolder, observedAt); err != nil {
+		if err := recordPulseFindingDetailAt(ctx, db, workspacePath, runFolder, stepID, marker, fingerprint, observedAt); err != nil {
 			return err
 		}
-		if marker.IssueKind == "harness_issue" && marker.TargetKey != "" {
-			if err := upsertPulseHarnessPlatformIssue(
-				ctx, workspacePath, stepID, fingerprint, runFolder,
-				marker.PulseFindingDetails, observedAt,
-			); err != nil {
-				return err
-			}
-		}
+	}
+	return nil
+}
+
+func recordPulseFindingDetailAt(
+	ctx context.Context,
+	db pulseFindingLifecycleDB,
+	workspacePath, sourceRunID, module string,
+	marker pulseFindingDetailMarker,
+	fingerprint, observedAt string,
+) error {
+	encoded, err := json.Marshal(marker.PulseFindingDetails)
+	if err != nil {
+		return fmt.Errorf("encode Pulse finding details: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_details
+		(fingerprint, finding_id, issue_kind, target_key, detail_json, source_run_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(fingerprint) DO UPDATE SET
+			finding_id=excluded.finding_id,
+			issue_kind=excluded.issue_kind,
+			target_key=excluded.target_key,
+			detail_json=excluded.detail_json,
+			source_run_id=excluded.source_run_id,
+			updated_at=excluded.updated_at`,
+		fingerprint, marker.FindingID, marker.IssueKind, marker.TargetKey,
+		string(encoded), sourceRunID, observedAt); err != nil {
+		return err
+	}
+	if marker.IssueKind == "harness_issue" && marker.TargetKey != "" {
+		return upsertPulseHarnessPlatformIssue(ctx, workspacePath, module, fingerprint, sourceRunID, marker.PulseFindingDetails, observedAt)
 	}
 	return nil
 }

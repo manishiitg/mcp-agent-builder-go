@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,14 +150,13 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	}
 }
 
-func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
+func TestGetPulseReviewsAPIListsCompactReviewReceipts(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/example"
-	markdown := "# Pulse reviewer result\n\n- Status: `completed`\n\n## Verdict\n\nA real issue was found.\n"
-	if err := step_based_workflow.RecordPulseReview(
-		context.Background(), workspacePath, pulseModuleBugReview,
-		"2026-07-31T08-00-00.000Z_pulse-1", "pulse-1", "", markdown,
+	if err := step_based_workflow.CompletePulseReview(
+		context.Background(), workspacePath, []string{pulseModuleBugReview},
+		"2026-07-31T08-00-00.000Z_pulse-1", "pulse-1", "A real issue was found.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
@@ -177,8 +175,10 @@ func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
 	var listBody struct {
 		Success bool `json:"success"`
 		Reviews []struct {
-			ID       int64  `json:"id"`
-			Markdown string `json:"markdown"`
+			ID                int64  `json:"id"`
+			Verdict           string `json:"verdict"`
+			FindingCount      int    `json:"finding_count"`
+			VerificationCount int    `json:"verification_count"`
 		} `json:"reviews"`
 	}
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &listBody); err != nil {
@@ -187,31 +187,11 @@ func TestGetPulseReviewsAPIListsMetadataAndLoadsFullMarkdownByID(t *testing.T) {
 	if !listBody.Success || len(listBody.Reviews) != 1 || listBody.Reviews[0].ID <= 0 {
 		t.Fatalf("list response = %+v", listBody)
 	}
-	if listBody.Reviews[0].Markdown != "" {
-		t.Fatalf("list response unexpectedly included full Markdown")
+	if got := listBody.Reviews[0].Verdict; got != "A real issue was found." {
+		t.Fatalf("verdict = %q", got)
 	}
-
-	detailRequest := httptest.NewRequest(
-		http.MethodGet,
-		fmt.Sprintf("/api/workflow/pulse-reviews?workspace_path=Workflow%%2Fexample&id=%d", listBody.Reviews[0].ID),
-		nil,
-	)
-	detailResponse := httptest.NewRecorder()
-	api.handleGetPulseReviews(detailResponse, detailRequest)
-	if detailResponse.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, body=%s", detailResponse.Code, detailResponse.Body.String())
-	}
-	var detailBody struct {
-		Success bool `json:"success"`
-		Review  struct {
-			Markdown string `json:"markdown"`
-		} `json:"review"`
-	}
-	if err := json.Unmarshal(detailResponse.Body.Bytes(), &detailBody); err != nil {
-		t.Fatalf("decode detail response: %v", err)
-	}
-	if !detailBody.Success || detailBody.Review.Markdown != markdown {
-		t.Fatalf("detail response = %+v", detailBody)
+	if listBody.Reviews[0].FindingCount != 0 || listBody.Reviews[0].VerificationCount != 0 {
+		t.Fatalf("unexpected receipt counts: %+v", listBody.Reviews[0])
 	}
 }
 
@@ -1113,6 +1093,55 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 		if state.Status != "timed_out" {
 			t.Fatalf("unresolved command not timed out: %+v", state)
 		}
+	}
+}
+
+func TestSuccessfulFinalCommandClosesOnlyStageOwnershipFindings(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/finalizer-reconciliation"
+	pulseRunID := "pulse-finalizer-reconciliation"
+	if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
+		t.Fatal(err)
+	}
+	_, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE run_concerns (fingerprint TEXT PRIMARY KEY, status TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '', resolved_by TEXT NOT NULL DEFAULT '', resolution_note TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE pulse_finding_events (_id INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT NOT NULL, finding_id TEXT NOT NULL DEFAULT '', pulse_run_id TEXT NOT NULL DEFAULT '', attempt_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', metadata_json TEXT NOT NULL DEFAULT '{}', recorded_at TEXT NOT NULL, UNIQUE(fingerprint,pulse_run_id,attempt_id,event_type))`,
+		`INSERT INTO run_concerns(fingerprint,status) VALUES ('dashboard-owned','external_action_required'),('real-platform-bug','external_action_required')`,
+		`INSERT INTO pulse_finding_events(fingerprint,finding_id,pulse_run_id,event_type,metadata_json,recorded_at) VALUES
+			('dashboard-owned','PUL-DASH','review-1','external_action_required','{"reason_code":"dashboard_stage_owned"}','2026-08-07T00:00:00Z'),
+			('real-platform-bug','PUL-REAL','review-1','external_action_required','{"reason_code":"missing_platform_tool"}','2026-08-07T00:00:00Z')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered"); err != nil {
+		t.Fatal(err)
+	}
+	for fingerprint, want := range map[string]string{"dashboard-owned": "resolved", "real-platform-bug": "external_action_required"} {
+		var status string
+		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fingerprint).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != want {
+			t.Fatalf("%s status=%q, want %q", fingerprint, status, want)
+		}
+	}
+	var closed int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events WHERE fingerprint='dashboard-owned' AND event_type='closed' AND pulse_run_id=?`, pulseRunID).Scan(&closed); err != nil {
+		t.Fatal(err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed events=%d, want 1", closed)
 	}
 }
 

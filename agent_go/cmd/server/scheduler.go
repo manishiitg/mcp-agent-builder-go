@@ -2199,6 +2199,7 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		}
 		reqMap := cloneStringInterfaceMap(baseReqMap)
 		s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
+		applyPulseRecoveryChildSession(reqMap, pulseRunID, sessionID)
 		query := st.query
 		if !introSent {
 			recoveryContext := ""
@@ -2647,6 +2648,23 @@ func applyPulseReviewerChildSession(reqMap map[string]interface{}, pulseRunID st
 	}
 	reqMap["parent_session_id"] = strings.TrimSpace(pulseRunID)
 	reqMap["session_kind"] = "pulse_reviewer"
+}
+
+// applyPulseRecoveryChildSession keeps an internally separate recovery/finalizer
+// session attached to the scheduled run that owns it. The terminal UI follows
+// this lineage so replacing a timed-out Pulse session cannot make the visible
+// Main agent disappear while its child terminals remain.
+func applyPulseRecoveryChildSession(reqMap map[string]interface{}, pulseRunID, sessionID string) {
+	if reqMap == nil {
+		return
+	}
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	sessionID = strings.TrimSpace(sessionID)
+	if pulseRunID == "" || sessionID == "" || pulseRunID == sessionID {
+		return
+	}
+	reqMap["parent_session_id"] = pulseRunID
+	reqMap["session_kind"] = "pulse_recovery"
 }
 
 // Derived from the canonical registry — see pkg/pulsemodules. Returns "" for

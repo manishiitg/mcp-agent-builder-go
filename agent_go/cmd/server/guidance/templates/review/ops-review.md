@@ -83,8 +83,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `target_key`, severity, plain-language summary, exact evidence, bounded
    `recommended_fix`, verification, and `user_judgment_required` with reason.
    A shared harness/runtime/bridge/tool-API defect must be classified as
-   `issue_kind=harness_issue` and carry the exact `PULSE_FINDING_JSON` marker
-   from the injected artifact contract, including expected versus observed and
+   `issue_kind=harness_issue` and be persisted with `record_pulse_finding`
+   under the injected typed review contract, including expected versus observed and
    a minimal safe reproduction or an explicit limitation. Wrong workflow
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the

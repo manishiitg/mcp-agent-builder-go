@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing.T) {
+func TestMigrateLegacyPulseReviewsConvertsAndRemovesSources(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/demo"
@@ -43,37 +43,37 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 		t.Fatalf("write legacy packet: %v", err)
 	}
 
-	first, err := ImportLegacyPulseReviewArtifacts(context.Background(), workspacePath)
+	first, err := MigrateLegacyPulseReviews(context.Background(), workspacePath)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
-	if first.FilesFound != 3 || first.ReviewArtifacts != 2 || first.AuxiliaryArtifacts != 1 ||
-		first.ConcernOccurrences != 1 || first.FilesRetained != 3 || first.AlreadyImported != 0 {
+	if first.FilesFound != 3 || first.ReviewReceipts != 2 || first.AuxiliaryFiles != 1 ||
+		first.ConcernOccurrences != 1 || first.FilesRemoved != 3 {
 		t.Fatalf("first import result = %+v", first)
 	}
 	for _, path := range []string{reviewPath, learningPath, packetPath} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("compatibility migration removed %s: %v", path, err)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy source still exists %s: %v", path, err)
 		}
 	}
 
-	reviews, err := LoadPulseReviewArtifacts(context.Background(), workspacePath, "workflow_review", true, 10)
+	reviews, err := LoadPulseReviewReceipts(context.Background(), workspacePath, "workflow_review", 10)
 	if err != nil {
 		t.Fatalf("load imported review: %v", err)
 	}
 	if len(reviews) != 2 {
 		t.Fatalf("imported reviews = %+v, want both historical store reviews consolidated under Engineering Review", reviews)
 	}
-	reviewBySource := map[string]PulseReviewArtifactRecord{}
+	reviewByVerdict := map[string]PulseReviewReceipt{}
 	for _, review := range reviews {
-		reviewBySource[review.LegacySourcePath] = review
+		reviewByVerdict[review.Verdict] = review
 	}
-	importedKnowledge := reviewBySource["pulse/reviews/legacy-run/knowledgebase_health.md"]
-	importedLearning := reviewBySource["pulse/reviews/legacy-run/learning_health.md"]
-	if importedKnowledge.Module != "workflow_review" || importedKnowledge.Markdown != reviewMarkdown {
-		t.Fatalf("knowledge import did not preserve canonical module and exact Markdown: %+v", importedKnowledge)
+	importedKnowledge := reviewByVerdict["A stale selector still limits discovery."]
+	importedLearning := reviewByVerdict["Learning artifacts are healthy."]
+	if importedKnowledge.Module != "workflow_review" || importedKnowledge.FindingCount != 1 {
+		t.Fatalf("knowledge import did not preserve compact receipt metadata: %+v", importedKnowledge)
 	}
-	if importedLearning.Module != "workflow_review" || importedLearning.Markdown != learningMarkdown {
+	if importedLearning.Module != "workflow_review" || importedLearning.FindingCount != 0 {
 		t.Fatalf("learning import was overwritten during module consolidation: %+v", importedLearning)
 	}
 
@@ -85,12 +85,12 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 		t.Fatalf("imported findings = %+v, want one occurrence", findings)
 	}
 
-	second, err := ImportLegacyPulseReviewArtifacts(context.Background(), workspacePath)
+	second, err := MigrateLegacyPulseReviews(context.Background(), workspacePath)
 	if err != nil {
 		t.Fatalf("second import: %v", err)
 	}
-	if second.AlreadyImported != 3 || second.FilesRetained != 3 ||
-		second.ReviewArtifacts != 0 || second.AuxiliaryArtifacts != 0 || second.ConcernOccurrences != 0 {
+	if second.FilesFound != 0 || second.ReviewReceipts != 0 ||
+		second.AuxiliaryFiles != 0 || second.ConcernOccurrences != 0 || second.FilesRemoved != 0 {
 		t.Fatalf("second import result = %+v", second)
 	}
 	findings, err = LoadPulseFindingLifecycles(context.Background(), workspacePath, "workflow_review", 10)
@@ -102,7 +102,7 @@ func TestImportLegacyPulseReviewArtifactsCopiesExactlyAndIsIdempotent(t *testing
 	}
 }
 
-func TestImportLegacyPulseReviewArtifactsReportsUnknownMarkdownWithoutDeletingIt(t *testing.T) {
+func TestMigrateLegacyPulseReviewsReportsUnknownMarkdownWithoutDeletingIt(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/demo"
@@ -114,7 +114,7 @@ func TestImportLegacyPulseReviewArtifactsReportsUnknownMarkdownWithoutDeletingIt
 		t.Fatalf("write unknown legacy file: %v", err)
 	}
 
-	result, err := ImportLegacyPulseReviewArtifacts(context.Background(), workspacePath)
+	result, err := MigrateLegacyPulseReviews(context.Background(), workspacePath)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -123,5 +123,53 @@ func TestImportLegacyPulseReviewArtifactsReportsUnknownMarkdownWithoutDeletingIt
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("unknown file should be retained: %v", err)
+	}
+}
+
+func TestMigrateLegacyPulseReviewsRemovesAlreadyImportedSourceWithoutDuplicatingReceipt(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/demo"
+	ctx := context.Background()
+	if err := CompletePulseReview(ctx, workspacePath, []string{"workflow_review"}, "legacy-run", "pulse-1", "Old issue", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	reviewDir := filepath.Join(root, "Workflow", "demo", "pulse", "reviews", "legacy-run")
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reviewPath := filepath.Join(reviewDir, "bug_review.md")
+	markdown := "- Review run: `legacy-run`\n- Pulse run: `pulse-1`\n## Verdict\n\nOld issue\n"
+	if err := os.WriteFile(reviewPath, []byte(markdown), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, legacyPulseReviewCleanupLedgerSchema); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_artifact_imports
+		(legacy_path, content_sha256, imported_at) VALUES ('pulse/reviews/legacy-run/bug_review.md','hash','now')`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	result, err := MigrateLegacyPulseReviews(ctx, workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesRemoved != 1 || result.ReviewReceipts != 0 {
+		t.Fatalf("migration result = %+v", result)
+	}
+	receipts, err := LoadPulseReviewReceipts(ctx, workspacePath, "workflow_review", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("receipts = %+v, want one existing receipt", receipts)
 	}
 }

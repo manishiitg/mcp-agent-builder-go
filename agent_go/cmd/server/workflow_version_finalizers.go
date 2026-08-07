@@ -62,7 +62,7 @@ func finalizePulseReviewSQLiteUpgrade(ctx context.Context, workspacePath string,
 			workflowContractVersionForUpgrade(manifest),
 		)
 	}
-	migration, err := step_based_workflow.ImportLegacyPulseReviewArtifacts(ctx, workspacePath)
+	migration, err := step_based_workflow.MigrateLegacyPulseReviews(ctx, workspacePath)
 	if err != nil {
 		return fmt.Errorf("migrate Pulse review Markdown to SQLite: %w", err)
 	}

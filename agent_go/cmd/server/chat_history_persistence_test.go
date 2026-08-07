@@ -1682,6 +1682,19 @@ func TestSeedCodingAgentRuntimeFromCurrentConversationRestoresClaude(t *testing.
 	}
 }
 
+func TestCodingAgentHasNativeResumeRejectsHandleWithoutNativeID(t *testing.T) {
+	agent := testAgentWithHandle("chat-1", llmtypes.CodingProviderSessionHandle{
+		Provider:   "claude-code",
+		Transport:  llmtypes.CodingProviderTransportTmux,
+		WorkingDir: "/workspace",
+		Model:      "claude-opus-5",
+		Status:     llmtypes.CodingProviderSessionStatusIdle,
+	})
+	if codingAgentHasNativeResume("claude-code", agent) {
+		t.Fatal("handle without native session ID must not bypass persisted-runtime recovery")
+	}
+}
+
 func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresCodex(t *testing.T) {
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}

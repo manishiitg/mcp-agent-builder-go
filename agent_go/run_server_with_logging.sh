@@ -212,7 +212,7 @@ cleanup_coding_agent_tmux_sessions() {
     local count=0
     while IFS= read -r session; do
         case "$session" in
-            mlp-claude-code-exp*|mlp-codex-cli-int*|mlp-cursor-cli-int*|mlp-agy-cli-int*|mlp-pi-cli-int*)
+            mlp-claude-code-*|mlp-codex-cli-*|mlp-cursor-cli-*|mlp-agy-cli-*|mlp-pi-cli-*)
                 tmux kill-session -t "$session" 2>/dev/null || true
                 count=$((count + 1))
                 ;;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatTab } from '../../stores/useChatStore'
+import { userInteractiveContinuationFlag } from '../../utils/chatSubmitHelpers'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
 
 function observedTab(overrides: Partial<ChatTab> = {}): ChatTab {
@@ -48,9 +49,11 @@ describe('convertObservedWorkflowTabToInteractive', () => {
       isViewOnly: false,
       isScheduledRun: false,
       isBotRun: false,
+      userInteractiveContinuation: true,
     })
     expect(converted.metadata?.scheduledJobName).toBeUndefined()
     expect(converted.metadata?.readOnlyRestoredAt).toBeUndefined()
+    expect(userInteractiveContinuationFlag(converted)).toBe(true)
     expect(original.metadata?.isViewOnly).toBe(true)
   })
 

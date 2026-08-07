@@ -28,6 +28,12 @@ it. The operational lanes remain independent in meaning but intentionally share
 evidence and conversation context with their own Fixer turn.
 An unreliable evidence window is classified inside the affected review as an
 execution problem or insufficient evidence; it does not cancel another review.
+For coding-CLI sessions, absent `context_usage_percent` is explicitly
+**unavailable by design** when the provider exposes only cumulative transcript
+usage rather than a same-call context snapshot. Preserve cumulative token and
+cost evidence, but never file the missing percentage as a telemetry regression
+or use it to verify a context-pressure finding. Require a compatible same-call
+measurement before drawing that conclusion.
 Goal Advisor is selected only for its own blank-sheet opportunity, answered
 decision, healthy-headroom, or experiment-checkpoint trigger—not as a handler
 for a Strategy Auditor result.
@@ -111,10 +117,18 @@ The Engineering store-integrity evidence pack must load `improve-learnings`,
 learning review covers the complete skill package, not
 only the root index or a sample of references, and audits every effective
 read-write `learning_objective`. References are part of the skill: only
-reusable execution HOW may remain anywhere under `learnings/_global/`.
+reusable target-system execution HOW may remain anywhere under `learnings/_global/`.
 Relocating business facts, run state, owner values, strategy, incidents,
 decisions, provenance, or architecture history from `SKILL.md` into a reference
 does not fix the finding.
+
+The same evidence pack enforces shared-platform purity across Plan, Learnings,
+and KB. AgentWorks bridge/auth variables and envelopes, api-bridge routing,
+Folder Guard internals, managed workflow-DB tool syntax, `get_api_spec`
+workarounds, and coding-agent tmux/native-session plumbing are platform-owned,
+not reusable workflow HOW. Consolidate all occurrences into one workflow-level
+finding and one repair attempt. Preserve the workflow's semantic action,
+inputs/outputs, side effects, safety constraints, persistence, and verification.
 
 The store-integrity pack returns one reconciled `ownership_manifest`, not three
 disconnected lists. Each misplaced or duplicated item names its current
@@ -133,10 +147,10 @@ proven per step from its own objective, description hash, successful runs, and
 did not make. Before looking for anything new, take every `changed_unverified`
 finding this module owns whose `next_check` evidence has since arrived, and
 judge it against the post-change evidence: `passed`, `failed`, or
-`inconclusive`. Emit the required `PULSE_VERIFICATION_JSON` marker with
-finding ID, fingerprint, attempt ID, verdict, expected, observed, evidence, and
-next-check boundary when inconclusive. The backend validates and transports
-these records separately from prose. Return those verdicts as a verification
+`inconclusive`. Call `record_pulse_verification` with finding ID, fingerprint,
+attempt ID, verdict, expected, observed, evidence, and the next-check boundary
+when inconclusive. The backend validates and stores these records separately
+from prose. Return those verdicts as a verification
 list, separate from new findings. The Fixer routes them — passed closes the finding as `fixed_verified`,
 failed reopens it, inconclusive leaves it awaiting the boundary it still names.
 
@@ -173,6 +187,16 @@ naming that run. Use it rather than `blocked` whenever the answer is "the data
 does not exist yet" — calling that blocked points the operator at a decision
 that does not exist and hides the ones that do.
 `blocked` remains for retryable/current blockers;
+
+Dashboard rendering, backup, publishing, and notification are owned by the
+ordered Pulse finalizer. A reviewer or Fixer being forbidden to perform those
+later stages is normal stage separation—not a defect, blocker, or external
+action. Never file a finding merely because one of those commands is still
+`waiting` before its turn. Judge it only from `pulse_final_command_state` after
+the command becomes terminal; a real terminal `failed` or `blocked` status may
+be reported, while `waiting`, `running`, or later `done` must not create a
+platform finding.
+
 Escalate to the operator only for a real decision. Before choosing
 `awaiting_user`, state the cost of acting, the alternative, and why `soul.md`
 does not already settle it. If the goal implies the answer and the cost is

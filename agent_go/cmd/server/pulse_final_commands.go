@@ -180,6 +180,11 @@ func markPulseFinalCommandStateFromAgent(ctx context.Context, workspacePath, com
 	} else if changed != 1 {
 		return nil, fmt.Errorf("final command %q changed concurrently; refresh its state before retrying", command)
 	}
+	if status == "done" {
+		if err := reconcileFinalCommandOwnedFindings(ctx, db, command, pulseRunID, now); err != nil {
+			return nil, err
+		}
+	}
 	return getPulseFinalCommandStateByCommand(ctx, db, normalized, command)
 }
 
@@ -252,7 +257,90 @@ func markPulseFinalCommandStateInDB(ctx context.Context, db *sql.DB, workspacePa
 	if err != nil {
 		return nil, err
 	}
+	if status == "done" {
+		if err := reconcileFinalCommandOwnedFindings(ctx, db, command, pulseRunID, now); err != nil {
+			return nil, err
+		}
+	}
 	return getPulseFinalCommandStateByCommand(ctx, db, workspacePath, command)
+}
+
+var pulseFinalCommandOwnedReasonCodes = map[string][]string{
+	pulseFinalCommandDashboard: {
+		"dashboard_stage_owned",
+		"builder_html_is_dashboard_owned_not_fixer_writable",
+	},
+	pulseFinalCommandPublish: {
+		"finalizer_publish_owned",
+		"published_snapshots_are_publish_owned",
+	},
+}
+
+// reconcileFinalCommandOwnedFindings closes the old false-positive class where
+// a reviewer filed normal stage separation as an external platform defect.
+// Matching uses the stable reason_code written by the lifecycle, never prose.
+// A genuine terminal command failure is untouched and remains reportable.
+func reconcileFinalCommandOwnedFindings(ctx context.Context, db *sql.DB, command, pulseRunID, recordedAt string) error {
+	reasonCodes := pulseFinalCommandOwnedReasonCodes[command]
+	if len(reasonCodes) == 0 {
+		return nil
+	}
+	var lifecycleTableCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name IN ('run_concerns','pulse_finding_events')`).Scan(&lifecycleTableCount); err != nil {
+		return err
+	}
+	if lifecycleTableCount != 2 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(reasonCodes)), ",")
+	queryArgs := make([]interface{}, 0, len(reasonCodes))
+	for _, reasonCode := range reasonCodes {
+		queryArgs = append(queryArgs, reasonCode)
+	}
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT c.fingerprint,
+		COALESCE((SELECT e.finding_id FROM pulse_finding_events e
+			WHERE e.fingerprint=c.fingerprint ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1), '')
+		FROM run_concerns c
+		WHERE c.status='external_action_required'
+		AND COALESCE((SELECT json_extract(e.metadata_json, '$.reason_code')
+			FROM pulse_finding_events e WHERE e.fingerprint=c.fingerprint
+			AND e.event_type='external_action_required'
+			ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1), '') IN (%s)`, placeholders), queryArgs...)
+	if err != nil {
+		return err
+	}
+	type findingRef struct{ fingerprint, findingID string }
+	var findings []findingRef
+	for rows.Next() {
+		var finding findingRef
+		if err := rows.Scan(&finding.fingerprint, &finding.findingID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		findings = append(findings, finding)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, finding := range findings {
+		summary := fmt.Sprintf("Pulse finalizer command %s completed successfully; normal stage ownership is not a platform defect.", command)
+		if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status='resolved', resolved_at=?,
+			resolved_by='pulse_finalizer', resolution_note=? WHERE fingerprint=? AND status='external_action_required'`,
+			recordedAt, summary, finding.fingerprint); err != nil {
+			return err
+		}
+		metadata := fmt.Sprintf(`{"command":%q,"status":"done","reconciled_reason":"finalizer_stage_completed"}`, command)
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, '', 'closed', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO UPDATE SET
+				summary=excluded.summary, metadata_json=excluded.metadata_json, recorded_at=excluded.recorded_at`,
+			finding.fingerprint, finding.findingID, strings.TrimSpace(pulseRunID), summary, metadata, recordedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func getPulseFinalCommandStates(ctx context.Context, workspacePath string) ([]PulseFinalCommandState, error) {

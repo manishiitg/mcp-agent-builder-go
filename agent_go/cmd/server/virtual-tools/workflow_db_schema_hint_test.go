@@ -205,6 +205,31 @@ func TestQueryWorkflowDBAcceptsQueryAlias(t *testing.T) {
 	}
 }
 
+func TestQueryWorkflowDBIntegrityCheckUsesGuardedNamedAction(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"action": "integrity_check",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(result), `"ok"`) {
+		t.Fatalf("integrity result=%s", result)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("integrity action must execute exactly once: requests=%d", got)
+	}
+
+	_, err = registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"action": "integrity_check",
+		"sql":    "PRAGMA foreign_key_check",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not accept sql") {
+		t.Fatalf("integrity action accepted caller SQL: %v", err)
+	}
+}
+
 func TestQueryWorkflowDBRejectsConflictingSQLAliases(t *testing.T) {
 	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
 

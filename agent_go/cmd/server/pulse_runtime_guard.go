@@ -8,13 +8,16 @@ import (
 	"time"
 
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
 type trustedPulseSession struct {
-	runID     string
-	token     uint64
-	expiresAt time.Time
+	runID         string
+	token         uint64
+	expiresAt     time.Time
+	reviewRunID   string
+	reviewModules map[string]bool
 }
 
 var trustedPulseSessionRegistry = struct {
@@ -97,11 +100,56 @@ func validateTrustedPulseToolRunID(ctx context.Context, requestedRunID string) e
 	return nil
 }
 
+func bindTrustedPulseReviewSession(childSessionID, reviewRunID string, modules []string) error {
+	childSessionID = strings.TrimSpace(childSessionID)
+	reviewRunID = strings.TrimSpace(reviewRunID)
+	if childSessionID == "" || reviewRunID == "" || len(modules) == 0 {
+		return fmt.Errorf("child session, review_run_id, and modules are required")
+	}
+	trustedPulseSessionRegistry.Lock()
+	defer trustedPulseSessionRegistry.Unlock()
+	trusted, ok := trustedPulseSessionRegistry.sessions[childSessionID]
+	if !ok {
+		return fmt.Errorf("child session %q has no delegated Pulse authority", childSessionID)
+	}
+	trusted.reviewRunID = reviewRunID
+	trusted.reviewModules = map[string]bool{}
+	for _, module := range modules {
+		if canonical := pulsemodules.Normalize(module); canonical != "" {
+			trusted.reviewModules[canonical] = true
+		}
+	}
+	if len(trusted.reviewModules) == 0 {
+		return fmt.Errorf("review authority has no valid modules")
+	}
+	trustedPulseSessionRegistry.sessions[childSessionID] = trusted
+	return nil
+}
+
+func validateTrustedPulseReviewIdentity(ctx context.Context, pulseRunID, reviewRunID, module string) error {
+	if err := validateTrustedPulseToolRunID(ctx, pulseRunID); err != nil {
+		return err
+	}
+	sessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
+	trustedPulseSessionRegistry.RLock()
+	trusted := trustedPulseSessionRegistry.sessions[sessionID]
+	trustedPulseSessionRegistry.RUnlock()
+	module = pulsemodules.Normalize(module)
+	if trusted.reviewRunID == "" || trusted.reviewRunID != strings.TrimSpace(reviewRunID) {
+		return fmt.Errorf("review_run_id %q does not match this reviewer session's identity %q", reviewRunID, trusted.reviewRunID)
+	}
+	if !trusted.reviewModules[module] {
+		return fmt.Errorf("module %q is not selected for reviewer session %q", module, sessionID)
+	}
+	return nil
+}
+
 // init installs the delegator on the orchestrator side. Authority lives here,
 // but children are spawned in step_based_workflow, which cannot import this
 // package — cmd/server imports it, so the dependency runs one way only.
 func init() {
 	step_based_workflow.SetPulseWriteAuthorityDelegator(DelegateTrustedPulseSessionToChild)
+	step_based_workflow.SetPulseReviewAuthorityBinder(bindTrustedPulseReviewSession)
 }
 
 // DelegateTrustedPulseSessionToChild lends one child execution the parent's

@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Codex` |
 | Ticket state | `runtime_reverify` |
-| Last synchronized | `2026-08-05` |
+| Last synchronized | `2026-08-07` |
 
 - **Priority:** P2
 - **Owner:** shared cost telemetry writer and its UI/API projection
@@ -47,6 +47,12 @@ inventing a percentage from aggregate accounting. The focused mcpagent test
 uses the observed 643,364-token/200,000-token shape and proves it no longer
 emits a saturated percentage; Claude Code and Codex CLI transcript tests prove
 the marker is carried across the adapter boundary.
+
+The 2026-08-07 Upwork review tried to turn an absent coding-CLI
+`context_usage_percent` into a telemetry regression. Reviewer guidance now
+states that this absence is the intended representation when only cumulative
+transcript usage exists. It must not be filed as a platform defect or used as
+proof of context pressure.
 
 ## Acceptance
 

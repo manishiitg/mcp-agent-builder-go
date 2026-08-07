@@ -25,6 +25,9 @@ func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 	surface := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
 	for _, required := range []string{
 		"get_pulse_state",
+		"record_pulse_finding",
+		"record_pulse_verification",
+		"complete_pulse_review",
 		"get_workflow_command_guidance",
 		"execute_shell_command",
 	} {
@@ -53,7 +56,7 @@ func TestPulseFixerUsesTheCanonicalWorkshopWriterSurface(t *testing.T) {
 	}
 }
 
-// TestOnlyTheFixerHoldsLifecycleWriters records where the real boundary sits.
+// TestOnlyTheFixerHoldsMutationWriters records where the real boundary sits.
 //
 // The reviewer surface is not a security boundary: execute_shell_command is
 // registered with no path parameters, so the folder guard cannot constrain it
@@ -61,10 +64,9 @@ func TestPulseFixerUsesTheCanonicalWorkshopWriterSurface(t *testing.T) {
 // actually separates the two roles is delegated Pulse write authority, keyed by
 // session id and unreachable by prompt.
 //
-// The lifecycle writers stay out of the reviewer surface anyway, because a
-// reviewer holding them could only ever be refused — offering a tool whose every
-// call fails is worse than not offering it.
-func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
+// Reviewers hold only the narrow append/finalize tools bound to their exact
+// review identity. Mutation/disposition and impact writers remain Fixer-only.
+func TestOnlyTheFixerHoldsMutationWriters(t *testing.T) {
 	reviewer := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
 	fixer := toolSet(pulseFixerStageToolAgentAllowedToolNames())
 	for _, writer := range []string{"record_pulse_result", "record_pulse_impact"} {

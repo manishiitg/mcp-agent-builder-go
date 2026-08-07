@@ -723,12 +723,12 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"no_material_problem",
 		"Missing target/source/outcome linkage",
 		"in_plan_recommendation",
-		"Never edit files or databases",
+		"Never edit workflow files or databases directly",
 		"does not wait for Bug Review",
 		"normally runs more frequently than",
 		"bounded in-plan recommendation",
-		"PULSE_FINDING_JSON",
-		"recommended_route=none",
+		"record_pulse_finding",
+		"non-trackable conclusion",
 	} {
 		if !strings.Contains(auditor, want) {
 			t.Fatalf("strategy-auditor guidance missing %q:\n%s", want, auditor)
@@ -1266,8 +1266,8 @@ func TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence(t *testing.T) {
 		"timestamped, group/run-scoped rows",
 		"Measurement plan",
 		"Rollback condition",
-		"PULSE_FINDING_JSON",
-		"recommended_route=none",
+		"record_pulse_finding",
+		"non-trackable conclusion",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("goal-advisor guidance missing %q:\n%s", want, rendered)

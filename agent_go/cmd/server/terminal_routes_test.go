@@ -228,6 +228,49 @@ func TestListTerminalsExposesStatusLineCreatedLiveTerminal(t *testing.T) {
 	}
 }
 
+func TestListTerminalsProjectsPulseRecoveryMainIntoOriginalScheduleTab(t *testing.T) {
+	store := terminals.NewStore()
+	api := &StreamingAPI{
+		terminalStore:  store,
+		activeSessions: map[string]*ActiveSessionInfo{},
+	}
+	originalSessionID := "schedule-manual--pulse-root"
+	recoverySessionID := "schedule-manual--pulse-recovery"
+	reviewerSessionID := "schedule-manual--pulse-reviewer"
+	api.activeSessions[recoverySessionID] = &ActiveSessionInfo{
+		SessionID: recoverySessionID, ParentSessionID: originalSessionID, SessionKind: "pulse_recovery",
+	}
+	api.activeSessions[reviewerSessionID] = &ActiveSessionInfo{
+		SessionID: reviewerSessionID, ParentSessionID: originalSessionID, SessionKind: "pulse_reviewer",
+	}
+
+	for sessionID, tmuxSession := range map[string]string{
+		originalSessionID: "tmux-original-main",
+		recoverySessionID: "tmux-recovery-main",
+		reviewerSessionID: "tmux-reviewer-main",
+	} {
+		store.HandleEvent(sessionID, storeevents.Event{
+			Type: "status_line", SessionID: sessionID, Timestamp: time.Now(),
+			Data: &agentevents.AgentEvent{
+				Type: agentevents.StreamingStatusLine,
+				Data: &agentevents.StreamingStatusLineEvent{Provider: "codex-cli", TmuxSession: tmuxSession},
+			},
+		})
+	}
+
+	response := terminalRouteList(t, api, originalSessionID)
+	gotSessions := make(map[string]bool)
+	for _, terminal := range response.Terminals {
+		gotSessions[terminal.SessionID] = true
+	}
+	if !gotSessions[originalSessionID] || !gotSessions[recoverySessionID] {
+		t.Fatalf("terminal sessions = %#v, want original and recovery", gotSessions)
+	}
+	if gotSessions[reviewerSessionID] {
+		t.Fatalf("independent reviewer main must not replace Schedule main: %#v", gotSessions)
+	}
+}
+
 func TestListTerminalsActiveOnlyFiltersStaleMetadataList(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}
@@ -1455,7 +1498,7 @@ func TestTerminalRoutesKillTerminalKillsTmuxAndMarksFailed(t *testing.T) {
 	}
 }
 
-func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T) {
+func TestTerminalRoutesKillTerminalClosesCompletedLiveProcessWithoutChangingOutcome(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}
 	sessionID := "session-terminal-kill-completed"
@@ -1479,8 +1522,8 @@ func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T
 	if rec.Code != http.StatusOK {
 		t.Fatalf("kill completed status = %d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-	if called {
-		t.Fatalf("completed terminal should not call tmux kill")
+	if !called {
+		t.Fatalf("completed terminal with a live process should call tmux kill")
 	}
 	var response terminalActionResponse
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
@@ -1488,6 +1531,9 @@ func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T
 	}
 	if response.Terminal.Active || response.Terminal.State != "completed" {
 		t.Fatalf("terminal active/state = %v/%q, want false/completed", response.Terminal.Active, response.Terminal.State)
+	}
+	if response.Terminal.ProcessState != "closed" || response.Terminal.TmuxSession != "" {
+		t.Fatalf("terminal process/tmux = %q/%q, want closed/empty", response.Terminal.ProcessState, response.Terminal.TmuxSession)
 	}
 }
 

@@ -174,7 +174,7 @@ Two optional top-level fields configure hard behavioral gates the auto-improveme
 | `oversight_mode` | `manual` \| `supervised` \| `autonomous` | `supervised` | Controls when human approval is required for high-risk framework changes. Hard gate. |
 | `decision_log_mutability` | `append_only` \| `append_only_strict` | `append_only` | `append_only_strict` forbids rewriting a dated decision entry in `builder/improve.html`, even for correction. Used by compliance workflows. Hard gate. |
 
-`schema_version` controls the JSON shape. `version` controls product-managed workflow behavior. The current `1.0.20` contract upgrades `builder/improve.html` to the schema-5 executive Pulse journal before a scheduled workflow runs. The scheduler verifies the resulting HTML and writes the version through its trusted manifest writer.
+`schema_version` controls the JSON shape. `version` controls product-managed workflow behavior. The current `1.0.21` contract performs an idempotent artifact-ownership preflight before a scheduled workflow runs: it removes shared AgentWorks bridge/auth, Folder Guard, managed-tool, discovery, and coding-session mechanics from workflow-authored Plan/Learnings/KB prose while preserving semantic behavior and target-specific HOW. Ambiguous rewrites block the version stamp rather than guessing. The prior `1.0.20` contract remains the schema-5 executive Pulse journal upgrade.
 
 The stable Goal lives only in `soul/soul.md`. `/define-success` records operating-model reasoning as a dated Reflection / Hansei entry in `builder/improve.html`; there is no permanent Workflow Profile card that can silently become an immutable constraint.
 

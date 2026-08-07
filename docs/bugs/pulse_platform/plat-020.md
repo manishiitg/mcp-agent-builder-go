@@ -21,11 +21,13 @@
   was the wrong abstraction: **Make interactive** means continue this exact
   conversation, not fork it. A new session bypasses the retained tmux and loses
   the provider-native conversation identity that already carries the context.
-- **Implementation (corrected 2026-08-04):** conversion changes only the tab's
-  view-only/scheduled metadata and preserves its session ID. The ordinary query
-  path already prefers direct delivery to the retained main tmux. If that pane
-  is genuinely gone, the same session is relaunched through the persisted
-  native resume handle and its replacement tmux is materialized in the UI.
+- **Implementation (corrected 2026-08-06):** conversion preserves the session
+  ID and records an explicit durable `user_interactive_continuation` marker on
+  the tab. Every later query carries that marker. The backend lets this explicit
+  user promotion outrank the historical `schedule-*` ID, so a replacement CLI
+  resumes the same native conversation and receives normal interactive
+  retention. The ordinary query path still prefers direct delivery when the
+  original tmux is live. No fork or new conversation is created.
 - **Verification:** backend coverage proves a settled retained tmux accepts a
   follow-up and becomes running/live again, while a session without a live tmux
   falls through to the normal same-session resume path. Frontend regression
@@ -38,6 +40,7 @@
   continuity; PLAT-035 owns the retained turn's stream-driven end boundary.
 - **Regression tests:**
   `TestTryDeliverQueryAsLiveInputReactivatesSettledRetainedTmux` plus
+  `TestCodingAgentRequestAllowsPersistentInteractive` and
   `workflowChatTabConversion.test.ts` for scheduled and bot conversations.
 - **Acceptance:** active, settled, and relaunched scheduled coding-agent chats
   keep the same logical session ID and conversation context. The first user

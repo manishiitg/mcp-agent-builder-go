@@ -42,8 +42,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    severity, plain-language summary, exact evidence, bounded
    `recommended_fix`, verification, and `user_judgment_required` with reason.
    When evidence proves the defect belongs to the shared harness/runtime/bridge
-   or tool API, classify it as `issue_kind=harness_issue` and emit the exact
-   `PULSE_FINDING_JSON` marker required by the injected artifact contract. Do
+   or tool API, classify it as `issue_kind=harness_issue` and persist it with
+   `record_pulse_finding` under the injected typed review contract. Do
    not use that classification for a workflow that supplied wrong arguments,
    paths, credentials, IDs, or stale data. Include a minimal side-effect-free
    reproduction when possible; otherwise identify the precise reproduction

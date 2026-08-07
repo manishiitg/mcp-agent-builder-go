@@ -77,7 +77,6 @@ import type {
   ReportWidgetResponsesResponse,
   PulseModuleStateResponse,
   PulseFindingsResponse,
-  PulseReviewResponse,
   PulseReviewsResponse,
   PulseAgentMetricsResponse,
   PulseImpactResponse,
@@ -1512,13 +1511,6 @@ export const agentApi = {
       },
     })
     return response.data as PulseReviewsResponse
-  },
-
-  getPulseReview: async (workspacePath: string, id: number) => {
-    const response = await api.get('/api/workflow/pulse-reviews', {
-      params: { workspace_path: workspacePath, id },
-    })
-    return response.data as PulseReviewResponse
   },
 
   getPulseAgentMetrics: async (

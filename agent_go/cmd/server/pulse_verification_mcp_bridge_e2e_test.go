@@ -76,10 +76,14 @@ func TestPulseReviewerVerificationClosesThroughMCPBridge(t *testing.T) {
 	expected := "run-12 has latency"
 	observed := "run-12 contains latency_ms=42"
 	reviewRunID := "2026-08-01T00-00-00.000Z_bridge-verification"
-	marker := fmt.Sprintf(`PULSE_VERIFICATION_JSON: {"finding_id":%q,"fingerprint":%q,"attempt_id":%q,"verdict":"passed","expected":%q,"observed":%q,"evidence":["runs/run-12/result.json"]}`,
-		finding.Issue.ID, finding.Fingerprint, attemptID, expected, observed)
-	if err := step_based_workflow.RecordPulseReview(ctx, workspacePath, pulseModuleBugReview, reviewRunID, currentRunID, "", "## Verification\n"+marker); err != nil {
-		t.Fatalf("record structured review: %v", err)
+	if err := step_based_workflow.RecordPulseReviewVerification(ctx, workspacePath, pulseModuleBugReview, reviewRunID, currentRunID, step_based_workflow.PulseReviewVerificationResult{
+		FindingID: finding.Issue.ID, Fingerprint: finding.Fingerprint, AttemptID: attemptID, Verdict: step_based_workflow.VerificationPassed,
+		Expected: expected, Observed: observed, Evidence: []string{"runs/run-12/result.json"},
+	}); err != nil {
+		t.Fatalf("record typed verification: %v", err)
+	}
+	if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, []string{pulseModuleBugReview}, reviewRunID, currentRunID, "Prior repair verified.", "completed"); err != nil {
+		t.Fatalf("complete typed review: %v", err)
 	}
 
 	_, executors, _ := createPulseWorklistTools()

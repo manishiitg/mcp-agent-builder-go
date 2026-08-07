@@ -260,7 +260,7 @@ type PulseFindingLifecycle struct {
 }
 
 // PulseReviewVerificationCandidate is the backend-owned allowlist entry for a
-// reviewer checking a prior fix. A review may emit PULSE_VERIFICATION_JSON only
+// reviewer checking a prior fix. A review may call record_pulse_verification only
 // for one of these exact tuples; ordinary open, blocked, rejected, and already
 // resolved findings have no attempt to verify.
 type PulseReviewVerificationCandidate struct {
@@ -1012,8 +1012,27 @@ func RecordPulseFindingDispositionsTx(
 				details = normalizePulseFindingDetails(details)
 				switch details.RecommendedRoute {
 				case pulseFindingRouteDecisionRequired:
-					if disposition.Disposition != FindingDispositionAwaitingUser {
+					if disposition.Disposition == FindingDispositionAwaitingUser {
+						break
+					}
+					if !pulseDispositionConsumesLinkedDecision(disposition.Disposition) {
 						return fmt.Errorf("%s finding %q is routed decision_required and must use awaiting_user with a linked pending decision; got %s", module, findingID, disposition.Disposition)
+					}
+					var linkedDecisionStatus string
+					err := db.QueryRowContext(ctx, `SELECT COALESCE(h.status, '')
+						FROM pulse_finding_events e
+						JOIN report_human_inputs h
+						  ON h.id=json_extract(e.metadata_json, '$.human_input_id')
+						WHERE e.fingerprint=? AND e.event_type='awaiting_user'
+						ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1`, fingerprint).Scan(&linkedDecisionStatus)
+					if err == sql.ErrNoRows {
+						return fmt.Errorf("%s finding %q is routed decision_required and cannot become %s without a prior linked awaiting_user decision", module, findingID, disposition.Disposition)
+					}
+					if err != nil {
+						return err
+					}
+					if linkedDecisionStatus != "answered" {
+						return fmt.Errorf("%s finding %q is routed decision_required and cannot become %s while its linked decision has status %q", module, findingID, disposition.Disposition, linkedDecisionStatus)
 					}
 				case pulseFindingRouteEvidenceWait:
 					if disposition.Disposition != FindingDispositionProposalOnly {
@@ -1149,6 +1168,7 @@ func RecordPulseFindingDispositionsTx(
 			"external_owner":   disposition.ExternalOwner,
 			"reason_code":      disposition.ReasonCode,
 			"reopen_condition": disposition.ReopenCondition,
+			"human_input_id":   disposition.HumanInputID,
 		})
 		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
 			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
@@ -1158,6 +1178,11 @@ func RecordPulseFindingDispositionsTx(
 			fingerprint, findingID, pulseRunID, attemptID, eventType,
 			strings.TrimSpace(disposition.Summary), string(metadata), recordedAt); err != nil {
 			return err
+		}
+		if pulseDispositionConsumesLinkedDecision(disposition.Disposition) {
+			if err := consumeLinkedPulseDecisionTx(ctx, db, fingerprint, disposition.Summary, recordedAt); err != nil {
+				return err
+			}
 		}
 		if attemptID != "" {
 			if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempt_findings SET
@@ -1194,6 +1219,45 @@ func RecordPulseFindingDispositionsTx(
 		}
 	}
 	return nil
+}
+
+// pulseDispositionConsumesLinkedDecision identifies lifecycle outcomes that
+// prove an earlier awaiting_user answer has actually been used. Merely reading
+// an answer, failing a check, blocking, or waiting for evidence must not consume
+// it. A changed_unverified repair has still used the decision even though its
+// behavioral proof arrives on a later run.
+func pulseDispositionConsumesLinkedDecision(disposition string) bool {
+	switch strings.TrimSpace(disposition) {
+	case FindingDispositionFixedVerified, FindingDispositionVerifiedNoChange,
+		FindingDispositionChangedUnverified, FindingDispositionRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// consumeLinkedPulseDecisionTx closes the durable human-input loop when a
+// finding with a previously linked awaiting_user decision reaches an outcome.
+// The link comes from the immutable lifecycle event, not from prose or a guessed
+// ID. Only an answered row transitions; pending, already-consumed, or unrelated
+// questions are untouched.
+func consumeLinkedPulseDecisionTx(ctx context.Context, db pulseFindingLifecycleDB, fingerprint, summary, recordedAt string) error {
+	var humanInputID string
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(metadata_json, '$.human_input_id'), '')
+		FROM pulse_finding_events
+		WHERE fingerprint=? AND event_type='awaiting_user'
+		ORDER BY recorded_at DESC, _id DESC LIMIT 1`, fingerprint).Scan(&humanInputID)
+	if errors.Is(err, sql.ErrNoRows) || strings.TrimSpace(humanInputID) == "" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs SET
+		status='consumed', consumed_by='pulse', outcome_summary=?, consumed_at=?, updated_at=?
+		WHERE id=? AND status='answered'`,
+		strings.TrimSpace(summary), recordedAt, recordedAt, strings.TrimSpace(humanInputID))
+	return err
 }
 
 func decodeLifecycleStrings(raw string) []string {

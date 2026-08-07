@@ -21,11 +21,14 @@ next evidence boundary instead of inventing a strategy claim.
 - Goal Advisor independently asks which materially different, out-of-plan
   approach might achieve the goal better.
 
-Never edit files or databases, run producing workflow actions, publish, notify,
+Never edit workflow files or databases directly, run producing workflow actions, publish, notify,
 create or consume human-input requests, update HTML, launch another agent, or
 mark module state. Read SQLite with read-only queries only. A strategy finding
 is not authorization for the Pulse Fixer to change the plan. Preserve it as the
 Auditor's own in-plan recommendation and apply normal approval rules.
+The only allowed write is through the injected typed reviewer tools, which can
+file findings/verifications and complete this review receipt but cannot edit the
+workflow or close a finding.
 
 Every recommendation must name exactly one next-action route:
 
@@ -141,11 +144,11 @@ When both correctness and strategy defects exist, preserve both with separate
 evidence and make `strategy_flaw` primary only when the perfect-execution
 counterfactual still fails.
 
-### Required reviewer artifact
+### Required review checkpoint
 
-Return compact artifact-form Markdown containing. The saved SQLite review,
-run artifacts, and tool history retain detailed proof: this artifact is an
-evidence index, not a transcript. Keep every field below to one or two compact
+Keep a compact working checkpoint while reasoning. SQLite findings, run
+artifacts, and tool history retain detailed proof: this checkpoint is an
+evidence index, not a durable report. Keep every field below to one or two compact
 sentences, use evidence paths/query names plus short observed values rather than
 raw output, and do not paste logs, SQL rows, source excerpts, or extended
 reasoning. Keep the artifact brief while retaining every valid finding:
@@ -177,16 +180,11 @@ recommendation explains what must improve within the current strategy but does
 not approve or apply a plan edit. A clean review returns an empty finding-id
 manifest.
 
-For every trackable finding, emit these adjacent single-line markers with the
-same concern text:
-
-```text
-PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"<exact concern>","issue_kind":"workflow_issue","recommended_route":"decision_required|evidence_wait|fixer_handoff","next_check":"<required for evidence_wait>"}
-CONCERNS: <exact concern>
-```
-
-The backend rejects a Strategy Auditor concern without this route. Do not emit
-`CONCERNS:` when `recommended_route=none`; that is a non-trackable conclusion.
+Persist every trackable finding with `record_pulse_finding`, using
+`module="strategy_auditor"`, `issue_kind="workflow_issue"`, and a
+`recommended_route` of `decision_required`, `evidence_wait`, or
+`fixer_handoff`. `evidence_wait` requires the exact `next_check`. Do not call
+the tool for a non-trackable conclusion.
 
 The Twitter-style pattern must be discoverable generically: if action volume is
 high, most actions repeatedly target the same existing entities from one source,

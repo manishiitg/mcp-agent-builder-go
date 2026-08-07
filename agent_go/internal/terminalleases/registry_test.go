@@ -81,6 +81,27 @@ func TestPersistentMainAgentDoesNotReceiveBoundedDeadline(t *testing.T) {
 	}
 }
 
+func TestScheduledMainAgentReceivesBoundedDeadline(t *testing.T) {
+	now := time.Now()
+	registry := NewRegistry("instance-1", 1234, now)
+	lease, _ := registry.Observe(terminals.Snapshot{
+		TerminalID:    "schedule-123:main:schedule-123",
+		TmuxSession:   "mlp-claude-code-scheduled",
+		SessionID:     "schedule-123",
+		OwnerID:       "main:schedule-123",
+		ExecutionKind: "main_agent",
+		Active:        false,
+		UpdatedAt:     now,
+	}, now)
+
+	if lease.Policy != PolicyBounded {
+		t.Fatalf("policy = %q, want bounded", lease.Policy)
+	}
+	if lease.ProcessDeadline == nil || !lease.ProcessDeadline.Equal(now.Add(DefaultBoundedProcessGrace)) {
+		t.Fatalf("process deadline = %v, want %v", lease.ProcessDeadline, now.Add(DefaultBoundedProcessGrace))
+	}
+}
+
 func TestClosedLeasePrunesOnlyAfterSnapshotDeadline(t *testing.T) {
 	now := time.Now()
 	snapshotDeadline := now.Add(time.Minute)

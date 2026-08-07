@@ -128,7 +128,8 @@ REVIEW OUTPUT
 2. Return the instruction and mode as `recommended_fix`.
 3. Name tables/contracts/indexes/assets affected, report/eval compatibility
    impact, whether a row migration would be required, and exact verification
-   commands such as `PRAGMA integrity_check`. For control-state findings, also
+   actions such as `query_workflow_db(action="integrity_check")`. Do not send
+   raw PRAGMA SQL. For control-state findings, also
    include one bounded source-of-truth comparison query and one assertion that
    proves the runtime decision consumed the canonical value.
 4. The Pulse Fixer owns every DB/file mutation and `builder/improve.html` update.

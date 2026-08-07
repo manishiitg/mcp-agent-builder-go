@@ -71,14 +71,21 @@ scheduled run it runs a small sequence with one mandatory intelligence turn:
    and deduplicates findings, `pulse_fix_attempts` plus
    `pulse_fix_attempt_findings` record the mutation boundary,
    `pulse_fix_verifications` records passed/failed/inconclusive proof, and
-   `pulse_finding_events` records filed/fixing/closed/reopened history. Complete
-   reviewer Markdown is stored as human-readable SQLite TEXT in
-   `pulse_review_log`; it is evidence, not the close/reopen state. The Pulse popup
+   `pulse_finding_events` records filed/fixing/closed/reopened history.
+   Reviewers write through three narrow typed tools: `record_pulse_finding`
+   writes one complete lifecycle finding immediately,
+   `record_pulse_verification` writes one exact allowlisted prior-attempt
+   judgment, and `complete_pulse_review` finalizes the compact receipt after
+   computing counts from SQLite. `pulse_review_log` stores only that terminal
+   receipt (module, status, short verdict, finding/verification counts, and
+   structured verification references). Final-response prose is informational,
+   transient, and never parsed or persisted.
+   The Pulse popup
    is one database-native, outcome-first workspace: Goal/Success/Constraints,
    latest retained run outcome, pending decisions, Engineering/Operations/Product
    work areas, one issue and follow-through queue, Pulse run/skip/Fixer activity,
-   longitudinal goal impact, and finalization status. Raw Markdown and individual
-   reviewer mechanics are secondary evidence views. Retired reviewer labels are
+   longitudinal goal impact, and finalization status. Individual reviewer
+   mechanics are secondary metadata. Retired reviewer labels are
    normalized into Engineering or Operations rather than exposed as primary UI.
    The popup does not extract or display fragments from `builder/improve.html`.
    Every reviewer and consolidated Fixer also gets one automatic
@@ -101,17 +108,19 @@ the lightweight published executive journal and archive-linked material history,
 while the Pulse popup owns the complete operational tracker. Moving reviewer
 evidence and lifecycle state into SQLite does not retire the publishable artifact.
 
-Workflow contract v1.0.17 non-destructively imports recognized historical
-`pulse/reviews/**/*.md` into `pulse_review_log` and keeps the source files during
-the compatibility window. New Pulse reviewers write their complete Markdown
-directly to SQLite and create no review file. The popup falls back to retained
-legacy files only when a workflow has no matching database review yet.
+Workflow contract v1.0.17 converts recognized historical
+`pulse/reviews/**/*.md` into compact receipts and lifecycle findings, then
+removes the legacy files. New Pulse reviewers call the typed lifecycle tools;
+they create no review file, emit no marker protocol, and persist no narrative
+report. Workflows already beyond that version perform the same idempotent cleanup
+before their first successful review under this contract; the former import
+ledger prevents historical findings from being filed again and is then dropped.
 
 Standalone Pulse-module slash commands use the same path. `/bug-review`,
 `/ops-review`, `/strategy-auditor`, and `/review-artifact-drift` pass their
 canonical module to `call_generic_agent`; Go generates manual run identities,
-stores the full Markdown in `pulse_review_log`, and indexes `CONCERNS:` into the
-finding lifecycle before the parent updates `builder/improve.html`.
+and the reviewer persists complete findings plus its compact receipt through
+the same typed tools before the parent updates `builder/improve.html`.
 `/engineering-review` is the only user-facing mutation command: it launches the
 same Engineering → LLM/Ops → consolidation → Fixer sequence used by scheduled
 Pulse. The former standalone `/pulse-fixer` command is retired so manual and
@@ -182,11 +191,11 @@ the Fixer turn. Strategy Auditor and Goal Advisor remain independent read-only
 agents; a residual Fixer runs only for their non-terminal lifecycle work or
 operational recovery. The writer reconciles semantically duplicate findings,
 applies bounded changes sequentially, and records attempt-scoped proof. SQLite is authoritative
-for findings, attempts, verification, review artifacts, module outcomes, and
+for findings, attempts, verification, compact review receipts, module outcomes, and
 final-command status. `builder/improve.html` is still required, but it is a
 generated user-facing dashboard and publishable time-series artifact, not the
 database for closing or reopening findings. The Pulse popup reads structured
-SQLite projections and exposes raw reviewer Markdown only as supporting detail.
+SQLite projections. There is no raw reviewer-report view.
 
 The same rule applies to manual maintenance. `/engineering-review` runs the
 combined sequence; `/pulse-fixer` no longer exists. The internal residual

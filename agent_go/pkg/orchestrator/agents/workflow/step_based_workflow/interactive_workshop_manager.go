@@ -150,15 +150,17 @@ func newDerivedPulseReviewIdentity(now time.Time, pulseRunID, todoID, module str
 }
 
 func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker string) string {
-	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
-	artifactContract := ""
+	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep tool narration compact. Do not emit narrative findings or a Markdown report.\n\n", workspacePath)
+	structuredContract := ""
 	if strings.TrimSpace(resultPath) != "" {
-		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED FINDING DETAILS: an injected multi-lane contract may require one compact PULSE_FINDING_JSON marker before every CONCERNS line solely to preserve its owning module. Strategy Auditor and Goal Advisor also require this marker before every CONCERNS line to preserve recommended_route (and next_check for evidence_wait); a missing advisor route rejects the review. Outside those contracts, add this marker only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
-		artifactContract += "LIFECYCLE HISTORY: call get_pulse_state(view=\"backlog\") for this module before final classification so prior attempts, verification, closure, external ownership, and reopen conditions are not lost or duplicated.\n\n"
-	}
-	return scopeHeader + artifactContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
-}
+		structuredContract = `TYPED REVIEW CONTRACT: SQLite lifecycle rows are the only findings source of truth. Do not write or return a Markdown report and do not encode lifecycle records in final-response text.
 
+Call record_pulse_finding once for every trackable finding as soon as it is established. Call record_pulse_verification only for an exact changed_unverified attempt returned by get_pulse_state(view="backlog") whose named evidence boundary has arrived. After all selected lanes are reconciled, call complete_pulse_review exactly once with every selected module. The backend computes counts; the final response is informational only and is neither parsed nor persisted.
+
+BACKLOG RECONCILIATION: compare by affected behavior, expected outcome, and observed failure; reuse the stable concern/finding identity for an existing issue. Ordinary workflow findings use issue_kind=workflow_issue; shared runtime/tool/bridge defects use issue_kind=harness_issue with stable target_key and complete reproduction evidence. Advisor findings use recommended_route=decision_required, evidence_wait, or fixer_handoff; evidence_wait requires next_check. If a conclusion is not trackable, do not call record_pulse_finding for it. LIFECYCLE HISTORY: load the module backlog before final classification.` + "\n\n"
+	}
+	return scopeHeader + structuredContract + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
+}
 func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
 	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
 	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Process verification outcomes first, then repairs, sequentially. The backend opens the durable fix-attempt record from the disposition you write, so there is no attempt to declare and no attempt_id to carry. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
@@ -197,9 +199,19 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
+type pulseReviewBindingContextKey struct{}
+type pulseReviewBinding struct {
+	ReviewRunID string
+	Modules     []string
+}
+
+func withPulseReviewBinding(ctx context.Context, reviewRunID string, modules []string) context.Context {
+	return context.WithValue(ctx, pulseReviewBindingContextKey{}, pulseReviewBinding{ReviewRunID: reviewRunID, Modules: append([]string(nil), modules...)})
+}
+
 func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) ([]backgroundMessageSequenceItem, error) {
 	available := map[string]backgroundMessageSequenceItem{
-		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, and DB/knowledgebase/learnings integrity. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence pointers only: never paste raw logs, SQL rows, tool output, or repeated context into the response. Do not propose product strategy and do not consolidate yet."},
+		pulsemodules.WorkflowReviewID: {ID: "engineering", Title: "Engineering review", Message: "Using the shared evidence map already collected, act as an engineering QA reviewer. Load the focused bug-review, artifact-drift, improve-report, improve-evaluation, improve-learnings, improve-knowledge, and improve-database references that current evidence requires. Check whether the workflow is implemented as its explicit contracts intend: execution and tool behavior, safe exploratory QA, arrived verification boundaries, report/eval implementation and truthfulness, plan-change blast radius and artifact consistency, DB/knowledgebase/learnings integrity, and artifact ownership purity. Shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics copied into Plan/Learnings/KB are one consolidated workflow-level contract-drift finding; preserve target-specific HOW. A report or eval that works as designed but measures the wrong business outcome is not an engineering bug; hand that evidence to Strategy Auditor. Likewise, a technically correct but inefficient model/tool choice belongs to LLM/Ops. Checkpoint compact engineering findings and evidence pointers only: never paste raw logs, SQL rows, tool output, or repeated context into the response. Do not propose product strategy and do not consolidate yet."},
 		pulsemodules.LLMOpsReviewID:   {ID: "llm-ops", Title: "LLM and tool operations", Message: "Continue in the same context. Review cost, time, model selection, tool/runtime reliability, and plan-design hygiene. Checkpoint only new conclusions and cross-links with evidence pointers; do not quote raw tool output or repeat the engineering lane, and do not evaluate strategy completeness."},
 	}
 	if len(lanes) == 0 {
@@ -225,12 +237,12 @@ func canonicalWorkflowReviewMessageSequence(lanes []string, includeFixer bool) (
 			items = append(items, available[lane])
 		}
 	}
-	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause, retain distinct evidence pointers, and separate verification verdicts from new findings. Return one compact evidence index, not an investigation transcript: a brief executive verdict, then one short structured entry per finding (claim, impact, next action, evidence pointers). Do not paste logs, SQL rows, tool output, repeated reasoning, or source excerpts; SQLite, lifecycle rows, run artifacts, and tool history retain the full proof. Keep the review brief while retaining every valid finding by writing it compactly. Do not introduce new investigation unless needed to resolve a direct contradiction."})
+	items = append(items, backgroundMessageSequenceItem{ID: "consolidate", Title: "Consolidate review", Message: "Now reconcile every selected-lane checkpoint semantically. Merge only the same root cause and retain distinct evidence pointers. Persist each trackable issue with record_pulse_finding, persist each arrived allowlisted verification with record_pulse_verification, then call complete_pulse_review once for every selected lane. Do not encode records in the response. Keep the final message brief and do not introduce new investigation unless needed to resolve a direct contradiction."})
 	if includeFixer {
 		items = append(items, backgroundMessageSequenceItem{
 			ID:      "fix",
 			Title:   "Apply and verify fixes",
-			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The backend has now persisted your consolidated review and filed its trackable concerns. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the persisted review and complete lifecycle backlog, consume verification verdicts first, and build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome only: changed, verified, and still blocked with evidence pointers. Do not repeat the review, CONCERNS lines, logs, or raw proof because the review/lifecycle records already retain them.",
+			Message: "Continue in the same conversation as the bounded Fixer for only the selected operational lanes. The typed reviewer tools have already filed every finding and compact receipt in SQLite. First load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"}]), then load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]) as a separate call. Read the structured lifecycle backlog and reviewer verification records, then build a short priority-ordered repair list. Apply safe compatible repair bundles sequentially, checkpoint each disposition before the next, and call record_pulse_result exactly once for every selected operational lane. Never mark an item blocked merely because this pass did not reach it: leave it open with its next-fixer priority. Keep proposal-only, waiting, externally owned, and decision-bound work separate. Return a concise fix outcome only: changed, verified, and still blocked with evidence pointers. Do not repeat findings, logs, or raw proof.",
 		})
 	}
 	return items, nil
@@ -260,62 +272,6 @@ func backgroundReviewLanes(args map[string]interface{}) ([]string, error) {
 		return nil, fmt.Errorf("review_lanes must contain at least one operational module")
 	}
 	return lanes, nil
-}
-
-func partitionPulseReviewConcerns(summary string, lanes []string) (map[string]string, error) {
-	concerns := ParseConcernLines(summary)
-	if len(concerns) == 0 {
-		return map[string]string{}, nil
-	}
-	canonical := make([]string, 0, len(lanes))
-	allowed := map[string]bool{}
-	for _, lane := range lanes {
-		lane = pulsemodules.Normalize(lane)
-		if lane == "" || allowed[lane] {
-			continue
-		}
-		allowed[lane] = true
-		canonical = append(canonical, lane)
-	}
-	if len(canonical) == 0 {
-		return nil, fmt.Errorf("review concerns have no owning module")
-	}
-	if len(canonical) == 1 {
-		return map[string]string{canonical[0]: summary}, nil
-	}
-
-	markers := map[string]pulseFindingDetailMarker{}
-	for _, marker := range ParsePulseFindingDetailMarkers(summary) {
-		key := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
-		if _, duplicate := markers[key]; duplicate {
-			return nil, fmt.Errorf("review concern %q has duplicate PULSE_FINDING_JSON attribution", marker.Concern)
-		}
-		marker.Module = pulsemodules.Normalize(marker.Module)
-		if !allowed[marker.Module] {
-			return nil, fmt.Errorf("review concern %q must name one selected module in PULSE_FINDING_JSON; got %q", marker.Concern, marker.Module)
-		}
-		markers[key] = marker
-	}
-
-	partitioned := map[string][]string{}
-	for _, concern := range concerns {
-		key := strings.ToLower(strings.Join(strings.Fields(concern), " "))
-		marker, ok := markers[key]
-		if !ok {
-			return nil, fmt.Errorf("review concern %q is missing selected-lane PULSE_FINDING_JSON attribution", concern)
-		}
-		rawMarker, err := json.Marshal(marker)
-		if err != nil {
-			return nil, fmt.Errorf("encode review concern attribution: %w", err)
-		}
-		partitioned[marker.Module] = append(partitioned[marker.Module], pulseFindingJSONPrefix+" "+string(rawMarker), concernLinePrefix+" "+concern)
-	}
-
-	out := make(map[string]string, len(partitioned))
-	for module, lines := range partitioned {
-		out[module] = strings.Join(lines, "\n")
-	}
-	return out, nil
 }
 
 func defaultBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
@@ -475,12 +431,11 @@ func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 		}
 	}
 	// Derived from the canonical registry — see pkg/pulsemodules. Current
-	// modules plus retired ones, so historical pulse/reviews/<run>/<module>.md
-	// paths stay readable while only current modules are written. Omitting a
+	// modules plus retired ones remain valid receipt identities. Omitting a
 	// current module here silently breaks that module's result persistence:
 	// that was the 2026-07-29 stores_health defect.
 	valid := false
-	for _, accepted := range pulsemodules.AcceptedForReviewArtifacts() {
+	for _, accepted := range pulsemodules.AcceptedForReviewReceipts() {
 		if accepted == module {
 			valid = true
 			break
@@ -488,7 +443,7 @@ func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 	}
 	if !valid {
 		return fmt.Errorf("module %q is not a valid Pulse review module. Must be one of: %s",
-			module, strings.Join(pulsemodules.AcceptedForReviewArtifacts(), ", "))
+			module, strings.Join(pulsemodules.AcceptedForReviewReceipts(), ", "))
 	}
 	return nil
 }
@@ -498,11 +453,6 @@ func pulseReviewResultPath(reviewRunID, module string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("pulse_review_log:%s:%s", reviewRunID, module), nil
-}
-
-func pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, status, result string, completedAt time.Time) string {
-	return fmt.Sprintf("# Pulse reviewer result\n\n- Pulse run: `%s`\n- Review run: `%s`\n- Module: `%s`\n- Status: `%s`\n- Completed at: `%s`\n\n## Findings\n\n%s\n",
-		strings.TrimSpace(pulseRunID), reviewRunID, module, status, completedAt.UTC().Format(time.RFC3339Nano), strings.TrimSpace(result))
 }
 
 func acquirePulseReviewerSlot(ctx context.Context, slots chan struct{}) error {
@@ -1738,6 +1688,9 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// dynamic Pulse worklist/result state.
 	pulseState := []string{
 		"get_pulse_state",
+		"record_pulse_finding",
+		"record_pulse_verification",
+		"complete_pulse_review",
 		"begin_pulse_fixer_run",
 		"record_pulse_worklist",
 		"record_pulse_result",
@@ -1899,6 +1852,10 @@ func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
 		"move_report_widget", "toggle_report_widget", "set_report_theme",
 		"set_section_layout", "validate_report_plan", "preview_report_render",
 		"create_human_input_request",
+
+		// Goal Advisor's finalizer persists its decision/evidence route through
+		// the same typed reviewer contract as every other Pulse perspective.
+		"record_pulse_finding", "record_pulse_verification", "complete_pulse_review",
 	}
 }
 
@@ -1992,6 +1949,11 @@ func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
 		// including saved reviews, which is how it tells a recurrence from a
 		// genuinely new finding.
 		"get_pulse_state",
+
+		// Narrow, typed reviewer writes. These can create findings, record
+		// allowlisted verification judgments, and finalize the compact receipt;
+		// they cannot mutate workflow artifacts or close/fix lifecycle rows.
+		"record_pulse_finding", "record_pulse_verification", "complete_pulse_review",
 	}
 }
 
@@ -4189,36 +4151,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if specialization := iwm.advisorSpecializationInstruction(execCtx, module); specialization != "" {
 				stageInstructions = strings.TrimSpace(stageInstructions) + "\n\n" + specialization
 			}
+			reviewModules := []string{module}
+			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
+				reviewModules = append([]string(nil), reviewLanes...)
+			}
 			if isPulseReviewer {
-				candidateModules := []string{module}
-				if module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
-					candidateModules = reviewLanes
-				}
-				candidates := []PulseReviewVerificationCandidate{}
-				var allowlistErrors []string
-				for _, candidateModule := range candidateModules {
-					moduleCandidates, candidateErr := LoadPulseReviewVerificationCandidates(execCtx, workspacePath, candidateModule)
-					if candidateErr != nil {
-						allowlistErrors = append(allowlistErrors, candidateModule+": "+candidateErr.Error())
-						continue
-					}
-					candidates = append(candidates, moduleCandidates...)
-				}
-				allowlistJSON, _ := json.Marshal(candidates)
-				allowlistNote := ""
-				if len(allowlistErrors) > 0 {
-					candidates = []PulseReviewVerificationCandidate{}
-					allowlistJSON, _ = json.Marshal(candidates)
-					allowlistNote = " The complete selected-lane allowlist could not be loaded; fail closed and emit zero verification markers. Errors: " + strings.Join(allowlistErrors, "; ")
-				}
+				modulesJSON, _ := json.Marshal(reviewModules)
 				stageInstructions = strings.TrimSpace(stageInstructions) + fmt.Sprintf(
-					"\n\nTRUSTED VERIFICATION ALLOWLIST (backend generated): %s.%s Emit PULSE_VERIFICATION_JSON only for an exact finding_id + fingerprint + attempt_id tuple in this list. An empty list means emit no verification markers. Evidence that contradicts any other retained finding is a new/reopened finding, not verification of a nonexistent attempt.",
-					string(allowlistJSON), allowlistNote,
+					"\n\nTYPED TOOL IDENTITY (copy exactly into every reviewer write): workspace_path=%q, pulse_run_id=%q, review_run_id=%q, selected modules=%s. record_pulse_finding.module must be one selected module. complete_pulse_review.modules must contain the complete selected list. The backend validates verification identities against the live backlog; do not invent them.",
+					workspacePath, pulseRunID, reviewRunID, string(modulesJSON),
 				)
-				if len(reviewLanes) > 1 {
-					laneJSON, _ := json.Marshal(reviewLanes)
-					stageInstructions += fmt.Sprintf("\n\nSELECTED-LANE FINDING ATTRIBUTION (backend enforced): selected lanes are %s. Treat module=workflow_review as the shared-session transport identity, not as ownership for every finding. Load backlog and prior-review evidence for each selected lane before discovery. Immediately before every CONCERNS line, emit one single-line PULSE_FINDING_JSON marker whose concern exactly matches the CONCERNS payload, whose module is exactly one selected lane, and whose issue_kind is workflow_issue or harness_issue. Ordinary workflow findings do not need an invented finding_id or target_key. Harness findings still include their complete structured harness fields. A missing, duplicate, or unselected module attribution rejects the shared review rather than silently assigning the finding to the wrong future Gate lane.", string(laneJSON))
-				}
 			}
 			stageInstruction := buildPulseReviewerInstruction(workspacePath, resultPath, stageInstructions, marker)
 			if isFixer && !isReviewFixer {
@@ -4236,18 +4178,27 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				last := len(stageSequence) - 1
 				stageSequence[last].Message = strings.TrimSpace(stageSequence[last].Message) + pulseReviewerCompletionContract(marker)
 			}
-			reviewModules := []string{module}
-			if isPulseReviewer && module == pulsemodules.WorkflowReviewID && len(reviewLanes) > 0 {
-				reviewModules = append([]string(nil), reviewLanes...)
-			}
 			persistFailure := func(message string) error {
 				if !isPulseReviewer {
 					return nil
 				}
-				body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "failed", message, time.Now())
 				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
 				defer persistCancel()
-				return RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body)
+				return CompletePulseReview(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, message, "failed")
+			}
+			verifyReviewReceipts := func() error {
+				persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
+				defer persistCancel()
+				for _, reviewModule := range reviewModules {
+					receipt, err := LoadPulseReviewReceiptForRun(persistCtx, workspacePath, reviewRunID, reviewModule)
+					if err != nil {
+						return fmt.Errorf("module %s did not call complete_pulse_review: %w", reviewModule, err)
+					}
+					if receipt.Status != "completed" {
+						return fmt.Errorf("module %s review receipt has status %q, want completed", reviewModule, receipt.Status)
+					}
+				}
+				return nil
 			}
 
 			go func() {
@@ -4299,26 +4250,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 								if turn.ID != "consolidate" {
 									return nil
 								}
-								concernsByModule, attributionErr := partitionPulseReviewConcerns(reviewResult, reviewModules)
-								if attributionErr != nil {
-									return attributionErr
-								}
-								body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", reviewResult, time.Now())
-								persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
-								defer persistCancel()
-								if writeErr := RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body); writeErr != nil {
-									return fmt.Errorf("persist combined Pulse review %s: %w", resultPath, writeErr)
-								}
-								for concernModule, concernSummary := range concernsByModule {
-									iwm.controller.recordStepConcerns(persistCtx, concernModule, map[string]string{
-										ConcernPhaseReview: concernSummary,
-									})
+								if err := verifyReviewReceipts(); err != nil {
+									return err
 								}
 								combinedReviewPersisted = true
 								return nil
 							}
 						}
-						result, runErr := iwm.runGoalAdvisorStageAgentSequenceObserved(execCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID, observer)
+						reviewCtx := withPulseReviewBinding(execCtx, reviewRunID, reviewModules)
+						result, runErr := iwm.runGoalAdvisorStageAgentSequenceObserved(reviewCtx, stageName, stageInstruction, stageSequence, stageAccess, stagePulseRunID, parentMCPSessionID, observer)
 						if runErr != nil {
 							if !combinedReviewPersisted {
 								if writeErr := persistFailure(runErr.Error()); writeErr != nil {
@@ -4344,40 +4284,17 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							if !isPulseReviewer {
 								return completed, nil
 							}
-							concernsByModule, attributionErr := partitionPulseReviewConcerns(completed, reviewModules)
-							if attributionErr != nil {
-								incompleteErr = attributionErr
-								logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned invalid lane attribution: %v", todoID, attempt, attributionErr))
+							if receiptErr := verifyReviewReceipts(); receiptErr != nil {
+								incompleteErr = receiptErr
+								logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d omitted typed completion: %v", todoID, attempt, receiptErr))
 								continue
 							}
-							body := pulseReviewResultMarkdown(pulseRunID, reviewRunID, module, "completed", completed, time.Now())
-							persistCtx, persistCancel := pulseReviewerPersistenceContext(execCtx)
-							defer persistCancel()
-							if writeErr := RecordPulseReviewForModules(persistCtx, workspacePath, reviewModules, reviewRunID, pulseRunID, "", body); writeErr != nil {
-								return "", fmt.Errorf("persist Pulse reviewer result %s: %w", resultPath, writeErr)
-							}
-							// File the review's CONCERNS: lines through the same Go-side path
-							// steps use, keyed by module, so a finding repeated across database
-							// review records becomes visible as recurrence. The Markdown stored
-							// in SQLite remains the full evidence; this is only its trackable
-							// lifecycle index.
-							for concernModule, concernSummary := range concernsByModule {
-								iwm.controller.recordStepConcerns(persistCtx, concernModule, map[string]string{
-									ConcernPhaseReview: concernSummary,
-								})
-							}
-							// Log that this reviewer ran and what it concluded. Without it,
-							// Gate cannot tell a module that keeps finding real problems from
-							// one that never finds anything, and its next choice is a guess.
-							// Recorded here rather than by the Fixer: reviews that found live
-							// breakages have gone entirely unrecorded because the Fixer never
-							// called record_pulse_result.
 							return fmt.Sprintf("Pulse reviewer completed and was persisted in SQLite.\nmodule: %s\nreview_run_id: %s\nCall get_pulse_state(view=\"review\", review_run_id=%q, module=%q) before applying or recording fixes.", module, reviewRunID, reviewRunID, module), nil
 						}
 						incompleteErr = completionErr
 						logger.Warn(fmt.Sprintf("⚠️ Pulse reviewer %q attempt %d returned incomplete output: %v", todoID, attempt, completionErr))
 					}
-					finalErr := fmt.Errorf("Pulse reviewer %q returned incomplete output twice; partial findings were rejected: %w", todoID, incompleteErr)
+					finalErr := fmt.Errorf("Pulse reviewer %q did not complete its typed SQLite receipt after two attempts: %w", todoID, incompleteErr)
 					if writeErr := persistFailure(finalErr.Error()); writeErr != nil {
 						return "", fmt.Errorf("%w; additionally failed to persist Pulse reviewer failure at %s: %w", finalErr, resultPath, writeErr)
 					}
@@ -11137,20 +11054,22 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequenceObserved(
 		configureWorkflowDBSession(toolAgentSessionID, workspacePath, DBAccessReadWrite, false)
 	}
 
-	// A fixer stage writes Pulse state, and authority is keyed by the session id
-	// its tool calls actually carry — which setupWorkshopToolAgentSession
-	// derives, and is not stageAgentIdentity. Lending to the wrong identity
-	// would authorize a session that never makes a call and leave the real child
-	// refused on its first lifecycle write.
-	//
-	// Fail closed: an unauthorized fixer would spend its whole analysis and
-	// possibly mutate files before that refusal.
-	if access == goalAdvisorStagePulseFixer {
+	// Reviewers now persist through narrow typed SQLite tools, while Fixers also
+	// hold the broader lifecycle writer surface. Both need run-bound authority
+	// on the physical child session that actually makes the MCP call. Tool
+	// allow-listing keeps reviewer authority limited to finding, verification,
+	// and receipt writes.
+	if strings.TrimSpace(pulseRunID) != "" {
 		releaseAuthority, err := lendPulseWriteAuthority(parentSessionID, toolAgentSessionID, pulseRunID)
 		if err != nil {
-			return "", fmt.Errorf("start Pulse Fixer stage %q: %w", name, err)
+			return "", fmt.Errorf("start Pulse stage %q: %w", name, err)
 		}
 		defer releaseAuthority()
+		if binding, ok := ctx.Value(pulseReviewBindingContextKey{}).(pulseReviewBinding); ok && binding.ReviewRunID != "" {
+			if err := bindPulseReviewAuthority(toolAgentSessionID, binding.ReviewRunID, binding.Modules); err != nil {
+				return "", fmt.Errorf("bind Pulse reviewer identity for stage %q: %w", name, err)
+			}
+		}
 	}
 
 	toolsToRegister, executorsToUse := filterWorkspaceToolsByName(iwm.controller.WorkspaceTools, iwm.controller.WorkspaceToolExecutors, allowedToolNames)
@@ -11264,44 +11183,20 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		pulsemodules.GoalAdvisorID,
 	)
 	defer func() {
-		status := "completed"
 		if resultErr != nil {
-			status = "failed"
-		}
-		body := pulseReviewResultMarkdown(
-			effectivePulseRunID,
-			reviewRunID,
-			pulsemodules.GoalAdvisorID,
-			status,
-			result,
-			time.Now(),
-		)
-		if err := RecordPulseReview(
-			ctx,
-			iwm.controller.GetWorkspacePath(),
-			pulsemodules.GoalAdvisorID,
-			reviewRunID,
-			effectivePulseRunID,
-			"",
-			body,
-		); err != nil {
-			if resultErr != nil {
-				resultErr = fmt.Errorf("%w; persist Goal Advisor review: %w", resultErr, err)
-			} else {
-				resultErr = fmt.Errorf("persist Goal Advisor review: %w", err)
+			if err := CompletePulseReview(ctx, iwm.controller.GetWorkspacePath(), []string{pulsemodules.GoalAdvisorID}, reviewRunID, effectivePulseRunID, resultErr.Error(), "failed"); err != nil {
+				resultErr = fmt.Errorf("%w; persist Goal Advisor failure receipt: %w", resultErr, err)
 			}
 			return
 		}
-		if resultErr == nil {
-			iwm.controller.recordStepConcerns(ctx, pulsemodules.GoalAdvisorID, map[string]string{
-				ConcernPhaseReview: result,
-			})
-			result = strings.TrimSpace(result) + fmt.Sprintf(
-				"\n\nGoal Advisor review persisted in SQLite.\nreview_run_id: %s\nmodule: %s",
-				reviewRunID,
-				pulsemodules.GoalAdvisorID,
-			)
+		if receipt, err := LoadPulseReviewReceiptForRun(ctx, iwm.controller.GetWorkspacePath(), reviewRunID, pulsemodules.GoalAdvisorID); err != nil {
+			resultErr = fmt.Errorf("Goal Advisor finalizer did not complete its typed SQLite receipt: %w", err)
+			return
+		} else if receipt.Status != "completed" {
+			resultErr = fmt.Errorf("Goal Advisor finalizer receipt has status %q, want completed", receipt.Status)
+			return
 		}
+		result = strings.TrimSpace(result) + fmt.Sprintf("\n\nGoal Advisor findings persisted in SQLite.\nreview_run_id: %s", reviewRunID)
 	}()
 
 	advisorInstruction := buildGoalAdvisorAdvisorInstruction(pulseRunID, focus)
@@ -11335,7 +11230,10 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorReviewPipeline(ctx context.
 		finalizerAccess = goalAdvisorStageFinalizerApprovedMutation
 	}
 	finalizerPrompt := buildGoalAdvisorFinalizerInstruction(pulseRunID, focus, advisorForNextStage, criticForNextStage, approvedProposals, enablePlanMutationTools)
-	finalizerResult, err := iwm.runGoalAdvisorStageAgent(ctx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, "", "")
+	finalizerPrompt += fmt.Sprintf("\n\nTYPED REVIEW COMPLETION: Persist each trackable conclusion with record_pulse_finding using workspace_path=%q, pulse_run_id=%q, review_run_id=%q, module=%q. Persist any exact allowlisted verification with record_pulse_verification. Then call complete_pulse_review with modules=[%q], a compact verdict, and status=completed. Do not encode records in final text.", iwm.controller.GetWorkspacePath(), effectivePulseRunID, reviewRunID, pulsemodules.GoalAdvisorID, pulsemodules.GoalAdvisorID)
+	parentSessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
+	finalizerCtx := withPulseReviewBinding(ctx, reviewRunID, []string{pulsemodules.GoalAdvisorID})
+	finalizerResult, err := iwm.runGoalAdvisorStageAgent(finalizerCtx, "Goal Advisor - Finalizer", finalizerPrompt, finalizerAccess, effectivePulseRunID, parentSessionID)
 	if err != nil {
 		return fmt.Sprintf("Goal Advisor finalizer stage failed: %v\n\nAdvisor draft:\n%s\n\nCritic verdict:\n%s", err, advisorForNextStage, criticForNextStage), err
 	}

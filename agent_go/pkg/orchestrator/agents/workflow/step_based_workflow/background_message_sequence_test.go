@@ -132,11 +132,11 @@ func TestParseBackgroundMessageSequenceContinuesOperationalReviewIntoFixer(t *te
 	if !strings.Contains(items[len(items)-1].Message, "same conversation") || !strings.Contains(items[len(items)-1].Message, "record_pulse_result") {
 		t.Fatalf("combined Fixer turn lacks continuation/lifecycle contract: %s", items[len(items)-1].Message)
 	}
-	if !strings.Contains(items[len(items)-1].Message, "Do not repeat the review") {
+	if !strings.Contains(items[len(items)-1].Message, "Do not repeat findings") {
 		t.Fatalf("combined Fixer turn must not produce a duplicate final consolidation: %s", items[len(items)-1].Message)
 	}
-	if !strings.Contains(items[1].Message, "evidence index") || !strings.Contains(items[1].Message, "Keep the review brief") {
-		t.Fatalf("consolidation lacks compact evidence-index contract: %s", items[1].Message)
+	if !strings.Contains(items[1].Message, "record_pulse_finding") || !strings.Contains(items[1].Message, "complete_pulse_review") {
+		t.Fatalf("consolidation lacks typed-tool result contract: %s", items[1].Message)
 	}
 }
 
@@ -148,42 +148,6 @@ func TestParseBackgroundMessageSequenceRejectsUnknownWorkflowReviewLane(t *testi
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported operational lane") {
 		t.Fatalf("expected unsupported-lane error, got %v", err)
-	}
-}
-
-func TestPartitionPulseReviewConcernsPreservesSelectedLaneOwnership(t *testing.T) {
-	summary := strings.Join([]string{
-		`PULSE_FINDING_JSON: {"module":"workflow_review","concern":"plan changelog is stale","issue_kind":"workflow_issue","summary":"stale plan"}`,
-		`CONCERNS: plan changelog is stale`,
-		`PULSE_FINDING_JSON: {"module":"llm_ops_review","concern":"tool retries duplicate cost","issue_kind":"workflow_issue","summary":"duplicate retries"}`,
-		`CONCERNS: tool retries duplicate cost`,
-	}, "\n")
-
-	partitioned, err := partitionPulseReviewConcerns(summary, []string{"workflow_review", "llm_ops_review"})
-	if err != nil {
-		t.Fatalf("partition concerns: %v", err)
-	}
-	if !strings.Contains(partitioned["workflow_review"], "plan changelog is stale") || strings.Contains(partitioned["workflow_review"], "tool retries") {
-		t.Fatalf("engineering partition = %q", partitioned["workflow_review"])
-	}
-	if !strings.Contains(partitioned["llm_ops_review"], "tool retries duplicate cost") || strings.Contains(partitioned["llm_ops_review"], "plan changelog") {
-		t.Fatalf("ops partition = %q", partitioned["llm_ops_review"])
-	}
-}
-
-func TestPartitionPulseReviewConcernsRejectsMissingOrSkippedLane(t *testing.T) {
-	for name, summary := range map[string]string{
-		"missing": `CONCERNS: unattributed problem`,
-		"skipped": strings.Join([]string{
-			`PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"wrong lane","issue_kind":"workflow_issue"}`,
-			`CONCERNS: wrong lane`,
-		}, "\n"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := partitionPulseReviewConcerns(summary, []string{"workflow_review", "llm_ops_review"}); err == nil {
-				t.Fatalf("expected %s attribution to fail", name)
-			}
-		})
 	}
 }
 

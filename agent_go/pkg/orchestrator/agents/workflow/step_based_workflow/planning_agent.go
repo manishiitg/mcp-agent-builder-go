@@ -1155,7 +1155,7 @@ func getAddRegularStepSchema() string {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED: Complete deterministic execution contract for the checked-in learnings/<step-id>/main.py script. Specify exact inputs, fixed API/SDK/CLI operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. This is not an LLM prompt; conversational or judgment-heavy work belongs in add_message_sequence_step."
+				"description": "REQUIRED: Complete semantic execution contract for the checked-in learnings/<step-id>/main.py script. Specify inputs, target-domain operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics into this field. This is not an LLM prompt; conversational or judgment-heavy work belongs in add_message_sequence_step."
 			},
 			"context_dependencies": {
 				"type": "array",
@@ -1230,7 +1230,7 @@ func getAddMessageSequenceStepSchema() string {
 		"properties": {
 			"id": {"type": "string", "description": "REQUIRED: Stable URL-friendly step ID."},
 			"title": {"type": "string", "description": "REQUIRED: Short title for the message sequence step."},
-			"description": {"type": "string", "description": "REQUIRED: The opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation — identical to how a todo_task's description is its first turn. Write it as an actionable work instruction, not throwaway metadata (anything you put here runs). Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes."},
+			"description": {"type": "string", "description": "REQUIRED: The opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation — identical to how a todo_task's description is its first turn. Write it as an actionable semantic workflow instruction: domain action, inputs, durable result, failure behavior, and verification. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes."},
 			"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "REQUIRED: Prior context files this sequence depends on. Use [] if none."},
 			"context_output": {"type": "string", "description": "OPTIONAL: Summary/result file for later steps. Omit when the step writes its result to the db (validate via validation_schema.db)."},
 			"items": {
@@ -1243,7 +1243,7 @@ func getAddMessageSequenceStepSchema() string {
 						"type": {"type": "string", "enum": ["user_message", "prevalidation", "foreach"], "description": "user_message, prevalidation, or foreach"},
 						"kind": {"type": "string", "description": "Optional shorthand that narrows this turn's inherited writes to one store: learning, knowledgebase, or db. Explicit non-empty write_access overrides kind."},
 						"title": {"type": "string"},
-						"message": {"type": "string", "description": "For user_message items: a follow-up instruction run in the same persistent conversation. Prefer evidence-seeking validation/repair turns (e.g. \"Re-open the output. Did you actually satisfy every criterion? Quote the evidence, then fix every unsupported or incomplete item.\") over routine subtask instructions. For foreach items: a Go text/template rendered once per row of source, with the row bound to '.' (e.g. 'Process {{.id}}: {{.task}}')."},
+						"message": {"type": "string", "description": "For user_message items: a follow-up semantic workflow instruction run in the same persistent conversation. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Prefer evidence-seeking validation/repair turns (e.g. \"Re-open the output. Did you actually satisfy every criterion? Quote the evidence, then fix every unsupported or incomplete item.\") over routine subtask instructions. For foreach items: a Go text/template rendered once per row of source, with the row bound to '.' (e.g. 'Process {{.id}}: {{.task}}')."},
 						"write_access": {
 							"type": "object",
 							"description": "Optional item-scoped narrowing. Omit it to inherit the step-level DB/KB/learnings write permissions. A non-empty object limits this turn to the selected stores and can never exceed step-level access. Folder-level booleans only — NO per-file path scoping (a \"paths\" list is rejected).",
@@ -3480,6 +3480,9 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 		if err != nil {
 			return "", err
 		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
+			return "", err
+		}
 
 		// Convert args to JSON and unmarshal to PartialPlanStep
 		stepJSON, err := json.Marshal(args)
@@ -3614,6 +3617,9 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 		stepJSON, err := json.Marshal(args)
@@ -3951,6 +3957,9 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 		if err != nil {
 			return "", err
 		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
+			return "", err
+		}
 
 		stepJSON, err := json.Marshal(args)
 		if err != nil {
@@ -4041,6 +4050,9 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -4592,6 +4604,9 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -5163,6 +5178,9 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 		if err != nil {
 			return "", err
 		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
+			return "", err
+		}
 
 		// Accept parent_step_id or legacy alias step_id
 		parentStepID, ok := args["parent_step_id"].(string)
@@ -5195,6 +5213,11 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 						return "", fmt.Errorf("failed to parse predefined_route JSON string: %w", err)
 					}
 				}
+			}
+		}
+		if newRouteRaw != nil {
+			if err := validateWorkflowArtifactMutationValue("step.new_route", newRouteRaw); err != nil {
+				return "", err
 			}
 		}
 		if newRouteRaw == nil {
@@ -5297,6 +5320,9 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 

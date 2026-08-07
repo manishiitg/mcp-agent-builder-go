@@ -70,6 +70,8 @@ with source/provenance. They do not own:
 - selectors, tool quirks, retry rules, or execution recipes (Learnings);
 - run metrics, current status, queues, actions, or timestamps (DB/run evidence);
 - incident narratives, findings, attempts, decisions, or fix history (Pulse).
+- shared AgentWorks bridge/auth, Folder Guard, managed-tool invocation,
+  tool-discovery, or coding-session mechanics (platform prompt/tool schema).
 
 Enforce **one semantic item, one authoritative owner**. A note may reference a
 stable record ID/path in another owner, but must not copy its content. Never

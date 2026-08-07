@@ -93,6 +93,36 @@ func TestCleanupStaleCodingAgentTmuxSessionsKeepsRecentCompletedSession(t *testi
 	}
 }
 
+func TestCleanupStaleCodingAgentTmuxSessionsClosesCompletedScheduleWithoutRestart(t *testing.T) {
+	now := time.Now()
+	store := terminals.NewStore()
+	sessionID := "schedule-cron--123"
+	tmuxSession := "mlp-claude-code-scheduled"
+	terminalID := sessionID + ":main:" + sessionID
+	store.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(now, sessionID, "main:"+sessionID, tmuxSession))
+	if _, ok := store.MarkTurnCompleted(terminalID); !ok {
+		t.Fatal("expected scheduled main terminal")
+	}
+	settled, _ := store.GetRaw(terminalID)
+	api := &StreamingAPI{
+		terminalStore: store,
+		activeSessions: map[string]*ActiveSessionInfo{
+			sessionID: {SessionID: sessionID, Status: "completed", TriggeredBy: "cron"},
+		},
+	}
+
+	gotArgs := stubTerminalTmuxCommand(t)
+	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(29 * time.Second)); closed != 0 {
+		t.Fatalf("closed before bounded grace = %d, want 0", closed)
+	}
+	if closed := api.cleanupStaleCodingAgentTmuxSessions(settled.UpdatedAt.Add(31 * time.Second)); closed != 1 {
+		t.Fatalf("closed after bounded grace = %d, want 1", closed)
+	}
+	if got := strings.Join(*gotArgs, " "); got != "kill-session -t "+tmuxSession {
+		t.Fatalf("tmux args = %q, want kill-session", got)
+	}
+}
+
 func TestCleanupStaleCodingAgentTmuxSessionsKeepsRunningActiveSession(t *testing.T) {
 	now := time.Now()
 	store := terminals.NewStore()
@@ -485,6 +515,18 @@ func TestCodingAgentSnapshotIsMainAgentRequiresOwnershipEvidence(t *testing.T) {
 				t.Fatalf("codingAgentSnapshotIsMainAgent() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestCodingAgentTmuxOrphanIdleTimeoutHasOneHourCeiling(t *testing.T) {
+	t.Setenv(envCodingAgentTmuxOrphanIdleSeconds, "7200")
+	if got := codingAgentTmuxOrphanIdleTimeout(); got != time.Hour {
+		t.Fatalf("timeout = %v, want one-hour ceiling", got)
+	}
+
+	t.Setenv(envCodingAgentTmuxOrphanIdleSeconds, "900")
+	if got := codingAgentTmuxOrphanIdleTimeout(); got != 15*time.Minute {
+		t.Fatalf("shorter timeout = %v, want 15m", got)
 	}
 }
 

@@ -7,7 +7,6 @@ import {
   buildPulseWorkspaceModuleSummaries,
   normalizePulseWorkspaceModule,
   selectPulseWorkspaceModule,
-  summarizePulseReviewStorage,
 } from './pulseWorkspaceUtils'
 
 const definitions = [
@@ -39,8 +38,8 @@ function review(module: string, recordedAt: string): PulseReviewRecord {
     id: Date.parse(recordedAt),
     module,
     review_run_id: `${recordedAt}_${module}`,
-    artifact_kind: 'review',
-    artifact_bytes: 10,
+    finding_count: 0,
+    verification_count: 0,
     recorded_at: recordedAt,
   }
 }
@@ -110,17 +109,4 @@ describe('Pulse workspace model', () => {
     expect(selectPulseWorkspaceModule(summaries)).toBe('bug_review')
   })
 
-  it('separates migrated file history from SQLite-native reviews', () => {
-    const migrated = {
-      ...review('bug_review', '2026-07-30T10:00:00Z'),
-      legacy_source_path: 'pulse/reviews/legacy-run/bug_review.md',
-    }
-    const native = review('bug_review', '2026-07-31T10:00:00Z')
-
-    expect(summarizePulseReviewStorage([migrated, native])).toEqual({
-      total: 2,
-      migrated: 1,
-      native: 1,
-    })
-  })
 })

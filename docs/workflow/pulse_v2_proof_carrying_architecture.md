@@ -76,7 +76,8 @@ The current Pulse loop is broadly:
 2. A consolidated parent launches read-only module reviewers in batches.
 3. The same parent becomes the single Pulse Fixer and applies bounded changes.
 4. A finalizer updates the dashboard, backs up, publishes, and notifies.
-5. SQLite, reviewer Markdown, `builder/improve.html`, cards, and run metadata
+5. SQLite lifecycle records, compact review receipts, `builder/improve.html`,
+   cards, and run metadata
    preserve different parts of the outcome and recovery state.
 
 The canonical reviewer-perspective set currently contains:
@@ -212,8 +213,9 @@ Pulse state currently spans:
 - `pulse_fix_verifications` and `pulse_finding_events`;
 - `pulse_final_command_state`;
 - `eval_results`;
-- full reviewer Markdown stored as TEXT in `pulse_review_log` (with retained
-  legacy `pulse/reviews/**/*.md` files during the v1.0.17 compatibility window);
+- compact reviewer receipts in `pulse_review_log`; typed reviewer tools write
+  findings and verifications directly, while reviewer prose is transient,
+  and legacy `pulse/reviews/**/*.md` files are removed after conversion;
 - `builder/improve.html`;
 - the hidden `#pulse-agent-handoff` recovery marker;
 - dashboard cards;
@@ -222,7 +224,7 @@ Pulse state currently spans:
 
 Some duplication is intentional, but recovery guidance must now explain which
 copy is authoritative and how to repair one mirror from another. Once a
-recovery process has to reconcile HTML, SQLite, reviewer artifacts, and
+recovery process has to reconcile HTML, SQLite lifecycle records, and
 scheduler state, presentation has become part of the transaction protocol.
 
 The system needs one immutable operational ledger and code-owned projections.
@@ -1009,8 +1011,8 @@ Pulse v2 should be considered successful when:
 8. Should static Pulse publishing happen on every state change or be
    source-hash gated?
 9. Which Goal Advisor proposals may enter a canary without explicit approval?
-10. How should historical `pulse_module_audit` and reviewer Markdown be exposed
-    after migration?
+10. How should historical `pulse_module_audit` and compact review receipts be
+    exposed after migration?
 
 ## Non-goals
 
@@ -1071,8 +1073,8 @@ contained `learning_health` / `knowledgebase_health` / `db_health` but **not**
 persist its result with `module "stores_health" is not a valid Pulse review
 module`. The reviewer would run, produce findings, and lose them at write time.
 
-Fixed by adding `stores_health` while retaining the three retired names so
-historical `pulse/reviews/<run>/<module>.md` artifacts stay readable. Two
+Fixed by adding `stores_health` while retaining the three retired identities so
+historical compact receipts remain readable. Two
 regression tests added, verified by revert (they reproduce the exact production
 error string).
 
@@ -1906,7 +1908,7 @@ the result is `inconclusive`, not permission to proceed.
 
 The missing cost model is real. Comparing Stage A only with token savings would
 still be incomplete: registry/state improvements also reduce outages, lost
-review artifacts, incorrect fixes, and operator investigation time.
+review findings, incorrect fixes, and operator investigation time.
 
 Track both operating cost and assurance value.
 
@@ -2327,8 +2329,10 @@ to produce anything; someone has to go and look.
 
 That is the shape now built. A `changed_unverified` finding names a `next_check`
 boundary; when a later reviewer runs and that evidence has arrived, it judges the
-finding before doing any discovery and emits a `PULSE_VERIFICATION_JSON` marker
-with the verdict. The Fixer routes it: `passed` closes as `fixed_verified`,
+finding before doing any discovery and calls the typed
+`record_pulse_verification` tool with the verdict. This replaced the former
+`PULSE_VERIFICATION_JSON` text transport; the lifecycle behavior is unchanged.
+The Fixer routes it: `passed` closes as `fixed_verified`,
 `failed` reopens, `inconclusive` leaves it awaiting the boundary it still names.
 Verification does not count against the finding cap, so a reviewer never has to
 choose between confirming past work and finding new problems.
@@ -2338,13 +2342,14 @@ verification is weak; they were fixes waiting on runs that then completed with
 nobody assigned to check them, so each pass repaired them again. rtslatency
 carried one finding at `seen_count` 4 for exactly this reason.
 
-### Confirmed defect: attemptless verification can discard a complete review (2026-08-03)
+### Confirmed defect: text-encoded verification could discard a complete review (2026-08-03)
 
-**Status: implemented and verified (2026-08-03).** The latest
+**Status: superseded by typed reviewer tools (2026-08-06).** The latest
 `build-in-public` Artifact Review demonstrated a contract seam between the
 review instructions and the persistence layer. The reviewer completed 11m40s
 of work, made 46 tool calls, and consumed 3.39M cumulative token operations,
-but its complete review was rejected before `pulse_review_log` persistence.
+but its structured terminal result was rejected before `pulse_review_log`
+persistence.
 
 The first rejected marker was:
 
@@ -2358,7 +2363,7 @@ The exact validation failure was:
 verification marker line 15 requires finding_id, fingerprint, attempt_id, expected, and observed
 ```
 
-Nine of the ten `PULSE_VERIFICATION_JSON` markers carried an empty
+Nine of the ten former `PULSE_VERIFICATION_JSON` markers carried an empty
 `attempt_id`. Only `PUL-DB6AC22E` named a real attempt. This was not a malformed
 finding analysis: the later, module-specific reviewer brief asked the reviewer
 to classify all ten retained findings and said to include an attempt ID "when
@@ -2367,8 +2372,8 @@ already rejected or closed with prior verification. None was an active
 `changed_unverified` fix awaiting proof, so the correct verification allowlist
 for this pass was empty.
 
-The Go invariant is intentional. `ExtractPulseReviewVerifications` requires a
-non-empty attempt ID, and the terminal module validator later joins the review
+The lifecycle invariant is intentional. `record_pulse_verification` requires a
+non-empty attempt ID and joins the review
 verdict to the exact finding disposition by finding ID, fingerprint, and
 attempt ID. A `passed` verdict becomes `fixed_verified`; `failed` reopens the
 attempt; `inconclusive` remains `changed_unverified`. Relaxing only the parser
@@ -2378,13 +2383,13 @@ and [`pulse_worklist.go`](../../agent_go/cmd/server/pulse_worklist.go).
 
 The correct contract is narrower:
 
-- `PULSE_VERIFICATION_JSON` is proof about a **specific Fixer attempt**, not a
+- `record_pulse_verification` records proof about a **specific Fixer attempt**, not a
   generic re-check of any retained finding.
 - Only an owned `changed_unverified` finding with a non-empty `attempt_id` and
   an arrived `next_check` boundary is eligible.
 - Acknowledged, blocked, rejected, already-closed, suppressed, and legacy
-  attemptless findings are classified in the retained-finding manifest and
-  prose. They emit no verification marker.
+  attemptless findings are classified in the retained-finding manifest. They
+  do not call the verification tool.
 - Evidence contradicting a closed finding is a reopen/rediscovery event. It is
   not retroactively attached to an absent Fixer attempt.
 

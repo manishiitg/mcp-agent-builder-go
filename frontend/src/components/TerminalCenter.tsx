@@ -903,6 +903,7 @@ function formatSelectedTerminalMeta(terminal: TerminalSnapshot): string {
   return [
     terminal.execution_tree_placeholder ? terminal.display_meta : '',
     terminalStepTypeLabel(terminal),
+    formatStartedAt(terminal),
     formatUpdatedAge(terminal),
   ].filter(Boolean).join(' · ')
 }
@@ -1168,6 +1169,18 @@ function formatUpdatedAge(terminal: TerminalSnapshot): string {
   if (minutes < 60) return `updated ${minutes}m ago`
   const hours = Math.floor(minutes / 60)
   return `updated ${hours}h ago`
+}
+
+function formatStartedAt(terminal: TerminalSnapshot): string {
+  const startedAt = terminalCreatedTime(terminal)
+  if (!startedAt) return ''
+
+  const date = new Date(startedAt)
+  const isToday = date.toDateString() === new Date().toDateString()
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return isToday
+    ? `started ${time}`
+    : `started ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
 function formatRailAge(terminal: TerminalSnapshot): { label: string; title: string } | null {

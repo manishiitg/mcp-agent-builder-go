@@ -559,7 +559,9 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
 		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
 		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
-		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT,
+		consumed_by TEXT NOT NULL DEFAULT '', outcome_summary TEXT NOT NULL DEFAULT '',
+		consumed_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create human inputs table: %v", err)
 	}
 	err = RecordPulseFindingDispositionsTx(ctx, db, module, pulseRunID,
@@ -590,6 +592,29 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 		[]PulseFindingDisposition{disposition}, ""); err != nil {
 		t.Fatalf("a genuine pending decision was rejected: %v", err)
 	}
+
+	// Once the operator answers and the linked finding reaches a concrete
+	// terminal outcome, the same atomic lifecycle write consumes the decision.
+	// This prevents the next loop-closure pass from fabricating
+	// answer_not_applied after the repair/rejection was already recorded.
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET status='answered' WHERE id='open-q'`); err != nil {
+		t.Fatalf("answer decision: %v", err)
+	}
+	resolved := disposition
+	resolved.Disposition = FindingDispositionRejected
+	resolved.HumanInputID = ""
+	resolved.Summary = "The answered option retired this repair safely."
+	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2",
+		[]PulseFindingDisposition{resolved}, "2026-08-07T12:00:00Z"); err != nil {
+		t.Fatalf("record linked decision outcome: %v", err)
+	}
+	var status, consumedBy, outcome string
+	if err := db.QueryRowContext(ctx, `SELECT status, consumed_by, outcome_summary FROM report_human_inputs WHERE id='open-q'`).Scan(&status, &consumedBy, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if status != "consumed" || consumedBy != "pulse" || outcome != resolved.Summary {
+		t.Fatalf("linked decision not consumed: status=%q consumed_by=%q outcome=%q", status, consumedBy, outcome)
+	}
 }
 
 func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
@@ -610,7 +635,9 @@ func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
 		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
 		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
-		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT,
+		consumed_by TEXT NOT NULL DEFAULT '', outcome_summary TEXT NOT NULL DEFAULT '',
+		consumed_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create human inputs table: %v", err)
 	}
 
@@ -649,7 +676,9 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (
 		id TEXT PRIMARY KEY, workspace_path TEXT, source TEXT, priority TEXT,
 		question TEXT, context TEXT, options_json TEXT, allow_free_text INTEGER,
-		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT)`); err != nil {
+		status TEXT, selected_option_id TEXT, note TEXT, run_id TEXT,
+		consumed_by TEXT NOT NULL DEFAULT '', outcome_summary TEXT NOT NULL DEFAULT '',
+		consumed_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create human inputs table: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, source, status) VALUES
@@ -681,6 +710,29 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
 		[]PulseFindingDisposition{disposition}, ""); err != nil {
 		t.Fatalf("Goal Advisor's real pending decision was rejected: %v", err)
+	}
+
+	resolved := disposition
+	resolved.Disposition = FindingDispositionRejected
+	resolved.HumanInputID = ""
+	resolved.Summary = "The answered decision rejected this experiment."
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, "pulse-goal-decision-2",
+		[]PulseFindingDisposition{resolved}, "2026-08-07T13:00:00Z"); err == nil || !strings.Contains(err.Error(), `status "pending"`) {
+		t.Fatalf("Goal Advisor closed a decision before it was answered: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET status='answered' WHERE id='plan-proposal-owned-channel'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, "pulse-goal-decision-2",
+		[]PulseFindingDisposition{resolved}, "2026-08-07T13:00:00Z"); err != nil {
+		t.Fatalf("Goal Advisor could not apply an answered decision: %v", err)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM report_human_inputs WHERE id='plan-proposal-owned-channel'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "consumed" {
+		t.Fatalf("applied advisor decision status=%q, want consumed", status)
 	}
 }
 

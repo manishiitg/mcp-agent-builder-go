@@ -2,9 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,19 +15,22 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
-const legacyPulseReviewImportsSchema = `CREATE TABLE IF NOT EXISTS pulse_review_artifact_imports (
+const legacyPulseReviewCleanupLedgerSchema = `CREATE TABLE IF NOT EXISTS pulse_review_artifact_imports (
 	legacy_path TEXT PRIMARY KEY,
-	content_sha256 TEXT NOT NULL,
-	imported_at TEXT NOT NULL
+	content_sha256 TEXT NOT NULL DEFAULT '',
+	imported_at TEXT NOT NULL DEFAULT ''
 )`
 
-type PulseReviewArtifactMigrationResult struct {
+// PulseLegacyReviewMigrationResult describes the one-time removal of the old
+// pulse/reviews Markdown transport. Recognized review files become compact
+// receipts plus lifecycle findings; evidence packets are redundant transport
+// data and are removed. Unknown files are never deleted automatically.
+type PulseLegacyReviewMigrationResult struct {
 	FilesFound          int      `json:"files_found"`
-	ReviewArtifacts     int      `json:"review_artifacts"`
-	AuxiliaryArtifacts  int      `json:"auxiliary_artifacts"`
+	ReviewReceipts      int      `json:"review_receipts"`
+	AuxiliaryFiles      int      `json:"auxiliary_files"`
 	ConcernOccurrences  int      `json:"concern_occurrences"`
-	AlreadyImported     int      `json:"already_imported"`
-	FilesRetained       int      `json:"files_retained"`
+	FilesRemoved        int      `json:"files_removed"`
 	UnrecognizedSkipped []string `json:"unrecognized_skipped,omitempty"`
 }
 
@@ -57,13 +58,13 @@ func pulseReviewRecordedAt(markdown, path string) string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
-func legacyPulseReviewIdentity(path string) (module, artifactKind string, ok bool) {
+func legacyPulseReviewIdentity(path string) (module, kind string, ok bool) {
 	name := strings.ToLower(filepath.Base(path))
-	artifactKind = "review"
+	kind = "review"
 	switch {
 	case strings.HasSuffix(name, ".packet.md"):
 		module = strings.TrimSuffix(name, ".packet.md")
-		artifactKind = "packet"
+		kind = "packet"
 	case strings.HasSuffix(name, ".md"):
 		module = strings.TrimSuffix(name, ".md")
 	default:
@@ -73,16 +74,16 @@ func legacyPulseReviewIdentity(path string) (module, artifactKind string, ok boo
 	if !pulsemodules.IsValid(module) {
 		return "", "", false
 	}
-	return module, artifactKind, true
+	return module, kind, true
 }
 
-// ImportLegacyPulseReviewArtifacts migrates the old pulse/reviews/**/*.md
-// transport into SQLite. Full Markdown is retained byte-for-byte in
-// pulse_review_log; only explicit CONCERNS lines become open lifecycle rows.
-// Source files are intentionally retained during the compatibility phase. A
-// later version may remove them only after DB/UI read parity is proven.
-func ImportLegacyPulseReviewArtifacts(ctx context.Context, workspacePath string) (PulseReviewArtifactMigrationResult, error) {
-	result := PulseReviewArtifactMigrationResult{UnrecognizedSkipped: []string{}}
+// MigrateLegacyPulseReviews removes the obsolete pulse/reviews/**/*.md
+// transport. Each recognized review is transactionally converted to a compact
+// receipt and lifecycle findings before its source file is removed. Packet
+// files contain only duplicated transport evidence and are removed directly.
+// A failed conversion leaves its source file intact, making retry safe.
+func MigrateLegacyPulseReviews(ctx context.Context, workspacePath string) (PulseLegacyReviewMigrationResult, error) {
+	result := PulseLegacyReviewMigrationResult{UnrecognizedSkipped: []string{}}
 	workflowRoot := filepath.Dir(filepath.Dir(runConcernsDBPath(workspacePath)))
 	reviewsRoot := filepath.Join(workflowRoot, "pulse", "reviews")
 	if _, err := os.Stat(reviewsRoot); err != nil {
@@ -118,7 +119,7 @@ func ImportLegacyPulseReviewArtifacts(ctx context.Context, workspacePath string)
 	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
 		return result, err
 	}
-	if _, err := db.ExecContext(ctx, legacyPulseReviewImportsSchema); err != nil {
+	if _, err := db.ExecContext(ctx, legacyPulseReviewCleanupLedgerSchema); err != nil {
 		return result, err
 	}
 
@@ -128,49 +129,60 @@ func ImportLegacyPulseReviewArtifacts(ctx context.Context, workspacePath string)
 			return result, err
 		}
 		relativePath = filepath.ToSlash(relativePath)
-		module, artifactKind, ok := legacyPulseReviewIdentity(path)
+		module, kind, ok := legacyPulseReviewIdentity(path)
 		if !ok {
 			result.UnrecognizedSkipped = append(result.UnrecognizedSkipped, relativePath)
 			continue
 		}
-		contentBytes, err := os.ReadFile(path)
+		if kind == "packet" {
+			if err := os.Remove(path); err != nil {
+				return result, fmt.Errorf("remove legacy Pulse packet %s: %w", relativePath, err)
+			}
+			result.AuxiliaryFiles++
+			result.FilesRemoved++
+			continue
+		}
+
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return result, fmt.Errorf("read legacy Pulse review %s: %w", relativePath, err)
 		}
-		markdown := string(contentBytes)
-		sum := sha256.Sum256(contentBytes)
-		contentSHA := hex.EncodeToString(sum[:])
+		markdown := string(content)
+		reviewRunID := pulseReviewHeaderValue(markdown, "Review run")
+		if reviewRunID == "" {
+			reviewRunID = filepath.Base(filepath.Dir(path))
+		}
+		originalReviewRunID := reviewRunID
+		// Several retired reviewers now normalize into one current lane. Keep
+		// each historical receipt distinct instead of letting the compact
+		// receipt upsert collapse them onto one (module, review_run_id) pair.
+		legacyName := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".md")
+		pulseRunID := pulseReviewHeaderValue(markdown, "Pulse run")
+		status := pulseReviewHeaderValue(markdown, "Status")
+		recordedAt := pulseReviewRecordedAt(markdown, path)
+		verifications, _ := extractLegacyPulseReviewVerifications(markdown)
+		concernLines := ParseConcernLines(markdown)
+
+		alreadyConverted, err := legacyPulseReviewAlreadyConverted(ctx, db, relativePath, originalReviewRunID, module, legacyName)
+		if err != nil {
+			return result, err
+		}
+		if alreadyConverted {
+			if err := os.Remove(path); err != nil {
+				return result, fmt.Errorf("remove already-migrated Pulse review %s: %w", relativePath, err)
+			}
+			result.FilesRemoved++
+			continue
+		}
+		reviewRunID += "_legacy_" + legacyName
 
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return result, err
 		}
-		var existingSHA string
-		err = tx.QueryRowContext(ctx, `SELECT content_sha256 FROM pulse_review_artifact_imports WHERE legacy_path=?`, relativePath).Scan(&existingSHA)
-		if err == nil {
-			tx.Rollback()
-			if existingSHA != contentSHA {
-				return result, fmt.Errorf("legacy Pulse review %s changed after it was imported", relativePath)
-			}
-			result.AlreadyImported++
-			result.FilesRetained++
-			continue
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			tx.Rollback()
-			return result, err
-		}
-
-		reviewRunID := pulseReviewHeaderValue(markdown, "Review run")
-		if reviewRunID == "" {
-			reviewRunID = filepath.Base(filepath.Dir(path))
-		}
-		pulseRunID := pulseReviewHeaderValue(markdown, "Pulse run")
-		status := pulseReviewHeaderValue(markdown, "Status")
-		recordedAt := pulseReviewRecordedAt(markdown, path)
 		if err := recordPulseReviewOnDB(
-			ctx, tx, module, reviewRunID, pulseRunID, artifactKind,
-			relativePath, status, markdown, recordedAt,
+			ctx, tx, module, reviewRunID, pulseRunID, extractReviewVerdict(markdown),
+			status, len(concernLines), verifications, recordedAt,
 		); err != nil {
 			tx.Rollback()
 			return result, err
@@ -179,7 +191,6 @@ func ImportLegacyPulseReviewArtifacts(ctx context.Context, workspacePath string)
 		if runIdentity == "" {
 			runIdentity = reviewRunID
 		}
-		concernLines := ParseConcernLines(markdown)
 		recordedConcerns, err := recordRunConcernLinesAt(
 			ctx, tx, runIdentity, "", module, ConcernPhaseReview, concernLines, recordedAt,
 		)
@@ -187,22 +198,66 @@ func ImportLegacyPulseReviewArtifacts(ctx context.Context, workspacePath string)
 			tx.Rollback()
 			return result, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_artifact_imports
-			(legacy_path, content_sha256, imported_at) VALUES (?, ?, ?)`,
-			relativePath, contentSHA, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-			tx.Rollback()
-			return result, err
-		}
 		if err := tx.Commit(); err != nil {
 			return result, err
 		}
-		if artifactKind == "review" {
-			result.ReviewArtifacts++
-		} else {
-			result.AuxiliaryArtifacts++
+		if err := os.Remove(path); err != nil {
+			return result, fmt.Errorf("remove migrated Pulse review %s: %w", relativePath, err)
 		}
+		result.ReviewReceipts++
 		result.ConcernOccurrences += recordedConcerns
-		result.FilesRetained++
+		result.FilesRemoved++
+	}
+
+	removeEmptyPulseReviewDirs(reviewsRoot)
+	if len(result.UnrecognizedSkipped) == 0 {
+		if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS pulse_review_artifact_imports`); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
+}
+
+func legacyPulseReviewAlreadyConverted(
+	ctx context.Context,
+	db *sql.DB,
+	relativePath, reviewRunID, normalizedModule, legacyName string,
+) (bool, error) {
+	var exists int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM pulse_review_artifact_imports WHERE legacy_path=? LIMIT 1`,
+		relativePath,
+	).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	legacyModule := strings.TrimSuffix(legacyName, ".packet")
+	err = db.QueryRowContext(ctx, `SELECT 1 FROM pulse_review_log
+		WHERE review_run_id=? AND (module=? OR module=?) LIMIT 1`,
+		reviewRunID, normalizedModule, legacyModule,
+	).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, err
+}
+
+func removeEmptyPulseReviewDirs(root string) {
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		_ = os.Remove(dir) // succeeds only when empty
+	}
 }

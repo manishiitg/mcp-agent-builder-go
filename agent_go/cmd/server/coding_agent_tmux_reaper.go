@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultCodingAgentTmuxOrphanIdleTimeout = 3 * time.Hour
+	defaultCodingAgentTmuxOrphanIdleTimeout = time.Hour
 	envCodingAgentTmuxOrphanIdleSeconds     = "MCP_CODING_AGENT_TMUX_ORPHAN_IDLE_TIMEOUT_SECONDS"
 )
 
@@ -38,7 +38,14 @@ func codingAgentTmuxOrphanIdleTimeout() time.Duration {
 	if err != nil || seconds <= 0 {
 		return defaultCodingAgentTmuxOrphanIdleTimeout
 	}
-	return time.Duration(seconds) * time.Second
+	timeout := time.Duration(seconds) * time.Second
+	// A retained interactive shell is a short continuation window, never an
+	// unbounded process lease. Configuration may shorten this ceiling but may
+	// not extend it beyond one hour.
+	if timeout > defaultCodingAgentTmuxOrphanIdleTimeout {
+		return defaultCodingAgentTmuxOrphanIdleTimeout
+	}
+	return timeout
 }
 
 func (api *StreamingAPI) cleanupStaleCodingAgentTmuxSessions(now time.Time) int {

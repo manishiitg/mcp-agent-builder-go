@@ -155,6 +155,7 @@ func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Requ
 	if len(scopes) == 0 {
 		scopes = []string{sessionID}
 	}
+	scopes = api.includePulseRecoveryTerminalScopes(scopes)
 	var snapshots []terminals.Snapshot
 	seenTerminalIDs := make(map[string]struct{})
 	for _, scope := range scopes {
@@ -201,6 +202,58 @@ func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Requ
 	_ = json.NewEncoder(w).Encode(listTerminalsResponse{
 		Terminals: filtered, Total: len(filtered), RuntimeStates: runtimeStates,
 	})
+}
+
+// includePulseRecoveryTerminalScopes projects replacement Pulse sessions into
+// the original Schedule tab. Recovery sessions are deliberately separate for
+// cancellation and tool authority, but they are one user-visible run. Other
+// child kinds (for example independent reviewers) remain separate agents and
+// must not replace the pinned Main agent.
+func (api *StreamingAPI) includePulseRecoveryTerminalScopes(scopes []string) []string {
+	if api == nil || len(scopes) == 0 {
+		return scopes
+	}
+	wantedParents := make(map[string]struct{}, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	out := make([]string, 0, len(scopes)+1)
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		if _, exists := seen[scope]; exists {
+			continue
+		}
+		seen[scope] = struct{}{}
+		wantedParents[scope] = struct{}{}
+		out = append(out, scope)
+	}
+
+	api.activeSessionsMux.RLock()
+	children := make([]string, 0)
+	for childSessionID, session := range api.activeSessions {
+		if session == nil || strings.TrimSpace(session.SessionKind) != "pulse_recovery" {
+			continue
+		}
+		if _, wanted := wantedParents[strings.TrimSpace(session.ParentSessionID)]; !wanted {
+			continue
+		}
+		childSessionID = strings.TrimSpace(childSessionID)
+		if childSessionID != "" {
+			children = append(children, childSessionID)
+		}
+	}
+	api.activeSessionsMux.RUnlock()
+
+	sort.Strings(children)
+	for _, childSessionID := range children {
+		if _, exists := seen[childSessionID]; exists {
+			continue
+		}
+		seen[childSessionID] = struct{}{}
+		out = append(out, childSessionID)
+	}
+	return out
 }
 
 // handleGetTerminal returns one current view-only terminal snapshot.
@@ -686,7 +739,9 @@ func (api *StreamingAPI) handleRefreshTerminal(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(terminalActionResponse{OK: true, Terminal: api.enrichTerminalSnapshot(r.Context(), newTerminalPlanTypeResolver(r.Context()), updated)})
 }
 
-// handleKillTerminal kills the backing tmux session and marks the UI snapshot failed.
+// handleKillTerminal kills the backing tmux session. An active execution is
+// failed; a logically completed execution keeps its completed outcome while
+// its retained continuation process is closed.
 // POST /api/terminals/{terminal_id}/kill
 func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -702,11 +757,6 @@ func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Terminal has no tmux session", http.StatusBadRequest)
 		return
 	}
-	if !snapshot.Active {
-		_ = json.NewEncoder(w).Encode(terminalActionResponse{OK: true, Terminal: api.enrichTerminalSnapshot(r.Context(), newTerminalPlanTypeResolver(r.Context()), snapshot)})
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), terminalTmuxActionTimeout)
 	defer cancel()
 	if err := runTerminalTmuxCommand(ctx, "", "kill-session", "-t", snapshot.TmuxSession); err != nil {
@@ -715,12 +765,16 @@ func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	updated, ok := api.terminalStore.MarkFailed(snapshot.TerminalID)
-	if !ok {
-		http.Error(w, "Terminal not found", http.StatusNotFound)
-		return
+	updated := snapshot
+	if snapshot.Active {
+		var marked bool
+		updated, marked = api.terminalStore.MarkFailed(snapshot.TerminalID)
+		if !marked {
+			http.Error(w, "Terminal not found", http.StatusNotFound)
+			return
+		}
+		api.reconcileUnexpectedTerminalExit(snapshot, "killed by operator")
 	}
-	api.reconcileUnexpectedTerminalExit(snapshot, "killed by operator")
 	if registry := api.ensureTerminalLeaseRegistry(); registry != nil {
 		registry.MarkClosed(snapshot.TmuxSession, "killed by operator", time.Now())
 	}

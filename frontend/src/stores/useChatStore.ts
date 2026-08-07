@@ -377,6 +377,7 @@ export interface ChatTab {
     isBotRun?: boolean // True when tab is observing a bot-triggered session (read-only live view)
     botPlatform?: string // Display label for the bot platform, e.g. Slack or WhatsApp
     readOnlyRestoredAt?: number // Timestamp for an explicit user-opened Schedule/Bot restore
+    userInteractiveContinuation?: boolean // Observed run promoted to an interactive chat without changing session ID
   }
 }
 

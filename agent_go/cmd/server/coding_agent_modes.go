@@ -9,9 +9,10 @@ import (
 	"github.com/manishiitg/mcpagent/llm"
 )
 
-func codingAgentPersistentInteractiveFlags(provider string) (claudeCode bool, codexCLI bool, cursorCLI bool, piCLI bool) {
+func codingAgentPersistentInteractiveFlags(provider string, allowPersistentInteractive bool) (claudeCode bool, codexCLI bool, cursorCLI bool, piCLI bool) {
 	normalizedProvider := strings.ToLower(strings.TrimSpace(provider))
-	if !llm.IsTmuxCodingAgentProvider(llm.Provider(normalizedProvider), "") {
+	if !allowPersistentInteractive ||
+		!llm.IsTmuxCodingAgentProvider(llm.Provider(normalizedProvider), "") {
 		return false, false, false, false
 	}
 
@@ -27,6 +28,26 @@ func codingAgentPersistentInteractiveFlags(provider string) (claudeCode bool, co
 	default:
 		return false, false, false, false
 	}
+}
+
+func codingAgentRequestAllowsPersistentInteractive(req *QueryRequest, sessionID string) bool {
+	if req == nil {
+		return false
+	}
+	// Backend-created children and typed runtime stages have durable outputs and
+	// completion notifications, not a user who can continue their native CLI.
+	if strings.TrimSpace(req.ParentSessionID) != "" || strings.TrimSpace(req.SessionKind) != "" || req.IsAutoNotification {
+		return false
+	}
+	// "Make interactive" deliberately keeps the schedule session ID. This
+	// explicit promotion therefore outranks its historical trigger/ID shape.
+	if req.UserInteractiveContinuation {
+		return true
+	}
+	// Workflow Builder chats are represented internally as workflow_phase, but
+	// they are still ordinary user-interactive main chats. Classify by origin
+	// and ownership instead of agent mode so their conversation tmux survives.
+	return !isScheduledSessionIdentity(sessionID, req.TriggeredBy)
 }
 
 func codingAgentClaudeCodeChatTransport(provider string) string {

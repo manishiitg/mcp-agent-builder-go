@@ -399,7 +399,7 @@ Report: which eval steps needed changes vs. were already compliant, the old-shap
 		label: "upgrade-1.0.17",
 		query: `WORKFLOW VERSION UPGRADE v1.0.16 -> v1.0.17.
 
-This is a trusted backend compatibility migration from filesystem Pulse review Markdown to SQLite. Do not edit or delete review files manually. The backend imports every recognized pulse/reviews/**/*.md artifact byte-for-byte into pulse_review_log, imports only explicit CONCERNS lines into the structured finding lifecycle, verifies each transaction, retains the legacy source files for rollback/read parity, and stamps workflow.json version 1.0.17. New reviewers write their complete human-readable Markdown directly to SQLite and create no review file.
+This is a trusted backend migration that removes the obsolete filesystem Pulse review transport. Do not edit or delete review files manually. The backend converts each recognized pulse/reviews/**/*.md review into a compact SQLite receipt, imports explicit CONCERNS lines into the structured finding lifecycle, removes redundant packet files, verifies each transaction, deletes each migrated source file, and stamps workflow.json version 1.0.17. New reviewers emit structured finding, verification, and compact receipt markers only; no review prose or review file is persisted.
 
 If this turn runs, the trusted migration reported a blocker. Report the exact blocker without attempting a lossy free-form conversion, then stop. Do not run the workflow, alter schedules, publish, notify, or make unrelated changes.`,
 	},
@@ -462,6 +462,26 @@ Goal: builder/improve.html is a small published executive journal. The database-
 7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.20". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
 
 Report the before/after active card count, archived card count, removed visible operational sections, and any blocker, then stop.`,
+	},
+	{
+		from:  workflowContractExecutivePulseJournalVersion,
+		to:    workflowContractArtifactPurityVersion,
+		label: "upgrade-1.0.21",
+		query: `WORKFLOW VERSION UPGRADE v1.0.20 -> v1.0.21.
+
+This is a product-managed artifact-ownership migration. Do ONLY this purification upgrade, then stop and wait for the normal scheduled message. Do not run the workflow.
+
+Goal: workflow artifacts contain workflow-specific intent and know-how, while shared AgentWorks runtime mechanics remain owned by platform prompts and tool schemas.
+
+1. Read workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md plus its referenced Markdown files, and knowledgebase/notes Markdown files. Inventory exact occurrences of shared platform mechanics before editing: MCP bridge environment variables or curl envelopes; api-bridge routing; Folder Guard implementation; managed workflow DB tool invocation syntax; get_api_spec workarounds; and coding-agent tmux/native-session plumbing.
+2. Classify semantically. Preserve target/domain-specific HOW such as selectors, third-party API behavior, parsing, recovery, authentication to the target service, and stable failure signatures. Remove only shared AgentWorks implementation instructions. Generic words such as API, SQL, curl, browser, database, session, or tool are not evidence by themselves.
+3. Purify planning prose with the typed plan mutation tools, never by directly patching planning/plan.json. Rewrite each contaminated description/message as a semantic contract: domain action, inputs, durable result, failure behavior, and observable verification. Preserve every business rule, output, side effect, safety boundary, persistence requirement, and acceptance condition.
+4. Purify learnings with diff_patch_workspace_file. Keep reusable target-specific execution HOW; remove shared AgentWorks transport/auth/sandbox/session/tool-discovery mechanics, architecture history, and duplicates owned by Soul, Plan, Validation, KB, DB, or Pulse. Purify knowledgebase notes only when a note contains those shared mechanics; preserve durable domain facts and provenance. Never edit knowledgebase/context/.
+5. Re-read every changed file. Verify the inventory signatures are absent from workflow-authored prose, all plan steps/items still validate, the same inputs/outputs/side effects/guards remain represented semantically, and no target-specific know-how was removed. Record one concise changelog reason for the workflow-level migration; do not create one Pulse finding per token or file.
+6. The migration is idempotent: if the inventory is already clean, make no artifact edits. If any occurrence is ambiguous or cannot be rewritten without changing behavior, do not guess and do not stamp the version; report the exact file/step and ambiguity so the blocking preflight is visible.
+7. Only after the clean verification succeeds, update workflow.json "version" to "1.0.21" with write_workflow_manifest. Do not change schema_version, schedules, notifications, publishing, or unrelated workflow behavior.
+
+Report the candidate count, changed plan fields, changed learning/KB files, verification result, and any blocker, then stop.`,
 	},
 }
 

@@ -167,6 +167,9 @@ export interface AgentQueryRequest {
   // Auto-notification flag: when true, this is a background agent completion notification,
   // not a user-initiated message. Backend treats it as a synthetic turn (doesn't block user input).
   is_auto_notification?: boolean
+  // True after the user converts an observed schedule/bot run into an
+  // interactive chat. Keeps the same session/native conversation identity.
+  user_interactive_continuation?: boolean
 }
 
 // Delegation tier configuration for multi-LLM support
@@ -645,12 +648,9 @@ export interface PulseReviewRecord {
   pulse_run_id?: string
   verdict?: string
   status?: string
-  artifact_kind: string
-  legacy_source_path?: string
-  artifact_bytes: number
-  content_sha256?: string
+  finding_count: number
+  verification_count: number
   recorded_at: string
-  markdown?: string
   metrics?: PulseAgentMetricRecord
 }
 
@@ -700,12 +700,6 @@ export interface PulseAgentMetricsResponse {
   success: boolean
   total?: number
   metrics: PulseAgentMetricRecord[]
-  error?: string
-}
-
-export interface PulseReviewResponse {
-  success: boolean
-  review: PulseReviewRecord
   error?: string
 }
 

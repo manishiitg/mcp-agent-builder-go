@@ -660,6 +660,9 @@ type QueryRequest struct {
 	// the next cron message waits for turn completion instead of racing a tmux
 	// snapshot that may not have flipped to busy yet.
 	DisableLiveInputDelivery bool `json:"disable_live_input_delivery,omitempty"`
+	// UserInteractiveContinuation promotes an observed schedule/bot conversation
+	// into an interactive chat without changing its session or native resume ID.
+	UserInteractiveContinuation bool `json:"user_interactive_continuation,omitempty"`
 	// Internal: user ID for synthetic turn reconstruction (not from JSON)
 	userID string `json:"-"`
 }
@@ -4263,7 +4266,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 		// Create new agent with streamCtx instead of r.Context()
 		log.Printf("[AGENT CONFIG DEBUG] Creating agent with ServerName: %s, UseCodeExecutionMode: %v", serverList, useCodeExecutionMode)
-		claudeCodePersistentInteractive, codexPersistentInteractive, cursorPersistentInteractive, piPersistentInteractive := codingAgentPersistentInteractiveFlags(finalProvider)
+		allowPersistentInteractive := codingAgentRequestAllowsPersistentInteractive(&req, sessionID)
+		claudeCodePersistentInteractive, codexPersistentInteractive, cursorPersistentInteractive, piPersistentInteractive := codingAgentPersistentInteractiveFlags(finalProvider, allowPersistentInteractive)
 		claudeCodeTransport := codingAgentClaudeCodeChatTransport(finalProvider)
 		chatWorkingFolder := perUserChatsFolder
 		if isWorkflowPhase && workflowPhaseFolder != "" && workflowPhaseFolder != "default_workspace" {
@@ -6871,7 +6875,7 @@ func codingAgentHasNativeResume(provider string, underlyingAgent *mcpagent.Agent
 		return false
 	}
 	handle := mcpagent.SnapshotAgentSession(underlyingAgent)
-	if handle == nil || handle.Provider.Empty() {
+	if handle == nil || handle.Provider.Empty() || strings.TrimSpace(handle.Provider.NativeSessionID) == "" {
 		return false
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))

@@ -27,12 +27,6 @@ export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
   latestReview: PulseReviewRecord | null
 }
 
-export type PulseReviewStorageSummary = {
-  total: number
-  migrated: number
-  native: number
-}
-
 const ENGINEERING_REVIEW_ALIASES = new Set([
   'bug_review',
   'artifact_review',
@@ -50,21 +44,6 @@ export function normalizePulseWorkspaceModule(module?: string): string {
   if (ENGINEERING_REVIEW_ALIASES.has(value)) return 'workflow_review'
   if (value === 'cost_llm_time') return 'llm_ops_review'
   return value
-}
-
-export function summarizePulseReviewStorage(
-  reviews: PulseReviewRecord[],
-): PulseReviewStorageSummary {
-  const migrated = reviews.filter((review) => (
-    (review.legacy_source_path || '')
-      .replaceAll('\\', '/')
-      .includes('pulse/reviews/')
-  )).length
-  return {
-    total: reviews.length,
-    migrated,
-    native: reviews.length - migrated,
-  }
 }
 
 export function buildPulseWorkspaceModuleSummaries(

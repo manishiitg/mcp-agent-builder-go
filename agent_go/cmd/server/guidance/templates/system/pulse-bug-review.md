@@ -91,6 +91,26 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
    and `untested risk` alongside the normal ordered findings. Coverage is not a
    percentage unless a real denominator exists.
 
+#### Artifact ownership purity
+
+When Engineering Review is selected, inspect current plan descriptions and
+message-sequence messages plus the effective Learnings and KB packages for
+shared AgentWorks mechanics copied into workflow-owned prose: bridge/auth
+environment variables or curl envelopes, api-bridge routing, Folder Guard
+internals, managed workflow-DB tool syntax, `get_api_spec` workarounds, and
+coding-agent tmux/native-session plumbing. Preserve target-specific selectors,
+third-party API behavior, parsing, recovery, and target-service authentication.
+Generic words such as API, SQL, curl, browser, database, session, or tool are
+not findings by themselves.
+
+Consolidate all confirmed occurrences into one root-cause finding per workflow,
+with the affected locations as evidence; never file one finding per token,
+line, or file. Classify it as artifact ownership/contract drift. The bounded
+fix rewrites Plan through typed mutation tools and Learnings/KB through focused
+patches, preserving business behavior and verification. Re-run this evidence
+pack when the Plan/Learnings/KB fingerprint changed, a prior purity repair is
+awaiting verification, or the workflow has never been audited.
+
 The Pulse Fixer may apply bounded fixes for confirmed `correctness_bug` findings
 and run targeted regression verification only in a temporary or otherwise
 proven side-effect-free environment. It must not rerun a side-effecting
@@ -152,9 +172,8 @@ verification. Use exactly these classifications:
   decision was wrong; name the missing evidence and do not invent a defect
 
 When the trace proves the shared harness, runtime adapter, MCP bridge, or tool
-API violated its own contract, set `issue_kind=harness_issue` and emit the
-single-line `PULSE_FINDING_JSON` record required by the reviewer artifact
-contract immediately before the matching `CONCERNS:` line. Prove ownership:
+API violated its own contract, set `issue_kind=harness_issue` and persist it
+with `record_pulse_finding` under the typed reviewer contract. Prove ownership:
 show that the workflow supplied a valid request and that the shared boundary
 rejected, rewrote, mislabeled, truncated, or misreported it. Include a minimal
 side-effect-free reproduction with setup, action, expected, and observed; when
