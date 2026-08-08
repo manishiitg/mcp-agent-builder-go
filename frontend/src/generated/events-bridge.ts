@@ -157,6 +157,7 @@ export interface EventDataUnion {
   background_agent_terminated?: BackgroundAgentTerminatedEvent;
   synthetic_turn_ready?: SyntheticTurnReadyEvent;
   auto_notification_steered?: AutoNotificationSteeredEvent;
+  presentation_updated?: PresentationUpdatedEvent;
   step_token_usage?: StepTokenUsageEvent;
   step_progress_updated?: StepProgressUpdatedEvent;
   routing_evaluated?: RoutingEvaluatedEvent;
@@ -1476,6 +1477,28 @@ export interface AutoNotificationSteeredEvent {
   status?: string;
   provider?: string;
   execution_kind?: string;
+}
+export interface PresentationUpdatedEvent {
+  timestamp?: string;
+  trace_id?: string;
+  span_id?: string;
+  event_id?: string;
+  parent_id?: string;
+  is_end_event?: boolean;
+  correlation_id?: string;
+  hierarchy_level?: number;
+  session_id?: string;
+  component?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  presentation_id?: string;
+  kind?: string;
+  title?: string;
+  workspace_path?: string;
+  payload?: {
+    [k: string]: unknown;
+  };
 }
 export interface StepTokenUsageEvent {
   timestamp?: string;

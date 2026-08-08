@@ -49,6 +49,7 @@ export interface UnifiedEventsComplete {
   orchestrator_error?: OrchestratorErrorEvent;
   orchestrator_start?: OrchestratorStartEvent;
   pre_validation_completed?: PreValidationCompletedEvent;
+  presentation_updated?: PresentationUpdatedEvent;
   request_human_feedback?: RequestHumanFeedbackEvent;
   step_progress_updated?: StepProgressUpdatedEvent;
   step_token_usage?: StepTokenUsageEvent;
@@ -1095,6 +1096,28 @@ export interface JSONCheckResultForEvent {
   error_msg?: string;
   passed?: boolean;
   path?: string;
+}
+export interface PresentationUpdatedEvent {
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  kind?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  parent_id?: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+  presentation_id?: string;
+  session_id?: string;
+  span_id?: string;
+  timestamp?: string;
+  title?: string;
+  trace_id?: string;
+  workspace_path?: string;
 }
 export interface RequestHumanFeedbackEvent {
   action_description?: string;

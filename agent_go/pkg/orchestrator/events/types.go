@@ -70,6 +70,10 @@ const (
 	SyntheticTurnReady        events.EventType = "synthetic_turn_ready"
 	AutoNotificationSteered   events.EventType = "auto_notification_steered"
 
+	// PresentationUpdated announces a product tool showing or re-showing
+	// something in ui_presentations. See PresentationUpdatedEvent.
+	PresentationUpdated events.EventType = "presentation_updated"
+
 	// Parallel execution events
 	IndependentStepsSelected events.EventType = "independent_steps_selected"
 

@@ -1,15 +1,30 @@
 import { agentApi, getApiBaseUrl, getAuthToken } from '../../services/api'
-import type { PlannerFile } from '../../services/api-types'
+import type { LLMProvider, PlannerFile } from '../../services/api-types'
 import { loadWorkspacePresentations, parseWorkspacePresentations, type WorkspacePresentation } from '../../platform/presentations/presentationData'
 
 export const VIDEO_PROJECTS_ROOT = 'Chats/Video Studio/projects'
 export const VIDEO_PROFILE_ID = 'video-studio'
 export const VIDEO_PROFILE_VERSION = 2
 
+// Mirrors the LLMProvider union in api-types.ts. Kept as a Set here (rather
+// than importing one) because there is no runtime-checkable form of a
+// string-literal union to import -- this is the validation half that has to
+// exist somewhere for a value arriving as untyped server JSON to become a
+// safely-typed LLMProvider.
+const KNOWN_LLM_PROVIDERS = new Set<LLMProvider>([
+  'openrouter', 'bedrock', 'openai', 'vertex', 'anthropic', 'azure', 'z-ai',
+  'kimi', 'claude-code', 'codex-cli', 'cursor-cli', 'agy-cli', 'pi-cli',
+  'minimax', 'minimax-coding-plan', 'elevenlabs', 'deepgram',
+])
+
+function asLLMProvider(value: string): LLMProvider | null {
+  return KNOWN_LLM_PROVIDERS.has(value as LLMProvider) ? (value as LLMProvider) : null
+}
+
 export type VideoAgentProviderOption = {
   id: string
   label: string
-  provider: string
+  provider: LLMProvider
   modelId: string
   isDefault?: boolean
 }
@@ -40,7 +55,7 @@ export async function loadVideoAgentProviderOptions(): Promise<VideoAgentProvide
   return options.flatMap((option) => {
     const id = asString(option.id)
     const label = asString(option.label)
-    const provider = asString(option.provider)
+    const provider = asLLMProvider(asString(option.provider))
     const modelId = asString(option.model_id)
     return id && label && provider && modelId ? [{ id, label, provider, modelId, isDefault: option.default === true }] : []
   })

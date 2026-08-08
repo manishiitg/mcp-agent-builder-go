@@ -201,6 +201,11 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 }
 
 func profileRuntimeEventType(event any) string {
+	if typed, ok := event.(unifiedevents.EventData); ok {
+		if eventType := strings.TrimSpace(string(typed.GetEventType())); eventType != "" {
+			return eventType
+		}
+	}
 	if payload, ok := event.(map[string]interface{}); ok {
 		if eventType, _ := payload["type"].(string); strings.TrimSpace(eventType) != "" {
 			return strings.TrimSpace(eventType)
@@ -209,16 +214,44 @@ func profileRuntimeEventType(event any) string {
 	return "agent_profile_event"
 }
 
+// emitAgentProfileEvent records an agent-profile-emitted event for this
+// session's stream.
+//
+// event should be a value implementing unifiedevents.EventData -- a real
+// struct from a schema-gen-registered event package (e.g.
+// orchestrator_events.PresentationUpdatedEvent), not a hand-built
+// map[string]interface{}. A typed value is used directly as the
+// AgentEvent.Data payload, so it serializes at the same nesting depth as
+// every other typed event (tool_call_end, llm_generation_end, ...) and gets
+// a real generated TypeScript interface via cmd/schema-gen instead of an
+// `unknown`-typed blob the frontend has to defensively unwrap.
+//
+// The map[string]interface{} path still exists underneath for a caller that
+// has no registered event type yet, but it comes at a real cost: schema-gen
+// has no way to generate a shape for it, so consumers get no compile-time
+// guarantee about what is inside, and it wraps one JSON level deeper
+// (GenericEventData's own "data" field) than a typed event does. Prefer
+// registering a real type (see docs/design/agent_tool_surface_single_source.md
+// for why "declared once, consumed everywhere" beats "reconstructed per
+// consumer").
 func (api *StreamingAPI) emitAgentProfileEvent(sessionID string, event any) {
 	if api.eventStore == nil {
 		return
 	}
 	eventType := profileRuntimeEventType(event)
-	payload := map[string]interface{}{"event": event}
-	if typed, ok := event.(map[string]interface{}); ok {
-		payload = typed
-	}
 	now := time.Now()
+
+	var data unifiedevents.EventData
+	if typed, ok := event.(unifiedevents.EventData); ok {
+		data = typed
+	} else {
+		payload := map[string]interface{}{"event": event}
+		if untyped, ok := event.(map[string]interface{}); ok {
+			payload = untyped
+		}
+		data = &unifiedevents.GenericEventData{Data: payload}
+	}
+
 	api.eventStore.AddEvent(sessionID, internalevents.Event{
 		ID:        fmt.Sprintf("profile_%s_%d", strings.ReplaceAll(eventType, ".", "_"), now.UnixNano()),
 		Type:      eventType,
@@ -226,7 +259,7 @@ func (api *StreamingAPI) emitAgentProfileEvent(sessionID string, event any) {
 		SessionID: sessionID,
 		Data: &unifiedevents.AgentEvent{
 			Type: unifiedevents.EventType(eventType), Timestamp: now,
-			Data: &unifiedevents.GenericEventData{Data: payload},
+			Data: data,
 		},
 	})
 }
@@ -238,7 +271,8 @@ func (api *StreamingAPI) registerAgentProfileTools(registrar definitionToolRegis
 	for _, binding := range resolved.Definition.Tools {
 		tool, err := api.agentProfiles.BuildTool(binding, agentprofiles.ToolRuntimeContext{
 			UserID: userID, SessionID: sessionID, WorkspacePath: workspacePath,
-			Emit: func(event any) { api.emitAgentProfileEvent(sessionID, event) },
+			Emit:         func(event any) { api.emitAgentProfileEvent(sessionID, event) },
+			Presentation: binding.Presentation,
 		})
 		if err != nil {
 			return err

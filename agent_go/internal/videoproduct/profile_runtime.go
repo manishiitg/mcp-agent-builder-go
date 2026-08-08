@@ -2,8 +2,6 @@ package videoproduct
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/presentations"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 )
 
@@ -343,6 +342,15 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				"note":           map[string]interface{}{"type": "string"},
 			}, "required": []string{"path", "qa_report_path", "title"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				// The profile must declare this tool's presentation kind in
+				// product.yaml (tools[].presentation.kind). Requiring it here,
+				// rather than falling back to a hardcoded "media.video",
+				// makes the YAML declaration load-bearing instead of
+				// decorative -- the same reason tool_policy.enabled has to be
+				// consulted rather than optional.
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
+					return "", fmt.Errorf("show_video: profile did not declare a presentation kind for this tool")
+				}
 				rawPath, _ := args["path"].(string)
 				videoPath, err := cleanProjectPath(rawPath)
 				if err != nil || !videoExtensions[strings.ToLower(filepath.Ext(videoPath))] {
@@ -359,25 +367,23 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				if err != nil {
 					return "Quality assurance has not passed for this video: " + err.Error(), nil
 				}
-				hash := sha256.Sum256([]byte(videoPath))
-				presentationID := "video-" + hex.EncodeToString(hash[:8])
-				now := time.Now().UTC().Format(time.RFC3339Nano)
-				payload, _ := json.Marshal(map[string]interface{}{"path": videoPath, "qa_report_path": reportPath, "note": strings.TrimSpace(note), "verdict": verdict})
-				resources, _ := json.Marshal([]map[string]string{{"kind": "workspace.file", "path": videoPath, "role": "primary"}})
-				// The workspace database API applies X-User-ID isolation itself and
-				// explicitly rejects _users/... request paths. Keep this route
-				// user-relative; evidence reads above use projectRoot because those
-				// also pass through the session folder guard in the agent process.
-				dbPath := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "db/db.sqlite"))
-				_, err = client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{DBPath: dbPath, Statements: []workspace.WorkflowDBMutationStatement{{
-					SQL:    `INSERT INTO ui_presentations (id,kind,schema_version,session_id,title,payload_json,resources_json,actions_json,status,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,title=excluded.title,payload_json=excluded.payload_json,resources_json=excluded.resources_json,status=excluded.status,revision=ui_presentations.revision+1,updated_at=excluded.updated_at`,
-					Params: []interface{}{presentationID, "media.video", 1, runtime.SessionID, title, string(payload), string(resources), "[]", "ready", 1, now, now},
-				}}})
+				event, err := presentations.Upsert(ctx, client, presentations.Presentation{
+					Kind:          runtime.Presentation.Kind,
+					IdentityKey:   videoPath,
+					Title:         title,
+					WorkspacePath: runtime.WorkspacePath,
+					SessionID:     runtime.SessionID,
+					Payload: map[string]interface{}{
+						"path": videoPath, "qa_report_path": reportPath,
+						"note": strings.TrimSpace(note), "verdict": verdict,
+					},
+					Resources: []map[string]string{{"kind": "workspace.file", "path": videoPath, "role": "primary"}},
+				})
 				if err != nil {
 					return "", fmt.Errorf("persist video presentation: %w", err)
 				}
 				if runtime.Emit != nil {
-					runtime.Emit(map[string]interface{}{"type": "presentation_created", "presentation_id": presentationID, "kind": "media.video", "workspace_path": runtime.WorkspacePath})
+					runtime.Emit(&event)
 				}
 				return fmt.Sprintf("Showing %q in the Videos panel.", title), nil
 			},

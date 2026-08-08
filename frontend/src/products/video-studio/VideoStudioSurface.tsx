@@ -33,6 +33,7 @@ import Workspace from '../../components/Workspace'
 import { WorkflowCanvas } from '../../components/workflow/canvas/WorkflowCanvas'
 import { PresentationRenderer, type PresentationRendererProps } from '../../platform/presentations/PresentationRenderer'
 import { registerPresentationRenderer } from '../../platform/presentations/presentationRegistry'
+import { usePresentationEvents } from '../../platform/presentations/usePresentationEvents'
 import { agentApi } from '../../services/api'
 import { useAppStore } from '../../stores/useAppStore'
 import { useAuthStore } from '../../stores/useAuthStore'
@@ -535,12 +536,27 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   useEffect(() => {
     let cancelled = false
     void refreshProject().finally(() => { if (!cancelled) setLoadingProject(false) })
+    // The 5s interval is the fallback: it works even if this tab's SSE
+    // connection to project.sessionId is momentarily down, and it is what
+    // was picking up new videos before the event path below existed.
     const interval = window.setInterval(() => { void refreshProject(true) }, 5000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
   }, [refreshProject])
+
+  // Instant path: react to this session's own presentation_updated events
+  // instead of waiting up to 5s for the poll above. Reuses the SSE stream
+  // useChatStore already keeps open for the chat transcript -- see
+  // usePresentationEvents for why this does not open a second connection.
+  const presentationEvents = usePresentationEvents(project.sessionId, ['media.video'])
+  const handledPresentationEventCountRef = useRef(0)
+  useEffect(() => {
+    if (presentationEvents.length <= handledPresentationEventCountRef.current) return
+    handledPresentationEventCountRef.current = presentationEvents.length
+    void refreshProject(true)
+  }, [presentationEvents, refreshProject])
 
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">

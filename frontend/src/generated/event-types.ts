@@ -130,6 +130,8 @@ import type {
   BackgroundAgentTerminatedEvent,
   SyntheticTurnReadyEvent,
   AutoNotificationSteeredEvent,
+  // Presentation Events
+  PresentationUpdatedEvent,
 } from './events-bridge';
 
 // =============================================================================
@@ -299,7 +301,9 @@ export type EventTypeString =
   | 'background_agent_completed'
   | 'background_agent_terminated'
   | 'synthetic_turn_ready'
-  | 'auto_notification_steered';
+  | 'auto_notification_steered'
+  // Presentation Events
+  | 'presentation_updated';
 
 // =============================================================================
 // EVENT TYPE TO DATA TYPE MAPPING
@@ -428,6 +432,8 @@ export interface EventTypeToDataMap {
   'background_agent_terminated': BackgroundAgentTerminatedEvent;
   'synthetic_turn_ready': SyntheticTurnReadyEvent;
   'auto_notification_steered': AutoNotificationSteeredEvent;
+  // Presentation Events
+  'presentation_updated': PresentationUpdatedEvent;
 }
 
 // Todo Task event data types (not in generated schema)
@@ -923,6 +929,8 @@ export type {
   BackgroundAgentTerminatedEvent,
   SyntheticTurnReadyEvent,
   AutoNotificationSteeredEvent,
+  // Presentation Events
+  PresentationUpdatedEvent,
 } from './events-bridge';
 
 // Export nested types from events.ts (used by event types but not in events-bridge.ts)

@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	profileIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$`)
-	skillIDPattern   = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	toolIDPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$`)
+	profileIDPattern        = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$`)
+	skillIDPattern          = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	toolIDPattern           = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$`)
+	presentationKindPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$`)
 )
 
 func Validate(profile Profile) error {
@@ -62,6 +63,9 @@ func Validate(profile Profile) error {
 		seenTools[toolID] = struct{}{}
 		if len(binding.Config) > 0 && !json.Valid(binding.Config) {
 			return fmt.Errorf("tool %q has invalid JSON config", toolID)
+		}
+		if binding.Presentation != nil && !presentationKindPattern.MatchString(strings.TrimSpace(binding.Presentation.Kind)) {
+			return fmt.Errorf("tool %q has invalid presentation kind %q (want dotted lowercase, e.g. media.video)", toolID, binding.Presentation.Kind)
 		}
 	}
 	for _, name := range profile.ToolPolicy.Disabled {

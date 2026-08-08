@@ -3,6 +3,8 @@ package videoproduct
 import (
 	"strings"
 	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
 func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
@@ -39,6 +41,21 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	}
 	if enabled["execute_shell_command"] {
 		t.Fatalf("Video Studio must keep the legacy shell API bridge disabled: %+v", manifest.Profile.ToolPolicy)
+	}
+	// video.show-video must declare what it presents. Without this the
+	// factory refuses every call (see TestShowVideoRequiresADeclaredPresentationKind)
+	// and the frontend's kind-keyed renderer registry has nothing to dispatch on.
+	var showVideoBinding *agentprofiles.ToolBinding
+	for i := range manifest.Profile.Tools {
+		if manifest.Profile.Tools[i].ID == "video.show-video" {
+			showVideoBinding = &manifest.Profile.Tools[i]
+		}
+	}
+	if showVideoBinding == nil {
+		t.Fatal("video.show-video is not in manifest.Profile.Tools")
+	}
+	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
+		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
 	}
 	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
 	// orchestration, and scheduling are not this product's business.

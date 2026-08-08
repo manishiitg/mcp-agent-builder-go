@@ -76,6 +76,23 @@ type RuntimeCapabilities struct {
 type ToolBinding struct {
 	ID     string          `json:"id" yaml:"id"`
 	Config json.RawMessage `json:"config,omitempty" yaml:"config,omitempty"`
+	// Presentation declares that this tool's execution presents something in
+	// the product's UI (a video, a report, a document — one row in the shared
+	// ui_presentations table per showing). It is data, not behavior: the tool
+	// factory still owns validation and payload shape, but it reads the kind
+	// from here rather than hardcoding it, so the declaration is load-bearing
+	// instead of decorative. See pkg/presentations and
+	// docs/design/agent_tool_surface_single_source.md for why a declared fact
+	// beats a fact re-derived per call site.
+	Presentation *PresentationBinding `json:"presentation,omitempty" yaml:"presentation,omitempty"`
+}
+
+// PresentationBinding names the presentation kind a tool produces. The kind
+// must match a renderer registered on the frontend (getPresentationRenderer)
+// and is the same string a future product's own tool would declare — one
+// contract, reused, not one bespoke wiring per product.
+type PresentationBinding struct {
+	Kind string `json:"kind" yaml:"kind"`
 }
 
 type Profile struct {
@@ -131,6 +148,10 @@ type ToolRuntimeContext struct {
 	SessionID     string
 	WorkspacePath string
 	Emit          func(event any)
+	// Presentation is the calling binding's declared PresentationBinding, if
+	// any. A tool factory that presents something reads the kind from here
+	// instead of hardcoding it — see ToolBinding.Presentation.
+	Presentation *PresentationBinding
 }
 
 // RuntimeContext contains trusted, server-resolved state for a profile turn.

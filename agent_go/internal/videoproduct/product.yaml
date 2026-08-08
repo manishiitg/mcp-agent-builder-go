@@ -76,6 +76,13 @@ profile:
     - agent-browser
   tools:
     - id: video.show-video
+      # Declares what this tool shows, not how. The frontend renderer
+      # registered for this kind (getPresentationRenderer) and the
+      # tool's own factory (which reads this at construction rather
+      # than hardcoding it) both key off this one value. See
+      # pkg/presentations and docs/design/agent_tool_surface_single_source.md.
+      presentation:
+        kind: media.video
   tool_policy:
     # Video Studio names the tools it needs. Everything AgentWorks registers that
     # is not listed here never reaches the agent.

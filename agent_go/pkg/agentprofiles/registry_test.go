@@ -62,6 +62,51 @@ func TestValidateHybridRejectsExecuteShellCommand(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsAToolWithNoPresentationDeclared(t *testing.T) {
+	profile := validProfile()
+	if profile.Tools[0].Presentation != nil {
+		t.Fatal("fixture already declares a presentation; test needs the undeclared case")
+	}
+	if err := Validate(profile); err != nil {
+		t.Fatalf("a tool that presents nothing must not be required to declare a kind: %v", err)
+	}
+}
+
+func TestValidateRejectsAMalformedPresentationKind(t *testing.T) {
+	for _, kind := range []string{"", "Media.Video", "media video", "media_video", "media."} {
+		profile := validProfile()
+		profile.Tools[0].Presentation = &PresentationBinding{Kind: kind}
+		if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "presentation kind") {
+			t.Errorf("kind %q should have been rejected, got %v", kind, err)
+		}
+	}
+}
+
+func TestValidateAcceptsADottedLowercasePresentationKind(t *testing.T) {
+	profile := validProfile()
+	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video"}
+	if err := Validate(profile); err != nil {
+		t.Fatalf("valid presentation kind was rejected: %v", err)
+	}
+}
+
+// The clone path used by every profile lookup (Registry.Profile) must not
+// alias the original's Presentation pointer. Two profile lookups sharing one
+// *PresentationBinding would let a caller that mutates one corrupt the other
+// — the same aliasing risk the existing Config clone already guards against.
+func TestClonedProfileDoesNotAliasThePresentationBinding(t *testing.T) {
+	profile := validProfile()
+	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video"}
+	cloned := cloneProfile(profile)
+	if cloned.Tools[0].Presentation == profile.Tools[0].Presentation {
+		t.Fatal("clone shares the original's *PresentationBinding pointer")
+	}
+	cloned.Tools[0].Presentation.Kind = "media.image"
+	if profile.Tools[0].Presentation.Kind != "media.video" {
+		t.Fatal("mutating the clone's Presentation changed the original")
+	}
+}
+
 func TestRenderPromptUsesAllowListedContext(t *testing.T) {
 	profile := validProfile()
 	rendered, err := RenderPrompt(profile, PromptContext{ProjectTitle: "Launch Film", LocalDateTime: "Friday"})

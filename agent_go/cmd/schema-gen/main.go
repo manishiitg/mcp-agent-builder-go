@@ -147,6 +147,9 @@ type EventDataUnion struct {
 	SyntheticTurnReady        *orchestrator_events.SyntheticTurnReadyEvent        `json:"synthetic_turn_ready,omitempty"`
 	AutoNotificationSteered   *orchestrator_events.AutoNotificationSteeredEvent   `json:"auto_notification_steered,omitempty"`
 
+	// Presentation Events
+	PresentationUpdated *orchestrator_events.PresentationUpdatedEvent `json:"presentation_updated,omitempty"`
+
 	// Step Execution Events
 	StepTokenUsage         *todo_creation_human.StepTokenUsageEvent         `json:"step_token_usage,omitempty"`
 	StepProgressUpdated    *todo_creation_human.StepProgressUpdatedEvent    `json:"step_progress_updated,omitempty"`
@@ -297,6 +300,9 @@ var EventRegistry = map[events.EventType]string{
 	orchestrator_events.BackgroundAgentTerminated: "background_agent_terminated",
 	orchestrator_events.SyntheticTurnReady:        "synthetic_turn_ready",
 	orchestrator_events.AutoNotificationSteered:   "auto_notification_steered",
+
+	// Presentation Events
+	orchestrator_events.PresentationUpdated: "presentation_updated",
 
 	// Step Execution Events
 	orchestrator_events.StepTokenUsage:         "step_token_usage",
@@ -586,6 +592,7 @@ type UnifiedEvent struct {
 	BackgroundAgentTerminatedEvent orchestrator_events.BackgroundAgentTerminatedEvent `json:"background_agent_terminated"`
 	SyntheticTurnReadyEvent        orchestrator_events.SyntheticTurnReadyEvent        `json:"synthetic_turn_ready"`
 	AutoNotificationSteeredEvent   orchestrator_events.AutoNotificationSteeredEvent   `json:"auto_notification_steered"`
+	PresentationUpdatedEvent       orchestrator_events.PresentationUpdatedEvent       `json:"presentation_updated"`
 
 	// Human Verification Events
 	RequestHumanFeedbackEvent orchestrator_events.RequestHumanFeedbackEvent `json:"request_human_feedback"`
