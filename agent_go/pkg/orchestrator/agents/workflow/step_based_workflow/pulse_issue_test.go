@@ -56,6 +56,7 @@ func TestNewPulseIssueMapsFixLifecycleToWorkflowStatuses(t *testing.T) {
 	tests := map[string]string{
 		ConcernStatusFixing:                 "in_progress",
 		ConcernStatusAwaitingVerification:   "in_review",
+		ConcernStatusQueuedForEngineering:   "backlog",
 		ConcernStatusResolved:               "done",
 		ConcernStatusRejected:               "canceled",
 		ConcernStatusExternalActionRequired: "external",

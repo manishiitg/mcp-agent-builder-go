@@ -62,9 +62,8 @@ type WorkflowManifest struct {
 	//
 	// Only fields that drive HARD behavioral gates live here. Workflow profile
 	// (deterministic / exploratory / contextual classification, plan-stability
-	// guidance, dual-mode declarations) lives as prose in builder/improve.html
-	// — the agent reads improve.html on every improvement turn anyway, and prose
-	// captures nuance that enums can't.
+	// guidance, dual-mode declarations) belongs in semantic workflow artifacts
+	// and typed Pulse records; prose captures nuance that enums cannot.
 	OversightMode OversightMode `json:"oversight_mode,omitempty"`
 
 	// PostRunMonitor opts this workflow into the post-run monitor: a compact
@@ -785,7 +784,7 @@ func applyManifestDefaults(m *WorkflowManifest) {
 
 	// Auto-improvement framework defaults. oversight_mode is the one hard-gate
 	// field that default-fills — typology, plan-stability, and decision-log
-	// handling live as prose in builder/improve.html, not as manifest enums.
+	// handling stay in semantic artifacts and typed Pulse records.
 	if m.OversightMode == "" {
 		m.OversightMode = OversightSupervised
 	}

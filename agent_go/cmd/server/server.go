@@ -1935,6 +1935,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-context", api.handleGetPulseContext).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
 	apiRouter.HandleFunc("/workflow/running", api.handleListRunningWorkflows).Methods("GET")
@@ -2152,8 +2153,6 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Auto-improvement framework — see docs/workflow/auto_improvement_framework.md
 	apiRouter.HandleFunc("/workflow/builder-doc", api.handleGetBuilderDoc).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/workflow/builder-docs-status", api.handleGetBuilderDocsStatus).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/workflow/builder-doc-archives", api.handleGetBuilderDocArchives).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog", api.handleGetPlanChangelog).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog/prune", requireWorkflowWriteAccess(api.handlePrunePlanChangelog)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/framework-health", api.handleGetFrameworkHealth).Methods("GET", "OPTIONS")

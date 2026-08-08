@@ -54,7 +54,6 @@ import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
-import { WORKFLOW_LOG_REFRESH_EVENT } from '../workflowEvents'
 import {
   resolveGroupFolderPath
 } from '../../../utils/workflowUtils'
@@ -127,6 +126,10 @@ interface WorkflowToolbarProps {
   // workflow chat tabs + new-chat share one row with the status/tools instead of
   // sitting in a separate bar below.
   chatTabsSlot?: React.ReactNode
+  // Used by cross-workflow decision links. This is intentionally one-shot:
+  // opening a decision must surface Pulse, but normal re-renders must not keep
+  // reopening a modal the user deliberately closed.
+  openPulseOnMount?: boolean
   className?: string
 }
 
@@ -139,6 +142,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
+  openPulseOnMount = false,
   className = ''
 }) => {
   // Normalize runFolders to avoid repeated null checks throughout the component
@@ -291,20 +295,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
   }, [workspacePath])
 
+  const openedInitialPulseRef = useRef(false)
+  useEffect(() => {
+    if (!openPulseOnMount || openedInitialPulseRef.current) return
+    openedInitialPulseRef.current = true
+    setShowMonitorHelp(true)
+    void refreshPulseModuleStates()
+  }, [openPulseOnMount, refreshPulseModuleStates])
+
   useEffect(() => {
     if (!showMonitorHelp) return
     void refreshPulseModuleStates()
     const timer = window.setInterval(() => { void refreshPulseModuleStates(false) }, 5_000)
     return () => window.clearInterval(timer)
   }, [showMonitorHelp, refreshPulseModuleStates])
-
-  const openPulseDashboard = useCallback(() => {
-    setShowMonitorHelp(false)
-    const workflowStore = useWorkflowStore.getState()
-    workflowStore.setShowWorkspacePane(true)
-    workflowStore.setWorkflowWorkspaceView('log')
-    workflowStore.setCanvasViewMode('log')
-  }, [])
 
   const pulseModuleStateByModule = useMemo(() => {
     return new Map(pulseModuleStates.map(state => [state.module, state]))
@@ -894,7 +898,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     type="button"
                     onClick={() => {
                       window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
                       void refreshPulseModuleStates()
                     }}
                     disabled={pulseStatusLoading}
@@ -923,10 +926,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     statusError={pulseStatusError}
                     onRefresh={() => {
                       window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
                       void refreshPulseModuleStates()
                     }}
-                    onOpenDashboard={openPulseDashboard}
                   />
                 )}
               </div>
@@ -948,7 +949,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </button>
                 <div className="min-w-0">
                   <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing scheduled runs' : 'Scheduled review is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">The Pulse report remains in builder/improve.html.</div>
+                  <div className="truncate text-[11px] text-muted-foreground">Pulse findings, fixes, decisions, and history are here.</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">

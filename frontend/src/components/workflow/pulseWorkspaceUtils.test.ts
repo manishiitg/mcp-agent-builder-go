@@ -10,7 +10,7 @@ import {
 } from './pulseWorkspaceUtils'
 
 const definitions = [
-  { id: 'bug_review', label: 'Bug review', description: 'Correctness' },
+  { id: 'workflow_review', label: 'Engineering review', description: 'Correctness' },
   { id: 'llm_ops_review', label: 'Ops review', description: 'Operations' },
 ]
 
@@ -45,21 +45,19 @@ function review(module: string, recordedAt: string): PulseReviewRecord {
 }
 
 describe('Pulse workspace model', () => {
-  it('folds retired reviewer names into the four user-facing perspectives', () => {
-    expect(normalizePulseWorkspaceModule('bug_review')).toBe('workflow_review')
-    expect(normalizePulseWorkspaceModule('report_health')).toBe('workflow_review')
-    expect(normalizePulseWorkspaceModule('cost_llm_time')).toBe('llm_ops_review')
+  it('keeps only canonical module identities', () => {
+    expect(normalizePulseWorkspaceModule('workflow_review')).toBe('workflow_review')
     expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategy_auditor')
   })
 
   it('summarizes module lifecycle state and keeps the latest review', () => {
-    const blocked = finding('bug_review', 'acknowledged')
+    const blocked = finding('workflow_review', 'acknowledged')
     blocked.events = [{
       event_type: 'blocked',
       summary: 'No safe repair path.',
       recorded_at: '2026-07-31T09:00:00Z',
     }]
-    const awaitingUser = finding('bug_review', 'acknowledged')
+    const awaitingUser = finding('workflow_review', 'acknowledged')
     awaitingUser.events = [{
       event_type: 'awaiting_user',
       summary: 'Decision requested.',
@@ -69,27 +67,29 @@ describe('Pulse workspace model', () => {
     const summaries = buildPulseWorkspaceModuleSummaries(
       definitions,
       [
-        finding('bug_review', 'open', 3),
-        finding('bug_review', 'fixing'),
-        finding('bug_review', 'awaiting_verification'),
-        finding('bug_review', 'awaiting_run'),
+        finding('workflow_review', 'open', 3),
+        finding('workflow_review', 'fixing'),
+        finding('workflow_review', 'awaiting_verification'),
+        finding('workflow_review', 'awaiting_run'),
+        finding('workflow_review', 'queued_for_engineering'),
         blocked,
         awaitingUser,
-        finding('bug_review', 'resolved'),
-        finding('bug_review', 'external_action_required', 5),
+        finding('workflow_review', 'resolved'),
+        finding('workflow_review', 'external_action_required', 5),
       ],
       [
-        review('bug_review', '2026-07-31T10:00:00Z'),
-        review('bug_review', '2026-07-30T10:00:00Z'),
+        review('workflow_review', '2026-07-31T10:00:00Z'),
+        review('workflow_review', '2026-07-30T10:00:00Z'),
       ],
     )
 
     expect(summaries[0]).toMatchObject({
-      findings: 8,
+      findings: 9,
       active: 1,
       fixing: 1,
       awaitingVerification: 1,
       awaitingRun: 1,
+      queuedForEngineering: 1,
       awaitingUser: 1,
       blocked: 1,
       closed: 1,
@@ -102,11 +102,11 @@ describe('Pulse workspace model', () => {
   it('selects the module with unresolved work before a merely recent clean review', () => {
     const summaries = buildPulseWorkspaceModuleSummaries(
       definitions,
-      [finding('bug_review', 'open')],
+      [finding('workflow_review', 'open')],
       [review('llm_ops_review', '2026-07-31T12:00:00Z')],
     )
 
-    expect(selectPulseWorkspaceModule(summaries)).toBe('bug_review')
+    expect(selectPulseWorkspaceModule(summaries)).toBe('workflow_review')
   })
 
 })

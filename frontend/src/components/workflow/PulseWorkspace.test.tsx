@@ -20,7 +20,6 @@ describe('PulseWorkspace information hierarchy', () => {
         statusLoading={false}
         statusError={null}
         onRefresh={() => undefined}
-        onOpenDashboard={() => undefined}
       />,
     )
 

@@ -64,6 +64,33 @@ func TestParseBackgroundMessageSequenceRejectsDuplicateIDs(t *testing.T) {
 	}
 }
 
+func TestParseBackgroundMessageSequenceGeneratesDiagnosticIDs(t *testing.T) {
+	items, err := parseBackgroundMessageSequence(map[string]interface{}{
+		"message_sequence": []interface{}{
+			map[string]interface{}{"message": "review"},
+			map[string]interface{}{"title": "Fix", "message": "repair"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("parse sequence without IDs: %v", err)
+	}
+	want := []backgroundMessageSequenceItem{{ID: "turn-1", Message: "review"}, {ID: "turn-2", Title: "Fix", Message: "repair"}}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("items = %#v, want %#v", items, want)
+	}
+}
+
+func TestBackgroundMessageSequenceSchemaRequiresOnlyMessage(t *testing.T) {
+	schema := backgroundMessageSequenceSchema()
+	items, ok := schema["items"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("items schema = %#v", schema["items"])
+	}
+	if got := items["required"]; !reflect.DeepEqual(got, []string{"message"}) {
+		t.Fatalf("item required fields = %#v, want only message", got)
+	}
+}
+
 func TestExecuteBackgroundMessageSequenceReusesConversationHistory(t *testing.T) {
 	agent := &recordingBackgroundSequenceAgent{}
 	template := map[string]string{"Instruction": "stale"}

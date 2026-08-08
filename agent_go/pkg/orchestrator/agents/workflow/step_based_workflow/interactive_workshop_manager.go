@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/guidance"
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
@@ -125,6 +126,59 @@ type backgroundMessageSequenceItem struct {
 	Message string
 }
 
+// backgroundWorkshopToolDefinitionDraft collects workshop-native tools before
+// the child MCP agent is constructed. mcpagent intentionally has no mutable
+// post-construction registration API, so this keeps the child on the same
+// definition-time contract as every other agent.
+type backgroundWorkshopToolDefinitionDraft struct {
+	tools  []mcpagent.ToolDefinition
+	byName map[string]int
+	skills []*llmtypes.Skill
+}
+
+func newBackgroundWorkshopToolDefinitionDraft(skills []*llmtypes.Skill) *backgroundWorkshopToolDefinitionDraft {
+	return &backgroundWorkshopToolDefinitionDraft{
+		byName: make(map[string]int),
+		skills: append([]*llmtypes.Skill(nil), skills...),
+	}
+}
+
+func (d *backgroundWorkshopToolDefinitionDraft) RegisterCustomTool(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), displayGroup string) error {
+	return d.RegisterCustomToolWithTimeout(name, description, parameters, execute, 0, displayGroup)
+}
+
+func (d *backgroundWorkshopToolDefinitionDraft) RegisterCustomToolWithTimeout(name, description string, parameters map[string]interface{}, execute func(context.Context, map[string]interface{}) (string, error), timeout time.Duration, displayGroup string) error {
+	definition := mcpagent.ToolDefinition{Name: name, Description: description, InputSchema: parameters, Execute: execute, Timeout: timeout, DisplayGroup: displayGroup}
+	if index, exists := d.byName[name]; exists {
+		d.tools[index] = definition
+		return nil
+	}
+	d.byName[name] = len(d.tools)
+	d.tools = append(d.tools, definition)
+	return nil
+}
+
+func (d *backgroundWorkshopToolDefinitionDraft) AttachedSkills() []*llmtypes.Skill {
+	return append([]*llmtypes.Skill(nil), d.skills...)
+}
+
+func (d *backgroundWorkshopToolDefinitionDraft) Definitions() []mcpagent.ToolDefinition {
+	return append([]mcpagent.ToolDefinition(nil), d.tools...)
+}
+
+func (iwm *InteractiveWorkshopManager) prepareBackgroundWorkshopToolDefinitions(skills []*llmtypes.Skill) ([]mcpagent.ToolDefinition, error) {
+	if iwm == nil || iwm.controller == nil {
+		return nil, fmt.Errorf("background workshop tool definitions require a controller")
+	}
+	draft := newBackgroundWorkshopToolDefinitionDraft(skills)
+	workspacePath := iwm.controller.GetWorkspacePath()
+	logger := iwm.controller.GetLogger()
+	if err := registerFullWorkshopAgentTools(iwm, draft, workspacePath, logger, "background-task"); err != nil {
+		return nil, fmt.Errorf("prepare complete background workshop toolset: %w", err)
+	}
+	return draft.Definitions(), nil
+}
+
 func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMessageSequenceItem, error) {
 	raw, exists := args["message_sequence"]
 	if !exists || raw == nil {
@@ -151,7 +205,9 @@ func parseBackgroundMessageSequence(args map[string]interface{}) ([]backgroundMe
 		id, _ := item["id"].(string)
 		id = strings.TrimSpace(id)
 		if id == "" {
-			return nil, fmt.Errorf("message_sequence[%d].id is required", index)
+			// Item IDs are diagnostic labels only, not caller-owned identity.
+			// Keep useful error text without making agents manufacture metadata.
+			id = fmt.Sprintf("turn-%d", index+1)
 		}
 		if _, duplicate := seen[id]; duplicate {
 			return nil, fmt.Errorf("message_sequence item id %q is duplicated", id)
@@ -183,7 +239,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 			"properties": map[string]interface{}{
 				"id": map[string]interface{}{
 					"type":        "string",
-					"description": "Stable unique turn ID for logs and diagnostics.",
+					"description": "Optional diagnostic label. The backend generates turn-1, turn-2, etc. when omitted.",
 				},
 				"title": map[string]interface{}{
 					"type":        "string",
@@ -194,7 +250,7 @@ func backgroundMessageSequenceSchema() map[string]interface{} {
 					"description": "The next user message sent after the preceding turn completes.",
 				},
 			},
-			"required": []string{"id", "message"},
+			"required": []string{"message"},
 		},
 	}
 }
@@ -267,10 +323,9 @@ func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 			return fmt.Errorf("review_run_id contains unsupported path characters")
 		}
 	}
-	// Derived from the canonical registry — see pkg/pulsemodules. Current
-	// modules plus retired ones remain valid receipt identities. Omitting a
-	// current module here silently breaks that module's result persistence:
-	// that was the 2026-07-29 stores_health defect.
+	// Derived from the canonical registry — see pkg/pulsemodules. Only current
+	// perspectives are accepted: evidence packs never get independent receipt
+	// identities. Omitting a current module here silently breaks its persistence.
 	valid := false
 	for _, accepted := range pulsemodules.AcceptedForReviewReceipts() {
 		if accepted == module {
@@ -1638,6 +1693,32 @@ func registerWorkshopAgentTools(iwm *InteractiveWorkshopManager, mcpAgent Defini
 	}
 }
 
+// registerFullWorkshopAgentTools installs the complete workshop surface on an
+// agent. Background agents are children of the workshop conversation, not
+// ordinary workflow steps: they must inherit the same plan, schedule, Pulse,
+// human-input, and workspace capabilities as their parent. Folder Guard and
+// the child task's instruction remain the authority for what a particular
+// child may safely change.
+func registerFullWorkshopAgentTools(iwm *InteractiveWorkshopManager, mcpAgent DefinitionRegistrar, workspacePath string, logger loggerv2.Logger, agentName string) error {
+	if err := RegisterPlanModificationTools(
+		mcpAgent,
+		workspacePath,
+		logger,
+		iwm.controller.ReadWorkspaceFile,
+		iwm.controller.WriteWorkspaceFile,
+		iwm.controller.MoveWorkspaceFile,
+		agentName,
+	); err != nil {
+		return fmt.Errorf("register plan modification tools: %w", err)
+	}
+	registerWorkshopAgentTools(iwm, mcpAgent, workspacePath, logger)
+	// Slash-command wrappers may dispatch their work into a background child.
+	// Keep their canonical guidance tool on this shared registration path so the
+	// child never receives an instruction it cannot execute.
+	guidance.RegisterGuidanceTool(mcpAgent, iwm.currentWorkshopModeFromConfigs(nil), logger)
+	return nil
+}
+
 func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context.Context, workspacePath string, args map[string]interface{}, logger loggerv2.Logger) (string, error) {
 	rawMarks, ok := args["marks"].([]interface{})
 	if !ok || len(rawMarks) == 0 {
@@ -2289,7 +2370,7 @@ Each workflow has three separate stores that survive across runs: `+"`learnings/
 
 **Read previous builder conversations** from `+"`builder/`"+` folder (`+"`ls -t {{.AbsWorkspacePath}}/builder/*.json | head -3`"+`) to avoid repeating failed approaches.
 
-**Core loop:** run → eval → classify → review → fix → verify. Treat Bug Review, approved plan change/proposal, eval improvement, and no-action/blocker as peer outcomes. Load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/post-run-monitor.md\"}])`"+` for the normal background review/fix contract.
+**Core loop:** run → eval → classify → review → fix → verify. Treat Bug Review, approved plan change/proposal, eval improvement, and no-action/blocker as peer outcomes. Load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"}])`"+` for the normal background review/fix contract.
 {{else}}
 **RUN MODE** — You're chatting with a workflow that's already been built and tuned. Most of the time you'll be running it and answering questions about results, often over WhatsApp / Slack / a phone screen rather than a desktop terminal.
 
@@ -2476,24 +2557,9 @@ func (agent *WorkflowInteractiveWorkshopAgent) Execute(ctx context.Context, temp
 
 	logger := iwm.controller.GetLogger()
 
-	// Register plan modification tools
-	if err := RegisterPlanModificationTools(
-		mcpAgentRef,
-		workspacePath,
-		logger,
-		iwm.controller.ReadWorkspaceFile,
-		iwm.controller.WriteWorkspaceFile,
-		iwm.controller.MoveWorkspaceFile,
-		"workflow-builder",
-	); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to register plan modification tools: %v", err))
+	if err := registerFullWorkshopAgentTools(iwm, mcpAgentRef, workspacePath, logger, "workflow-builder"); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register complete workshop toolset: %v", err))
 	}
-
-	// Variable management tools (update_variable, group CRUD)
-	// are registered inside registerInteractiveWorkshopTools for both full and HAE modes.
-
-	// Register custom workshop tools (execute_step, query_step, send_step_message, stop_step, update_step_config)
-	registerWorkshopAgentTools(iwm, mcpAgentRef, workspacePath, logger)
 
 	// Build system prompt and initial user message
 	var systemPrompt, userMessage strings.Builder
@@ -3245,7 +3311,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: run_in_background — spawn independent background agent (not tied to a workflow step)
 	if err := mcpAgent.RegisterCustomTool(
 		"run_in_background",
-		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
+		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel. message_sequence is optional: use it only when one executor needs ordered follow-up turns in the same conversation. Every supplied item needs only a non-empty message, for example [{\"message\":\"Review the evidence.\"},{\"message\":\"Apply and verify safe fixes.\"}]. Optional id/title fields are generated or used only for diagnostics.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -9818,8 +9884,26 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	config.CodingAgentKeepAlive = len(messageSequence) > 0
 	defer iwm.configureWorkshopToolAgentSession(config, "background-task", readPaths, writePaths)()
 
-	// --- Tools: same as default execution agent (all workspace tools) ---
-	toolsToRegister, executorsToUse := iwm.controller.prepareCustomTools(nil) // nil = default tools
+	// The workshop-only tools are native definitions rather than entries in the
+	// workspace tool pool. Collect them before construction, alongside the full
+	// inherited workspace bundle below.
+	workshopToolDefinitions, err := iwm.prepareBackgroundWorkshopToolDefinitions(inheritedSkills)
+	if err != nil {
+		return "", err
+	}
+	config.DirectTools = workshopToolDefinitions
+
+	// --- Tools: inherit the parent's complete workspace tool bundle ---
+	//
+	// A background task is a workshop child, not a normal plan step. Using
+	// prepareCustomTools(nil) here silently reduced it to the step-default
+	// workspace/human/DB set, which omitted Pulse persistence, plan editing,
+	// schedules, and durable human-input tools. That made children able to
+	// diagnose defects but unable to record or repair them. The per-agent Folder
+	// Guard above still enforces file safety; do not add a second, drifting
+	// category allow-list here.
+	toolsToRegister := iwm.controller.WorkspaceTools
+	executorsToUse := iwm.controller.WorkspaceToolExecutors
 
 	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
 		return newWorkflowBackgroundTaskAgent(cfg, log, tracer, eventBridge)

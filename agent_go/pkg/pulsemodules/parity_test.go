@@ -9,7 +9,7 @@ import (
 )
 
 // These tests are the invariant the 2026-07-29 refactor lacked. Merging three
-// modules into stores_health desynchronized four independently maintained
+// reviewer-lens consolidation desynchronized four independently maintained
 // surfaces at once — two of which caused production failures — while the build
 // and the entire test suite stayed green.
 //
@@ -165,54 +165,6 @@ func assertExactModuleSet(t *testing.T, surface string, got map[string]bool) {
 // retired or unknown ID silently files cards under a module with no tab, where
 // they become unreachable. This asserts every emitted ID is one the registry
 // still recognizes.
-func TestFrontendTimelineClassifierEmitsOnlyKnownModules(t *testing.T) {
-	src := repoFile(t, "frontend/src/components/workflow/pulseTimelineHtml.ts")
-
-	known := map[string]bool{"": true}
-	for _, id := range IDs() {
-		known[id] = true
-	}
-	for _, p := range PseudoIDs {
-		known[p] = true
-	}
-
-	const marker = "return '"
-	emitted := 0
-	for rest := src; ; {
-		i := strings.Index(rest, marker)
-		if i < 0 {
-			break
-		}
-		rest = rest[i+len(marker):]
-		j := strings.Index(rest, "'")
-		if j < 0 {
-			break
-		}
-		id := rest[:j]
-		rest = rest[j:]
-
-		// Skip the pass-through of an explicit attribute and any non-ID return.
-		if id == "" || strings.ContainsAny(id, " .()") {
-			continue
-		}
-		emitted++
-		if !known[id] {
-			t.Fatalf("pulseTimelineHtml.ts classifies cards as %q, which the registry does not recognize — those cards would land under a module with no tab", id)
-		}
-	}
-	if emitted == 0 {
-		t.Fatal("found no module classifications to check — the parser or the file shape changed")
-	}
-
-	// The pseudo classifications must remain, or Gate/run rows and applied
-	// fixes lose their grouping entirely.
-	for _, p := range PseudoIDs {
-		if !strings.Contains(src, marker+p+"'") {
-			t.Fatalf("pulseTimelineHtml.ts no longer classifies pseudo module %q", p)
-		}
-	}
-}
-
 // TestGuidanceDocsNameCurrentModules catches the stale-prose class of drift:
 // pulse-gate.md enumerates the modules Gate must decide on, and a retired name
 // there sends Gate a module the backend will reject.
@@ -223,13 +175,5 @@ func TestGuidanceDocsNameCurrentModules(t *testing.T) {
 		if !strings.Contains(gate, m.ID) {
 			t.Fatalf("pulse-gate.md does not name current module %q in its worklist contract", m.ID)
 		}
-	}
-}
-
-func TestPulseDashboardSkeletonKeepsModuleCoverageOutOfTheLightweightJournal(t *testing.T) {
-	skeleton := repoFile(t, "agent_go/cmd/server/guidance/templates/system/review-improve-log-skeleton.md")
-	const chip = `<div class="covitem `
-	if got := strings.Count(skeleton, chip); got != 0 {
-		t.Fatalf("lightweight Pulse journal still contains %d obsolete coverage chips", got)
 	}
 }

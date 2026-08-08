@@ -13,10 +13,8 @@ active, apply it as the owner-approved workflow-specific lens subordinate to
 this canonical role and the current `soul.md`/plan. It may specialize what to
 inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`, and
-   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. The Strategy Auditor
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`. The Strategy Auditor
    reference is the classification and evidence contract. These references
    belong to the parent; never give the reviewer HTML/CSS/formatting work.
 2. Read the objective and success criteria from `soul/soul.md`, then inspect the

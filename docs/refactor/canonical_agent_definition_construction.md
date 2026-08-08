@@ -61,6 +61,13 @@ mcpagent validates, clones, materializes, runs, and retires that definition
 Every agent launch path must cross this boundary once. No launch path may add,
 remove, or rediscover identity tools after construction.
 
+For a child explicitly described as inheriting its parent's workshop surface,
+the boundary must resolve the child from the same role policy and tool bindings
+as the parent. It must not start from a default step tool set and try to append
+"workshop-only" tools later. A child may have narrower instructions or a
+Reader authority profile, but any difference in its callable tools must be an
+explicit role-policy decision made before construction.
+
 ## Confirmed decisions
 
 In discussion, "AgentSpec refactor" is shorthand for this canonical builder
@@ -121,6 +128,29 @@ This allows internally contradictory states such as:
 - visible in a prompt but denied by runtime authority;
 - available in scheduled Pulse but missing from standalone or converted-chat
   Pulse.
+
+### Confirmed background-child incident (2026-08-08)
+
+A standalone `/bug-review` was launched through the Workflow Builder's
+`run_in_background` path. The parent Builder assembled plan, schedule, Pulse
+recording, human-input, and guidance tools through its workshop registration
+path. The child instead called `prepareCustomTools(nil)`, the ordinary
+workflow-step default, and therefore initially lacked tools the parent had
+already made available. The observed missing surface included Pulse lifecycle
+recording, plan/schedule mutation, human-input tools, and
+`get_workflow_command_guidance`.
+
+The immediate compatibility repair shares the workshop registration helper and
+collects native direct tools before constructing the child. It fixes this
+specific path, and the real Bug Review subsequently received and used the
+typed Pulse tools. It is **not** the canonical-definition refactor: the main
+Builder still registers native tools after construction while the child
+prebuilds a parallel list. A future tool added to only one route can recreate
+the same fault.
+
+This is direct evidence for the proposal, not merely an analogy to the earlier
+DB incident: parent and child represented one intended capability decision in
+two assembly paths, then diverged.
 
 Tests have consequently accumulated around individual seams. Passing those
 tests proves the pieces, not that a real agent receives a coherent definition.
@@ -242,6 +272,20 @@ buildWorkflowBuilderAgent(...)
 ```
 
 They express domain policy; they do not perform registration.
+
+### Parent/child tool-surface rule
+
+`run_in_background` is not a new tool-selection authority. When it creates a
+Builder child, the role builder receives the parent's resolved workshop role
+policy (or a typed explicit child role) and produces the child's complete
+definition in one call. It must never call a broad default selector such as
+`prepareCustomTools(nil)` and then separately register plan, Pulse, guidance,
+or human-input tools.
+
+Implementation may use a private immutable builder-side role-policy value to
+avoid recomputing domain inputs, but it must be consumed immediately to create
+the one public `mcpagent.AgentDefinition`; it is not a second public
+`AgentSpec`, mutable tool registry, or list of names copied into prompts.
 
 ## Tool and authorization model
 
@@ -377,6 +421,9 @@ workflow while the intended behavior remains unchanged.
   Fixer to direct `AgentDefinition` construction.
 - Make scheduled, slash-command, background, and converted-chat launches call
   the same role builder.
+- Include a Builder-launched background Engineering/QA child: it must receive
+  the exact role-approved direct tool surface, not the ordinary workflow-step
+  default bundle.
 - Bind query/mutation executors before construction.
 - Retain the current preflight temporarily as a diagnostic assertion.
 - Prove a real read and mutation/read-back through both scheduled and
@@ -409,6 +456,8 @@ workflow-step constructor to migrate.
   creation.
 - Ensure isolated working directories remain transport details and do not
   change the attached definition.
+- Delete the temporary split between post-construction parent registration and
+  pre-construction child registration once both call the common role builder.
 
 ### Phase 4 — Builder/main and conversion paths
 
@@ -456,6 +505,12 @@ One table-driven test asserts the complete definition for each agent kind:
 For message sequences, assert that every item shares the sequence profile and
 that obsolete item kinds/`write_access` no longer change runtime authority.
 
+For a Builder parent and a child declared to inherit its workshop role, assert
+the exact same approved tool names and attached skill names before transport
+projection. Assert that an explicitly Reader child differs only by the
+role-policy removal of mutation bindings, never because it fell back to a
+default tool bundle.
+
 ### 2. `mcpagent` definition contract
 
 Keep the existing tests that prove definitions are immutable, cloned, reject
@@ -479,6 +534,10 @@ diverged:
 - manual `/engineering-review` review-and-fix sequence;
 - converted schedule-to-chat Pulse Fixer;
 - one reader and one writer ordinary workflow agent.
+- a Builder-launched background Engineering/QA child that calls
+  `get_workflow_command_guidance`, records a typed finding, creates a human
+  input request, and performs one authorized plan mutation/read-back through
+  the real bridge. This is the regression case for the 2026-08-08 incident.
 
 The tests should assert a definition fingerprint plus one real action, not
 source strings or only allow-list membership.
@@ -511,6 +570,9 @@ The refactor is complete only when all of the following are true:
 13. Existing workflow files require no migration for the initial cutover.
 14. Full real-provider E2E suites for Codex and Claude pass after the complete
     migration.
+15. A Builder-launched child cannot have a tool that is present in its declared
+    inherited parent surface silently disappear because a default step bundle
+    was selected on a different construction path.
 
 ## Risks and constraints
 

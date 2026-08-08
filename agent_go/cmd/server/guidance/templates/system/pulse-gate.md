@@ -4,7 +4,7 @@ Use only for the scheduler's Gate stage — a progressive evidence scan, not a
 full audit or fixer.
 
 Read `soul/soul.md`, the compact schedule definitions in `workflow.json`,
-`builder/improve.html`, `get_pulse_state(view="module")`, latest run summary,
+`get_pulse_state(view="module")`, latest run summary,
 compact freshness/LLM/readiness state, and human inputs. Weigh returned
 `open_concerns`, `plan_change_backlog`, `loop_closure`, and
 `module_review_history`; justify every skip. `loop_closure` is read-only
@@ -19,8 +19,8 @@ for `CONCERNS:`: `execution-final-summary.json`, `session.json`, or latest
 completion does not erase it, but it is not automatic run failure.
 
 Gate owns the durable worklist and the cheap per-run goal observation checkpoint.
-Do not write HTML, a recovery ledger, or any workflow artifact; the dedicated
-Dashboard projects recorded state later.
+Do not write HTML, a recovery ledger, or any workflow artifact. The Pulse popup
+projects the durable recorded state directly.
 
 Call `record_pulse_worklist` exactly once with one decision for every canonical
 module: `workflow_review`, `llm_ops_review`, `strategy_auditor`,
@@ -33,7 +33,13 @@ strategy and measurement system can achieve the goal. `goal_advisor` explores
 materially different approaches. Do not emit retired artifact-named modules.
 It is valid to skip every module when current evidence and recorded next-check
 boundaries justify that choice. In that case no reviewer and no Fixer run; the
-lightweight Dashboard and Finalizer still project and deliver the current state.
+Finalizer still delivers the current durable state.
+
+When `workflow_review` is due because of DB, knowledgebase, or learnings
+integrity, say **Stores Health** and name the relevant store(s) in that
+decision's `reason` and evidence. The later Engineering executor uses that
+durable Gate evidence to run its distinct Stores Health turn before fixing; it
+must not infer one from a generic Engineering due flag.
 On recovery, if this Pulse run already has a complete worklist,
 verify and stop; do not record it twice.
 

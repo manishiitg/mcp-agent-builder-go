@@ -1,5 +1,5 @@
 import React from 'react'
-import { FileText, Server, Cpu, Bot, Layers, RefreshCw, GitBranch, CheckCircle, Search, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
+import { FileText, Server, Cpu, Bot, Layers, RefreshCw, GitBranch, CheckCircle, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
 import type { CommandContext, CommandDefinition } from './types'
 
 function submitGuidedWorkflowCommand(
@@ -22,7 +22,7 @@ function submitGuidedWorkflowCommand(
   if (options.background) {
     const outputContract = ctx.workshopMode === 'run'
       ? 'Return findings in chat only; do not write or edit any workspace file.'
-      : 'Write recommendations to builder/improve.html as required by the returned guidance.'
+      : 'Persist findings, recommendations, decisions, and repairs through the typed Pulse tools required by the returned guidance; do not write a separate review file.'
     const instruction =
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.`
@@ -169,19 +169,6 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'bug-review',
-    description: 'Run the Pulse QA and logic-bug review without applying fixes',
-    icon: <Search className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'bug-review', { runFolder, background: true })
-    }
-  },
-  {
     command: 'ops-review',
     description: 'Agentically review cost, timing, tool/runtime reliability, model routing, and setup',
     icon: <Cpu className="w-4 h-4" />,
@@ -275,7 +262,7 @@ Always write backup/status.json; never write operational status into workflow.js
   },
   {
     command: 'publish',
-    description: 'Set up or publish this automation’s Pulse log & report to a public URL',
+    description: 'Set up or publish this automation’s report to a public URL',
     icon: <Globe className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -284,7 +271,7 @@ Always write backup/status.json; never write operational status into workflow.js
     execute: (ctx) => {
       const instruction = `Help me set up or run publish for this workflow. Call read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and follow it exactly, then read workflow.json.publish and publish/status.json.
 - If publish is NOT configured: set it up — ask me which static host (Netlify / Vercel / Cloudflare Pages / Cloudflare R2 / S3 / any). As soon as I pick one, AUTO-CHECK its CLI (command -v) and INSTALL it for me if missing (announce it, e.g. "Installing the Vercel CLI…", then run npm i -g <cli>); do NOT ask me for an access token/API key — the path is install CLI → I run <cli> login once → you deploy. Default visibility is PRIVATE via a simple password gate (StatiCrypt with $SECRET_PUBLISH_PASSWORD and the Runloop dark gate styling from the reference doc); ask me to set a PUBLISH_PASSWORD secret, or confirm if I want it fully public instead. Then write workflow.json.publish and publish/status.json with state "configured_not_verified". Do not publish yet.
-- If publish IS configured: publish now. Publish BOTH artifacts — bake the report dashboard to static HTML AND publish the Pulse log (builder/improve.html); deploy dashboard.html + pulse.html + the nav index.html wrapper per the reference doc. If publish.targets only lists one, update it to include both first. Force every page to **DARK only** (matching the app) — set BOTH class="dark" and data-theme="dark" on the html element per the reference doc; no toggle, do NOT use prefers-color-scheme. Stage the files in a /tmp dir; if visibility is private, encrypt them with StatiCrypt ($SECRET_PUBLISH_PASSWORD) and apply the Runloop dark password-gate styling before deploying; run the deploy CLI from /tmp. Then give me the URL and confirm visibility + what's public.
+- If publish IS configured: publish the report dashboard now. Deploy dashboard.html and the nav index.html wrapper per the reference doc. Pulse is in-app only and must not be published as a separate artifact. Force every page to **DARK only** (matching the app) — set BOTH class="dark" and data-theme="dark" on the html element per the reference doc; no toggle, do NOT use prefers-color-scheme. Stage the files in a /tmp dir; if visibility is private, encrypt them with StatiCrypt ($SECRET_PUBLISH_PASSWORD) and apply the Runloop dark password-gate styling before deploying; run the deploy CLI from /tmp. Then give me the URL and confirm visibility + what's public.
 CRITICAL — after deploying, come BACK to the workflow folder and persist state there (never in the /tmp staging dir): set workflow.json.publish.enabled=true with the destination + top-level url, AND write publish/status.json with state "published", the url, and last_source_hash (= the current_source_hash the backend reports; leave empty if unknown). A deploy that doesn't write these shows a grey "not configured" dot even though the site is live.
 Always write publish/status.json.`
       ctx.onSubmit(ctx.beforeSlash ? `${ctx.beforeSlash}\n\n${instruction}` : instruction)

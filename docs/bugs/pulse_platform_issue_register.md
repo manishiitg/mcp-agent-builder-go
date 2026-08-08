@@ -51,6 +51,9 @@ The Upwork v1.0.21 migration then exposed PLAT-051: upgrade guidance named an
 internal helper instead of a registered agent tool. Its scheduled follow-up
 also exposed PLAT-052: known consecutive scheduler turns unnecessarily closed
 and resumed the native Claude session.
+The next Upwork Pulse run exposed PLAT-053: `run_in_background` gave Pulse
+review/fix children a workflow-step subset rather than the full workshop tool
+surface, so they could diagnose but not persist or repair findings.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -146,6 +149,7 @@ Rules:
 | [PLAT-050-A](pulse_platform/plat-050.md) | Keep Pulse reasoning in one continuing agent conversation | Codex | `runtime_reverify` | scheduler Pulse orchestration and event-driven completion |
 | [PLAT-051-A](pulse_platform/plat-051.md) | Stamp contract upgrades through a real registered agent tool | Codex | `runtime_reverify` | version-upgrade guidance and Workshop tool surface |
 | [PLAT-052-A](pulse_platform/plat-052.md) | Keep one native CLI alive across known scheduler turns | Codex | `runtime_reverify` | scheduler request lifecycle and coding-agent mode |
+| [PLAT-053-A](pulse_platform/plat-053.md) | Give background workshop children the complete parent tool surface | Codex | `runtime_reverify` | background-agent construction and direct tool definitions |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,

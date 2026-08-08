@@ -7,7 +7,7 @@ Load this doc before any step or agent that writes a `.html` file as a final art
 | Output goes to | Format |
 |----------------|--------|
 | Downstream step as structured data | **JSON** — always |
-| Dedicated HTML surfaces: `builder/improve.html`, org pages (`pulse/*.html`), dashboard cards, published pages | **HTML** — that's what this doc is for |
+| Dedicated HTML surfaces: report documents, org pages (`pulse/*.html`), and published pages | **HTML** — that's what this doc is for |
 | Final human-readable report / analysis | **Markdown by default** — reach for HTML only when the layout genuinely needs it (see `code-authoring`); an actual dashboard belongs in the report system (`reports/report_plan.json`), not a hand-authored page |
 | Short prose note / KB append / learnings | **Markdown** |
 | Raw data the user may download | **JSON or CSV** |

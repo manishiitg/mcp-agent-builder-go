@@ -465,7 +465,7 @@ func TestPulseImpactRejectionsNameTheContractTheyEnforce(t *testing.T) {
 		}
 	}
 	for _, value := range statuses {
-		if !validPulseInterventionStatus(value) {
+		if !validPulseInterventionStatus("fix_bundle", value) {
 			t.Fatalf("advertised intervention status %q is rejected", value)
 		}
 	}

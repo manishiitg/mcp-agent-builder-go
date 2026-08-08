@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
 
 // =====================================================================
@@ -13,9 +15,8 @@ import (
 //   <workflow>/knowledgebase/context/context.md
 //   <workflow>/knowledgebase/context/examples/
 //
-// This helper only writes context.md. It does not touch the improvement
-// ledger — the agent narrates context captures into builder/improve.html on
-// its turn.
+// The context file is the runtime source. Each capture also has a typed Pulse
+// receipt so the user can see the authoritative rule without an HTML journal.
 //
 // `knowledgebase/context/` is intentionally excluded from
 // reorganize_knowledgebase / consolidate_knowledgebase passes — user-supplied
@@ -89,14 +90,11 @@ func AppendContextRule(ctx context.Context, workspacePath, section, ruleText str
 	return writeFileToWorkspace(ctx, contextRulesPath(workspacePath), body)
 }
 
-// CaptureContext is the high-level helper used by the capture_context tool.
-// It appends the rule text to knowledgebase/context/context.md and returns a
-// summary of what was written (section and applied changes). It
-// does NOT write to the improvement ledger — the agent narrates context
-// captures into builder/improve.html on its turn.
-func CaptureContext(ctx context.Context, workspacePath, section, ruleText string, exampleNote string) (DecisionEntry, error) {
+// CaptureContext appends the user rule to the runtime context file and records
+// a typed authoritative receipt in the workflow database.
+func CaptureContext(ctx context.Context, workspacePath, section, ruleText string, exampleNote string) (*step_based_workflow.PulseContextRecord, error) {
 	if strings.TrimSpace(ruleText) == "" {
-		return DecisionEntry{}, fmt.Errorf("capture_context requires context text")
+		return nil, fmt.Errorf("capture_context requires context text")
 	}
 	section = strings.TrimSpace(section)
 	if section == "" {
@@ -104,22 +102,15 @@ func CaptureContext(ctx context.Context, workspacePath, section, ruleText string
 	}
 
 	if err := AppendContextRule(ctx, workspacePath, section, ruleText); err != nil {
-		return DecisionEntry{}, fmt.Errorf("append context: %w", err)
+		return nil, fmt.Errorf("append context: %w", err)
 	}
-
-	rationale := fmt.Sprintf("user-supplied context: %s", truncate(ruleText, 120))
-	if exampleNote != "" {
-		rationale = fmt.Sprintf("%s — note: %s", rationale, truncate(exampleNote, 80))
+	record, err := step_based_workflow.RecordPulseContextRecord(
+		ctx, workspacePath, section, ruleText, exampleNote, "knowledgebase/context/context.md",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("record context receipt: %w", err)
 	}
-	dec := DecisionEntry{
-		Source:         DecisionSourceUser,
-		Trigger:        "capture-context",
-		Rationale:      rationale,
-		AppliedChanges: []string{"knowledgebase/context/context.md"},
-		RuleAdded:      ruleText,
-		RuleSection:    section,
-	}
-	return dec, nil
+	return record, nil
 }
 
 type CaptureContextInput struct {
@@ -136,21 +127,14 @@ type CaptureContextOutput struct {
 }
 
 func CaptureContextTool(ctx context.Context, workspacePath string, input CaptureContextInput) (*CaptureContextOutput, error) {
-	decision, err := CaptureContext(ctx, workspacePath, input.Section, input.ContextText, input.ExampleNote)
+	record, err := CaptureContext(ctx, workspacePath, input.Section, input.ContextText, input.ExampleNote)
 	if err != nil {
 		return nil, err
 	}
 	return &CaptureContextOutput{
-		DecisionID:     decision.ID,
+		DecisionID:     record.ContextID,
 		Status:         "captured",
-		Section:        decision.RuleSection,
-		AppliedChanges: decision.AppliedChanges,
+		Section:        record.Section,
+		AppliedChanges: []string{record.Path},
 	}, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }

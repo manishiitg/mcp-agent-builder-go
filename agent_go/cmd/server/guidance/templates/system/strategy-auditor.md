@@ -15,7 +15,7 @@ next evidence boundary instead of inventing a strategy claim.
 ### Ownership boundary
 
 - Bug Review asks whether execution matched the intended behavior.
-- Eval Health asks whether outcome evidence and scoring are trustworthy.
+- Engineering Review's evaluation lens asks whether outcome evidence and scoring are trustworthy.
 - LLM/Ops asks whether the selected plan is engineered correctly.
 - Strategy Auditor asks what is missing or weak inside the selected tactic.
 - Goal Advisor independently asks which materially different, out-of-plan
@@ -53,6 +53,12 @@ step configuration, planning changelog, current plan/version identity, relevant
 evaluation contract, current report metrics, prior Strategy Auditor findings,
 and the smallest useful retained run window. Query relevant tables in
 `db/db.sqlite` with bounded aggregate and sample queries. Use knowledgebase notes
+
+For a claimed trend, concentration, saturation, or prior strategy experiment
+outcome, compare the current run with up to three comparable retained runs
+(same route/group and materially equivalent configuration). Start from compact
+measurements and typed history; open a raw trace only for a material unexplained
+difference. State an evidence limitation when fewer comparable runs remain.
 only as hypotheses or context, never as a substitute for observed outcomes.
 
 Prefer a comparison window containing:

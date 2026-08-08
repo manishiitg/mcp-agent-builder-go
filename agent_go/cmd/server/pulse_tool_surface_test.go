@@ -182,7 +182,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 		t.Fatalf(`view="backlog" did not return the durable issue backlog: %s`, raw)
 	}
 	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint == "" {
-		t.Fatalf(`view="backlog" lost the issue.id/fingerprint pair a fixer must carry: %+v`, backlogView.Findings[0])
+		t.Fatalf(`view="backlog" lost its visible issue id or backend lifecycle key: %+v`, backlogView.Findings[0])
 	}
 	// The optional module filter still filters, and still names the closed set.
 	if _, err := execute(ctx, map[string]interface{}{
@@ -318,8 +318,8 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	commandArgs := func(status string) map[string]interface{} {
 		return map[string]interface{}{
 			"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-			"command": pulseFinalCommandDashboard, "result": status,
-			"reason": "Dashboard " + status,
+			"command": pulseFinalCommandBackup, "result": status,
+			"reason": "Backup " + status,
 		}
 	}
 	if _, err := execute(ctx, commandArgs("done")); err == nil || !strings.Contains(err.Error(), "marked running before done") {
@@ -340,7 +340,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 		t.Fatalf("get final command states: %v", err)
 	}
 	for _, state := range commands {
-		if state.Command == pulseFinalCommandDashboard && state.Status != "done" {
+		if state.Command == pulseFinalCommandBackup && state.Status != "done" {
 			t.Fatalf("final command result was not persisted: %+v", state)
 		}
 	}
@@ -373,7 +373,7 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 
 	_, err := execute(ctx, clone(nil))
 	assertRejectionContains(t, err, "exactly one of module or command",
-		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandDashboard)
+		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandBackup)
 
 	_, err = execute(ctx, clone(map[string]interface{}{
 		"module": pulseModuleWorkflowReview, "command": pulseFinalCommandBackup,

@@ -1,8 +1,8 @@
-# READ-ONLY LEARNING HEALTH REVIEW
+# ENGINEERING REVIEW — STORES HEALTH / LEARNINGS LENS
 
 Review whether `learnings/_global/` supports the current plan and objective. This
 checklist is passed to a generic read-only reviewer. Do not edit any file, update
-`builder/improve.html`, or call module-result or human-input tools. Any later
+any presentation artifact, or call module-result or human-input tools. Any later
 wording such as improve, apply, edit, update, remove, merge, or resolve describes
 what the **Pulse Fixer** should do after consolidating all reviewer findings; it
 is not permission for this reviewer to mutate anything.
@@ -15,16 +15,15 @@ executor returns compact evidence; the parent consolidates it after the
 automatic completion notification. Do not create a dedicated
 learning-maintenance agent.
 
-This checklist is one of three (learnings, knowledgebase, DB) the parent loads
-together in the stores turn of the scheduled `workflow_review` sequence (or a
-legacy standalone `stores_health` pass) — see `post-run-monitor`. Inside
-`workflow_review`, use the fields below as the learning-lens checkpoint; do not
-emit the legacy `module: stores_health` envelope, return the final consolidated
-artifact, or mark module state from this turn.
+This checklist is one of three store-integrity lenses (learnings, knowledgebase,
+DB) the parent may load into Engineering Review — see the `pulse-review-fixer`
+contract. Use
+the fields below as the learning-lens checkpoint; do not return a separate
+module envelope, final artifact, or module state from this turn.
 
 Return only this compact contract:
 
-- `module`: stores_health
+- `module`: workflow_review
 - `verdict`: clean | needs_fix | blocked
 - `index_shape`: **required, measure it — do not estimate.** Report
   `SKILL.md` line count, how many of those lines are links to `references/`
@@ -64,10 +63,15 @@ correct content findings and never once mentioned its shape.
 
 Use the remaining document only as the learning-health audit checklist.
 
-Read `builder/improve.html` for prior context and matching open findings, but do
-not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
-style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
-the consolidated log update.
+Read typed Pulse findings and review history for prior context and matching open
+findings, but do not mutate them. Use targeted semantic reads only. The parent
+agent owns any approved mutation and its typed disposition.
+
+For a claimed learning regression or a repair awaiting proof, compare the
+current state with up to three comparable retained runs (same route/group and
+materially equivalent configuration). Inspect compact receipts first and open
+raw execution traces only for the differing writer or consumer. State an
+evidence limitation when fewer comparable runs remain.
 
 Apply the parent-provided `assumption-audit` learnings/skills lens within this command's boundaries. Reusable HOW belongs here; business policy, fixed strategy, architecture preferences, and unverified limitations do not become true because they were written into a skill. Recommend removing misplaced material from the complete skill package, not merely relocating it from `SKILL.md` to a reference. Surface consequential unresolved assumptions for Pulse's Assumptions challenged.
 
@@ -143,7 +147,7 @@ READ FIRST
 
 1. Read `soul/soul.md` if present to understand the workflow objective and success criteria.
 2. Read `planning/plan.json` and `planning/step_config.json` if present. Use them to understand current steps, `learnings_access`, `learning_objective`, `lock_learnings`, and `lock_code` decisions.
-3. Read `builder/improve.html` if present. Carry unresolved learning/code findings, prior cleanup attempts, recent Pulse fixes or Goal Advisor actions, and recent plan changes into the instruction.
+3. Read typed Pulse findings and review history. Carry unresolved learning/code findings, prior cleanup attempts, recent Pulse fixes or Goal Advisor actions, and recent plan changes into the instruction.
 4. Inventory the complete `learnings/_global/` tree. Read `SKILL.md` and every
    content-bearing Markdown reference for the purity manifest. For unusually
    large files, inspect them in bounded chunks or use headings/search to route
@@ -186,7 +190,7 @@ If unsure, use `mode="auto"` or omit mode. Broad instructions like "optimize lea
 
 REVIEW OUTPUT
 
-1. Build one concrete instruction. It must mention the objective from `soul.md` or `planning/plan.json`, the user's focus if provided, and any unresolved learning-related findings from `builder/improve.html`.
+1. Build one concrete instruction. It must mention the objective from `soul.md` or `planning/plan.json`, the user's focus if provided, and any unresolved learning-related typed Pulse findings.
    - Always include this invariant in the instruction: keep `learnings/_global/SKILL.md` lean as an index/overview; move detailed HOW-to-run content into `learnings/_global/references/<topic>.md` and link those files from `SKILL.md`.
    - Always include this purity invariant: references are part of the skill; remove non-HOW content from the entire package and route it to its authoritative store rather than moving it behind a link.
    - Always include this stale-content rule: compare learnings against current `planning/plan.json` step descriptions and `planning/step_config.json` learning objectives; remove or replace HOW guidance that belongs to old step behavior, obsolete selectors/API paths, removed dependencies, or previous descriptions.
@@ -194,8 +198,8 @@ REVIEW OUTPUT
 3. Name the exact files that would change, stale or duplicate HOW content to
    remove, reference files to create or reorganize, and learning objectives that
    still lack matching content.
-4. Identify matching open findings only as evidence. The Pulse Fixer owns any
-   `builder/improve.html` update or close-out.
+4. Identify matching open findings only as evidence. The parent agent owns any
+   typed Pulse disposition or close-out.
 5. For every proposed removal, name the classification, authoritative
    destination, whether that destination already contains the material, and
    how the current durable Pulse review preserves the evidence. Never discard

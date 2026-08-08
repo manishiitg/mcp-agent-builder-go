@@ -13,6 +13,8 @@ export type PulseModuleSummary = {
   blocked: number
   /** Real, but only waiting on a scheduled run to produce its evidence. */
   awaitingRun: number
+  /** Safe workflow work retained for a future Engineering/Pulse pass. */
+  queuedForEngineering: number
   /** Understood and recorded as a proposal; Pulse chose not to repair it. */
   proposals: number
   /**
@@ -156,6 +158,7 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     awaitingUser: 0,
     blocked: 0,
     awaitingRun: 0,
+    queuedForEngineering: 0,
     proposals: 0,
     workflowReported: 0,
     unclassified: 0,
@@ -174,6 +177,7 @@ export function summarizePulseModule(findings: PulseFindingLifecycle[]): PulseMo
     // Waiting for data is not a blocker and not the operator's move; counting it
     // with either sends you looking for a decision that does not exist.
     else if (finding.status === 'awaiting_run') summary.awaitingRun++
+    else if (finding.status === 'queued_for_engineering') summary.queuedForEngineering++
     else if (finding.status === 'acknowledged') {
       const reason = acknowledgedReason(finding)
       if (reason === 'awaiting_user') summary.awaitingUser++

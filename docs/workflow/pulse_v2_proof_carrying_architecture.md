@@ -805,11 +805,11 @@ The database-native Pulse popup uses this outcome-first hierarchy (implemented
 8. impact over time against the workflow success measures;
 9. finalization details such as backup, publish, and notification.
 
-The UI must not make retired internal reviewer names such as Report Health,
-Eval Health, Stores Health, or Artifact Review primary navigation. Historical
-records using those names normalize into Engineering Review; `cost_llm_time`
-normalizes into LLM & Operations. The popup explains outcomes and ownership;
-reviewer implementation details remain secondary drill-down evidence.
+The UI exposes only the current Engineering, Operations, Strategy, and Goal
+perspectives. Report, evaluation, artifact, database, knowledgebase, learning,
+and runtime checks are Engineering evidence packs rather than separate reviewer
+identities. The popup explains outcomes and ownership; implementation details
+remain secondary drill-down evidence.
 
 Static `pulse.html` publishing can reuse the same renderer or a server-generated
 HTML template.
@@ -2351,7 +2351,7 @@ of work, made 46 tool calls, and consumed 3.39M cumulative token operations,
 but its structured terminal result was rejected before `pulse_review_log`
 persistence.
 
-The first rejected marker was:
+The first rejected marker used the former internal-only transport shape:
 
 ```json
 {"finding_id":"PUL-71DC2B32","fingerprint":"71dc2b32264343a2","attempt_id":"","verdict":"failed", ...}
@@ -2372,12 +2372,12 @@ already rejected or closed with prior verification. None was an active
 `changed_unverified` fix awaiting proof, so the correct verification allowlist
 for this pass was empty.
 
-The lifecycle invariant is intentional. `record_pulse_verification` requires a
-non-empty attempt ID and joins the review
-verdict to the exact finding disposition by finding ID, fingerprint, and
-attempt ID. A `passed` verdict becomes `fixed_verified`; `failed` reopens the
-attempt; `inconclusive` remains `changed_unverified`. Relaxing only the parser
-would therefore move the same failure into the Fixer rather than solve it. See
+The lifecycle invariant is intentional. Internally, a reviewer verdict joins
+to one exact finding and fix attempt. Public tools now take only visible
+`issue_id`; the backend resolves the internal semantic fingerprint and eligible
+attempt before applying the same invariant. A `passed` verdict becomes
+`fixed_verified`; `failed` reopens the attempt; `inconclusive` remains
+`changed_unverified`. See
 [`pulse_review_log.go`](../../agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/pulse_review_log.go)
 and [`pulse_worklist.go`](../../agent_go/cmd/server/pulse_worklist.go).
 
@@ -2421,8 +2421,8 @@ reconstructed by the agent.
 The implementation keeps the strict proof validator and closes the seam at both
 boundaries:
 
-- reviewer launch receives a backend-generated allowlist of exact
-  `finding_id`/`fingerprint`/`attempt_id`/`next_check` tuples;
+- reviewer launch receives a backend-generated allowlist of exact internal
+  issue/attempt tuples; agents submit only its visible `issue_id`;
 - the allowlist is derived only from owned `changed_unverified` attempts that
   are still awaiting verification, including retired module aliases normalized
   to their current owner;
@@ -2558,9 +2558,9 @@ Gate independently decides whether these four perspectives are due:
 4. `goal_advisor` — blank-sheet product review of materially different routes
    to the goal.
 
-Historical artifact-named modules (`bug_review`, `artifact_review`,
-`report_health`, `eval_health`, and `stores_health`) normalize into Engineering
-Review. They remain readable evidence identities but are never scheduled.
+Artifact-named reviewer modules are retired rather than normalized. Engineering
+Review owns their evidence packs under one durable identity from this design
+forward; old records are not a separate compatibility surface.
 
 The Review+Fix turn first reconciles retained findings and pending verification,
 then performs only the due lenses, semantically deduplicates their evidence,

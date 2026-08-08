@@ -26,8 +26,6 @@ import {
   reportPreviewPreferenceKey,
   ReportView,
 } from '../ReportViewer'
-import { LogViewer } from '../LogViewer'
-import { WORKFLOW_LOG_REFRESH_EVENT } from '../workflowEvents'
 import { usePlanData, type PlanChanges } from '../hooks/usePlanData'
 import { useEvaluationPlanData } from '../hooks/useEvaluationPlanData'
 import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
@@ -127,6 +125,7 @@ interface WorkflowCanvasProps {
   viewMode?: CanvasViewMode
   hideToolbar?: boolean
   readOnly?: boolean
+  openPulseOnMount?: boolean
 }
 
 // On-pane controls for the preview (canvas) pane: a Plan/Report segmented switch
@@ -193,46 +192,10 @@ export function previewDeviceShellClass(device: PreviewDevice): string {
 
 function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: { hasPlan: boolean; onExportPlan?: () => void; onRefreshPlan?: () => void; scopeId?: string | null }) {
   const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const visibleCanvasViewMode = canvasViewMode === 'soul' ? 'log' : canvasViewMode
+  const visibleCanvasViewMode = canvasViewMode === 'log' || canvasViewMode === 'soul' ? 'report' : canvasViewMode
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const isFiles = workflowWorkspaceView === 'files'
   const isReport = !isFiles && visibleCanvasViewMode === 'report'
-  const isLog = !isFiles && visibleCanvasViewMode === 'log'
-
-  // "New Pulse" dot — show a dot on the Pulse tab when builder/improve.html
-  // changed since the user last viewed it. Per-workspace seen-timestamp persists
-  // in localStorage; cleared whenever the user opens the Pulse tab.
-  const [pulseLastModified, setPulseLastModified] = React.useState<string | null>(null)
-  const [pulseSeenTick, setPulseSeenTick] = React.useState(0)
-  React.useEffect(() => {
-    if (!scopeId) { setPulseLastModified(null); return }
-    let active = true
-    const poll = async () => {
-      try {
-        const res = await agentApi.getBuilderDocsStatus(scopeId)
-        if (active && res.success) setPulseLastModified(res.improve?.last_modified || null)
-      } catch { /* soft signal */ }
-    }
-    void poll()
-    const id = setInterval(() => { void poll() }, 60000)
-    return () => { active = false; clearInterval(id) }
-  }, [scopeId])
-  const hasUnseenPulse = React.useMemo(() => {
-    if (!scopeId || !pulseLastModified) return false
-    void pulseSeenTick
-    let seen: string | undefined
-    try { seen = JSON.parse(localStorage.getItem('pulseSeen') || '{}')[scopeId] } catch { /* ignore */ }
-    return !seen || new Date(pulseLastModified).getTime() > new Date(seen).getTime()
-  }, [scopeId, pulseLastModified, pulseSeenTick])
-  React.useEffect(() => {
-    if (!isLog || !scopeId || !pulseLastModified) return
-    try {
-      const all = JSON.parse(localStorage.getItem('pulseSeen') || '{}')
-      all[scopeId] = pulseLastModified
-      localStorage.setItem('pulseSeen', JSON.stringify(all))
-    } catch { /* localStorage may be unavailable */ }
-    setPulseSeenTick(t => t + 1)
-  }, [isLog, scopeId, pulseLastModified])
 
   const devicePref = usePreviewDevice(scopeId)
   const setDevice = (mode: PreviewDevice) => setPreviewDevice(mode, scopeId)
@@ -247,12 +210,6 @@ function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: 
     const s = useWorkflowStore.getState()
     s.setWorkflowWorkspaceView('flow')
     s.setCanvasViewMode('flow')
-  }
-  const showLog = () => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    const s = useWorkflowStore.getState()
-    s.setWorkflowWorkspaceView('log')
-    s.setCanvasViewMode('log')
   }
   const showFiles = () => {
     const s = useWorkflowStore.getState()
@@ -270,11 +227,10 @@ function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: 
   }
   const refresh = () => {
     if (isReport) window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))
-    else if (isLog) window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
     else onRefreshPlan?.()
   }
   const canDownload = !isFiles && (isReport || Boolean(onExportPlan))
-  const canRefresh = !isFiles && (isReport || isLog || Boolean(onRefreshPlan))
+  const canRefresh = !isFiles && (isReport || Boolean(onRefreshPlan))
   const tabCls = (active: boolean) =>
     `rounded px-2.5 py-1 text-xs font-medium transition-colors ${
       active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
@@ -293,13 +249,12 @@ function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: 
           onMouseEnter={() => setExpanded(true)}
           onFocus={() => setExpanded(true)}
           onClick={() => setExpanded(true)}
-          title={hasUnseenPulse ? 'View controls — new Pulse update' : 'View controls'}
+          title="View controls"
           aria-label="View controls"
           className="relative inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-2 py-1 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground"
         >
-          <span>{isFiles ? 'Files' : isReport ? 'Report' : isLog ? 'Pulse' : 'Plan'}</span>
+          <span>{isFiles ? 'Files' : isReport ? 'Report' : 'Plan'}</span>
           <SlidersHorizontal className="h-3.5 w-3.5" />
-          {hasUnseenPulse && !isLog && <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-background" aria-label="New Pulse update" />}
         </button>
         {canRefresh && (
           <button type="button" onClick={refresh} title="Refresh" aria-label="Refresh" className={iconBtnCls}>
@@ -323,10 +278,6 @@ function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: 
           <button type="button" onClick={showPlan} className={tabCls(!isFiles && visibleCanvasViewMode === 'flow')}>Plan</button>
         )}
         <button type="button" onClick={showReport} className={tabCls(isReport)}>Report</button>
-        <button type="button" onClick={showLog} className={`relative ${tabCls(isLog)}`} title={hasUnseenPulse ? 'Pulse — new update' : 'Pulse'}>
-          Pulse
-          {hasUnseenPulse && <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-background" aria-label="New Pulse update" />}
-        </button>
         <button type="button" onClick={showFiles} className={tabCls(isFiles)}>Files</button>
       </div>
       {!isFiles && (
@@ -463,9 +414,7 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
         {toolbarOnly ? null : (
           <div className="h-full min-h-0 relative">
             <PreviewPaneControls hasPlan={Boolean(plan?.steps?.length)} scopeId={workspacePath} />
-            {workspacePath && (paneMode === 'log' || paneMode === 'soul'
-              ? <div className={documentPreviewShellClassName}><LogViewer workspacePath={workspacePath} /></div>
-              : <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} reserveTopControlsSpace />)}
+            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} reserveTopControlsSpace />}
           </div>
         )}
       </div>
@@ -1384,7 +1333,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   className = '',
   viewMode,
   hideToolbar = false,
-  readOnly = false
+  readOnly = false,
+  openPulseOnMount = false
 }, ref) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -2957,6 +2907,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
               onToggleChatArea={onToggleChatArea}
               onRefresh={handleRefresh}
               chatTabsSlot={chatTabsSlot}
+              openPulseOnMount={openPulseOnMount}
             />
           </div>
         )}
@@ -3007,6 +2958,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             onToggleChatArea={onToggleChatArea}
             onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
+            openPulseOnMount={openPulseOnMount}
           />
         </div>
       )}

@@ -62,10 +62,10 @@ a Goal concern. Do not confuse the two.
    in the SQLite-backed Pulse lifecycle with the assumption, source, evidence
    for/against, and validation/retirement condition. Route high-leverage strategy
    work to Goal Advisor. Create a human-input request only when a real user
-   decision is required. Do not add an assumptions panel to `builder/improve.html`.
-5. When an assumption is resolved, close its Product finding and record a material
-   outcome once in the journal timeline when consequential. Never duplicate the
-   same challenge across findings or cards.
+   decision is required. Do not create a separate assumptions presentation.
+5. When an assumption is resolved, close its Product finding and record the
+   consequential outcome through typed Pulse tools. Never duplicate the same
+   challenge across findings.
 
 ### Store-specific ownership
 

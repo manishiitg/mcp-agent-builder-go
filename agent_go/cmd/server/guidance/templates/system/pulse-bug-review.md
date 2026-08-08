@@ -1,9 +1,9 @@
 ## Pulse Bug Review — read-only QA and execution-trace contract
 
-Load this when the `bug_review` module is due. It is the deep read-only review
-contract used by the Bug Review reviewer and the Pulse Fixer. Gate does not load
-it — Gate only decides whether `bug_review` is due from the triggers in
-`read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`. The reviewer inspects and advises;
+Load this when Engineering Review is due and runtime/logic evidence is selected.
+It is the deep read-only execution evidence pack used by Engineering Review and
+the Review+Fix sequence. Gate does not load it — Gate only decides whether
+`workflow_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.
 
@@ -133,6 +133,12 @@ This is targeted escalation, not a mandatory audit of every conversation. Start
 from Gate evidence and open only the step/attempt needed to test the suspected
 problem. Valid triggers include:
 
+For a recurring defect or prior fix awaiting verification, compare the current
+run with up to three comparable retained runs (same route/group and materially
+equivalent configuration). Read compact summaries and typed findings first;
+open raw traces only for the differing or suspicious step/attempt. If fewer
+comparable runs remain, state that limitation rather than inferring recurrence.
+
 - evaluation, validation, report, DB, or artifact evidence contradicts the
   step's claimed success
 - the final result is empty, unsupported, stale, from the wrong run/group, or
@@ -186,7 +192,7 @@ Review. It must not rewrite a step merely because another tool might have been
 faster or stylistically preferable. Route `efficiency_or_coaching` findings to
 the `llm_ops_review` evidence set: if that module is due in the current worklist,
 pass the finding to its reviewer; otherwise record one deduplicated evidence
-pointer and next-check trigger in `builder/improve.html` so the next Gate makes
+pointer and next-check trigger through typed Pulse tools so the next Gate makes
 LLM/Ops due. Record `no_issue` as reviewed with no action. Keep
 `insufficient_evidence` visible only when it is consequential, with a concrete
 way to obtain the missing evidence.

@@ -454,12 +454,17 @@ func (bo *BaseOrchestrator) CreateAndSetupStandardAgentWithConfig(
 	// Apply overwriteSystemPrompt parameter to config so callers can override default system prompt behavior
 	config.OverwriteSystemPrompt = &overwriteSystemPrompt
 	syncCodingAgentWorkingDirWithShellSession(config)
+	// Some callers add native, builder-owned tool definitions before this common
+	// factory prepares the workspace-tool bundle. Preserve those definitions:
+	// overwriting them here made it impossible for isolated child agents to
+	// receive the workshop-only tools their parent exposes.
+	preconfiguredDirectTools := append([]mcpagent.ToolDefinition(nil), config.DirectTools...)
 	if customTools != nil && customToolExecutors != nil {
 		definitions, err := bo.prepareToolDefinitionsForAgent(config, customTools, customToolExecutors)
 		if err != nil {
 			return nil, err
 		}
-		config.DirectTools = definitions
+		config.DirectTools = append(definitions, preconfiguredDirectTools...)
 	}
 
 	// Create agent using provided factory function with pre-created config

@@ -335,15 +335,15 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 		JOIN (
 			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
 			FROM run_concerns
-			WHERE status IN (?, ?, ?, ?, ?)
+			WHERE status IN (?, ?, ?, ?, ?, ?)
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE c.status IN (?, ?, ?, ?, ?)
+		WHERE c.status IN (?, ?, ?, ?, ?, ?)
 		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
 			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
 	args := []interface{}{
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusQueuedForEngineering,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusQueuedForEngineering,
 	}
 	if limit > 0 {
 		query += ` LIMIT ?`

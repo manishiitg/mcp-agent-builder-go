@@ -1,13 +1,13 @@
-# READ-ONLY REPORT HEALTH REVIEW
+# ENGINEERING REVIEW — REPORT LENS
 
 Review the workflow report for accuracy, live-data wiring, evidence coverage,
 goal usefulness, and presentation quality. This specialist is read-only. Do not
 edit report HTML or `reports/report_plan.json`, call report mutation tools,
-update `builder/improve.html`, create questions, or mark module state. Any later
+update any presentation artifact, create questions, or mark module state. Any later
 wording such as improve, apply, edit, fix, update, reorder, add, remove, or
 resolve means **recommend the exact change to the Pulse Fixer**.
 
-Return only: `module=report_health`, `verdict`, `next_check`, and ordered
+Return only: `module=workflow_review`, `verdict`, `next_check`, and ordered
 `findings`. Every finding includes stable `finding_id`, `target_key`, severity,
 plain-language summary, precise `evidence`, bounded `recommended_fix` with
 before/after intent, exact `verification`, and `user_judgment_required` with
@@ -15,15 +15,14 @@ reason.
 
 The parent Workshop/Pulse agent supplies the relevant report contract and
 assumption-audit lens with this checklist. Do not burden the reviewer with
-`html-output`, Pulse HTML skeletons, CSS migration, or card formatting. The
+Pulse presentation guidance, CSS migration, or card formatting. The
 parent may load `report-plan` and `html-output` later when applying an accepted
 report fix. The reviewer must not call Workshop-only guidance, validation,
 preview, or mutation tools.
 
-Read only matching Report Health findings, goal verdicts, active measurement
-handoffs, and recent report decisions from `builder/improve.html`. Do not inspect
-or update the Pulse page's CSS/markup; the Pulse Fixer owns its one consolidated
-log update.
+Read only matching typed Engineering Review findings, goal verdicts, active measurement
+handoffs, and recent report decisions. Do not inspect or update Pulse presentation;
+the parent agent owns typed outcomes and dispositions.
 
 Apply the parent-provided assumption-audit report lens. The dashboard must show goal/outcome truth, not present the current architecture, tactic, channel, source list, or inferred proxy as the user's permanent target. Recommend bounded fixes for stale presentation assumptions and surface consequential unresolved ones for Pulse's Assumptions challenged.
 {{if .Focus}}
@@ -40,15 +39,15 @@ The report dashboard should help the user measure and track whether the workflow
 
 GOAL TRACKING CONTRACT
 Before proposing visual/layout work, translate `soul.md` success criteria into the dashboard's tracked signals using existing evidence:
-- For each important success criterion, show the best available signal from `db/db.sqlite`, `evaluation/`, `costs/`, `workflow.json`, `builder/improve.html`, or durable report-facing files.
+- For each important success criterion, show the best available signal from `db/db.sqlite`, `evaluation/`, `costs/`, `workflow.json`, typed Pulse records, or durable report-facing files.
 - If `evaluation_plan.json` has an eval step scoring this criterion, its verdict is already a `db/db.sqlite` row — see EVALUATION VERDICTS below — no separate measurement step is needed for that criterion.
 - Prefer a compact goal band: status, current value/state, target/baseline, trend/delta vs prior run/window, last updated, and a short plain-language interpretation.
 - If a success criterion cannot be measured from existing persisted evidence, show an honest "not measured yet" or "missing evidence" state and log the missing data requirement. Do not hardcode guesses and do not create a separate metrics system.
 - Keep detailed tables/charts below the goal band; the user should know progress and issues before inspecting raw rows.
 
 GOAL ADVISOR MEASUREMENT HANDOFF
-- Read applied Goal Advisor decisions and the active `.advisor-experiment` in
-  `builder/improve.html`, then inspect the current plan for the named normal
+- Read applied Goal Advisor decisions and the active typed strategy experiment,
+  then inspect the current plan for the named normal
   measurement step and its persisted DB contract.
 - An unapproved metric proposal is not report data. Show it only as the current
   proposed experiment/decision; do not add a KPI tile that implies measurement
@@ -63,7 +62,7 @@ GOAL ADVISOR MEASUREMENT HANDOFF
   zero.
 - If a Goal Advisor proposal identifies a useful metric but no approved
   collection step/data exists, log the missing-data handoff for Goal Advisor or
-  plan work. Report Health must not create workflow steps itself.
+  plan work. This report lens must not create workflow steps itself.
 
 EVALUATION VERDICTS
 - Each eval step in `evaluation_plan.json` already writes its own score/reasoning into
@@ -119,5 +118,5 @@ When you finish, return to the Pulse Fixer:
 - what is safe to apply automatically vs what must be deferred or approved
 
 Do not record or close findings yourself. Name matching open findings and proposed
-close-out text so the Pulse Fixer can update `builder/improve.html` once after
-all reviewers return.
+close-out text so the parent agent can record typed Pulse dispositions after all
+reviewers return.

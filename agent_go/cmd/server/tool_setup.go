@@ -661,7 +661,7 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 							// client normalizes the same way, but only after this guard runs,
 							// so it never got the chance. Prompts actively encourage absolute
 							// paths, which is how a legitimate write to
-							// Workflow/social-media/builder/improve.html was rejected against
+							// A retired Pulse HTML path was rejected against
 							// an allow list that contained Workflow/social-media.
 							if relPath, ok := orchestrator.NormalizeAbsoluteWorkspaceDocsPath(cleanedPath); ok {
 								cleanedPath = filepath.Clean(relPath)

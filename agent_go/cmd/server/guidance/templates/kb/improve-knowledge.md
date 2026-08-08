@@ -1,8 +1,8 @@
-# READ-ONLY KNOWLEDGEBASE HEALTH REVIEW
+# ENGINEERING REVIEW — STORES HEALTH / KNOWLEDGEBASE LENS
 
 Review whether workflow knowledgebase notes support the current plan and
 objective. This checklist is passed to a generic read-only reviewer. Do not edit
-any file, update `builder/improve.html`, or call module-result or human-input
+any file, update a presentation artifact, or call module-result or human-input
 tools. Any later wording such as improve, apply, edit, update, merge, rename,
 compact, or resolve describes a recommendation for the **Pulse Fixer**, not an
 action for this reviewer.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
@@ -15,12 +15,13 @@ executor returns compact evidence; the parent consolidates it after the
 automatic completion notification. Do not create a dedicated KB-maintenance
 agent.
 
-This checklist is one of three (learnings, knowledgebase, DB) the parent may
-load together in a single `stores_health` pass — see `post-run-monitor`. If so,
-this reviewer's output is one part of that combined packet, not a standalone
-result.
+This checklist is one of three store-integrity lenses (learnings, knowledgebase,
+DB) that Engineering Review may load together — see the `pulse-review-fixer`
+contract. Its
+output is evidence for the one Engineering Review result, never a standalone
+reviewer result.
 
-Return only: `module=stores_health`, `verdict`, `note_shape`,
+Return only: `module=workflow_review`, `verdict`, `note_shape`,
 `kb_purity_manifest`, `ownership_candidates`, `next_check`, and ordered
 `findings`. Every finding includes stable `finding_id`, `target_key`,
 severity, plain-language summary, precise `evidence`, a bounded
@@ -50,10 +51,15 @@ semantic item with `item`, `current_location`, `semantic_type`,
 `authoritative_owner`, `duplicate_locations`, `recommended_action`, and exact
 `verification`.
 
-Read `builder/improve.html` for prior context and matching open findings, but do
-not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
-style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
-the consolidated log update.
+Read typed Pulse findings and review history for prior context and matching open
+findings, but do not mutate them. Use targeted semantic reads only. The parent
+agent owns any approved mutation and its typed disposition.
+
+For a claimed knowledgebase regression or a repair awaiting proof, compare the
+current state with up to three comparable retained runs (same route/group and
+materially equivalent configuration). Inspect compact receipts first and open
+raw execution traces only for the differing writer or consumer. State an
+evidence limitation when fewer comparable runs remain.
 
 Apply the parent-provided `assumption-audit` KB-notes lens within this command's boundaries. A note that merely repeats the current plan's tactic, architecture, fixed source/channel, or unverified belief is not durable domain knowledge. Keep user-owned `knowledgebase/context/` untouched; surface a consequential unresolved restriction for Pulse's Assumptions challenged instead of copying it into more notes.
 
@@ -85,7 +91,7 @@ BOUNDARIES
 READ FIRST
 
 1. Read `soul/soul.md` if present to understand the workflow objective and success criteria.
-2. Read `builder/improve.html` if present. Use unresolved KB/db/report findings, prior failed cleanup attempts, recent Pulse fixes or Goal Advisor actions, and plan changes as context.
+2. Read typed Pulse findings and review history. Use unresolved KB/db/report findings, prior failed cleanup attempts, recent Pulse fixes or Goal Advisor actions, and plan changes as context.
 3. Read `planning/plan.json` and `planning/step_config.json` if present so the KB improvement is aligned with the current plan.
 4. Read `knowledgebase/notes/_index.json` before opening topic files.
 5. Inventory every content-bearing Markdown topic under `knowledgebase/notes/`
@@ -129,9 +135,9 @@ If unsure, use `mode="auto"` or omit mode. Broad instructions like "optimize the
 
 REVIEW OUTPUT
 
-1. Convert the user's request into one concrete instruction. If the focus is empty, base the instruction on `soul/soul.md`, `planning/plan.json`, unresolved findings and recent entries in `builder/improve.html`, and the KB index.
+1. Convert the user's request into one concrete instruction. If the focus is empty, base the instruction on `soul/soul.md`, `planning/plan.json`, unresolved typed Pulse findings/review history, and the KB index.
 2. Return the instruction and mode as `recommended_fix`; there is no separate KB-maintenance tool.
 3. Name affected topics, contradictions, pattern-note opportunities, index
    corrections, and remaining uncertainty.
-4. Identify matching open findings only as evidence. The Pulse Fixer owns every
-   file mutation and `builder/improve.html` update.
+4. Identify matching open findings only as evidence. The parent agent owns every
+   file mutation and typed Pulse disposition.

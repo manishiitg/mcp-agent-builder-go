@@ -28,19 +28,19 @@ It is tractable **because the contracts already exist** — `db/README.md` lists
 ## 3. Reconcile or flag
 For each affected dependent:
 - **Fix it now** if the fix is clear and contained — update the consumer's schema, fix the report query, repair the eval source, update the db contract, clear a learning lock. (Back up first, or rely on the surrounding pass's backup.)
-- **Flag an open finding** if the reconciliation needs judgment — a downstream step needs real redesign, a metric definition is now ambiguous. Record it in `builder/improve.html` so it isn't lost.
+- **Flag an open finding** if the reconciliation needs judgment — a downstream step needs real redesign, a metric definition is now ambiguous. Record it through typed Pulse tools so it isn't lost.
 
 **Never leave a plan change with a silently broken dependent.**
 
 ## 4. Record an impact summary
-After tracing, write a short **impact summary** into `builder/improve.html`: what changed (the surface), which dependents it touched across the six dimensions, what you reconciled, and what you flagged. This makes the blast radius auditable and tells the next pass what was already handled.
+After tracing, record a short typed Pulse impact summary: what changed (the surface), which dependents it touched across the six dimensions, what you reconciled, and what you flagged. This makes the blast radius auditable and tells the next pass what was already handled.
 
 ## The changelog is your work-list — keep it lean
-Every plan-mod tool call is auto-written to `planning/changelog/changelog-*.json` (tool, `reason`, affected step ids, old/new values). Treat entries without `artifact_review.done=true` as the **ledger of changes whose blast radius may not be reconciled yet** — your work-list. When you reconcile a change (steps 1–3), **record its impact summary in `builder/improve.html`** so it is human-visible.
+Every plan-mod tool call is auto-written to `planning/changelog/changelog-*.json` (tool, `reason`, affected step ids, old/new values). Treat entries without `artifact_review.done=true` as the **ledger of changes whose blast radius may not be reconciled yet** — your work-list. When you reconcile a change (steps 1–3), record its typed Pulse impact summary.
 
-Do **not** edit or delete changelog files directly. The read-only Artifact Review agent returns exact inspected entries; the parent writer records the review in `builder/improve.html` and then marks those entries through the dedicated `mark_changelog_artifact_reviewed` tool. Pulse uses that metadata to skip future no-op review turns.
+Do **not** edit or delete changelog files directly. The read-only Artifact Review agent returns exact inspected entries; the parent writer records typed findings/dispositions and then marks those entries through the dedicated `mark_changelog_artifact_reviewed` tool. Pulse uses that metadata to skip future no-op review turns.
 
-This proactive check is one end of a loop; the **`review-artifact-drift` audit** is the read-only checklist passed to a generic reviewer that sweeps the changelog and catches anything the proactive pass missed. Its parent writer advances the **Artifact Sync Cursor** in `builder/improve.html` and calls `mark_changelog_artifact_reviewed` only for exact inspected entries. Pulse handles the same concern inside its independent Artifact Review module stage.
+This proactive check is one end of a loop; the **`review-artifact-drift` audit** is the read-only checklist passed to a generic reviewer that sweeps the changelog and catches anything the proactive pass missed. Its parent writer uses changelog review metadata as the cursor and calls `mark_changelog_artifact_reviewed` only for exact inspected entries. Pulse handles the same concern inside its independent Artifact Review module stage.
 
 ## Scope note
 The discipline **scales to the change**. A change that is purely internal to a step (same output contract, same db writes, same described behavior) has no blast radius — confirm that quickly and move on. A renamed output field touches downstream + report + eval + db; a reworded description that keeps the same contract may only touch learnings. Trace what the surface actually reaches, not a fixed checklist for its own sake.

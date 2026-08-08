@@ -46,7 +46,7 @@ function pulseReviewTitleFromIdentity(searchable: string): string {
     { title: 'Learning health', phrases: ['learning health'] },
     { title: 'Knowledge base review', phrases: ['knowledge base'] },
     { title: 'Database health', phrases: ['database health', 'db health'] },
-    { title: 'Report health', phrases: ['report health'] },
+    { title: 'Engineering review', phrases: ['report health', 'evaluation health', 'eval health'] },
     { title: 'Artifact review', phrases: ['artifact review'] },
     { title: 'Ops review', phrases: ['llm ops', 'ops review'] },
     { title: 'Goal Advisor', phrases: ['goal advisor'] },

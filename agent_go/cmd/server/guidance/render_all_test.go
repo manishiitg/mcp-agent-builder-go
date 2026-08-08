@@ -206,12 +206,6 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"update_workflow_config(post_run_monitor=true)",
 			"Create or update one normal workshop Run-mode schedule",
 		},
-		"bug-review": {
-			"STANDALONE PULSE BUG REVIEW",
-			"without applying fixes",
-			"READ-ONLY REVIEW",
-			"`/engineering-review`",
-		},
 		"ops-review": {
 			"STANDALONE LLM AND OPERATIONS REVIEW",
 			"must not edit files or config",
@@ -923,7 +917,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"bug-review", "ops-review", "strategy-auditor"} {
+	for _, kind := range []string{"ops-review", "strategy-auditor"} {
 		review, renderErr := renderFromRegistry(kind, tmplData{}, allKinds)
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
@@ -1048,7 +1042,6 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) {
 	kinds := []string{
 		"design-plan",
-		"bug-review",
 		"ops-review",
 		"strategy-auditor",
 		"review-code",
@@ -1099,7 +1092,6 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 
 func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T) {
 	for kind, module := range map[string]string{
-		"bug-review":            "bug_review",
 		"ops-review":            "llm_ops_review",
 		"strategy-auditor":      "strategy_auditor",
 		"review-artifact-drift": "artifact_review",

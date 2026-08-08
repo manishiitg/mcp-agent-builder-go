@@ -9,25 +9,28 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`, and
-   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. These references belong to
-   the parent. Do not pass HTML style, skeleton, CSS, migration, or card-format
-   work to the reviewer.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
+   These references belong to the parent. Do not pass presentation work to the
+   reviewer; findings are persisted through typed Pulse tools.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval
    LLM configuration, actual model/tier use, fallbacks, cost ledgers, token
    usage, timing summaries, representative conversation/tool traces, retained
    `efficiency_or_coaching` findings, workflow version, and current
-   backup/publish/notify readiness. Sample comparable earlier runs when needed
-   to establish recurrence; do not open every trace. Use retained evidence, not
+   backup/publish/notify readiness. For a recurrence, prior fix awaiting proof,
+   or claimed cost/quality regression, compare the current run with up to three
+   comparable retained runs (same route/group and materially equivalent
+   configuration). Read compact summaries and ledgers first; open raw traces
+   only for the differing or suspicious step/attempt. If fewer comparable runs
+   remain, state that limitation. Do not open every trace. Use retained evidence, not
    provider assumptions or generic best practices.
 3. Launch exactly one reviewer with
    `run_in_background(name="Standalone Operations Review", instruction="READ-ONLY OPERATIONS REVIEW ...", agent_type="executor")`.
    The reviewer must not edit files or config,
    create questions, publish, notify, run the workflow, call Pulse module-state
    tools, or launch another agent. It may read only matching
-   LLM/Ops/open-finding regions of `builder/improve.html`; it must not format or
-   write the page. `run_in_background` returns an `execution_id` immediately;
+   LLM/Ops/open-finding records from the Pulse backlog; it must not format or
+   write any presentation. `run_in_background` returns an `execution_id` immediately;
    end the current turn and resume only from the automatic completion
    notification.
 4. Require the reviewer to check all of the following agentically:
@@ -87,7 +90,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    remaining question is genuinely product policy.
 8. Read the child completion and validate its evidence against the actual
    artifacts. Do not write Pulse lifecycle state, apply recommendations, or
-   create approval cards in this read-only command.
+   create approval requests in this read-only command.
 
 Finish with a short executive summary followed by every evidence-backed
 recommendation in severity order. Identify which exact changes require user

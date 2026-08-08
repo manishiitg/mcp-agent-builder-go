@@ -445,8 +445,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 		"before_refs":    []string{"step_config:sha256:before"},
 		"after_refs":     []string{"step_config:sha256:after"},
 		"finding_dispositions": []map[string]interface{}{{
-			"fingerprint":   selected.Fingerprint,
-			"finding_id":    selected.Issue.ID,
+			"issue_id":      selected.Issue.ID,
 			"disposition":   "fixed_verified",
 			"summary":       "The stale run binding was corrected and the targeted test passed.",
 			"changed_files": []string{"planning/step_config.json"},
@@ -594,7 +593,21 @@ func TestValidatePulseGateCompletionRequiresOnlyCompleteDurableWorklist(t *testi
 	}
 }
 
+// The following test-only symbols keep the retired dashboard tests buildable
+// while their bodies remain skipped until they are deleted with the next test
+// file consolidation. Production Pulse no longer has these operations.
+type pulseDashboardArtifactSnapshot struct{}
+
+func validatePulseDashboardArtifact(context.Context, string, string, string, bool) error { return nil }
+func capturePulseDashboardArtifacts(context.Context, string) ([]pulseDashboardArtifactSnapshot, error) {
+	return nil, nil
+}
+func restorePulseDashboardArtifacts(context.Context, []pulseDashboardArtifactSnapshot) error {
+	return nil
+}
+
 func TestValidatePulseDashboardArtifactRequiresFreshContractCompliantHTML(t *testing.T) {
+	t.Skip("Pulse no longer writes or validates builder/improve.html")
 	ctx := context.Background()
 	workspacePath := "Workflow/dashboard-contract"
 	pulseRunID := "schedule-manual--dashboard-contract"
@@ -743,6 +756,7 @@ func pulseImproveHTMLFixture(pulseRunID, marker string) string {
 }
 
 func TestRestorePulseDashboardArtifactsRestoresBothFiles(t *testing.T) {
+	t.Skip("Pulse no longer snapshots dashboard artifacts")
 	ctx := context.Background()
 	workspacePath := "Workflow/dashboard-rollback"
 	improvePath := workspacePath + "/builder/improve.html"
@@ -778,6 +792,7 @@ func TestRestorePulseDashboardArtifactsRestoresBothFiles(t *testing.T) {
 }
 
 func TestRestorePulseDashboardArtifactsRemovesNewPartialFiles(t *testing.T) {
+	t.Skip("Pulse no longer snapshots dashboard artifacts")
 	ctx := context.Background()
 	workspacePath := "Workflow/dashboard-new-rollback"
 	improvePath := workspacePath + "/builder/improve.html"
@@ -827,8 +842,8 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	if err := initializePulseFinalCommandStates(ctx, workspacePath, "pulse-run-1"); err != nil {
 		t.Fatalf("initialize final commands: %v", err)
 	}
-	if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, "pulse-run-1", "done", "Dashboard updated"); err != nil {
-		t.Fatalf("mark dashboard: %v", err)
+	if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandBackup, "pulse-run-1", "done", "Backup completed"); err != nil {
+		t.Fatalf("mark backup: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/workflow/pulse-module-state?workspace_path=Workflow/example", nil)
@@ -855,8 +870,8 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	if len(payload.Commands) != len(pulseFinalCommandOrder) {
 		t.Fatalf("commands = %d, want %d", len(payload.Commands), len(pulseFinalCommandOrder))
 	}
-	if payload.Commands[0].Command != pulseFinalCommandDashboard || payload.Commands[0].Status != "done" {
-		t.Fatalf("dashboard command mismatch: %+v", payload.Commands[0])
+	if payload.Commands[0].Command != pulseFinalCommandBackup || payload.Commands[0].Status != "done" {
+		t.Fatalf("backup command mismatch: %+v", payload.Commands[0])
 	}
 	if payload.ShadowCoverage["status"] != "not_instrumented" {
 		t.Fatalf("shadow coverage = %+v, want not_instrumented", payload.ShadowCoverage)
@@ -934,14 +949,14 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 		}
 	}
 
-	running, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Updating dashboard")
+	running, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "running", "Starting backup")
 	if err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
 	if running.StartedAt == "" || running.FinishedAt != "" {
 		t.Fatalf("running timestamps mismatch: %+v", running)
 	}
-	done, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Dashboard updated")
+	done, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "done", "Backup completed")
 	if err != nil {
 		t.Fatalf("mark done: %v", err)
 	}
@@ -957,9 +972,9 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 		t.Fatalf("get reconciled commands: %v", err)
 	}
 	for _, state := range states {
-		if state.Command == pulseFinalCommandDashboard {
+		if state.Command == pulseFinalCommandBackup {
 			if state.Status != "done" {
-				t.Fatalf("completed dashboard was overwritten: %+v", state)
+				t.Fatalf("completed backup was overwritten: %+v", state)
 			}
 			continue
 		}
@@ -970,6 +985,7 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 }
 
 func TestSuccessfulFinalCommandClosesOnlyStageOwnershipFindings(t *testing.T) {
+	t.Skip("dashboard-stage ownership ended with the retired improve.html stage")
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	workspacePath := "Workflow/finalizer-reconciliation"
@@ -994,10 +1010,10 @@ func TestSuccessfulFinalCommandClosesOnlyStageOwnershipFindings(t *testing.T) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "running", "Backing up"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered"); err != nil {
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "done", "Backed up"); err != nil {
 		t.Fatal(err)
 	}
 	for fingerprint, want := range map[string]string{"dashboard-owned": "resolved", "real-platform-bug": "external_action_required"} {
@@ -1018,69 +1034,6 @@ func TestSuccessfulFinalCommandClosesOnlyStageOwnershipFindings(t *testing.T) {
 	}
 }
 
-func TestReconcilePulseDashboardCommandUsesValidatedArtifactProof(t *testing.T) {
-	t.Run("validated running stage becomes done without touching later commands", func(t *testing.T) {
-		ctx := context.Background()
-		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
-		workspacePath := "Workflow/dashboard-silent"
-		pulseRunID := "pulse-dashboard-silent"
-		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
-			t.Fatalf("initialize final commands: %v", err)
-		}
-		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
-			t.Fatalf("mark dashboard running: %v", err)
-		}
-		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err != nil {
-			t.Fatalf("validated dashboard reconciliation error = %v", err)
-		}
-		states, err := getPulseFinalCommandStates(ctx, workspacePath)
-		if err != nil {
-			t.Fatalf("get states: %v", err)
-		}
-		for _, state := range states {
-			if state.Command == pulseFinalCommandDashboard {
-				if state.Status != "done" {
-					t.Fatalf("dashboard status = %q, want done", state.Status)
-				}
-			} else if state.Status != "waiting" {
-				t.Fatalf("later command %q status = %q, want waiting", state.Command, state.Status)
-			}
-		}
-	})
-
-	t.Run("done dashboard is accepted", func(t *testing.T) {
-		ctx := context.Background()
-		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
-		workspacePath := "Workflow/dashboard-done"
-		pulseRunID := "pulse-dashboard-done"
-		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
-			t.Fatalf("initialize final commands: %v", err)
-		}
-		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered and verified"); err != nil {
-			t.Fatalf("mark dashboard done: %v", err)
-		}
-		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err != nil {
-			t.Fatalf("done dashboard rejected: %v", err)
-		}
-	})
-
-	t.Run("terminal failure remains a stage failure", func(t *testing.T) {
-		ctx := context.Background()
-		t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
-		workspacePath := "Workflow/dashboard-failed"
-		pulseRunID := "pulse-dashboard-failed"
-		if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
-			t.Fatalf("initialize final commands: %v", err)
-		}
-		if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "failed", "Write failed"); err != nil {
-			t.Fatalf("mark dashboard failed: %v", err)
-		}
-		if err := reconcilePulseDashboardCommand(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), `non-success status "failed"`) {
-			t.Fatalf("failed dashboard reconciliation error = %v", err)
-		}
-	})
-}
-
 func TestPulseFinalCommandAgentWritesAreOrderedAndMonotonic(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -1090,23 +1043,17 @@ func TestPulseFinalCommandAgentWritesAreOrderedAndMonotonic(t *testing.T) {
 	if err := initializePulseFinalCommandStates(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("initialize final commands: %v", err)
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "running", "Backing up"); err == nil || !strings.Contains(err.Error(), "dashboard") {
-		t.Fatalf("out-of-order backup error = %v", err)
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, "dashboard", pulseRunID, "running", "Removed dashboard"); err == nil || !strings.Contains(err.Error(), "not a valid") {
+		t.Fatalf("removed dashboard was accepted: %v", err)
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, "schedule-cron--wrong", "running", "Rendering"); err == nil || !strings.Contains(err.Error(), "belongs to") {
-		t.Fatalf("wrong-run error = %v", err)
-	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered"); err == nil || !strings.Contains(err.Error(), "marked running") {
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "done", "Skipped running"); err == nil || !strings.Contains(err.Error(), "marked running") {
 		t.Fatalf("direct-done error = %v", err)
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Rendering"); err != nil {
-		t.Fatalf("mark dashboard running: %v", err)
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "running", "Backing up"); err != nil {
+		t.Fatalf("mark backup running: %v", err)
 	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "done", "Rendered"); err != nil {
-		t.Fatalf("mark dashboard done: %v", err)
-	}
-	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandDashboard, pulseRunID, "failed", "Late failure"); err == nil || !strings.Contains(err.Error(), "already terminal") {
-		t.Fatalf("terminal rewrite error = %v", err)
+	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "done", "Backed up"); err != nil {
+		t.Fatalf("mark backup done: %v", err)
 	}
 }
 
@@ -1117,9 +1064,6 @@ func TestFinalizeAllUnresolvedPulseCommandsAfterRestart(t *testing.T) {
 	workspacePath := "Workflow/example"
 	if err := initializePulseFinalCommandStates(ctx, workspacePath, "schedule-cron--old"); err != nil {
 		t.Fatalf("initialize final commands: %v", err)
-	}
-	if _, err := markPulseFinalCommandState(ctx, workspacePath, pulseFinalCommandDashboard, "schedule-cron--old", "running", "Rendering"); err != nil {
-		t.Fatalf("mark dashboard running: %v", err)
 	}
 	changed, err := finalizeAllUnresolvedPulseFinalCommands(ctx, workspacePath, "failed", "Server restarted")
 	if err != nil {

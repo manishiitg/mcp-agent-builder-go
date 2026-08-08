@@ -25,6 +25,11 @@ const pulseInterventionsSchema = `CREATE TABLE IF NOT EXISTS pulse_interventions
 	checkpoint TEXT NOT NULL DEFAULT '',
 	minimum_evidence_runs INTEGER NOT NULL DEFAULT 1,
 	status TEXT NOT NULL DEFAULT 'awaiting_evidence',
+	kind TEXT NOT NULL DEFAULT 'fix_bundle',
+	guardrails_json TEXT NOT NULL DEFAULT '[]',
+	rollback_condition TEXT NOT NULL DEFAULT '',
+	human_input_id TEXT NOT NULL DEFAULT '',
+	terminal_outcome TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`
@@ -88,6 +93,11 @@ type PulseIntervention struct {
 	Checkpoint          string                    `json:"checkpoint,omitempty"`
 	MinimumEvidenceRuns int                       `json:"minimum_evidence_runs"`
 	Status              string                    `json:"status"`
+	Kind                string                    `json:"kind,omitempty"`
+	Guardrails          []string                  `json:"guardrails,omitempty"`
+	RollbackCondition   string                    `json:"rollback_condition,omitempty"`
+	HumanInputID        string                    `json:"human_input_id,omitempty"`
+	TerminalOutcome     string                    `json:"terminal_outcome,omitempty"`
 	CreatedAt           string                    `json:"created_at,omitempty"`
 	UpdatedAt           string                    `json:"updated_at,omitempty"`
 	Sources             []PulseInterventionSource `json:"sources,omitempty"`
@@ -151,6 +161,43 @@ func ensurePulseImpactSchema(ctx context.Context, db pulseFindingLifecycleDB) er
 			return err
 		}
 	}
+	return ensurePulseInterventionColumns(ctx, db)
+}
+
+func ensurePulseInterventionColumns(ctx context.Context, db pulseFindingLifecycleDB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(pulse_interventions)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for name, definition := range map[string]string{
+		"kind":               "TEXT NOT NULL DEFAULT 'fix_bundle'",
+		"guardrails_json":    "TEXT NOT NULL DEFAULT '[]'",
+		"rollback_condition": "TEXT NOT NULL DEFAULT ''",
+		"human_input_id":     "TEXT NOT NULL DEFAULT ''",
+		"terminal_outcome":   "TEXT NOT NULL DEFAULT ''",
+	} {
+		if existing[name] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE pulse_interventions ADD COLUMN %s %s", name, definition)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -174,7 +221,9 @@ func pulseImpactJSON(values []string) string {
 var (
 	pulseImpactTypeValues           = []string{"direct_goal", "reliability", "measurement", "presentation_maintenance"}
 	pulseImpactVerdictValues        = []string{"improved", "unchanged", "regressed", "inconclusive", "confounded"}
-	pulseInterventionStatusValues   = []string{"awaiting_evidence", "measuring", "assessed", "retired"}
+	pulseFixBundleStatusValues      = []string{"awaiting_evidence", "measuring", "assessed", "retired"}
+	pulseStrategyExperimentStatuses = []string{"proposed", "deferred", "approved", "running", "measuring", "blocked", "adopted", "rejected", "retired"}
+	pulseInterventionKindValues     = []string{"fix_bundle", "strategy_experiment"}
 	pulseImpactSourceTypeValues     = []string{"attempt", "experiment", "finding", "review"}
 	pulseExpectedDirectionValues    = []string{"increase", "decrease", "maintain"}
 	pulseAssessmentConfidenceValues = []string{"low", "medium", "high"}
@@ -188,8 +237,11 @@ func validPulseImpactVerdict(value string) bool {
 	return pulseValueAllowed(value, pulseImpactVerdictValues)
 }
 
-func validPulseInterventionStatus(value string) bool {
-	return pulseValueAllowed(value, pulseInterventionStatusValues)
+func validPulseInterventionStatus(kind, value string) bool {
+	if kind == "strategy_experiment" {
+		return pulseValueAllowed(value, pulseStrategyExperimentStatuses)
+	}
+	return pulseValueAllowed(value, pulseFixBundleStatusValues)
 }
 
 func validPulseImpactSourceType(value string) bool {
@@ -225,6 +277,10 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 		intervention.ImpactType = strings.TrimSpace(intervention.ImpactType)
 		intervention.Metric = strings.TrimSpace(intervention.Metric)
 		intervention.ExpectedDirection = strings.TrimSpace(intervention.ExpectedDirection)
+		intervention.Kind = strings.TrimSpace(intervention.Kind)
+		intervention.RollbackCondition = strings.TrimSpace(intervention.RollbackCondition)
+		intervention.HumanInputID = strings.TrimSpace(intervention.HumanInputID)
+		intervention.TerminalOutcome = strings.TrimSpace(intervention.TerminalOutcome)
 		if intervention.Title == "" || intervention.CriterionID == "" || intervention.Metric == "" {
 			return nil, fmt.Errorf("interventions[%d] requires all of title, criterion_id, and metric (got %s); criterion_id is a stable success-criterion id from the workflow's goal contract and metric is the measurement that criterion is judged by",
 				index, pulseArrivalReport(
@@ -243,31 +299,66 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 		if intervention.InterventionID == "" {
 			intervention.InterventionID = "int-" + pulseImpactID(intervention.CriterionID, intervention.Metric, intervention.Title)
 		}
+		if intervention.Kind == "" {
+			intervention.Kind = "fix_bundle"
+		}
+		if !pulseValueAllowed(intervention.Kind, pulseInterventionKindValues) {
+			return nil, fmt.Errorf("interventions[%d] has invalid kind %q. Must be one of: %s", index, intervention.Kind, pulseAllowed(pulseInterventionKindValues))
+		}
 		if intervention.MinimumEvidenceRuns < 1 {
 			intervention.MinimumEvidenceRuns = 1
 		}
 		if strings.TrimSpace(intervention.Status) == "" {
-			intervention.Status = "awaiting_evidence"
+			if intervention.Kind == "strategy_experiment" {
+				intervention.Status = "proposed"
+			} else {
+				intervention.Status = "awaiting_evidence"
+			}
 		}
-		if !validPulseInterventionStatus(intervention.Status) {
-			return nil, fmt.Errorf("interventions[%d] has invalid status %q. Must be one of: %s. Omit status to default to awaiting_evidence",
-				index, intervention.Status, pulseAllowed(pulseInterventionStatusValues))
+		if !validPulseInterventionStatus(intervention.Kind, intervention.Status) {
+			allowed := pulseFixBundleStatusValues
+			if intervention.Kind == "strategy_experiment" {
+				allowed = pulseStrategyExperimentStatuses
+			}
+			return nil, fmt.Errorf("interventions[%d] has invalid status %q for %s. Must be one of: %s", index, intervention.Status, intervention.Kind, pulseAllowed(allowed))
+		}
+		if intervention.Kind == "strategy_experiment" {
+			if intervention.BaselineWindow == "" || intervention.Checkpoint == "" || len(normalizedLifecycleStrings(intervention.Guardrails)) == 0 || intervention.RollbackCondition == "" {
+				return nil, fmt.Errorf("strategy experiment interventions[%d] require baseline_window, checkpoint, at least one guardrail, and rollback_condition", index)
+			}
+			if isActiveStrategyExperimentStatus(intervention.Status) {
+				var activeCount int
+				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_interventions WHERE kind='strategy_experiment' AND intervention_id<>? AND status IN ('proposed', 'approved', 'running', 'measuring', 'blocked')`, intervention.InterventionID).Scan(&activeCount); err != nil {
+					return nil, err
+				}
+				if activeCount > 0 {
+					return nil, fmt.Errorf("strategy experiment interventions[%d] would create a second active strategy experiment; retire, reject, adopt, or defer the existing experiment first", index)
+				}
+			}
+			if (intervention.Status == "adopted" || intervention.Status == "rejected" || intervention.Status == "retired") && intervention.TerminalOutcome == "" {
+				return nil, fmt.Errorf("strategy experiment interventions[%d] in terminal status %q require terminal_outcome", index, intervention.Status)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_interventions
 			(intervention_id, pulse_run_id, title, criterion_id, impact_type, metric, expected_direction,
-			 scope_json, provenance, baseline_window, checkpoint, minimum_evidence_runs, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 scope_json, provenance, baseline_window, checkpoint, minimum_evidence_runs, status, kind,
+			 guardrails_json, rollback_condition, human_input_id, terminal_outcome, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(intervention_id) DO UPDATE SET
 			 pulse_run_id=excluded.pulse_run_id, title=excluded.title, criterion_id=excluded.criterion_id,
 			 impact_type=excluded.impact_type, metric=excluded.metric, expected_direction=excluded.expected_direction,
 			 scope_json=excluded.scope_json, provenance=excluded.provenance,
 			 baseline_window=excluded.baseline_window, checkpoint=excluded.checkpoint,
-			 minimum_evidence_runs=excluded.minimum_evidence_runs, status=excluded.status, updated_at=excluded.updated_at`,
+			 minimum_evidence_runs=excluded.minimum_evidence_runs, status=excluded.status, kind=excluded.kind,
+			 guardrails_json=excluded.guardrails_json, rollback_condition=excluded.rollback_condition,
+			 human_input_id=excluded.human_input_id, terminal_outcome=excluded.terminal_outcome, updated_at=excluded.updated_at`,
 			intervention.InterventionID, strings.TrimSpace(intervention.PulseRunID), intervention.Title,
 			intervention.CriterionID, intervention.ImpactType, intervention.Metric,
 			intervention.ExpectedDirection, pulseImpactJSON(intervention.Scope), strings.TrimSpace(intervention.Provenance),
 			strings.TrimSpace(intervention.BaselineWindow), strings.TrimSpace(intervention.Checkpoint),
-			intervention.MinimumEvidenceRuns, strings.TrimSpace(intervention.Status), now, now); err != nil {
+			intervention.MinimumEvidenceRuns, strings.TrimSpace(intervention.Status), intervention.Kind,
+			pulseImpactJSON(intervention.Guardrails), intervention.RollbackCondition, intervention.HumanInputID,
+			intervention.TerminalOutcome, now, now); err != nil {
 			return nil, err
 		}
 		for sourceIndex, source := range intervention.Sources {
@@ -377,7 +468,12 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE pulse_interventions
-			SET status='assessed', updated_at=? WHERE intervention_id=? AND status!='retired'`,
+			SET status=CASE
+				WHEN kind='strategy_experiment' AND status IN ('proposed', 'approved', 'running', 'measuring', 'blocked') THEN 'measuring'
+				WHEN kind='fix_bundle' AND status!='retired' THEN 'assessed'
+				ELSE status
+			END, updated_at=?
+			WHERE intervention_id=?`,
 			now, assessment.InterventionID); err != nil {
 			return nil, err
 		}
@@ -386,6 +482,15 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 		return nil, err
 	}
 	return LoadPulseImpactLedger(ctx, workspacePath, 200)
+}
+
+func isActiveStrategyExperimentStatus(status string) bool {
+	switch status {
+	case "proposed", "approved", "running", "measuring", "blocked":
+		return true
+	default:
+		return false
+	}
 }
 
 func nullableFloat(value *float64) interface{} {
@@ -423,21 +528,24 @@ func LoadPulseImpactLedger(ctx context.Context, workspacePath string, limit int)
 
 	rows, err := db.QueryContext(ctx, `SELECT intervention_id, pulse_run_id, title, criterion_id, impact_type, metric,
 		expected_direction, scope_json, provenance, baseline_window, checkpoint, minimum_evidence_runs,
-		status, created_at, updated_at FROM pulse_interventions ORDER BY updated_at DESC LIMIT ?`, limit)
+		status, kind, guardrails_json, rollback_condition, human_input_id, terminal_outcome, created_at, updated_at
+		FROM pulse_interventions ORDER BY updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var item PulseIntervention
-		var scopeJSON string
+		var scopeJSON, guardrailsJSON string
 		if err := rows.Scan(&item.InterventionID, &item.PulseRunID, &item.Title, &item.CriterionID,
 			&item.ImpactType, &item.Metric, &item.ExpectedDirection, &scopeJSON, &item.Provenance,
-			&item.BaselineWindow, &item.Checkpoint, &item.MinimumEvidenceRuns, &item.Status,
+			&item.BaselineWindow, &item.Checkpoint, &item.MinimumEvidenceRuns, &item.Status, &item.Kind,
+			&guardrailsJSON, &item.RollbackCondition, &item.HumanInputID, &item.TerminalOutcome,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		item.Scope = decodePulseImpactStrings(scopeJSON)
+		item.Guardrails = decodePulseImpactStrings(guardrailsJSON)
 		sourceRows, sourceErr := db.QueryContext(ctx, `SELECT source_type, source_id FROM pulse_intervention_sources WHERE intervention_id=? ORDER BY source_type, source_id`, item.InterventionID)
 		if sourceErr != nil {
 			rows.Close()

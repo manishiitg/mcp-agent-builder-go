@@ -205,6 +205,11 @@ export interface AgentQueryResponse {
   // already-running coding-agent turn instead of starting a new one (single-entry
   // routing for tmux-transport CLIs).
   status: string
+  kind?: 'fix_bundle' | 'strategy_experiment' | string
+  guardrails?: string[]
+  rollback_condition?: string
+  human_input_id?: string
+  terminal_outcome?: string
   message?: string
   sse_endpoint?: string
   session_id?: string
@@ -475,6 +480,11 @@ export interface PulseIntervention {
   checkpoint?: string
   minimum_evidence_runs: number
   status: string
+  kind?: 'fix_bundle' | 'strategy_experiment' | string
+  guardrails?: string[]
+  rollback_condition?: string
+  human_input_id?: string
+  terminal_outcome?: string
   created_at?: string
   updated_at?: string
   sources?: PulseInterventionSource[]
@@ -521,6 +531,22 @@ export interface PulseImpactLedger {
 export interface PulseImpactResponse {
   success: boolean
   impact: PulseImpactLedger
+  error?: string
+}
+
+export interface PulseContextRecord {
+  context_id: string
+  section: string
+  context_text: string
+  example_note?: string
+  path: string
+  created_at: string
+}
+
+export interface PulseContextResponse {
+  success: boolean
+  records: PulseContextRecord[]
+  total: number
   error?: string
 }
 

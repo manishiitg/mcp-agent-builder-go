@@ -1,9 +1,9 @@
 ## Pulse finalizer
 
-Use only after Gate, every due module, and the dedicated Dashboard stage.
+Use only after Gate and every due module.
 Confirm every due module has a terminal result. Never treat missing as skipped/successful.
-Dashboard owns `builder/improve.html`, `builder/card.health.html`, and Pulse
-questions; do not rewrite them in this turn.
+Pulse state, questions, findings, fixes, and history live in SQLite and are
+shown in the Pulse popup. Do not write a separate presentation artifact in this turn.
 
 Run Backup, Publish, then Notify. Before and after each, call
 `record_pulse_result` with `command` set to its exact name and a truthful
@@ -41,7 +41,7 @@ Run Backup, Publish, then Notify. Before and after each, call
      fixes/no-change closures from changes awaiting proof.
    - **Still pending:** exact active count, highest-priority current and retained
      issues, blocker, next owner, and checkpoint. If over five, show the top five,
-     remaining count, and dashboard link.
+     remaining count, and tell the user to open Pulse for details.
    - **Needs your decision:** pending requests and what each unblocks.
    - **Operations:** backup/publish, cost/time, and next Pulse action.
 

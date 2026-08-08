@@ -1,9 +1,9 @@
-# READ-ONLY DATABASE HEALTH REVIEW
+# ENGINEERING REVIEW — STORES HEALTH / DATABASE LENS
 
 Review whether `db/db.sqlite`, `db/README.md`, and `db/assets/` support the
 current plan, downstream steps, evals, and reports. This checklist is passed to
 a generic read-only reviewer. Do not execute DDL/DML, edit any file, update
-`builder/improve.html`, or call module-result or human-input tools. Any later
+any presentation artifact, or call module-result or human-input tools. Any later
 wording such as improve, apply, edit, update, add, drop, migrate, or resolve is a
 recommendation for the **Pulse Fixer**, not permission for this reviewer to
 mutate state.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
@@ -16,12 +16,13 @@ executor returns compact evidence; the parent consolidates it after the
 automatic completion notification. Do not create a dedicated DB-maintenance
 agent.
 
-This checklist is one of three (learnings, knowledgebase, DB) the parent may
-load together in a single `stores_health` pass — see `post-run-monitor`. If so,
-this reviewer's output is one part of that combined packet, not a standalone
-result.
+This checklist is one of three store-integrity lenses (learnings, knowledgebase,
+DB) that Engineering Review may load together — see the `pulse-review-fixer`
+contract. Its
+output is evidence for the one Engineering Review result, never a standalone
+reviewer result.
 
-Return only: `module=stores_health`, `verdict`, `db_ownership_manifest`,
+Return only: `module=workflow_review`, `verdict`, `db_ownership_manifest`,
 `ownership_candidates`, `next_check`, and ordered `findings`.
 Every finding includes stable `finding_id`, `target_key`, severity,
 plain-language summary, precise `evidence`, a bounded `recommended_fix`,
@@ -37,10 +38,15 @@ records each misplaced or duplicated semantic item with `item`,
 `current_location`, `semantic_type`, `authoritative_owner`,
 `duplicate_locations`, `recommended_action`, and exact `verification`.
 
-Read `builder/improve.html` for prior context and matching open findings, but do
-not write it. Use targeted semantic reads only; do not inspect CSS, load HTML
-style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
-the consolidated log update.
+Read typed Pulse findings and review history for prior context and matching open
+findings, but do not mutate them. Use targeted semantic reads only. The parent
+agent owns any approved mutation and its typed disposition.
+
+For a claimed schema/data regression or a repair awaiting proof, compare the
+current state with up to three comparable retained runs (same route/group and
+materially equivalent configuration). Inspect compact rows/receipts first and
+open raw execution traces only for the differing writer or consumer. State an
+evidence limitation when fewer comparable runs remain.
 
 Apply the parent-provided `assumption-audit` DB lens within this command's boundaries. Check whether schemas, enums, keys, or cardinality unnecessarily hardcode one source, channel, entity type, group, or current tactic. Recommend safe contract changes, but do not perform speculative row migrations; surface a consequential strategy/schema choice for Pulse's Assumptions challenged when business judgment is required.
 
@@ -130,4 +136,5 @@ REVIEW OUTPUT
    raw PRAGMA SQL. For control-state findings, also
    include one bounded source-of-truth comparison query and one assertion that
    proves the runtime decision consumed the canonical value.
-4. The Pulse Fixer owns every DB/file mutation and `builder/improve.html` update.
+4. The parent agent owns every DB/file mutation and records the outcome through
+   typed Pulse tools.

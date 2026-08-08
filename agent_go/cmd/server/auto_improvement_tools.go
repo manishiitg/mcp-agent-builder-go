@@ -20,12 +20,12 @@ import (
 
 // RegisterCaptureContextTool exposes capture_context to the optimizer/builder.
 // It is the privileged, structured path for durable user-supplied runtime
-// context. The tool writes the context file; narrating the capture into
-// builder/improve.html is the agent's job.
+// context. The tool writes the canonical context file; Pulse surfaces the
+// durable result from SQLite when it is relevant.
 func RegisterCaptureContextTool(agent definitionToolRegistrar, workspacePath string, logger loggerv2.Logger) {
 	desc := "Capture durable user-supplied runtime business context for this workflow. " +
 		"Use only after the user confirms the item should be remembered across runs, and only when the Workflow Profile allows business-context accumulation. " +
-		"Writes to knowledgebase/context/context.md. Record the capture in builder/improve.html yourself as a User rule (authoritative) entry. " +
+		"Writes to knowledgebase/context/context.md. Keep the capture concise and authoritative. " +
 		"Use for persistent rules, preferences, constraints, assumptions, examples, ICP filters, approval rules, brand voice, or domain context that workflow steps must respect. " +
 		"Do not use for one-off instructions, general chat memory, workflow-discovered facts that belong in knowledgebase/notes, or execution recipes that belong in learnings."
 	params := map[string]interface{}{

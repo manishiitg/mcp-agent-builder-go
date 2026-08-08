@@ -9,12 +9,11 @@
 // description, a reviewer artifact-path whitelist, and two frontend files.
 // Nothing asserted they agreed.
 //
-// On 2026-07-29 a single refactor (merging learning_health,
-// knowledgebase_health, and db_health into stores_health) desynchronized four
-// of them at once. Two caused production failures: a missing ToolCategories
-// entry blocked every todo_task orchestrator, and a missing entry in the
-// reviewer whitelist made every stores_health review silently fail to persist
-// its result. Both built cleanly and passed the full test suite.
+// A 2026-07-29 refactor merged several maintenance lenses without updating all
+// consumers. Two production failures followed: a missing ToolCategories entry
+// blocked every todo_task orchestrator, and a missing reviewer-whitelist entry
+// silently discarded a whole review result. Both built cleanly and passed the
+// full test suite.
 //
 // The registry is a leaf package with no imports because both cmd/server and
 // pkg/orchestrator/.../step_based_workflow must consume it, and server already
@@ -41,11 +40,6 @@ type Module struct {
 // these values rather than restating their string literals.
 const (
 	WorkflowReviewID  = "workflow_review"
-	BugReviewID       = "bug_review"
-	ArtifactReviewID  = "artifact_review"
-	ReportHealthID    = "report_health"
-	EvalHealthID      = "eval_health"
-	StoresHealthID    = "stores_health"
 	LLMOpsReviewID    = "llm_ops_review"
 	StrategyAuditorID = "strategy_auditor"
 	GoalAdvisorID     = "goal_advisor"
@@ -119,7 +113,7 @@ func IsValid(id string) bool {
 }
 
 // Normalize maps current shorthand and loosely-cased spellings onto a canonical
-// ID. Old Pulse module identities are deliberately not translated.
+// ID. Retired module identities are deliberately not translated.
 func Normalize(module string) string {
 	module = strings.ToLower(strings.TrimSpace(module))
 	module = strings.ReplaceAll(module, "-", "_")

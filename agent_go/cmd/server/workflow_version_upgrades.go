@@ -12,469 +12,6 @@ type workflowVersionUpgrade struct {
 	query string
 }
 
-var workflowVersionUpgrades = []workflowVersionUpgrade{
-	{
-		from:  workflowContractInitialVersion,
-		to:    "1.0.1",
-		label: "upgrade-1.0.1",
-		query: `WORKFLOW VERSION UPGRADE v1.0.0 -> v1.0.1.
-
-This is a product-managed Pulse pre-step. Do ONLY this upgrade check, then stop and wait for the normal Pulse Gate step.
-
-1. Read workflow.json and builder/improve.html. Treat a missing workflow.json "version" as "1.0.0".
-2. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}]). If builder/improve.html uses the old narrow Pulse layout, update it to the current responsive workflow Pulse contract: viewport meta, no horizontal overflow, mobile-first/wide-safe cards, metadata under titles on narrow widths, overflow-wrap for long run notes, and compact latest-run/cost/time sections.
-3. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and refresh the workflow's publish instructions/config notes to the current password-protected static publish contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default StatiCrypt page, and record only visibility + secret_name/status. If publish is not enabled or not password/private, do nothing for publish.
-4. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.0 to v1.0.1 and lists what was applied or skipped.
-5. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.1". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-Report the files changed and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.1",
-		to:    "1.0.2",
-		label: "upgrade-1.0.2",
-		query: `WORKFLOW VERSION UPGRADE v1.0.1 -> v1.0.2.
-
-This is a product-managed Pulse pre-step. Do ONLY this upgrade check, then stop and wait for the normal Pulse Gate step.
-
-1. Read workflow.json, publish/status.json if it exists, and builder/improve.html.
-2. If workflow.json.publish or publish/status.json shows private/password/passphrase/secret_name/password-protected publishing, call read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and refresh the workflow's publish instructions/config notes to the current Runloop dark password-gate contract: named secret only, never plaintext, encrypt baked HTML with StatiCrypt after staging, use one shared salt/remember flow so the viewer unlocks once, apply the Runloop dark password-gate styling instead of the default green/white StatiCrypt page, and record only visibility + secret_name/status. Do not change the destination URL, do not expose the password, and do not do the deploy in this upgrade step; the normal verified publish turn will republish with the new gate.
-3. If publish is not enabled or not password/private, make no publish changes.
-4. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.1 to v1.0.2 and whether private publish styling was applied or skipped.
-5. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.2". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-Report the files changed and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.2",
-		to:    "1.0.3",
-		label: "upgrade-1.0.3",
-		query: `WORKFLOW VERSION UPGRADE v1.0.2 -> v1.0.3.
-
-This is a product-managed Pulse pre-step. Do ONLY this report-dashboard upgrade check, then stop and wait for the normal Pulse Gate step.
-
-Goal: move old report dashboards to the current HTML-only contract. The React report viewer should only receive a lightweight navigation plan; report intelligence, layout, tables, charts, summaries, and recommendations belong in HTML documents under db/reports/.
-
-1. Read workflow.json, reports/report_plan.json if it exists, builder/improve.html if it exists, and list db/reports/. Treat a missing workflow.json "version" as "1.0.0".
-2. Inspect reports/report_plan.json for legacy dashboard widgets. Legacy means any widget kind other than "file" or "file-list", any widget that relies on old fields such as db/sql/format/chart/stat/table/cards/alert/text, or any dashboard content that is not registered as a file widget with renderFormat "html".
-3. If legacy widgets exist, create or update durable HTML report document(s) under db/reports/. Preserve the user's current report intent, section headings, ordering, tabs, tables, charts, stats, alerts, and narrative decisions, but implement them inside the HTML using window.report.query(sql), window.report.get(path), and window.report.fileUrl(path) against durable db/, knowledgebase/, docs/, or report assets. Do not bake current query results as static text.
-4. If a legacy widget has missing or empty source/db/sql fields, inspect db/, db/README.md, knowledgebase/, existing db/reports/*.html, and recent durable report artifacts to find the matching data. If the data mapping is genuinely unclear, keep the section visible in the HTML with a clear "Needs data mapping" state instead of silently deleting it.
-5. Update reports/report_plan.json to be navigation only: version 1, sections with stable id/heading/layout, and entries that register the HTML documents using kind "file", renderFormat "html", and source like "db/reports/<report>.html". Remove legacy widget kinds such as table, chart, stat, cards, alert, text, markdown, and any old widget-only config.
-6. File-list widgets may remain only for supporting evidence galleries or artifact folders. They must not be the primary dashboard. If a file-list is being used as the report itself, replace it with an HTML document that links or previews the evidence intentionally.
-7. Validate reports/report_plan.json with validate_report_plan if the tool is available. Also sanity-check that every registered HTML source exists and is under db/reports/.
-8. Append one concise Pulse entry to builder/improve.html, if that file exists, that says this workflow was upgraded from v1.0.2 to v1.0.3 and lists which report sections were migrated or why the migration was a no-op.
-9. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.3". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-	Report the files changed, legacy widgets removed, HTML reports created or updated, validation result, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.3",
-		to:    "1.0.4",
-		label: "upgrade-1.0.4",
-		query: `WORKFLOW VERSION UPGRADE v1.0.3 -> v1.0.4.
-
-This is a product-managed Pulse pre-step. Do ONLY this Pulse report readability upgrade, then stop and wait for the normal Pulse Gate step.
-
-Goal: refresh workflow Pulse logs so builder/improve.html reads like a concise human/operator dashboard first, with the detailed evidence log below. This upgrade is for layout, readability, and stale-count cleanup only; do not change workflow behavior.
-
-1. Read workflow.json, builder/improve.html if it exists, soul.md if it exists, recent run/cost/timing evidence if needed, and reports/report_plan.json only if it helps understand current report naming. Treat a missing workflow.json "version" as "1.0.0".
-2. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and update builder/improve.html to the current Pulse skeleton/CSS where needed:
-   - first screen: two Bug/Goal verdict pills, one short status headline, chips, a "What matters now" brief, goal card, grouped signal tiles, and compact cost/time tiles;
-   - recent runs: metadata row first, long prose/evidence note on a full-width second row, metadata/chips/timestamps no-wrap, prose/evidence fields wrap safely, no one-character metadata columns;
-   - timeline: keep exactly one ` + "`<!-- LOG ENTRIES: newest first -->`" + ` anchor before the newest-first cards;
-   - remove stale labels/counts only when evidence clearly supports the correction.
-3. Preserve all existing unresolved findings, decisions, user rules, Chief of Staff recommendations, Artifact Review entries, recent-run evidence, and archive links. Do not delete evidence just because you are redesigning the shell.
-4. If builder/improve.html is already on the current layout, make this a no-op except for appending the concise upgrade entry.
-5. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.3 to v1.0.4 and lists what was applied or skipped.
-6. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.4". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-	Report the files changed, Pulse sections refreshed, evidence preserved, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.4",
-		to:    "1.0.5",
-		label: "upgrade-1.0.5",
-		query: `WORKFLOW VERSION UPGRADE v1.0.4 -> v1.0.5.
-
-This is a product-managed Pulse pre-step. Do ONLY this filterability upgrade, then stop and wait for the normal Pulse Gate step.
-
-Goal: make builder/improve.html searchable by activity kind and text so the user can inspect Pulse / Goal Advisor / Chief of Staff actions and notes without a separate date picker. Visible dates remain searchable as text.
-
-1. Read workflow.json and builder/improve.html. Treat a missing workflow.json "version" as "1.0.0".
-2. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and update builder/improve.html to the current filterable Pulse skeleton where needed:
-   - add the .filters bar with Kind, Search, Reset, and match count controls; do not add a date picker;
-   - add the static filter script from the reference doc; this UI script is allowed and is not a legacy JSON data block;
-   - add data-date="YYYY-MM-DD" and data-kind="run|monitor|artifact|decision|advisor|cos|open|user|note" to every recent-run row and timeline entry;
-   - preserve exactly one <!-- LOG ENTRIES: newest first --> anchor before the newest-first timeline cards.
-3. Backfill data dates/kinds from visible entry dates, run ids/folders, timestamp labels, tag text, or best available evidence. If a date is genuinely unknown, leave that specific old item unfiltered rather than fabricating a date, and mention it in the upgrade entry.
-4. Preserve all existing unresolved findings, decisions, user rules, Chief of Staff recommendations, Artifact Review entries, run evidence, and archive links. Do not delete evidence while adding filter metadata.
-5. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.4 to v1.0.5 and lists how many rows/cards were made filterable plus any skipped unknown-date items.
-6. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.5". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-Report the files changed, filter metadata added, skipped unknown-date items if any, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.5",
-		to:    "1.0.6",
-		label: "upgrade-1.0.6",
-		query: `WORKFLOW VERSION UPGRADE v1.0.5 -> v1.0.6.
-
-This is a product-managed Pulse pre-step. Do ONLY this richer Pulse dashboard upgrade, then stop and wait for the normal Pulse Gate step.
-
-Goal: make builder/improve.html more colorful, less text-heavy, and more widget-oriented so the user can understand workflow state quickly in the right panel.
-
-1. Read workflow.json, builder/improve.html if it exists, soul.md if it exists, and recent run/cost/timing evidence only when needed to populate visible tiles. Treat a missing workflow.json "version" as "1.0.0".
-2. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and update builder/improve.html to the current rich widget Pulse shell where needed:
-   - first screen has two Bug/Goal verdict pills, a one-sentence status banner, What matters now widget cards, a goal card, color-coded signal tiles, and cost/time tiles;
-   - use .tile.ok, .tile.warn, .tile.bad, .tile.info, .tile.goal, and .tile.cost classes where the status is known;
-   - replace dense first-screen prose/tables with compact widgets, chips, and card sections;
-   - preserve the Kind/Search filter bar, data-date/data-kind attributes, and exactly one ` + "`<!-- LOG ENTRIES: newest first -->`" + ` anchor; do not add a date picker;
-   - keep recent runs as readable mobile-first cards/rows with metadata first and long notes on a full-width second row.
-3. Preserve all existing unresolved findings, decisions, user rules, Chief of Staff recommendations, Artifact Review entries, recent-run evidence, archive links, and filter metadata. Do not delete evidence just because you are redesigning the shell.
-4. If builder/improve.html is already on the current rich widget layout, make this a no-op except for appending the concise upgrade entry.
-5. Append one concise Pulse entry to builder/improve.html that says this workflow was upgraded from v1.0.5 to v1.0.6 and lists which visual sections were refreshed or skipped.
-6. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.6". Do not change schema_version. Do not run the workflow, do not alter schedules, and do not call notify_user in this step.
-
-Report the files changed, widget sections refreshed, evidence preserved, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.6",
-		to:    "1.0.7",
-		label: "upgrade-1.0.7",
-		query: `WORKFLOW VERSION UPGRADE v1.0.6 -> v1.0.7.
-
-This is a product-managed Pulse pre-step. Do ONLY this legacy Auto Improve schedule cleanup, then stop and wait for the normal Pulse Gate step.
-
-Goal: remove old separate Auto Improve / Goal Advisor optimizer schedules because Goal Advisor now runs as a Pulse-selected module after normal scheduled workflow runs.
-
-1. Read workflow.json and builder/improve.html if it exists. Treat a missing workflow.json "version" as "1.0.0".
-2. Inspect workflow.json "schedules". Identify legacy product Auto Improve / Goal Advisor schedules ONLY when:
-   - workshop_mode is "optimizer"; AND
-   - messages is missing/empty OR the messages match the old fixed product queue shape, such as STEP 1/5 PRE-BACKUP, STEP 2/5 IMPROVE or GOAL ADVISOR, later backup/publish/notify steps.
-   Schedule name text such as "Auto Improve" or "Goal Advisor" is supporting evidence only. Do not remove a schedule by name alone.
-3. Preserve explicit custom optimizer jobs: if workshop_mode="optimizer" has a real user-authored custom message with specific scope, evidence window, stop conditions, or non-product task intent, keep it unchanged.
-4. For each legacy product optimizer schedule, remove it from workflow.json schedules. Do not delete or rewrite schedule-runs.json history; old run history stays as evidence.
-5. If any legacy optimizer schedule was removed, set workflow.json post_run_monitor=true so the normal scheduled run can run Pulse Gate and select Goal Advisor when due. Do not create a new schedule here.
-6. Append one concise Pulse entry to builder/improve.html, if that file exists, that says this workflow was upgraded from v1.0.6 to v1.0.7, lists removed legacy optimizer schedule ids/names, and lists preserved custom optimizer schedule ids/names if any.
-7. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.7". Do not change schema_version. Do not run the workflow, do not call notify_user, and do not publish in this step.
-
-Report the files changed, legacy optimizer schedules removed, custom optimizer schedules preserved, post_run_monitor state, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.7",
-		to:    "1.0.8",
-		label: "upgrade-1.0.8",
-		query: `WORKFLOW VERSION UPGRADE v1.0.7 -> v1.0.8.
-
-This is a product-managed Pulse pre-step. Do ONLY this Pulse filter cleanup, then stop and wait for the normal Pulse Gate step.
-
-Goal: remove the date picker from builder/improve.html while retaining useful activity filtering.
-
-1. Read workflow.json and builder/improve.html if it exists.
-2. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and update builder/improve.html where needed:
-   - remove the Date label and input (including id="filter-date") from the .filters bar;
-   - remove dateInput and exact-date filtering logic from the static filter script;
-   - keep Kind, Search, Reset, and match count controls working;
-   - keep visible dates and data-date attributes as event metadata so dates remain readable and searchable through Search;
-   - preserve data-kind attributes and exactly one <!-- LOG ENTRIES: newest first --> anchor.
-3. Preserve all existing unresolved findings, decisions, user rules, human-input cards, recent-run evidence, timeline entries, and archive links. Do not rewrite or delete report history for this UI cleanup.
-4. If builder/improve.html is missing, do not create it solely for this upgrade. If it already has no date picker, make this a no-op.
-5. Only after the applicable check/update is complete, update workflow.json "version" to "1.0.8". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, or publish in this step.
-
-Report whether the date picker was removed or already absent, then stop.`,
-	},
-	{
-		from:  "1.0.8",
-		to:    "1.0.9",
-		label: "upgrade-1.0.9",
-		query: `WORKFLOW VERSION UPGRADE v1.0.8 -> v1.0.9.
-
-This is a product-managed Pulse pre-step. Do ONLY this stable-soul and human-first Pulse upgrade, then stop and wait for the normal Pulse Gate step.
-
-Goals:
-- keep soul/soul.md limited to stable intent so old architecture and agent assumptions cannot freeze workflow evolution;
-- make builder/improve.html readable in priority order: Needs your decision, Assumptions challenged, Today's outcome, goal progress, recent activity, then technical detail.
-
-1. Read workflow.json, soul/soul.md, builder/improve.html if it exists, planning/plan.json, planning/step_config.json, and only the targeted changelog/user-rule evidence needed to distinguish explicit user-approved constraints from agent-inferred choices.
-2. Normalize soul/soul.md:
-   - keep ## Objective and ## Success Criteria;
-   - keep ## Notifications when present;
-   - keep an optional ## Constraints section only for boundaries explicitly stated or approved by the user;
-   - remove architecture, step design, provider/tool/model choices, implementation details, historical decision logs, references, and agent-inferred assumptions from soul.md;
-   - do not lose material context: when removed architecture is already represented by plan/config, cite those artifacts in the upgrade entry; when a consequential restriction is not clearly user-approved, preserve it as an active Assumptions challenged item in builder/improve.html with its source, evidence, and validation/retirement condition. Create a human-input request only when deciding whether it is a durable user constraint would materially change workflow behavior.
-3. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Upgrade builder/improve.html in place when it exists:
-   - replace the vague What matters now brief with Today's outcome cells: Outcome, Goal progress, Issues & fixes, Next Pulse;
-   - add the optional Assumptions challenged block near the top, with at most three active consequential assumptions and no empty-state block;
-   - wrap signal, cost/time, Maintenance Radar, cadence, and raw technical details in a closed-by-default <details class="technical"> section;
-   - add one closed-by-default Agent log at the bottom with #pulse-agent-handoff for current module/cadence state, cursors, unresolved/pending ids, and evidence pointers; it must update in place and must not repeat the user-facing report;
-   - preserve verdicts, goal criteria, pending/answered human-input history, unresolved findings, decisions, user rules, Chief of Staff recommendations, recent runs, timeline entries, filters, archive links, and exactly one <!-- LOG ENTRIES: newest first --> anchor;
-   - do not duplicate the full pending question in the timeline; Runloop renders report_human_inputs first as Needs your decision.
-4. If builder/improve.html is missing, do not create it solely for this upgrade. The next normal Pulse creates it with the current skeleton.
-5. Add one concise upgrade timeline entry only when builder/improve.html exists. State what was removed from soul, which items remained explicit constraints, which assumptions were surfaced, and which Pulse sections changed. Do not expose secret values.
-6. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.9". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, publish, or apply a strategy/plan change in this step.
-
-Report the files changed, soul sections retained/removed, challenged assumptions surfaced, Pulse sections upgraded, and any intentional no-op decisions, then stop.`,
-	},
-	{
-		from:  "1.0.9",
-		to:    workflowContractMessageSequenceCodeVersion,
-		label: "upgrade-1.0.10",
-		query: `WORKFLOW VERSION UPGRADE v1.0.9 -> v1.0.10.
-
-This is a product-managed workflow preflight. Do ONLY this message-sequence code migration, then stop and wait for the next preflight turn or the scheduled workflow message.
-
-Goal: remove hidden Python execution from message_sequence. Deterministic code must be a visible standalone scripted workflow step with durable file or DB inputs and outputs.
-
-1. Read workflow.json and planning/plan.json. Inventory every message_sequence item whose type is "code", including nested todo-task routes and orphan steps.
-2. If there are no code items, make no plan change.
-3. If code items exist, call migrate_message_sequence_code_items. This trusted migration tool converts only unambiguous top-level sequences made entirely of code items and their following prevalidation gates. It creates one standalone regular scripted step per code item, copies its source to learnings/<new-step-id>/main.py, carries forward cumulative file dependencies, attaches validation to the correct step, and creates scripted step_config entries.
-4. Inspect the tool result. If it reports an ambiguous mixed conversational/code sequence, nested usage, unsupported input_json, or another blocker, do not guess and do not stamp the workflow version. Report the exact sequence/item and required explicit split. The scheduler will block the normal workflow run so the old plan cannot fail halfway through execution.
-5. Re-read planning/plan.json and planning/step_config.json. Confirm:
-   - no message_sequence item has type "code";
-   - every migrated script exists at learnings/<step-id>/main.py;
-   - every migrated regular step has declared_execution_mode="scripted";
-   - durable context_dependencies/context_output and validation preserve the old sequence ordering and output contract.
-6. Do not edit workflow.json. After this turn, the scheduler independently verifies that no legacy code item remains and stamps version "1.0.10" through its trusted manifest writer. Do not change schema_version, run the workflow, notify the user, publish, or make unrelated plan improvements.
-
-Report migrated sequence ids, new scripted step ids, copied script paths, validation/context handoffs, no-op decisions, and blockers, then stop.`,
-	},
-	{
-		from:  "1.0.10",
-		to:    workflowContractPulseHistoryVersion,
-		label: "upgrade-1.0.11",
-		query: `WORKFLOW VERSION UPGRADE v1.0.10 -> v1.0.11.
-
-This is a product-managed Pulse report preflight. Do ONLY this builder/improve.html contract migration, then stop and wait for the next preflight turn or the scheduled workflow message.
-
-Goal: bring every workflow onto the current human-readable, responsive Pulse history contract. builder/improve.html remains the durable time-series source of truth. Runloop renders Goal directly from soul/soul.md and uses explicit section/module metadata to present the HTML history by Issues and reviews, Decisions and analysis, and Fixes and improvements.
-
-1. Read workflow.json and builder/improve.html. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Do not run the workflow or invent fresh findings merely to complete this migration.
-2. If builder/improve.html is missing, create it from the current skeleton with an empty history and one concise migration entry. If it exists, upgrade it in place. Preserve every useful historical run, finding, decision, user rule, user answer, outcome, evidence pointer, archive link, and unresolved item. Do not discard old evidence because its markup is obsolete; move very old detail into the existing Archive only when needed for readability.
-3. Make the document conform to the current report contract:
-   - the root html element has data-pulse-schema="2", a viewport meta tag, responsive full-width layout, safe wrapping, no fixed-width text columns, and no horizontal overflow;
-   - builder/improve.html stays time-first and newest-first, with exactly one <!-- LOG ENTRIES: newest first --> anchor;
-   - remove any duplicated Goal/Profile card from builder/improve.html. Goal is sourced from soul/soul.md and rendered by Runloop, not repeated in the history document;
-   - keep the user-facing timeline concise, with raw continuity state in one closed-by-default #pulse-agent-handoff block near the bottom;
-   - keep Kind/Search/Reset filtering when present, but no date picker.
-4. Attribute every dated recent-run row and timeline card with data-date, data-kind, data-pulse-section, and one canonical data-module:
-   - Issues and reviews: bug_review, artifact_review, stores_health, eval_health, report_health, llm_ops_review, or strategy_auditor. These cards state evidence-backed reviewer findings, not fixes. Normalize historical learning_health / knowledgebase_health / db_health evidence to stores_health, and historical cost_llm_time evidence to llm_ops_review;
-   - Decisions and analysis: run_summary and general Pulse/run question-and-answer outcomes. Preserve the actual question, selected option and/or free-form answer, outcome, and evidence. Current unanswered requests remain in report_human_inputs and must not be duplicated as hand-authored HTML cards;
-   - Fixes and improvements: workflow_builder for verified bounded repairs and goal_advisor for proposals, approved decisions, experiments, measured outcomes, and questions or answers asked by Goal Advisor. Link improvements back to the review evidence they address.
-   - Keep every historical question and answer with who asked it: Goal Advisor -> improvements/goal_advisor; a known reviewer -> signals/<reviewer module>; a general Pulse/run question -> reflection/run_summary. Reclassify old reflection/goal_advisor answer cards into improvements/goal_advisor.
-   When an old card cannot be attributed to a specific reviewer from real evidence, classify it as run_summary / reflection. Never guess a reviewer and never collapse several module results into one mixed card.
-5. Keep one concise v1.0.11 migration entry under Improvements / workflow_builder that records the report-shell migration and confirms that historical evidence was preserved. Do not expose secrets.
-6. Validate the final HTML structurally: one schema-2 root, one newest-first anchor, no duplicated Goal card, no date picker, no active hand-authored pending-question card, required metadata on dated records, responsive wrapping, and a single #pulse-agent-handoff block.
-7. Do not edit workflow.json. After this turn, the scheduler independently verifies the schema marker, responsive shell, newest-first anchor, dated-record metadata, migration entry, absence of a date picker, and the single handoff block. It stamps version "1.0.11" through its trusted manifest writer only when those checks pass. Do not change schema_version, alter the plan or schedules, process pending human answers, notify the user, publish, or make unrelated workflow changes in this step.
-
-Report whether builder/improve.html was created or upgraded, how many historical records were preserved and attributed, any records retained as run_summary because their origin was unknown, validation results, and blockers, then stop.`,
-	},
-	{
-		from:  "1.0.11",
-		to:    workflowContractNotificationConfigVersion,
-		label: "upgrade-1.0.12",
-		query: `WORKFLOW VERSION UPGRADE v1.0.11 -> v1.0.12.
-
-This is a product-managed preflight. Do ONLY this notification-config migration, then stop and wait for the next preflight turn or the scheduled workflow message.
-
-Goal: per-workflow notification preferences now live in structured workflow.json "notifications", NOT in soul/soul.md. The backend reads workflow.json.notifications and applies it to every notify_user send automatically. Move any existing soul.md notification preference into workflow.json and remove it from soul.md, without changing account-wide (global) notification settings.
-
-The workflow.json "notifications" object supports:
-  - "slack_webhook_secret_name": existing field, a workflow-scoped Slack Incoming Webhook secret reference (leave any existing value untouched);
-  - "exclude_channels": array of account-level channel names ("gmail", "slack", "whatsapp") this workflow opts OUT of. An account-level channel enabled globally is otherwise inherited by every workflow;
-  - "block_recipients": array of email addresses this workflow must never email, unioned with the account-wide denylist (block-only; never unblocks a globally-blocked address);
-  - "run_summary_recipients" / "pulse_summary_recipients": arrays of email addresses each summary is sent TO. These are the positive "send here" lists, the opposite of block_recipients. Empty means the account default recipient is used.
-
-1. Read workflow.json and soul/soul.md. If soul/soul.md has no "## Notifications" section AND workflow.json needs no change, this is a no-op migration — skip to step 4 (version bump only).
-2. If soul/soul.md has a "## Notifications" section, translate ONLY explicit, user-approved preferences into workflow.json "notifications":
-   - "do not email" / "no email" / "disable email for this workflow" -> add "gmail" to exclude_channels;
-   - "no Slack" / "no WhatsApp" for this workflow -> add that channel to exclude_channels;
-   - "never email X" / "do not email address X" -> add X to block_recipients;
-   - "email X" / "send the results to X" / "notify X" -> add X to run_summary_recipients (and to pulse_summary_recipients if the preference covers Pulse activity too).
-   Read the DIRECTION carefully before writing an address: an address the user wants to RECEIVE mail goes in a *_summary_recipients list, never in block_recipients. Putting a wanted recipient in block_recipients does the exact opposite of what was asked and silently drops their mail.
-   Preserve any existing notifications.slack_webhook_secret_name and any exclude_channels/block_recipients/*_summary_recipients already present (union, de-duplicated). Do NOT invent preferences, recipients, or channels that are not explicitly stated. Do NOT copy account-wide Gmail enablement, default recipient, or the global disallowed-recipients list into workflow.json — those stay account-level.
-3. Update soul/soul.md: remove the "## Notifications" section. If it also held a genuinely user-approved, non-channel/non-recipient constraint that has no structured home (e.g. an explicit cadence rule the user approved), move that single sentence into the "## Constraints" section rather than losing it; otherwise just delete the heading and its body. Keep ## Objective, ## Success Criteria, and ## Constraints. soul.md stays Markdown.
-4. Update workflow.json "version" to "1.0.12". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, publish, or make unrelated changes in this step.
-
-Report which notification preferences were migrated into workflow.json.notifications (or that there were none), what was removed from soul.md, and any preference you could not map (left for the user), then stop.`,
-	},
-	{
-		from:  workflowContractNotificationConfigVersion,
-		to:    workflowContractHumanInputOwnershipVersion,
-		label: "upgrade-1.0.13",
-		query: `WORKFLOW VERSION UPGRADE v1.0.12 -> v1.0.13.
-
-This is a product-managed Pulse history preflight. Do ONLY this question-ownership and human-readable-history migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
-
-Goal: historical questions and answers in builder/improve.html must remain under the component that asked them instead of all appearing in Reflection, and backend identifiers must not leak into the human-facing Pulse report.
-
-1. Read workflow.json and builder/improve.html. If builder/improve.html exists, call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) for the current attribution contract.
-2. Inspect historical question/answer cards (for example data-kind="input" or cards with data-question-id). Preserve their visible question, selected option/free-form answer, outcome, date, and status. Reclassify only when the asker is supported by real card or question evidence:
-   - Goal Advisor -> data-pulse-section="improvements", data-module="goal_advisor";
-   - a known Pulse reviewer -> data-pulse-section="signals", data-module="<that canonical reviewer module>";
-   - a general Pulse/run question, or an old card whose asker cannot be proven -> data-pulse-section="reflection", data-module="run_summary".
-3. Remove raw scheduler, session, execution, reviewer-task, review-run, and Pulse run identifiers from visible HTML text, including the visible Agent log. Replace them with a date/time or a short plain-language label where context is needed. Keep identifiers only in existing data-* attributes when required for internal matching; do not remove those attributes or change their values.
-4. Do not duplicate currently unanswered report_human_inputs in HTML. Do not rewrite CSS, redesign cards, reorder the timeline, alter findings/decisions, or change workflow behavior.
-5. Confirm every changed historical question/answer card has data-date, data-kind, data-pulse-section, data-module, and keeps its existing question id when present.
-6. Update workflow.json "version" to "1.0.13". Do not change schema_version, plan, steps, schedules, notification settings, publishing, or any unrelated file.
-
-Report how many cards were moved to Improvements, Signals, or retained in Reflection because the asker was unknown, and how many visible internal identifiers were removed, then stop.`,
-	},
-	{
-		from:  workflowContractHumanInputOwnershipVersion,
-		to:    workflowContractHumanReadablePulseStateVersion,
-		label: "upgrade-1.0.14",
-		query: `WORKFLOW VERSION UPGRADE v1.0.13 -> v1.0.14.
-
-This is a product-managed Pulse readability preflight. Do ONLY this visible-state-language migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
-
-Goal: builder/improve.html remains a human-readable decision and outcome history. Technical proof stays in separate reviewer result files and SQLite Pulse state; every visible Pulse label and sentence uses plain English.
-
-1. Read workflow.json and builder/improve.html. If builder/improve.html does not exist, skip the HTML edit and continue to the version update.
-2. Inspect visible text in builder/improve.html, including badges, titles, summaries, next-action text, questions/answers, and any old visible Agent log. Replace these internal states with the exact human text:
-   - no_terminal_packet -> The review did not finish.
-   - retry_due -> Pulse will retry.
-   - approved_awaiting_evidence -> Approved; waiting to confirm results.
-3. Apply the same plain-language rule to obvious visible variants of those values, such as underscore-free or title-cased labels, without changing their meaning. Do not rewrite unrelated findings or redesign, reorder, or delete timeline cards.
-4. Remove visible Evidence, Manifest, Finding ID, Files touched, raw path, run/session id, hash, packet, schema/table, and recovery-ledger text from every card. Preserve the human meaning as Why this matters, What changed, How we will confirm, Risk, or Next when useful. Do not remove a real finding, decision, answer, outcome, or metric.
-5. Replace the visible Agent log/details control with one #pulse-agent-handoff element carrying the hidden attribute. Keep only minimal current interrupted-fix recovery metadata there; reviewer proof remains in reviewer result files and scheduler/module state remains in SQLite. Preserve required matching data-* attributes.
-6. Rewrite dense visible cards into at most 70 words using: What happened, optional Why it matters, and Next. Use only Checked, Needs attention, Fixed, Waiting to confirm, Blocked, Review incomplete, Skipped, or User decision as visible statuses. Preserve the original human finding, decision, answer, outcome, and meaningful metric.
-7. Consolidate repeated unresolved cards only when they have the same data-module and the same underlying human reason. Keep the newest card in the active timeline, update its latest date and data-repeat-count, and move older duplicates to the existing monthly archive. Never combine different modules, different reasons, user decisions, or experiment outcomes.
-8. Confirm none of the three raw state codes or technical field labels remains in visible text. Update workflow.json "version" to "1.0.14". Do not change schema_version, plans, steps, schedules, notifications, publishing, or any unrelated file.
-
-Report how many visible labels or sentences were translated, how many technical evidence fields were removed, how many repeated cards were consolidated or archived, whether the hidden recovery marker and required matching attributes were preserved, and any blocker, then stop.`,
-	},
-	{
-		from:  workflowContractHumanReadablePulseStateVersion,
-		to:    workflowContractKBWriteMethodRetiredVersion,
-		label: "upgrade-1.0.15",
-		query: `WORKFLOW VERSION UPGRADE v1.0.14 -> v1.0.15.
-
-This is a product-managed pre-execution migration. Do ONLY this step-config migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
-
-Goal: the separate post-step "knowledgebase update agent" is retired, mirroring the earlier learnings-agent retirement. Every knowledgebase write now happens inline in the step agent's own post-completion turn. The ` + "`knowledgebase_write_method`" + ` and ` + "`learnings_write_method`" + ` fields no longer exist in the product at all — they are not settable, not clearable, and not read. This migration drops the dead keys from planning/step_config.json and verifies each KB-writing step still has a working write path.
-
-Why this matters: under the retired "agent" mode the step agent had NO write access to knowledgebase/notes/, so a separate agent re-read the run trace from disk and wrote the notes. Now the step agent writes them itself. A step that granted KB write access but never set a contribution performed no KB writes before and still performs none — report that, do not silently "fix" it.
-
-How the keys get dropped: both fields were removed from the step-config struct, so the loader ignores them on read and the writer omits them on save. Any successful update_step_config call rewrites planning/step_config.json in full, which strips the dead keys from EVERY step in one go. Do NOT pass them to clear_fields — they are no longer valid field names and the call will be rejected.
-
-1. Read workflow.json and planning/step_config.json. Treat a missing workflow.json "version" as "1.0.0".
-2. Record which steps currently carry ` + "`knowledgebase_write_method`" + ` or ` + "`learnings_write_method`" + ` and their values (note: an ABSENT knowledgebase_write_method previously meant "agent" mode).
-3. If any step from step 2 exists, trigger one full rewrite of planning/step_config.json: call update_step_config ONCE on any one of those steps, setting only ` + "`review_notes`" + ` to a short note such as "1.0.15: dropped retired write-method fields". Do not modify any other field. That single call rewrites the whole file and removes the dead keys everywhere.
-4. Re-read planning/step_config.json and confirm neither key appears anywhere. If either remains, report it as a blocker rather than hand-editing the file.
-5. Enumerate every step whose ` + "`agent_configs.knowledgebase_access`" + ` is "write" or "read-write" but whose ` + "`knowledgebase_contribution`" + ` is EMPTY. Do NOT invent contributions. Those steps perform no KB writes; report them so the owner can add a contribution or drop the write access.
-6. Do not change knowledgebase_access, knowledgebase_contribution text, learnings settings, step descriptions, schedules, notifications, or any unrelated field.
-7. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.15". Do not change schema_version. Do not run the workflow, alter schedules, notify the user, or publish in this step.
-
-Report: the steps that carried either retired field with their previous values (including "(absent — was agent mode)" where knowledgebase_write_method was missing on a KB-writing step), confirmation that a full rewrite removed the keys, the list of steps with KB write access but no contribution, and confirmation that no other field was modified. If no step carries either field and none grants KB write access, this is a no-op migration — say so explicitly and just bump the version.`,
-	},
-	{
-		from:  workflowContractKBWriteMethodRetiredVersion,
-		to:    workflowContractEvalVerdictSchemaVersion,
-		label: "upgrade-1.0.16",
-		query: `WORKFLOW VERSION UPGRADE v1.0.15 -> v1.0.16.
-
-This is a product-managed pre-execution migration. Do ONLY this eval-verdict-schema migration, then stop and wait for the next preflight turn or scheduled message. Do not run the workflow.
-
-Goal: every eval step's own output already carries the real verdict — there is no separate scoring agent. Each eval step must write a numeric "score" field into its output_content (the extraction code reads obj["score"] literally; nothing else makes a verdict "captured"). Older eval plans predate this contract and use other shapes (e.g. "score_0_to_100", a legacy "eval_logic"/"pass_condition" structure, or no validation_schema at all), so their real scores are silently stuck on "No score captured" and never reach evaluation_report.json or the db.sqlite eval_results table report_health reads via window.report.query.
-
-If evaluation/evaluation_plan.json does not exist, this is a no-op — skip to the version bump.
-
-1. Read evaluation/evaluation_plan.json and evaluation/step_config.json. Call read_skill(skills=[{"name":"builder-reference","path":"references/evaluation-plan.md"}]) for the current output contract: each step's own output_content should carry "score" (0-10), "max_score" (typically 10), "reasoning" or "pass_fail_reason" (either is accepted), and "evidence".
-2. For each eval step, inspect its description and validation_schema, and — if a prior real run exists — its actual output under evaluation/runs/iteration-0/.../execution/<step-id>/output_content.json, to judge whether it already emits a numeric "score" key. Steps that already do (on a 0-10 scale) need no change.
-3. For a step using an old 0-100 scale ("score_0_to_100" or similar), rewrite its description and validation_schema to emit "score" on a 0-10 scale (divide by 10, preserving relative strictness) rather than adding a second field alongside the old one.
-4. For a step using a wholly different mechanism (legacy eval_logic/pass_condition/severity, or any other bespoke shape with no "score" key), rewrite its description to instruct writing score/max_score/reasoning-or-pass_fail_reason/evidence directly into output_content, evaluating the exact same underlying checks/intent the step already performs. This changes what is emitted, not what is measured — do not alter the step's actual checks, thresholds, or pass/fail intent while doing this.
-5. Add or extend validation_schema json_checks so $.score (number) is required on every step; add $.max_score, and $.reasoning or $.pass_fail_reason, when the step doesn't already declare them. A step already correctly emitting evidence in its output but not declaring it in validation_schema is lower priority — extraction already falls back to pointing at output_content itself when no explicit evidence field exists, so only add an $.evidence check where the step genuinely has a distinct evidence value worth requiring.
-6. If evaluation_plan.json is a legacy top-level array, rewrite it to the canonical {"steps": [...]} object shape while making the other changes above (both parse identically today, but keep the file consistent with current authoring guidance).
-7. A leftover per-step "success_criteria" field is inert — the framework does not read it. Remove it while touching a step for another reason; do not treat its presence or absence as a validation error on its own, and do not touch steps that need no other change solely to strip it.
-8. Call validate_evaluation_plan and fix any errors before proceeding.
-9. Call run_full_evaluation(group_name="...") against one representative group to prove the rewritten steps produce a real "score" in their actual output, not just an updated schema. Read the resulting evaluation_report.json step_scores: every changed step's reasoning must no longer be the "No score captured — this eval step produced no output_content, or output_content had no score field." stub.
-10. Append one concise Pulse entry to builder/improve.html, if that file exists, listing which eval steps were migrated, which were already compliant, and the run_full_evaluation verification result (or why verification was skipped).
-11. Only after the applicable checks/updates are complete, update workflow.json "version" to "1.0.16". Do not change schema_version, planning/plan.json, schedules, notifications, or publishing in this step.
-
-Report: which eval steps needed changes vs. were already compliant, the old-shape -> new-field mapping per changed step, validate_evaluation_plan result, run_full_evaluation verification result confirming real scores are now captured (or why it was skipped), and any blockers. If evaluation_plan.json does not exist or every step already emits a numeric "score", this is a no-op migration — say so explicitly and just bump the version.`,
-	},
-	{
-		from:  workflowContractEvalVerdictSchemaVersion,
-		to:    workflowContractCompactPulseReportVersion,
-		label: "upgrade-1.0.18",
-		query: `WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18.
-
-This is a product-managed Pulse presentation migration. Do ONLY this compact-report upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
-
-Goal: builder/improve.html remains the readable published history, while SQLite and the Pulse popup own the complete operational issue tracker. Make the active HTML lighter without deleting history.
-
-1. Read workflow.json and builder/improve.html. Call read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Call get_pulse_state(view="backlog") without a module filter.
-2. If builder/improve.html exists, upgrade it to data-pulse-schema="3" while preserving the verdict/status header, coverage, Today's outcome, collapsed Technical details, filters, material Activity history, hidden #pulse-agent-handoff, and Archive links.
-3. Add exactly one data-source="sqlite" Current work section after Today's outcome. Derive Open, Fixing, and Verify counts from the returned issue statuses. Show at most three Important now items and three Needs verification items, with a compact +N more in Pulse note when truncated. Stable issue ids may appear only in data-issue-id attributes.
-4. Do not copy skeleton instructions or example comments into the saved HTML. Remove visible raw agent output, .modfields reviewer field dumps, and any visible Agent log. Full review evidence already lives in SQLite.
-5. Standing .entry.open cards are no longer active state. Preserve them unchanged in their matching monthly builder/improve-archive/YYYY-MM.html file, then remove them from the active Activity timeline. Keep one-time material lifecycle events such as filed, fixed, verified, reopened, escalated, and consequential decisions. Do not create cards for clean reviewer results; coverage and SQLite retain them.
-6. Verify the active file has exactly one log insertion anchor, one Current work section, no active .entry.open/.modfields/.agentlog, no duplicated Goal/Profile card, and still contains all non-standing material history. Do not impose a byte or character budget.
-7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.18". Do not change schema_version, plans, steps, schedules, notifications, publishing, or any unrelated file.
-
-Report the before/after active card count, how many standing cards moved to monthly archives, whether raw reviewer/Agent blocks were removed, the three Current work counts, and any blocker, then stop.`,
-	},
-	{
-		from:  workflowContractCompactPulseReportVersion,
-		to:    workflowContractLightweightPulseReportVersion,
-		label: "upgrade-1.0.19",
-		query: `WORKFLOW VERSION UPGRADE v1.0.18 -> v1.0.19.
-
-This is a product-managed Pulse presentation migration. Do ONLY this lightweight-report upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
-
-Goal: builder/improve.html is a short published executive journal. The SQLite-backed Pulse popup owns issue lists, evidence, verification, costs, tool diagnostics, and operational filtering.
-
-1. Read workflow.json and builder/improve.html. Load read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]). Call get_pulse_state(view="backlog") without a module filter.
-2. If builder/improve.html exists, upgrade it to data-pulse-schema="4". Keep the Bug/Goal verdicts, one status sentence, the three-module coverage row, exactly three Latest Pulse cells (Outcome, Goal movement, Next), one SQLite-backed Current work count strip (Open, Fixing, Verify), material Activity history, the hidden #pulse-agent-handoff, and Archive links.
-3. Remove Current work issue-title queues, collapsed Technical details, signal/cost/maintenance tiles, and Activity filters from the active page. Those details are already available in the Pulse popup and SQLite. Do not copy them into another visible section.
-4. Preserve material lifecycle history: filed, fixed, verified, reopened, escalated, consequential decisions, and meaningful run outcomes. Archive older resolved history using the normal monthly archive contract. Never delete history merely to shorten the active page.
-5. Keep material Activity history concise through editorial judgment. Retain important active history and move only genuinely safe resolved history into matching monthly archives; keep archive links. Never omit history merely to meet an item count. Do not impose a byte, character, or token budget.
-6. Verify exactly one newest-first anchor, one coverage row with all current modules, one three-cell Latest Pulse summary, one data-source="sqlite" Current work count strip, no .workqueue/.workitem/.technical/.filters blocks, no .entry.open/.modfields/.agentlog, and one hidden #pulse-agent-handoff.
-7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.19". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
-
-Report the before/after active card count, archived card count, Current work counts, and any blocker, then stop.`,
-	},
-	{
-		from:  workflowContractLightweightPulseReportVersion,
-		to:    workflowContractExecutivePulseJournalVersion,
-		label: "upgrade-1.0.20",
-		query: `WORKFLOW VERSION UPGRADE v1.0.19 -> v1.0.20.
-
-This is a product-managed Pulse presentation migration. Do ONLY this executive-journal upgrade, then stop and wait for the normal Pulse Gate step. Do not run the workflow.
-
-Goal: builder/improve.html is a small published executive journal. The database-native Pulse popup owns reviewer coverage, assumptions, issue queues, backlog counts, evidence, verification, costs, diagnostics, and operational filtering.
-
-1. Read workflow.json and builder/improve.html. Load read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) and read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}]).
-2. If builder/improve.html exists, upgrade it to data-pulse-schema="5". Keep only the Bug/Goal verdicts, one status sentence, exactly three Latest Pulse cells (Outcome, Goal movement, Next), concise material Activity transitions, the hidden #pulse-agent-handoff, and Archive links.
-3. Remove visible reviewer coverage, assumptions, Current work/backlog counts, issue queues, technical/cost/maintenance tiles, filters, raw agent output, per-reviewer fields, and standing finding cards. These remain available in SQLite and the Pulse popup; do not copy them into another visible section.
-4. Preserve material lifecycle history: consequential filed/fixed/verified/reopened/escalated transitions, user decisions, and meaningful run outcomes. Move older safe-to-archive cards into their matching monthly builder/improve-archive/YYYY-MM.html file. Never delete history merely to shorten the active page.
-5. Use editorial judgment: retain important active history, avoid duplicate standing state, and archive only genuinely safe resolved history. Never omit history merely to meet an item count. Do not impose a byte, character, or token budget.
-6. Verify exactly one newest-first anchor, exactly one three-cell Latest Pulse summary, no retired operational-detail blocks, no .entry.open/.modfields/.agentlog, and one hidden #pulse-agent-handoff.
-7. If builder/improve.html is missing, do not create it solely for this migration. Only after the applicable checks complete, update workflow.json "version" to "1.0.20". Do not change schema_version, plans, steps, schedules, notifications, publishing, or unrelated files.
-
-Report the before/after active card count, archived card count, removed visible operational sections, and any blocker, then stop.`,
-	},
-	{
-		from:  workflowContractExecutivePulseJournalVersion,
-		to:    workflowContractArtifactPurityVersion,
-		label: "upgrade-1.0.21",
-		query: `WORKFLOW VERSION UPGRADE v1.0.20 -> v1.0.21.
-
-This is a product-managed artifact-ownership migration. Do ONLY this purification upgrade, then stop and wait for the normal scheduled message. Do not run the workflow.
-
-Goal: workflow artifacts contain workflow-specific intent and know-how, while shared AgentWorks runtime mechanics remain owned by platform prompts and tool schemas.
-
-1. Read workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md plus its referenced Markdown files, and knowledgebase/notes Markdown files. Inventory exact occurrences of shared platform mechanics before editing: MCP bridge environment variables or curl envelopes; api-bridge routing; Folder Guard implementation; managed workflow DB tool invocation syntax; get_api_spec workarounds; and coding-agent tmux/native-session plumbing.
-2. Classify semantically. Preserve target/domain-specific HOW such as selectors, third-party API behavior, parsing, recovery, authentication to the target service, and stable failure signatures. Remove only shared AgentWorks implementation instructions. Generic words such as API, SQL, curl, browser, database, session, or tool are not evidence by themselves.
-3. Purify planning prose with the typed plan mutation tools, never by directly patching planning/plan.json. Rewrite each contaminated description/message as a semantic contract: domain action, inputs, durable result, failure behavior, and observable verification. Preserve every business rule, output, side effect, safety boundary, persistence requirement, and acceptance condition.
-4. Purify learnings with diff_patch_workspace_file. Keep reusable target-specific execution HOW; remove shared AgentWorks transport/auth/sandbox/session/tool-discovery mechanics, architecture history, and duplicates owned by Soul, Plan, Validation, KB, DB, or Pulse. Purify knowledgebase notes only when a note contains those shared mechanics; preserve durable domain facts and provenance. Never edit knowledgebase/context/.
-5. Re-read every changed file. Verify the inventory signatures are absent from workflow-authored prose, all plan steps/items still validate, the same inputs/outputs/side effects/guards remain represented semantically, and no target-specific know-how was removed. Record one concise changelog reason for the workflow-level migration; do not create one Pulse finding per token or file.
-6. The migration is idempotent: if the inventory is already clean, make no artifact edits. If any occurrence is ambiguous or cannot be rewritten without changing behavior, do not guess and do not stamp the version; report the exact file/step and ambiguity so the blocking preflight is visible.
-7. Only after the clean verification succeeds, call set_workflow_contract_version(version="1.0.21") to update workflow.json "version" to "1.0.21". Do not change schema_version, schedules, notifications, publishing, or unrelated workflow behavior.
-
-Report the candidate count, changed plan fields, changed learning/KB files, verification result, and any blocker, then stop.`,
-	},
-}
-
 func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {
 	if manifest == nil {
 		return workflowContractInitialVersion
@@ -486,39 +23,86 @@ func workflowContractVersionForUpgrade(manifest *WorkflowManifest) string {
 	return version
 }
 
+// workflowContractVersionRank is intentionally a closed set. A workflow made
+// by a newer server must never be silently "upgraded" backwards by an older
+// server: scheduledWorkshopTurns treats an unknown version as having no path.
+func workflowContractVersionRank(version string) (int, bool) {
+	known := []string{
+		"1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9",
+		workflowContractMessageSequenceCodeVersion,
+		workflowContractPulseHistoryVersion,
+		workflowContractNotificationConfigVersion,
+		workflowContractHumanInputOwnershipVersion,
+		workflowContractHumanReadablePulseStateVersion,
+		workflowContractKBWriteMethodRetiredVersion,
+		workflowContractEvalVerdictSchemaVersion,
+		workflowContractCompactPulseReportVersion,
+		workflowContractLightweightPulseReportVersion,
+		workflowContractExecutivePulseJournalVersion,
+		workflowContractArtifactPurityVersion,
+	}
+	for rank, candidate := range known {
+		if version == candidate {
+			return rank, true
+		}
+	}
+	return 0, false
+}
+
+const upgradeMessageSequenceCode = `WORKFLOW CONTRACT UPGRADE: MESSAGE-SEQUENCE CODE.
+
+This workflow predates the current message-sequence contract. Do only this migration.
+Call migrate_message_sequence_code_items. It is the trusted tool that either converts unambiguous legacy code items into standalone scripted steps or reports a precise blocker. Then inspect the resulting plan and confirm no legacy message-sequence code item remains. Do not run the workflow. If the migration is blocked or validation fails, do not stamp a version. Otherwise call set_workflow_contract_version(version="1.0.10") and stop.`
+
+const upgradeNotificationConfig = `WORKFLOW CONTRACT UPGRADE: NOTIFICATION CONFIGURATION.
+
+This workflow predates workflow-scoped notification configuration. Do only this migration. Read workflow.json and soul/soul.md. If soul contains an explicit user-approved Notifications preference, move only the mappable workflow-specific preference into workflow.json capabilities.notifications using update_workflow_config, then remove that duplicate preference from soul. Preserve account-wide delivery settings, unknown text, recipients, and constraints rather than guessing. If there is no legacy Notifications section, this is a no-op. Do not run the workflow. After re-reading the changed artifacts and confirming no notification meaning was lost, call set_workflow_contract_version(version="1.0.12") and stop.`
+
+const upgradeKBWriteMethod = `WORKFLOW CONTRACT UPGRADE: RETIRED KNOWLEDGEBASE WRITE METHOD.
+
+This workflow predates inline knowledgebase writes. Do only this migration. Inspect planning/step_config.json and remove the retired knowledgebase_write_method and learnings_write_method keys from every step configuration while preserving every other field. A KB-writing step still needs knowledgebase_access write/read-write plus a non-empty knowledgebase_contribution; do not invent contributions or change its access. Re-read and validate the complete config after the rewrite. Do not run the workflow. If any ambiguous legacy configuration cannot be safely preserved, report it and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.15") and stop.`
+
+const upgradeEvalVerdictSchema = `WORKFLOW CONTRACT UPGRADE: EVALUATION VERDICTS.
+
+This workflow predates the current evaluation output contract. Do only this migration. If evaluation/evaluation_plan.json is absent, this is a no-op. Otherwise load the evaluation-plan reference, inspect every evaluation step, and make each step emit numeric output_content.score on the current 0-10 scale without changing what it measures. Update validation schemas to require the emitted score and use validate_evaluation_plan. Do not run a normal workflow execution. If a representative evaluation can safely be run, use it to verify changed steps produce scores; otherwise record the exact evidence boundary. Do not stamp on a validation failure. When the plan is compliant, call set_workflow_contract_version(version="1.0.16") and stop.`
+
+const upgradeCurrentArtifactContract = `WORKFLOW CONTRACT UPGRADE: CURRENT ARTIFACT CONTRACT.
+
+Pulse state is SQLite-backed and shown only in the Pulse popup. Do not create, read, update, publish, validate, or archive a separate Pulse HTML journal. Delete a retired builder/improve.html and its retired improve archive only after preserving no workflow-owned information from them: typed Pulse state, soul, plan/config, reports, knowledgebase, learnings, runs, and database remain authoritative.
+
+Then inspect workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md and referenced learning Markdown, plus knowledgebase notes. Remove only shared AgentWorks transport, MCP bridge, Folder Guard, managed-tool, tool-discovery, or native-session mechanics from workflow-authored prose. Preserve domain-specific inputs, outputs, side effects, safety boundaries, acceptance criteria, selectors, external API behavior, and recovery knowledge. Use the normal typed plan/config tools for plan changes. Re-read every changed artifact and validate the plan/config. If a rewrite is ambiguous, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.21") and stop.`
+
+// workflowVersionUpgradePlan keeps the retired HTML presentation migrations
+// retired, but preserves the independent behavioral/data migrations older
+// workflows still need. They are deliberately grouped into five bounded,
+// blocking preflight turns rather than replaying the old 21-turn HTML chain.
 func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpgrade {
 	version := workflowContractVersionForUpgrade(manifest)
-	if version == WorkflowContractCurrentVersion {
+	rank, known := workflowContractVersionRank(version)
+	if !known || version == WorkflowContractCurrentVersion {
 		return nil
 	}
 
-	byFrom := make(map[string]workflowVersionUpgrade, len(workflowVersionUpgrades))
-	for _, upgrade := range workflowVersionUpgrades {
-		byFrom[upgrade.from] = upgrade
+	steps := make([]workflowVersionUpgrade, 0, 5)
+	if rank < 10 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractMessageSequenceCodeVersion, label: "upgrade-message-sequence-code", query: upgradeMessageSequenceCode})
 	}
-
-	seen := map[string]bool{}
-	var plan []workflowVersionUpgrade
-	for version != WorkflowContractCurrentVersion {
-		if seen[version] {
-			return plan
-		}
-		seen[version] = true
-
-		upgrade, ok := byFrom[version]
-		if !ok {
-			return plan
-		}
-		plan = append(plan, upgrade)
-		version = upgrade.to
+	if rank < 12 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractNotificationConfigVersion, label: "upgrade-notification-config", query: upgradeNotificationConfig})
 	}
-	return plan
+	if rank < 15 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractKBWriteMethodRetiredVersion, label: "upgrade-kb-write-method", query: upgradeKBWriteMethod})
+	}
+	if rank < 16 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractEvalVerdictSchemaVersion, label: "upgrade-eval-verdict-schema", query: upgradeEvalVerdictSchema})
+	}
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-current-artifact-contract", query: upgradeCurrentArtifactContract})
+	return steps
 }
 
 func postRunMonitorStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {
 	steps := postRunMonitorUpgradeStepsForManifest(manifest)
-	steps = append(steps, postRunMonitorSteps()...)
-	return steps
+	return append(steps, postRunMonitorSteps()...)
 }
 
 func postRunMonitorUpgradeStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {
@@ -531,12 +115,7 @@ func postRunMonitorUpgradeStepsForManifest(manifest *WorkflowManifest) []postRun
 	for _, upgrade := range upgrades {
 		steps = append(steps, postRunMonitorStep{
 			label: upgrade.label,
-			query: fmt.Sprintf(
-				"%s\n\nCurrent workflow.json version seen by scheduler: %q. Target workflow contract version: %q.",
-				upgrade.query,
-				workflowContractVersionForUpgrade(manifest),
-				WorkflowContractCurrentVersion,
-			),
+			query: fmt.Sprintf("%s\n\nCurrent workflow.json version seen by scheduler: %q. Target workflow contract version: %q.", upgrade.query, workflowContractVersionForUpgrade(manifest), upgrade.to),
 		})
 	}
 	return steps

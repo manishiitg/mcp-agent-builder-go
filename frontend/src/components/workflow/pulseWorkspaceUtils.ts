@@ -17,6 +17,7 @@ export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
   fixing: number
   awaitingVerification: number
   awaitingRun: number
+  queuedForEngineering: number
   awaitingUser: number
   blocked: number
   proposals: number
@@ -27,22 +28,8 @@ export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
   latestReview: PulseReviewRecord | null
 }
 
-const ENGINEERING_REVIEW_ALIASES = new Set([
-  'bug_review',
-  'artifact_review',
-  'report_health',
-  'eval_health',
-  'stores_health',
-  'learning_health',
-  'knowledgebase_health',
-  'db_health',
-])
-
-/** Keep old Pulse records visible after the reviewer model is simplified. */
 export function normalizePulseWorkspaceModule(module?: string): string {
   const value = (module || '').trim()
-  if (ENGINEERING_REVIEW_ALIASES.has(value)) return 'workflow_review'
-  if (value === 'cost_llm_time') return 'llm_ops_review'
   return value
 }
 
@@ -73,6 +60,7 @@ export function buildPulseWorkspaceModuleSummaries(
       fixing: lifecycle.fixing,
       awaitingVerification: lifecycle.awaitingVerification,
       awaitingRun: lifecycle.awaitingRun,
+      queuedForEngineering: lifecycle.queuedForEngineering,
       awaitingUser: lifecycle.awaitingUser,
       blocked: lifecycle.blocked,
       proposals: lifecycle.proposals,
@@ -93,11 +81,11 @@ export function selectPulseWorkspaceModule(
 ): string | null {
   if (summaries.length === 0) return null
   const ranked = [...summaries].sort((a, b) => {
-    const aPriority = (a.active + a.fixing) * 100
+    const aPriority = (a.active + a.fixing + a.queuedForEngineering) * 100
       + (a.awaitingVerification + a.awaitingRun) * 20
       + a.awaitingUser * 10
       + a.recurring
-    const bPriority = (b.active + b.fixing) * 100
+    const bPriority = (b.active + b.fixing + b.queuedForEngineering) * 100
       + (b.awaitingVerification + b.awaitingRun) * 20
       + b.awaitingUser * 10
       + b.recurring

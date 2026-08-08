@@ -29,9 +29,9 @@ all groups and runs; build new steps when the plan needs extending.
 (`ls -t builder/*.json | head -3`) to avoid repeating failed approaches
 and build on previous progress.
 
-Also read `builder/improve.html` before improvement decisions. Chief of Staff
-recommendation cards in that log are external open findings: verify their
-evidence against current runs/eval/soul.md, then choose the normal builder
+Also read typed Pulse state and saved review history before improvement decisions.
+Chief of Staff recommendations are external open findings: verify their evidence
+against current runs/eval/soul.md, then choose the normal builder
 path (Pulse Bug Review/Fixer, Goal Advisor proposal/approved plan change, targeted config/plan
 tool, or no action with rationale).
 

@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
-	stepbasedworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/robfig/cron/v3"
@@ -2090,7 +2089,7 @@ Scheduled task:
 }
 
 // runPostRunMonitor continues the scheduled run's main-agent conversation with
-// four conceptual turns: Gate, optional Review+Fix, Dashboard, and Finalize.
+// three conceptual turns: Gate, optional Review+Fix, and Finalize.
 // The agent owns reviewer selection, specialist delegation, diagnosis, repair,
 // and verification. Go supplies tools and permissions, preserves turn ordering,
 // and validates the typed durable receipts between turns. Pulse never changes
@@ -2130,8 +2129,8 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		return
 	}
 
-	// Pulse is one continuing agent conversation. Go sends four ordered turns:
-	// Gate, Review+Fix, Dashboard, and Finalize. The agent owns review selection,
+	// Pulse is one continuing agent conversation. Go sends three ordered turns:
+	// Gate, Review+Fix, and Finalize. The agent owns review selection,
 	// specialist delegation, repair bundling, and verification; Go only preserves
 	// ordering and validates the durable receipts between turns.
 	pulseContext := "A scheduled run of this workflow just finished"
@@ -2146,41 +2145,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	for _, upgrade := range upgradeSteps {
 		reviewFixPreflight = append(reviewFixPreflight, upgrade.query)
 	}
-	if assessment, err := pulseImproveArchiveAssessmentForWorkspace(ctx, sctx.WorkspacePath); err != nil {
-		s.sessionLogf(sctx, sessionID, "[PULSE] could not assess improve.html archive threshold: %v", err)
-	} else if assessment.Due {
-		reviewFixPreflight = append(reviewFixPreflight, postRunMonitorArchiveStep(assessment).query)
-	}
 	introSent := false
 	recoveryNotes := []string{}
 	runStep := func(st postRunMonitorStep) postRunMonitorStepRunResult {
-		var dashboardSnapshots []pulseDashboardArtifactSnapshot
-		dashboardSnapshotReady := false
-		dashboardPreviousHTML := ""
-		dashboardPreviousExists := false
-		if isPulseDashboardStep(st.label) {
-			var snapshotErr error
-			dashboardSnapshots, snapshotErr = capturePulseDashboardArtifacts(ctx, sctx.WorkspacePath)
-			if snapshotErr != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] could not snapshot dashboard artifacts before execution: %v", snapshotErr)
-			} else {
-				dashboardSnapshotReady = true
-				for _, snapshot := range dashboardSnapshots {
-					if strings.HasSuffix(snapshot.Path, "/builder/improve.html") {
-						dashboardPreviousHTML = snapshot.Content
-						dashboardPreviousExists = snapshot.Exists
-						break
-					}
-				}
-			}
-			s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
-				RunID: scheduleRunID, To: schedulerstate.StatePulseFinalizing, Reason: "Pulse dashboard starting",
-				SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
-			})
-			if _, err := markPulseFinalCommandState(ctx, sctx.WorkspacePath, pulseFinalCommandDashboard, pulseRunID, "running", "Preparing the Pulse dashboard and user questions"); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] failed to mark dashboard running: %v", err)
-			}
-		}
 		reqMap := cloneStringInterfaceMap(baseReqMap)
 		s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
 		query := st.query
@@ -2196,13 +2163,7 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		reqMap["query"] = query
 		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
 			s.sessionLogf(sctx, sessionID, "[PULSE] step %q failed to start: %v", st.label, err)
-			if isPulseDashboardStep(st.label) {
-				// Only the dashboard is resolved here. backup/publish/notify
-				// have their own stage and must still get their chance.
-				if _, markErr := markPulseFinalCommandState(ctx, sctx.WorkspacePath, pulseFinalCommandDashboard, pulseRunID, "failed", "Pulse dashboard stage failed to start"); markErr != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] failed to mark dashboard failed: %v", markErr)
-				}
-			} else if st.label == "finalize" {
+			if st.label == "finalize" {
 				_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", "Pulse finalizer failed to start")
 			}
 			return postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed, err: err}
@@ -2218,52 +2179,16 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 			} else if errors.Is(err, errWorkshopIdleWaitTimeout) {
 				outcome = postRunMonitorStepTimedOut
 			}
-			if isPulseDashboardStep(st.label) && dashboardSnapshotReady {
-				if restoreErr := restorePulseDashboardArtifacts(ctx, dashboardSnapshots); restoreErr != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] dashboard rollback after wait failure failed: %v", restoreErr)
-					err = fmt.Errorf("%w; dashboard rollback failed: %w", err, restoreErr)
-				} else {
-					s.sessionLogf(sctx, sessionID, "[PULSE] restored dashboard artifacts after the stage failed to finish")
-				}
-			}
 			status := "failed"
 			if outcome == postRunMonitorStepTimedOut {
 				status = "timed_out"
 			}
-			if isPulseDashboardStep(st.label) {
-				if _, markErr := markPulseFinalCommandState(ctx, sctx.WorkspacePath, pulseFinalCommandDashboard, pulseRunID, status, "Pulse dashboard stage did not finish cleanly"); markErr != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] failed to mark dashboard %s: %v", status, markErr)
-				}
-			} else if st.label == "finalize" {
+			if st.label == "finalize" {
 				_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, status, "Pulse finalizer did not finish cleanly")
 			}
 			return postRunMonitorStepRunResult{outcome: outcome, err: err}
 		}
-		if isPulseDashboardStep(st.label) {
-			if err := validatePulseDashboardArtifact(ctx, sctx.WorkspacePath, pulseRunID, dashboardPreviousHTML, dashboardPreviousExists); err != nil {
-				reason := "Pulse dashboard artifact validation failed: " + err.Error()
-				if dashboardSnapshotReady {
-					if restoreErr := restorePulseDashboardArtifacts(ctx, dashboardSnapshots); restoreErr != nil {
-						reason += "; rollback failed: " + restoreErr.Error()
-						err = fmt.Errorf("%w; dashboard rollback failed: %w", err, restoreErr)
-					} else {
-						reason += "; previous dashboard artifacts restored"
-					}
-				}
-				if _, markErr := markPulseFinalCommandState(ctx, sctx.WorkspacePath, pulseFinalCommandDashboard, pulseRunID, "failed", reason); markErr != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] failed to mark invalid dashboard artifact failed: %v", markErr)
-				}
-				s.sessionLogf(sctx, sessionID, "[PULSE] %s", reason)
-				return postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
-			}
-			// The stage ended cleanly but may not have recorded its own
-			// outcome. Resolve only the dashboard; the finalizer stage
-			// reconciles the rest after it runs.
-			if err := reconcilePulseDashboardCommand(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] failed to reconcile dashboard command state: %v", err)
-				return postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
-			}
-		} else if st.label == "finalize" {
+		if st.label == "finalize" {
 			if err := finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", "Finalizer ended without recording this command's outcome"); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] failed to reconcile final command state: %v", err)
 			}
@@ -2292,7 +2217,7 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		}
 		reason := fmt.Sprintf("Pulse stopped by user during %s", st.label)
 		pulseResult = postRunMonitorStopped
-		s.sessionLogf(sctx, sessionID, "[PULSE] %s; no later Review+Fix, Dashboard, Finalize, publish, or notification turn will run", reason)
+		s.sessionLogf(sctx, sessionID, "[PULSE] %s; no later Review+Fix, Finalize, publish, or notification turn will run", reason)
 		_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "skipped", reason)
 		return true
 	}
@@ -2405,12 +2330,8 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		pulseResult = postRunMonitorCompleted
 		s.sessionLogf(sctx, sessionID, "[PULSE] pulse completed for %s", sctx.Schedule.ID)
 	}
-	// Pulse owns its own notification: per its reference doc it calls notify_user
-	// once with a compact run summary, highlighting state transitions it reads from
-	// the durable Pulse log. The scheduler no longer pushes a templated message —
-	// that avoids a double-send and lets the agent author the exact, nuanced sentence.
-	// The Bug/Goal verdict lives in builder/improve.html (pills + headline) — the
-	// single source of truth, no separate file.
+	// Pulse owns its own notification from the durable SQLite state. The popup is
+	// the only Pulse presentation; there is no parallel HTML journal to update.
 	return pulseResult
 }
 
@@ -2436,22 +2357,14 @@ func pulseStepFailureMustStopBeforeNextTurn(result postRunMonitorStepRunResult, 
 }
 
 func postRunMonitorIntro(contextSummary, workspacePath, pulseRunID, runStatus, runFolder string) string {
-	return fmt.Sprintf("PULSE RUN CONTEXT. %s. workspace_path=%q, pulse_run_id=%q, evidence_status=%q, run_folder=%q. This is one continuing Pulse conversation. The scheduler sends Gate, Review+Fix, Dashboard, and Finalize turns in order. Own the reasoning and any useful specialist delegation inside the current turn, use durable workflow state for human answers, keep user-facing output concise, persist the required receipt, then stop so the next turn can continue.",
+	return fmt.Sprintf("PULSE RUN CONTEXT. %s. workspace_path=%q, pulse_run_id=%q, evidence_status=%q, run_folder=%q. This is one continuing Pulse conversation. The scheduler sends Gate, Review+Fix, and Finalize turns in order. Own the reasoning and any useful specialist delegation inside the current turn, use durable workflow state for human answers, keep user-facing output concise, persist the required receipt, then stop so the next turn can continue.",
 		contextSummary, workspacePath, pulseRunID, runStatus, runFolder)
 }
 
-// isPostRunMonitorFinalStep marks the stages that must still run when earlier
-// maintenance failed, and whose own failure must not suppress the stages after
-// them. The dashboard qualifies on both counts: the operator needs the page
-// updated precisely when a pass went badly, and a failed page write must not
-// stop backup/publish/notify.
+// isPostRunMonitorFinalStep marks the finalizer, which must still run when
+// earlier maintenance failed so notification/final command state stay truthful.
 func isPostRunMonitorFinalStep(label string) bool {
-	return label == "dashboard" || label == "finalize"
-}
-
-// isPulseDashboardStep identifies the stage that owns builder/improve.html.
-func isPulseDashboardStep(label string) bool {
-	return label == "dashboard"
+	return label == "finalize"
 }
 
 func (st postRunMonitorStep) idleMaxInactivity() time.Duration {
@@ -2517,7 +2430,7 @@ func postRunMonitorSteps() []postRunMonitorStep {
 func postRunMonitorGateStep(pulseRunID, runFolder, runStatus string) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "gate",
-		query: fmt.Sprintf("PULSE GATE / WORKLIST. pulse_run_id=%q, run_folder=%q, run_status=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-gate.md\"}]) and follow it exactly. Perform only the progressive Gate scan, call record_pulse_worklist exactly once with all %d module decisions, then record trustworthy current-run success-criterion observations with record_pulse_impact when available, and stop. Do not fabricate measurements, create interventions/assessments, write `builder/improve.html` or any workflow artifact, launch reviewers, fix, back up, publish, or notify.",
+		query: fmt.Sprintf("PULSE GATE / WORKLIST. pulse_run_id=%q, run_folder=%q, run_status=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-gate.md\"}]) and follow it exactly. Perform only the progressive Gate scan, call record_pulse_worklist exactly once with all %d module decisions, then record trustworthy current-run success-criterion observations with record_pulse_impact when available, and stop. Do not fabricate measurements, create interventions/assessments, write workflow artifacts, launch reviewers, fix, back up, publish, or notify.",
 			pulseRunID, runFolder, runStatus, len(pulseModuleOrder)),
 	}
 }
@@ -2531,7 +2444,7 @@ func postRunMonitorAgenticReviewFixStep(pulseRunID string, preflight []string) p
 		label: "review-fix",
 		query: fmt.Sprintf(`PULSE REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow it as the operating contract. Read the durable Gate worklist and handle only modules marked due.
 
-		This is a dispatch turn. Use ordinary run_in_background agents only: launch one executor message sequence for the selected Engineering and/or Operations work (review, consolidate, then apply and verify safe technical repairs); launch Strategy Auditor and Goal Advisor as separate executor agents only when their own modules are due. Give every child the pulse run ID, its selected module/lens, relevant Gate evidence, full normal builder authority for its task, and a compact evidence/result contract. Do not use a deleted generic-review tool, a residual Fixer, polling, or a Go-selected reviewer. Children return their evidence and completed work through normal automatic notifications.
+		This is a dispatch turn. Use ordinary run_in_background agents only: launch one executor message sequence for the selected Engineering and/or Operations work. Its fixed order is Engineering Review → Stores Health when the workflow_review Gate evidence selects learnings/knowledgebase/DB integrity → Operations Review when llm_ops_review is due → consolidate, repair, and verify safe technical changes. Stores Health is an internal Engineering turn, never a separate Pulse module or receipt. For run_in_background, put the first review in instruction and give every later message_sequence item a non-empty message; IDs are optional diagnostic labels generated by the backend. Launch Strategy Auditor and Goal Advisor as separate executor agents only when their own modules are due. Give every child the pulse run ID, its selected module/lens, relevant Gate evidence, full normal builder authority for its task, and a compact evidence/result contract. Do not use a deleted generic-review tool, a residual Fixer, polling, or a Go-selected reviewer. Children return their evidence and completed work through normal automatic notifications.
 
 		After dispatching every needed child, end this turn immediately. The runtime tracks registered children and waits for them before it advances Pulse. A later continuation turn will reconcile their evidence, persist the typed Pulse lifecycle rows, and record exactly one terminal record_pulse_result receipt per due module. If no modules are due, record the required skipped/terminal receipts yourself and stop. Do not render the dashboard, back up, publish, or notify in this turn.%s`, pulseRunID, preflightContext),
 	}
@@ -2540,7 +2453,7 @@ func postRunMonitorAgenticReviewFixStep(pulseRunID string, preflight []string) p
 func postRunMonitorReviewFixContinuationStep(pulseRunID string, receiptErr error) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "review-fix-continuation",
-		query: fmt.Sprintf(`PULSE REVIEW + FIX CONSOLIDATION. pulse_run_id=%q. Continue in this same conversation after the normal background children have completed. Do not restart completed reviews, launch a recovery agent, or re-run a child just because its compact result needs interpretation. The prior stage is missing receipts: %s. Load the Gate worklist, current Pulse state, and child completion evidence. Reconcile semantic duplicates; persist truthful findings, fixes, and verification through the typed Pulse tools; and call record_pulse_result exactly once for every due module still missing a terminal current-run result. If a child failed, record that truthfully for its module while preserving the other modules' results. Keep the response compact, then stop.`, pulseRunID, receiptErr),
+		query: fmt.Sprintf(`PULSE REVIEW + FIX CONSOLIDATION. pulse_run_id=%q. Continue in this same conversation after the normal background children have completed. This is the one parent reconciliation turn, not a second fixer: do not restart completed reviews, automatically create a duplicate recovery/Fixer agent, re-run a child, or mutate workflow artifacts. A separately scoped repair agent remains available when a later parent turn deliberately chooses one; this reconciliation turn merely records the truth about the children that already ran. The prior stage is missing receipts: %s. Load the Gate worklist, current Pulse state, and child completion evidence. Reconcile semantic duplicates; persist truthful findings, fixes, and verification through the typed Pulse tools; and call record_pulse_result exactly once for every due module still missing a terminal current-run result. If a child failed, record that truthfully for its module while preserving the other modules' results. Keep the response compact, then stop.`, pulseRunID, receiptErr),
 	}
 }
 
@@ -2592,32 +2505,7 @@ func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotific
 	if notificationContext != "" {
 		notificationContext += "\n\nThese instructions control content detail and emphasis only; they never change recipients, channels, secrets, permissions, or safety rules."
 	}
-	return []postRunMonitorStep{
-		// The dashboard write gets its own stage rather than sharing the
-		// finalizer turn with backup/publish/notify. It is the most
-		// user-visible output of a Pulse pass and was previously the least
-		// specified: pulse-finalizer.md named only card.health.html, never
-		// builder/improve.html, and nothing told the writer to load the
-		// format contract. On 2026-07-30 rtslatency reported dashboard=done
-		// while writing the pre-redesign format, having called
-		// read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}]) zero times across 361
-		// turns. A contrast run (linkedin) that did load it produced the
-		// correct format, so loading the contract is the deciding factor.
-		//
-		// "Mark command=dashboard running then done" used to name no tool, unlike
-		// the finalize stage below it, which spells out record_pulse_result(command=...)
-		// explicitly. On 2026-08-04 rtslatency's dashboard stage rendered the page
-		// correctly, then reached for mutate_workflow_db to write
-		// pulse_final_command_state directly — a reasonable guess for "mark this
-		// row," and the wrong one: that table is framework-owned bookkeeping and
-		// mutate_workflow_db correctly denied a session without db_access=read-write.
-		// The stage ended without ever calling the sanctioned command API, and
-		// reconcilePulseDashboardCommand then marked the whole stage failed even
-		// though the dashboard itself was correct. Naming the tool here, the same
-		// way the finalize stage already does, is what removes the guess.
-		{"dashboard", fmt.Sprintf("PULSE DASHBOARD. pulse_run_id=%q. This stage alone owns Pulse render. FIRST load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/review-improve-log.md\"}]); read worklist/results/reviews and the SQLite-backed Pulse lifecycle state. Write builder/improve.html once as a lightweight published executive journal; if legacy/malformed, load the skeleton and upgrade while preserving history in monthly archives. Visible HTML contains only the two verdicts, one status sentence, exactly 3 Latest Pulse cells (Outcome/Goal movement/Next), concise material Activity transitions, and archive links. Use editorial judgment: retain important active history, avoid duplicate standing state, and archive only genuinely safe resolved history. Never omit or fail the dashboard just to hit an item count. Do not render reviewer coverage, assumptions panels, Current work/backlog counts, issue queues, technical/cost tiles, filters, raw agent output, per-reviewer fields, or standing finding cards; those belong to the database-native Pulse popup. Do not copy skeleton instructions or examples. Refresh builder/card.health.html and create only genuine user questions. Read improve.html back. Require data-pulse-schema=\"5\", exactly 3 Latest Pulse cells, no duplicated operational-detail sections, and #pulse-agent-handoff[data-pulse-run-id] for this run. Archive older safe history. Mark command=\"dashboard\" running then done only after proof, using record_pulse_result(command=\"dashboard\", result=\"running\"|\"done\", reason=\"...\") — this is the only tool that may write pulse_final_command_state; never mutate_workflow_db or direct SQL for it — and stop.", pulseRunID)},
-		{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The dashboard stage already ran, so complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)},
-	}
+	return []postRunMonitorStep{{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The Pulse popup is the only presentation: do not write a Pulse HTML document or dashboard card. Complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)}}
 }
 
 func notificationChannelSummary(channels []string) string {
@@ -2858,25 +2746,6 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	}
 
 	for i, turn := range turns {
-		if hasTrustedWorkflowUpgradeFinalizer(turn.upgradeTarget) {
-			currentManifest, currentFound, currentErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
-			if currentErr != nil {
-				return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight %s could not inspect manifest: %w", turn.label, currentErr)
-			}
-			if currentFound && workflowContractVersionForUpgrade(currentManifest) == turn.upgradeTarget {
-				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Workshop turn %d/%d (%s) already finalized; skipping", i+1, len(turns), turn.label)
-				continue
-			}
-			if currentFound {
-				if finalizeErr := finalizeTrustedWorkflowUpgrade(ctx, sctx.WorkspacePath, turn.upgradeTarget, currentManifest); finalizeErr == nil {
-					s.sessionLogf(sctx, sessionID, "[SCHEDULER] Workshop turn %d/%d (%s) was a verified no-op; stamped %s without launching an LLM turn", i+1, len(turns), turn.label, turn.upgradeTarget)
-					continue
-				} else {
-					s.sessionLogf(sctx, sessionID, "[SCHEDULER] Workshop turn %d/%d (%s) requires migration work: %v", i+1, len(turns), turn.label, finalizeErr)
-				}
-			}
-		}
-
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Workshop turn %d/%d (%s): %q", i+1, len(turns), turn.label, turn.query)
 
 		reqMap := make(map[string]interface{})
@@ -2913,15 +2782,6 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			updatedManifest, updatedFound, readErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
 			if readErr != nil {
 				return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight %s completed but manifest could not be re-read: %w", turn.label, readErr)
-			}
-			if updatedFound && workflowContractVersionForUpgrade(updatedManifest) != turn.upgradeTarget && hasTrustedWorkflowUpgradeFinalizer(turn.upgradeTarget) {
-				if finalizeErr := finalizeTrustedWorkflowUpgrade(ctx, sctx.WorkspacePath, turn.upgradeTarget, updatedManifest); finalizeErr != nil {
-					return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight %s could not be finalized: %w", turn.label, finalizeErr)
-				}
-				updatedManifest, updatedFound, readErr = ReadWorkflowManifest(ctx, sctx.WorkspacePath)
-				if readErr != nil {
-					return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight %s was finalized but manifest could not be re-read: %w", turn.label, readErr)
-				}
 			}
 			if !updatedFound || workflowContractVersionForUpgrade(updatedManifest) != turn.upgradeTarget {
 				actual := "missing"
@@ -3002,35 +2862,6 @@ func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo) 
 		}
 	}
 	return "", false
-}
-
-func finalizeMessageSequenceCodeUpgrade(ctx context.Context, workspacePath string, manifest *WorkflowManifest) error {
-	if manifest == nil {
-		return errors.New("workflow manifest is missing")
-	}
-	if len(manifest.MalformedConfig) > 0 {
-		return fmt.Errorf("workflow manifest has malformed config block(s) %v; refusing to rewrite it", manifest.MalformedConfig)
-	}
-	if workflowContractVersionForUpgrade(manifest) != "1.0.9" {
-		return fmt.Errorf("expected workflow version 1.0.9 before finalizing 1.0.10, found %q", workflowContractVersionForUpgrade(manifest))
-	}
-
-	planContent, exists, err := readFileFromWorkspace(ctx, strings.TrimSuffix(workspacePath, "/")+"/planning/plan.json")
-	if err != nil {
-		return fmt.Errorf("read planning/plan.json: %w", err)
-	}
-	if !exists {
-		return errors.New("planning/plan.json is missing")
-	}
-	if err := stepbasedworkflow.ValidateMessageSequenceCodeMigrationComplete(planContent); err != nil {
-		return err
-	}
-
-	manifest.Version = workflowContractMessageSequenceCodeVersion
-	if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
-		return fmt.Errorf("stamp workflow version 1.0.10: %w", err)
-	}
-	return nil
 }
 
 func (s *SchedulerService) disableLegacyOptimizerSchedule(ctx context.Context, sctx *ScheduleContext, sessionID string) error {

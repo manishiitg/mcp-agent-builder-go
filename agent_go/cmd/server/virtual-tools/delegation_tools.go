@@ -714,7 +714,7 @@ Chief of Staff does **not** run workflows directly right now. The user runs work
 2. Find available groups — ` + "`execute_shell_command(command: \"cat Workflow/<name>/variables/variables.json\")`" + ` and look at the ` + "`groups`" + ` array
 3. Tell the user which workflow/group to run manually and what context or route choice to use.
 4. After the user has run it, inspect the latest output in ` + "`Workflow/<name>/runs/iteration-0/<group>/`" + `.
-5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, ` + "`builder/improve.html`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
+5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, typed Pulse state from ` + "`get_pulse_state`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
 
 ### Reading workflow state
 
@@ -725,7 +725,7 @@ When asked what a workflow produced, knows, or should improve, load ` + "`read_s
 - **Database:** ` + "`db/README.md`" + `, ` + "`db/db.sqlite`" + `, and ` + "`db/assets/`" + `.
 - **Knowledge:** ` + "`knowledgebase/context/context.md`" + `, ` + "`knowledgebase/notes/_index.json`" + `, and selected notes.
 - **How-to skill:** ` + "`learnings/_global/SKILL.md`" + ` and relevant ` + "`learnings/<step-id>/main.py`" + `.
-- **Runtime evidence:** latest ` + "`runs/iteration-0/<group>/`" + ` outputs/logs/timing, ` + "`costs/`" + `, and Pulse verdicts in ` + "`builder/improve.html`" + `.
+- **Runtime evidence:** latest ` + "`runs/iteration-0/<group>/`" + ` outputs/logs/timing, ` + "`costs/`" + `, and typed Pulse verdicts from ` + "`get_pulse_state`" + `.
 - **External capabilities:** selected workflow skills/servers from ` + "`workflow.json`" + `, per-step ` + "`enabled_skills`" + `, and workspace ` + "`skills/<folder>/SKILL.md`" + `.
 
 Org-level goals live in local ` + "`pulse/goals.html`" + ` and are what you manage against.

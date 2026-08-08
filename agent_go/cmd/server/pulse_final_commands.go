@@ -10,14 +10,12 @@ import (
 )
 
 const (
-	pulseFinalCommandDashboard = "dashboard"
-	pulseFinalCommandBackup    = "backup"
-	pulseFinalCommandPublish   = "publish"
-	pulseFinalCommandNotify    = "notify"
+	pulseFinalCommandBackup  = "backup"
+	pulseFinalCommandPublish = "publish"
+	pulseFinalCommandNotify  = "notify"
 )
 
 var pulseFinalCommandOrder = []string{
-	pulseFinalCommandDashboard,
 	pulseFinalCommandBackup,
 	pulseFinalCommandPublish,
 	pulseFinalCommandNotify,
@@ -28,10 +26,9 @@ var pulseFinalCommandOrder = []string{
 var pulseFinalCommandResultValues = []string{"running", "done", "skipped", "blocked", "failed"}
 
 var validPulseFinalCommands = map[string]bool{
-	pulseFinalCommandDashboard: true,
-	pulseFinalCommandBackup:    true,
-	pulseFinalCommandPublish:   true,
-	pulseFinalCommandNotify:    true,
+	pulseFinalCommandBackup:  true,
+	pulseFinalCommandPublish: true,
+	pulseFinalCommandNotify:  true,
 }
 
 const pulseFinalCommandStateSchema = `CREATE TABLE IF NOT EXISTS pulse_final_command_state (
@@ -266,10 +263,6 @@ func markPulseFinalCommandStateInDB(ctx context.Context, db *sql.DB, workspacePa
 }
 
 var pulseFinalCommandOwnedReasonCodes = map[string][]string{
-	pulseFinalCommandDashboard: {
-		"dashboard_stage_owned",
-		"builder_html_is_dashboard_owned_not_fixer_writable",
-	},
 	pulseFinalCommandPublish: {
 		"finalizer_publish_owned",
 		"published_snapshots_are_publish_owned",
@@ -462,45 +455,4 @@ func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath,
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-// reconcilePulseDashboardCommand runs only after the dedicated dashboard stage
-// became idle cleanly and validatePulseDashboardArtifact proved the new
-// projection. That backend proof is sufficient to mark dashboard done even if
-// the agent forgot to call record_pulse_result itself.
-//
-// The dashboard has its own stage, so the blanket
-// finalizeUnresolvedPulseFinalCommands is wrong here: it would mark
-// backup/publish/notify failed before their stage has even started. This is not
-// an assumption of success: the caller has already checked the artifact
-// contract and read-back boundary. The finalizer commands do not have an
-// equivalent deterministic artifact proof, so they must still self-report.
-func reconcilePulseDashboardCommand(ctx context.Context, workspacePath, pulseRunID string) error {
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	var currentStatus string
-	err = db.QueryRowContext(ctx, `SELECT status FROM pulse_final_command_state
-		WHERE workspace_path = ? AND pulse_run_id = ? AND command = ?`,
-		normalized, strings.TrimSpace(pulseRunID), pulseFinalCommandDashboard).Scan(&currentStatus)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("dashboard command was not initialized for Pulse run %q", strings.TrimSpace(pulseRunID))
-		}
-		return err
-	}
-	if currentStatus == "done" {
-		return nil
-	}
-	if currentStatus == "waiting" || currentStatus == "running" {
-		if _, markErr := markPulseFinalCommandStateInDB(ctx, db, normalized, pulseFinalCommandDashboard, pulseRunID,
-			"done", "Dashboard artifact rendered and validated by the scheduler"); markErr != nil {
-			return markErr
-		}
-		return nil
-	}
-	return fmt.Errorf("dashboard command ended with non-success status %q", currentStatus)
 }

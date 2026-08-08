@@ -9,6 +9,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FileListWidget, FileWidget } from './reportWidgets/FileWidget'
 import { FilePreviewModal } from './reportWidgets/FilePreviewModal'
+import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
 import {
   WidgetError,
@@ -1046,7 +1047,7 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusT
       // few stable top-level files. runs/ is intentionally excluded — per-run paths
       // aren't knowable at report-authoring time and transcripts can be sensitive.
       const folderPrefixes = ['db/', 'knowledgebase/', 'docs/', 'planning/', 'evaluation/', 'costs/', 'variables/']
-      const exactFiles = ['soul.md', 'workflow.json', 'improve.html']
+      const exactFiles = ['soul.md', 'workflow.json']
       if (folderPrefixes.some((pre) => n.startsWith(pre)) || exactFiles.includes(n)) return n
       return ''
     }
@@ -1140,6 +1141,13 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusT
         onScroll={event => setReportViewScrollTop(viewStateKey, event.currentTarget.scrollTop)}
         className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain ${htmlOnlyReport ? '' : '[scrollbar-gutter:stable]'} ${documentOnlyReport ? '' : 'px-2 py-2 sm:px-3 sm:py-3'}`}
       >
+        <div className={previewShellClassName}>
+          <ReportHumanInputPanel
+            workspacePath={workspacePath}
+            contentMode="pending"
+            className={previewContentClassName}
+          />
+        </div>
         <div ref={reportExportRef} className={previewShellClassName}>
           <div className={`flex flex-col gap-3 ${previewContentClassName}`}>
             {loading && <ReportSkeleton />}

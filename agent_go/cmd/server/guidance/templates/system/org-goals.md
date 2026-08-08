@@ -69,7 +69,7 @@ After a workflow run completes, interpret the run against any goals that name th
 This applies to full workflow runs and step runs launched from Chief of Staff chat. Use
 concrete evidence from:
 
-- the workflow's own Pulse verdict in `builder/improve.html`,
+- the workflow's own typed Pulse goal verdict,
 - the latest run outputs under `runs/iteration-0/<group>/execution/`,
 - live/finished reports under `reports/`,
 - durable metrics or rows in `db/db.sqlite`,

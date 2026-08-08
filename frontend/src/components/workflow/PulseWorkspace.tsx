@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
-  ArrowUpRight,
   CheckCircle2,
   Clock3,
   Cpu,
-  FileText,
   Lightbulb,
   Loader2,
   RefreshCw,
@@ -19,6 +17,7 @@ import type {
   PulseFinalCommandState,
   PulseFindingLifecycle,
   PulseImpactLedger,
+  PulseContextRecord,
   PulseAgentMetricRecord,
   PulseModuleState,
   PulseReviewRecord,
@@ -36,7 +35,6 @@ import {
   normalizePulseWorkspaceModule,
   selectPulseWorkspaceModule,
 } from './pulseWorkspaceUtils'
-import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 import {
   PULSE_FIXED_COMMANDS,
   PULSE_MODULE_COMMANDS,
@@ -108,11 +106,12 @@ type LatestWorkflowRun = {
 const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Current work',
   needs_action: 'Pulse to fix',
+  queued_repair: 'Queued for Pulse',
   waiting_proof: 'Waiting on a run',
   decisions: 'Your decisions',
   proposals: 'Proposed improvements',
-  blocked: 'Blocked',
-  platform: 'Platform team',
+  blocked: 'Paused',
+  platform: 'Platform repair pending',
   resolved: 'Resolved',
   workflow_reported: 'Workflow evidence',
 }
@@ -120,11 +119,12 @@ const FOCUS_TITLES: Record<PulseFocus, string> = {
 const FOCUS_HINTS: Record<PulseFocus, string> = {
   all: 'Open work, grouped by who or what can move it forward',
   needs_action: 'Issues Pulse can diagnose, repair, or reopen',
+  queued_repair: 'Safe workflow repairs retained for a later Engineering pass',
   waiting_proof: 'Fixes that need evidence from a future workflow run',
   decisions: 'Items that cannot continue without your approval or direction',
   proposals: 'Ideas Pulse recommends considering; these are not waiting for your answer',
-  blocked: 'Diagnosed issues with no safe action available to Pulse yet',
-  platform: 'Diagnosed work that must be fixed outside this workflow',
+  blocked: 'Diagnosed issues with no safe action currently available',
+  platform: 'Diagnosed runtime or product repairs outside this workflow',
   resolved: 'Verified fixes and legitimate no-change closures',
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
 }
@@ -137,7 +137,6 @@ export function PulseWorkspace({
   statusLoading,
   statusError,
   onRefresh,
-  onOpenDashboard,
 }: {
   workspacePath: string
   monitorOn: boolean
@@ -146,12 +145,12 @@ export function PulseWorkspace({
   statusLoading: boolean
   statusError: string | null
   onRefresh: () => void
-  onOpenDashboard: () => void
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
   const [agentMetrics, setAgentMetrics] = useState<PulseAgentMetricRecord[]>([])
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
+  const [contextRecords, setContextRecords] = useState<PulseContextRecord[]>([])
   const [latestRun, setLatestRun] = useState<LatestWorkflowRun | null>(null)
   const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
@@ -170,10 +169,11 @@ export function PulseWorkspace({
     if (!workspacePath) return
     setLoading(true)
     setError(null)
-    const [findingResult, reviewResult, impactResult, metricResult, runResult] = await Promise.allSettled([
+    const [findingResult, reviewResult, impactResult, contextResult, metricResult, runResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
       agentApi.getPulseImpact(workspacePath),
+      agentApi.getPulseContext(workspacePath),
       agentApi.getPulseAgentMetrics(workspacePath),
       agentApi.getWorkflowsSummary([workspacePath]),
     ])
@@ -208,6 +208,16 @@ export function PulseWorkspace({
           : impactResult.value.error || 'Could not load goal impact.',
       )
     }
+    if (contextResult.status === 'fulfilled' && contextResult.value.success) {
+      setContextRecords(contextResult.value.records || [])
+    } else {
+      setContextRecords([])
+      errors.push(
+        contextResult.status === 'rejected'
+          ? (contextResult.reason instanceof Error ? contextResult.reason.message : 'Could not load user context.')
+          : contextResult.value.error || 'Could not load user context.',
+      )
+    }
     if (metricResult.status === 'fulfilled' && metricResult.value.success) {
       setAgentMetrics(metricResult.value.metrics || [])
     } else {
@@ -240,19 +250,15 @@ export function PulseWorkspace({
     setReviews([])
     setAgentMetrics([])
     setImpact({ interventions: [], observations: [], assessments: [] })
+    setContextRecords([])
     setLatestRun(null)
     void load()
-  }, [load])
-
-  useEffect(() => {
-    const refresh = () => { void load() }
-    window.addEventListener(WORKFLOW_LOG_REFRESH_EVENT, refresh)
-    return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, refresh)
   }, [load])
 
   const queueCounts = useMemo(() => {
     const counts: Record<PulseFindingQueue, number> = {
       needs_action: 0,
+      queued_repair: 0,
       waiting_proof: 0,
       decisions: 0,
       proposals: 0,
@@ -303,11 +309,12 @@ export function PulseWorkspace({
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
             needs_action: 6,
-            waiting_proof: 5,
-            decisions: 4,
-            proposals: 3,
-            blocked: 2,
-            platform: 1,
+            queued_repair: 5,
+            waiting_proof: 4,
+            decisions: 3,
+            proposals: 2,
+            blocked: 1,
+            platform: 0,
             workflow_reported: 0,
             resolved: 0,
           }
@@ -339,7 +346,8 @@ export function PulseWorkspace({
       improved: currentAssessments.filter((item) => item.verdict === 'improved').length,
       regressed: currentAssessments.filter((item) => item.verdict === 'regressed').length,
       inconclusive: currentAssessments.filter((item) => ['inconclusive', 'confounded'].includes(item.verdict)).length,
-      awaiting: impact.interventions.filter((item) => ['awaiting_evidence', 'measuring'].includes(item.status)).length,
+      awaiting: impact.interventions.filter((item) => ['awaiting_evidence', 'proposed', 'approved', 'running', 'measuring', 'blocked'].includes(item.status)).length,
+      strategyExperiment: impact.interventions.find((item) => item.kind === 'strategy_experiment') || null,
       latest: Array.from(latestBySeries.values()).slice(0, 4),
     }
   }, [impact])
@@ -447,10 +455,10 @@ export function PulseWorkspace({
                 </span>
               )}
               <span><span className="font-medium text-foreground">Pulse owns:</span> {queueCounts.needs_action}</span>
+              <span><span className="font-medium text-foreground">Queued for Pulse:</span> {queueCounts.queued_repair}</span>
               <span><span className="font-medium text-foreground">You own:</span> {queueCounts.decisions}</span>
               <span><span className="font-medium text-foreground">Waiting on runs:</span> {queueCounts.waiting_proof}</span>
-              <span><span className="font-medium text-foreground">Blocked:</span> {queueCounts.blocked}</span>
-              <span><span className="font-medium text-foreground">Platform:</span> {queueCounts.platform}</span>
+              {queueCounts.platform > 0 && <span><span className="font-medium text-foreground">Platform repair pending:</span> {queueCounts.platform}</span>}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -462,15 +470,6 @@ export function PulseWorkspace({
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading || statusLoading ? 'animate-spin' : ''}`} />
               Refresh
-            </button>
-            <button
-              type="button"
-              onClick={onOpenDashboard}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-xs font-medium text-foreground hover:bg-muted"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Full dashboard
-              <ArrowUpRight className="h-3 w-3" />
             </button>
           </div>
         </div>
@@ -521,7 +520,7 @@ export function PulseWorkspace({
             const proposals = areaModules.reduce((sum, module) => sum + module.proposals, 0)
             const actionable = area.id === 'product'
               ? decisions + proposals
-              : areaModules.reduce((sum, module) => sum + module.active + module.fixing, 0)
+              : areaModules.reduce((sum, module) => sum + module.active + module.fixing + module.queuedForEngineering, 0)
             const waiting = areaModules.reduce((sum, module) => (
               sum + module.awaitingVerification + module.awaitingRun
             ), 0)
@@ -630,11 +629,12 @@ export function PulseWorkspace({
               {([
                 ['all', 'Current', findings.filter((finding) => !['resolved', 'workflow_reported'].includes(pulseFindingPresentation(finding).queue)).length],
                 ['needs_action', 'Pulse to fix', queueCounts.needs_action],
+                ['queued_repair', 'Queued for Pulse', queueCounts.queued_repair],
                 ['waiting_proof', 'Waiting on run', queueCounts.waiting_proof],
                 ['decisions', 'Your decisions', queueCounts.decisions],
                 ['proposals', 'Ideas', queueCounts.proposals],
-                ['blocked', 'Blocked', queueCounts.blocked],
-                ['platform', 'Platform', queueCounts.platform],
+                ['blocked', 'Paused', queueCounts.blocked],
+                ['platform', 'Platform repair pending', queueCounts.platform],
                 ['resolved', 'Resolved', queueCounts.resolved],
               ] as Array<[PulseFocus, string, number]>).map(([value, label, count]) => (
                 <button
@@ -715,6 +715,27 @@ export function PulseWorkspace({
             </div>
           )}
         </section>
+
+        {contextRecords.length > 0 && (
+          <section className="overflow-hidden rounded-xl border bg-background">
+            <div className="border-b px-4 py-3">
+              <h3 className="text-sm font-semibold text-foreground">User rules</h3>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">Confirmed context that future workflow runs must respect</p>
+            </div>
+            <div className="divide-y">
+              {contextRecords.slice(0, 5).map((record) => (
+                <div key={record.context_id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{record.section}</span>
+                    <span className="shrink-0 text-[9px] text-muted-foreground">{formatDate(record.created_at)}</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-foreground">{record.context_text}</p>
+                  {record.example_note && <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{record.example_note}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <section className="overflow-hidden rounded-xl border bg-background">
@@ -742,7 +763,7 @@ export function PulseWorkspace({
           {moduleSummaries.map((module) => {
             const state = moduleStateByID.get(module.id)
             const active = selectedModule === module.id
-            const openWork = module.active + module.fixing
+            const openWork = module.active + module.fixing + module.queuedForEngineering
             const waitingWork = module.awaitingVerification + module.awaitingRun
             return (
               <button
@@ -773,6 +794,9 @@ export function PulseWorkspace({
                   )}
                   {module.awaitingUser > 0 && (
                     <span className="text-[9px] font-medium text-fuchsia-700 dark:text-fuchsia-300">{module.awaitingUser} decisions</span>
+                  )}
+                  {module.queuedForEngineering > 0 && (
+                    <span className="text-[9px] font-medium text-sky-700 dark:text-sky-300">{module.queuedForEngineering} queued</span>
                   )}
                   {module.blocked > 0 && (
                     <span className="text-[9px] font-medium text-muted-foreground">{module.blocked} blocked</span>
@@ -847,6 +871,24 @@ export function PulseWorkspace({
             <span className="rounded-full border px-2 py-1 text-muted-foreground">{impactSummary.awaiting} awaiting evidence</span>
           </div>
         </div>
+        {impactSummary.strategyExperiment && (
+          <div className="border-b px-4 py-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-semibold text-foreground">Strategy experiment: {impactSummary.strategyExperiment.title}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {readable(impactSummary.strategyExperiment.status)} · {readable(impactSummary.strategyExperiment.metric)} · checkpoint {readable(impactSummary.strategyExperiment.checkpoint)}
+                </div>
+              </div>
+              <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(impactSummary.strategyExperiment.status)}`}>
+                {readable(impactSummary.strategyExperiment.status)}
+              </span>
+            </div>
+            {impactSummary.strategyExperiment.guardrails?.length ? (
+              <div className="mt-2 text-[10px] leading-4 text-muted-foreground">Guardrails: {impactSummary.strategyExperiment.guardrails.join(' · ')}</div>
+            ) : null}
+          </div>
+        )}
         {impactSummary.latest.length === 0 ? (
           <div className="flex items-start gap-2 px-4 py-3 text-xs text-muted-foreground">
             <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />

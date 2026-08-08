@@ -12,6 +12,7 @@ import {
 
 export type PulseFindingQueue =
   | 'needs_action'
+  | 'queued_repair'
   | 'waiting_proof'
   | 'decisions'
   | 'proposals'
@@ -152,6 +153,17 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
     }
   }
 
+  if (finding.status === 'queued_for_engineering') {
+    return {
+      label: 'Queued for Pulse',
+      queue: 'queued_repair',
+      tone: 'info',
+      nextAction: finding.resolution_note?.trim()
+        || finding.details?.next_check?.trim()
+        || 'Pulse will select this safe repair in a later Engineering pass.',
+    }
+  }
+
   if (finding.status === 'acknowledged') {
     const reason = acknowledgedReason(finding)
     if (reason === 'awaiting_user') {
@@ -177,8 +189,28 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       }
     }
     if (reason === 'blocked') {
+      // Old records used `blocked` to mean both “cannot act” and “not selected
+      // this pass.” Preserve their useful intent until the new durable queue
+      // state arrives, rather than falsely presenting deferred work as dead.
+      const latest = finding.events[0]?.summary?.toLowerCase() || ''
+      if (/next .*run|needs triage on the next|needs another .*run/.test(latest)) {
+        return {
+          label: 'Waiting for next run',
+          queue: 'waiting_proof',
+          tone: 'warning',
+          nextAction: finding.resolution_note?.trim() || finding.events[0]?.summary || 'A future workflow run will determine the next repair.',
+        }
+      }
+      if (/not attempted|deprioritized|deferred to (a )?future|next engineering pass/.test(latest)) {
+        return {
+          label: 'Queued for Pulse',
+          queue: 'queued_repair',
+          tone: 'info',
+          nextAction: finding.resolution_note?.trim() || finding.events[0]?.summary || 'Pulse will select this safe repair in a later Engineering pass.',
+        }
+      }
       return {
-        label: 'Blocked · no available action',
+        label: 'Paused · no safe action',
         queue: 'blocked',
         tone: 'neutral',
         nextAction: finding.resolution_note?.trim()

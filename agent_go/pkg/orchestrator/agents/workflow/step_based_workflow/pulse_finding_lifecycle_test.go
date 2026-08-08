@@ -771,6 +771,25 @@ func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
 	}
 }
 
+func TestQueuedForEngineeringSeparatesDeferredWorkFromBlocked(t *testing.T) {
+	queued := PulseFindingDisposition{
+		Fingerprint: "fp", FindingID: "ENG-1",
+		Disposition: FindingDispositionQueuedForEngineering,
+		Summary:     "Snapshot scoping repair deferred to the next Engineering pass.",
+	}
+	if err := validateFindingDisposition(queued); err == nil || !strings.Contains(err.Error(), "requires next_check") {
+		t.Fatalf("queued repair accepted without a repair boundary: %v", err)
+	}
+	queued.NextCheck = "next Engineering Pulse pass applies the snapshot-scoping repair"
+	if err := validateFindingDisposition(queued); err != nil {
+		t.Fatalf("queued repair was rejected: %v", err)
+	}
+	status, event, _ := lifecycleStatusForDisposition(FindingDispositionQueuedForEngineering)
+	if status != ConcernStatusQueuedForEngineering || event != "queued_for_engineering" {
+		t.Fatalf("queued repair mapped to status=%q event=%q", status, event)
+	}
+}
+
 // TestVerificationCanCloseAnAttemptFromAnEarlierRun covers the flow the
 // lifecycle mandates and used to block.
 //

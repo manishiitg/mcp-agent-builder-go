@@ -68,16 +68,21 @@ const (
 	ConcernStatusFixing               = "fixing"
 	ConcernStatusAwaitingVerification = "awaiting_verification"
 	ConcernStatusAwaitingRun          = "awaiting_run"
+	// ConcernStatusQueuedForEngineering is actionable workflow work which was
+	// deliberately not attempted in this Pulse pass. It remains visible to Gate
+	// and must not be conflated with a true blocker.
+	ConcernStatusQueuedForEngineering = "queued_for_engineering"
 )
 
 const (
-	FindingDispositionFixedVerified     = "fixed_verified"
-	FindingDispositionVerifiedNoChange  = "verified_no_change"
-	FindingDispositionChangedUnverified = "changed_unverified"
-	FindingDispositionProposalOnly      = "proposal_only"
-	FindingDispositionAwaitingUser      = "awaiting_user"
-	FindingDispositionBlocked           = "blocked"
-	FindingDispositionExternalAction    = "external_action_required"
+	FindingDispositionFixedVerified        = "fixed_verified"
+	FindingDispositionVerifiedNoChange     = "verified_no_change"
+	FindingDispositionChangedUnverified    = "changed_unverified"
+	FindingDispositionProposalOnly         = "proposal_only"
+	FindingDispositionAwaitingUser         = "awaiting_user"
+	FindingDispositionQueuedForEngineering = "queued_for_engineering"
+	FindingDispositionBlocked              = "blocked"
+	FindingDispositionExternalAction       = "external_action_required"
 	// FindingDispositionAwaitingRun is a real finding that no one is stuck on:
 	// the evidence to resolve it simply has not been produced yet, and the next
 	// scheduled run will produce it.
@@ -113,6 +118,7 @@ var (
 		FindingDispositionChangedUnverified,
 		FindingDispositionProposalOnly,
 		FindingDispositionAwaitingUser,
+		FindingDispositionQueuedForEngineering,
 		FindingDispositionAwaitingRun,
 		FindingDispositionBlocked,
 		FindingDispositionExternalAction,
@@ -224,6 +230,46 @@ type PulseFindingDisposition struct {
 	Verification []PulseFindingVerification `json:"verification,omitempty"`
 }
 
+// ResolvePulseFindingDispositionIssueIDs turns the one public issue identity
+// supplied by an agent into the internal fingerprint required by the durable
+// lifecycle tables. Fingerprints remain essential for semantic deduplication,
+// but they are backend plumbing: making agents copy both identifiers caused
+// routine lifecycle writes to fail on an avoidable transcription mistake.
+func ResolvePulseFindingDispositionIssueIDs(
+	ctx context.Context,
+	workspacePath string,
+	dispositions []PulseFindingDisposition,
+) ([]PulseFindingDisposition, error) {
+	if len(dispositions) == 0 {
+		return nil, nil
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]PulseFindingDisposition, len(dispositions))
+	for index, disposition := range dispositions {
+		disposition = NormalizePulseFindingDisposition(disposition)
+		if disposition.FindingID == "" {
+			return nil, fmt.Errorf("finding_dispositions[%d] requires issue_id: the visible PUL-… id from get_pulse_state(view=\"backlog\")", index)
+		}
+		fingerprint := ""
+		for _, finding := range findings {
+			if strings.EqualFold(finding.Issue.ID, disposition.FindingID) || strings.EqualFold(finding.FindingID, disposition.FindingID) {
+				fingerprint = finding.Fingerprint
+				break
+			}
+		}
+		if fingerprint == "" {
+			return nil, fmt.Errorf("no Pulse issue with issue_id %q; refresh get_pulse_state(view=\"backlog\") and use its issue.id", disposition.FindingID)
+		}
+		disposition.Fingerprint = fingerprint
+		resolved[index] = disposition
+	}
+	return resolved, nil
+}
+
 type PulseFindingEvent struct {
 	FindingID  string                 `json:"finding_id,omitempty"`
 	EventType  string                 `json:"event_type"`
@@ -268,6 +314,38 @@ type PulseReviewVerificationCandidate struct {
 	Fingerprint string `json:"fingerprint"`
 	AttemptID   string `json:"attempt_id"`
 	NextCheck   string `json:"next_check"`
+}
+
+// ResolvePulseReviewVerificationIssueID resolves the one public issue identity
+// a reviewer supplies into the exact changed_unverified attempt it is allowed
+// to verify. Attempt and fingerprint identifiers are lifecycle internals; a
+// reviewer should never have to copy them from a backlog payload.
+func ResolvePulseReviewVerificationIssueID(
+	ctx context.Context,
+	workspacePath, module, issueID string,
+) (PulseReviewVerificationCandidate, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id is required: use the visible issue.id from get_pulse_state(view=\"backlog\")")
+	}
+	candidates, err := LoadPulseReviewVerificationCandidates(ctx, workspacePath, module)
+	if err != nil {
+		return PulseReviewVerificationCandidate{}, err
+	}
+	matched := []PulseReviewVerificationCandidate{}
+	for _, candidate := range candidates {
+		if strings.EqualFold(candidate.FindingID, issueID) {
+			matched = append(matched, candidate)
+		}
+	}
+	switch len(matched) {
+	case 1:
+		return matched[0], nil
+	case 0:
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id %q has no pending verification in module %q; refresh get_pulse_state(view=\"backlog\") and record a normal finding result instead if it is not awaiting proof", issueID, pulsemodules.Normalize(module))
+	default:
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id %q has %d pending verification attempts in module %q; this is a backend lifecycle inconsistency", issueID, len(matched), pulsemodules.Normalize(module))
+	}
 }
 
 type pulseFindingLifecycleDB interface {
@@ -878,6 +956,13 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 			if len(disposition.ChangedFiles) > 0 {
 				add("awaiting_run changed files; a finding with a fix applied is changed_unverified, not awaiting_run")
 			}
+		case FindingDispositionQueuedForEngineering:
+			if disposition.NextCheck == "" {
+				add("queued_for_engineering requires next_check naming the next Engineering/Pulse pass or concrete repair boundary; use blocked only when no safe action exists")
+			}
+			if len(disposition.ChangedFiles) > 0 {
+				add("queued_for_engineering changed files; a finding with a repair applied is changed_unverified or fixed_verified, not queued_for_engineering")
+			}
 		case FindingDispositionAwaitingUser:
 			// A finding cannot wait on a decision nobody was asked for. Requiring
 			// the question id here is what turns "awaiting_user" from a label into
@@ -936,6 +1021,8 @@ func lifecycleStatusForDisposition(disposition string) (status, eventType, resol
 		return ConcernStatusAcknowledged, "proposal_recorded", ""
 	case FindingDispositionAwaitingUser:
 		return ConcernStatusAcknowledged, "awaiting_user", ""
+	case FindingDispositionQueuedForEngineering:
+		return ConcernStatusQueuedForEngineering, "queued_for_engineering", ""
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
 	case FindingDispositionAwaitingRun:

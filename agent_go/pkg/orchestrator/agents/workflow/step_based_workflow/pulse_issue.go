@@ -67,6 +67,8 @@ func pulseIssueStatus(finding PulseFindingLifecycle) string {
 		return "in_progress"
 	case ConcernStatusAwaitingVerification:
 		return "in_review"
+	case ConcernStatusQueuedForEngineering:
+		return "backlog"
 	case ConcernStatusResolved:
 		return "done"
 	case ConcernStatusRejected:

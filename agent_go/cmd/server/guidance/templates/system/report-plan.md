@@ -86,7 +86,8 @@ The viewer hands the HTML the live data and the HTML renders its own visuals (ch
 - **Variable groups** — `get('variables/variables.json')` → `groups: [{ name, enabled, values }]`
 - **Workflow config** — `get('workflow.json')` (id, label, schedule, …)
 - **Soul / persona** — `getHtml('soul.md')`
-- **Pulse / improvement log** — `getText('builder/improve.html')` (the single durable log)
+- **Pulse** — use typed Pulse records through the application APIs; do not read a
+  presentation file from the report.
 
 Use this to make reports context-aware — e.g. show this run's cost and eval score, badge the active variable group, or include the workflow's purpose from `soul.md`. (`runs/` per-run transcripts are NOT exposed: per-run paths aren't knowable at authoring time and can be sensitive.)
 
@@ -124,7 +125,7 @@ For workflow dashboards, the report should help the user measure and track the w
 - **What changed since last run:** trend/delta or a short latest-run note so the user can see movement without opening logs.
 - **Evidence path:** the database/eval/Pulse source behind the claim, linked or summarized without exposing internal file noise to nontechnical users.
 
-Use live sources for those sections: `db/db.sqlite` for durable result rows, `evaluation/` for score/eval summaries, `costs/` for cost/time signals, `builder/improve.html` for Pulse/open findings, and `workflow.json`/`soul.md` for purpose and schedule context. If a needed value is missing, show an honest empty/error state or record a workflow improvement requirement; do not hardcode guesses into the report and do not introduce a separate metrics system.
+Use live sources for those sections: `db/db.sqlite` for durable result rows, `evaluation/` for score/eval summaries, `costs/` for cost/time signals, typed Pulse records for open findings, and `workflow.json`/`soul.md` for purpose and schedule context. If a needed value is missing, show an honest empty/error state or record a workflow improvement requirement; do not hardcode guesses into the report and do not introduce a separate metrics system.
 
 ### Writing a GOOD report document (formatting)
 

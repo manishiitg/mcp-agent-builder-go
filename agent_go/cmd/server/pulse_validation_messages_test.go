@@ -26,12 +26,12 @@ func assertRejectionContains(t *testing.T, err error, wants ...string) {
 // A raw json.Unmarshal failure names an internal Go struct field and never the
 // shape that would have worked, which is unusable mid-turn.
 func TestPulseToolDecodeFailuresPublishTheExpectedShape(t *testing.T) {
-	_, err := pulseFindingDispositionsFromToolArg(map[string]interface{}{
+	_, err := pulseFindingDispositionsFromToolArg([]map[string]interface{}{{
 		"fingerprint": "fp-1", "finding_id": "PUL-1",
-	})
+	}})
 	assertRejectionContains(t, err,
 		"finding_dispositions", "array of disposition objects",
-		`"fingerprint"`, `"finding_id"`, `"disposition"`, `"summary"`, `"verification"`)
+		`"issue_id"`, `"disposition"`, `"summary"`, `"verification"`, `unknown field`)
 
 	_, err = pulseFindingDispositionsFromToolArg("fixed_verified")
 	assertRejectionContains(t, err, "array of disposition objects", "not an object or a string")

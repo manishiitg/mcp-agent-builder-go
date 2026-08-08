@@ -15,11 +15,11 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
+    for (const command of ['pulse', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
   })

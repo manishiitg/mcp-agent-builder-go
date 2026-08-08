@@ -51,7 +51,9 @@ the complete active backlog that existed when the pass began, using the existing
 Pulse state and lifecycle tools rather than an arbitrary top-N queue.
 
 1. **Freeze a starting manifest.** Call `get_pulse_state(view="backlog")` with no
-   module filter and retain every exact `finding_id` + `fingerprint` pair. Use
+   module filter and retain every exact visible `issue.id`. The backend resolves
+   the internal fingerprint and current attempt; never copy those internals into
+   a Pulse write. Use
    `query_workflow_db` to count and inspect status, owning module, step, age,
    recurrence, attempts, and next-check boundaries before choosing an order.
 2. **Classify every manifest item.** Put each finding in exactly one working
@@ -106,7 +108,7 @@ evidence. An old successful artifact proves only the old boundary.
 Before editing, state one compact bundle:
 
 - root cause;
-- linked finding IDs and fingerprints;
+- linked visible issue IDs;
 - canonical target and producer;
 - affected consumers;
 - intended files;

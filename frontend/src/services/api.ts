@@ -80,6 +80,7 @@ import type {
   PulseReviewsResponse,
   PulseAgentMetricsResponse,
   PulseImpactResponse,
+  PulseContextResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1535,6 +1536,13 @@ export const agentApi = {
     return response.data as PulseImpactResponse
   },
 
+  getPulseContext: async (workspacePath: string) => {
+    const response = await api.get('/api/workflow/pulse-context', {
+      params: { workspace_path: workspacePath },
+    })
+    return response.data as PulseContextResponse
+  },
+
   answerReportHumanInput: async (
     workspacePath: string,
     inputId: string,
@@ -1924,21 +1932,9 @@ export const agentApi = {
     }
   },
 
-  getBuilderDoc: async (workspacePath: string, doc: 'improve' | 'soul' | 'card-health' | 'card-progress' | 'card-cost', filePath?: string): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
-    const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc, path: filePath || '' } })
+  getBuilderDoc: async (workspacePath: string, doc: 'soul' | 'card-health' | 'card-progress' | 'card-cost'): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
+    const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc } })
     return response.data
-  },
-  getBuilderDocsStatus: async (workspacePath: string): Promise<{
-    success: boolean
-    improve: { exists: boolean; last_modified?: string; path: string }
-    error?: string
-  }> => {
-    const response = await api.get('/api/workflow/builder-docs-status', { params: { workspace_path: workspacePath } })
-    return response.data
-  },
-  getBuilderDocArchives: async (workspacePath: string, doc: 'improve' = 'improve'): Promise<{ success: boolean; files: Array<{ path: string; label: string }>; error?: string }> => {
-    const response = await api.get('/api/workflow/builder-doc-archives', { params: { workspace_path: workspacePath, doc } })
-    return { ...response.data, files: Array.isArray(response.data?.files) ? response.data.files : [] }
   },
   getPlanChangelog: async (workspacePath: string): Promise<import('./api-types').PlanChangelogResponse> => {
     const response = await api.get('/api/workflow/plan-changelog', { params: { workspace_path: workspacePath } })
