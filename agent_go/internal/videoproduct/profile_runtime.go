@@ -94,7 +94,7 @@ func profileWorkspaceLocalPath(userID, workspacePath string) (string, error) {
 }
 
 func integratedWorkflowManifest(projectID, title string) map[string]interface{} {
-	manifest := cinematicWorkflowManifest(projectID, title)
+	manifest := videoStudioWorkflowManifest(projectID, title)
 	if capabilities, ok := manifest["capabilities"].(map[string]interface{}); ok {
 		product := mustVideoStudioManifest()
 		// Reuse AgentWorks' built-in browser skill in workflow stages too; the
@@ -205,7 +205,7 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		"variables/variables.json":  map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
 	}
 	// Upgrade prior generated Video Studio plans too. Besides retiring the old
-	// cinematic route and panel-PNG/FFmpeg contract, keep product-owned plans in
+	// legacy routes and panel-PNG/FFmpeg contracts, keep product-owned plans in
 	// sync when the high-quality route gains a new production gate. The
 	// fingerprints are deliberately specific: a plan must already be the Video
 	// Studio infographic route, so an unrelated user-authored plan is preserved.

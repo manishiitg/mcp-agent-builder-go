@@ -53,28 +53,8 @@ var cinematicStageDescriptions = map[string]string{
 	"delivery":   qualityReviewDescription("render-report.md", "delivery.md"),
 }
 
-var cinematicPipeline = &Pipeline{
-	ID:          "cinematic",
-	Name:        "Cinematic video",
-	Description: "How an idea moves from a brief to a finished, checked video.",
-	WhenToUse:   "Story-led films, brand and product teasers, launch pieces, and anything whose value comes from footage, mood, and pacing rather than explanation.",
-	Stages: []PipelineStage{
-		{ID: "research", Title: "Research", Summary: "Understand the brief, audience, sources, and open questions.", Output: "research.md", Skills: []string{"video-creation"}},
-		{ID: "proposal", Title: "Creative proposal", Summary: "Choose the story, tone, format, and visual direction.", Output: "proposal.md"},
-		{ID: "script", Title: "Script", Summary: "Write the narration, dialogue, timing, and on-screen text.", Output: "script.md"},
-		{ID: "scene-plan", Title: "Scene plan", Summary: "Break the script into timed shots and visual moments.", Output: "scene-plan.md"},
-		// The only stage that can spend money, so it is the only one gated on approval.
-		{ID: "assets", Title: "Assets", Summary: "Identify or create the approved visuals, footage, and audio.", Output: "asset-manifest.md", RequiresApproval: true, Skills: []string{"video-shot-generation"}},
-		{ID: "edit", Title: "Edit plan", Summary: "Set the sequence, pacing, transitions, captions, and sound.", Output: "edit-plan.md", Skills: []string{"video-editing"}},
-		{ID: "compose", Title: "Compose", Summary: "Assemble the approved material and render the video.", Output: "render-report.md", Skills: []string{"video-editing"}},
-		{ID: "delivery", Title: "Quality check", Summary: "Review the final video for technical and creative issues.", Output: "delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality"}},
-	},
-}
-
-// Stage descriptions for the infographic branch. Its stage ids are prefixed
-// because both branches live in one plan.json and step ids must be unique
-// there; the cinematic ids stay unprefixed so existing run history keeps
-// resolving.
+// Stage descriptions for the infographic branch. Its step ids are prefixed so
+// the product can evolve with additional independent routes later.
 var infographicStageDescriptions = map[string]string{
 	"infographic-research":             "Own the brief before production. Read the current request, recent conversation, and every relevant file in uploads/. Follow the product-infographic skill's adaptive interview rules: do not ask again for settled information, and if the user said to build immediately, choose and record sensible non-factual defaults. Select exactly one primary HyperFrames route: product-launch-video when real UI/product evidence is central, faceless-explainer when source information should become invented explanatory visuals, motion-graphics for one short visual beat, or general-video only when no specialist fits. Write BRIEF.md with the message, audience, destination, duration, aspect ratio, authoritative inputs, exact claims and sources, route, visual/sound direction, review mode, exclusions, assumptions, and blockers. Do not design or build yet.",
 	"infographic-concept":              "Turn BRIEF.md into STORYBOARD.md. Establish a teaching or product-proof spine rather than translating each paragraph into a scene. The opening must earn attention, the main idea must be clear by scene two, every body scene must advance one mechanism/feature/step/example/proof, and the ending must land one remembered sentence or action. For each scene record purpose, timing, exact evidence, visual form, on-screen copy intent, narration intent, transition purpose, and the HyperFrames composition or reusable system it will need. Confirm total duration and flag unsupported claims. Do not author HTML yet.",
@@ -168,76 +148,3 @@ func init() {
 
 // DefaultPipeline is the branch a run takes when nothing selects one.
 func DefaultPipeline() *Pipeline { return infographicPipeline }
-
-// PipelineByName resolves persisted run labels back to their pipeline. Keep the
-// former infographic display name as an alias so existing project history still
-// drives the correct creator-facing Workflow panel after the rename.
-func PipelineByName(name string) *Pipeline {
-	for _, pipeline := range pipelineRegistry {
-		if name == pipeline.Name || name == pipeline.ID {
-			return pipeline
-		}
-	}
-	if name == "Product infographic" {
-		return infographicPipeline
-	}
-	return nil
-}
-
-// AllPipelineSteps returns every stage across every pipeline, numbered
-// continuously. A run is seeded with all of them because which branch it takes
-// is decided by the routing step while the run executes, not when the run row
-// is created — and a status written for a step with no row is silently dropped,
-// since SetWorkflowStep only updates.
-func AllPipelineSteps() []WorkflowStep {
-	steps := make([]WorkflowStep, 0, 16)
-	position := 1
-	for _, pipeline := range pipelineRegistry {
-		for _, stage := range pipeline.Stages {
-			steps = append(steps, WorkflowStep{ID: stage.ID, Title: stage.Title, Summary: stage.Summary, Position: position, Status: "pending"})
-			position++
-		}
-	}
-	return steps
-}
-
-// pipelineForStage reports which pipeline owns a stage id.
-func pipelineForStage(stageID string) *Pipeline {
-	for _, pipeline := range pipelineRegistry {
-		for _, stage := range pipeline.Stages {
-			if stage.ID == stageID {
-				return pipeline
-			}
-		}
-	}
-	return nil
-}
-
-// PipelineByID returns a pipeline by id, falling back to the default.
-func PipelineByID(id string) *Pipeline {
-	for _, pipeline := range pipelineRegistry {
-		if pipeline.ID == id {
-			return pipeline
-		}
-	}
-	return DefaultPipeline()
-}
-
-// Steps renders the pipeline as the per-run step rows the product stores and
-// the UI displays.
-func (p *Pipeline) Steps() []WorkflowStep {
-	steps := make([]WorkflowStep, 0, len(p.Stages))
-	for i, stage := range p.Stages {
-		steps = append(steps, WorkflowStep{ID: stage.ID, Title: stage.Title, Summary: stage.Summary, Position: i + 1, Status: "pending"})
-	}
-	return steps
-}
-
-// Outputs lists each stage's artifact in order.
-func (p *Pipeline) Outputs() []string {
-	outputs := make([]string, 0, len(p.Stages))
-	for _, stage := range p.Stages {
-		outputs = append(outputs, stage.Output)
-	}
-	return outputs
-}
