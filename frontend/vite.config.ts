@@ -1,5 +1,6 @@
 import path from "path"
 import { fileURLToPath } from "url"
+import fs from "fs"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
@@ -7,9 +8,46 @@ import { defineConfig } from "vite"
 // CommonJS __dirname isn't defined when Vite loads this config.
 const projectRoot = path.dirname(fileURLToPath(import.meta.url))
 
+const isolatedRuntimeConfigPath = process.env.AGENTWORKS_RUNTIME_CONFIG_PATH
+
+function isolatedRuntimeConfigMiddleware() {
+  return (req: { url?: string }, res: {
+    statusCode: number
+    setHeader(name: string, value: string): void
+    end(body?: string): void
+  }, next: () => void) => {
+    if (!isolatedRuntimeConfigPath || req.url?.split('?', 1)[0] !== '/runtime-config.js') {
+      next()
+      return
+    }
+
+    try {
+      const contents = fs.readFileSync(isolatedRuntimeConfigPath, 'utf8')
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(contents)
+    } catch (error) {
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+      res.end(`Unable to read isolated runtime config: ${String(error)}`)
+    }
+  }
+}
+
+const isolatedRuntimeConfigPlugin = {
+  name: 'agentworks-isolated-runtime-config',
+  configureServer(server: { middlewares: { use(handler: ReturnType<typeof isolatedRuntimeConfigMiddleware>): void } }) {
+    server.middlewares.use(isolatedRuntimeConfigMiddleware())
+  },
+  configurePreviewServer(server: { middlewares: { use(handler: ReturnType<typeof isolatedRuntimeConfigMiddleware>): void } }) {
+    server.middlewares.use(isolatedRuntimeConfigMiddleware())
+  },
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [isolatedRuntimeConfigPlugin, react()],
   resolve: {
     alias: {
       "@": path.resolve(projectRoot, "./src"),

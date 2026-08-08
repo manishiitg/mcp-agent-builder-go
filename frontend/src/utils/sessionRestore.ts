@@ -57,6 +57,7 @@ export async function restoreSession(
     title?: string
     source?: string
     skipConfigRestore?: boolean
+    workspacePath?: string
   }
 ): Promise<string> {
   // Async lock: if already restoring this session, return the existing promise
@@ -82,6 +83,7 @@ async function doRestoreSession(
     title?: string
     source?: string
     skipConfigRestore?: boolean
+    workspacePath?: string
   }
 ): Promise<string> {
   const src = options?.source || 'unknown'
@@ -134,6 +136,21 @@ async function doRestoreSession(
       if (runtime.events.length > 0) {
         chatStore.addTabEvents(sessionId, runtime.events)
       }
+      if (
+        options?.workspacePath &&
+        !isForegroundStreaming({
+          status: runtime.session_status,
+          hasRunningBackgroundAgents: runtime.has_running_background_agents,
+          isSyntheticTurn: runtime.is_synthetic_turn,
+          canSteer: runtime.can_steer,
+        })
+      ) {
+        // A completed coding-agent turn's live event window often contains an
+        // empty provider tool-start. Replace it with the durable structured
+        // transcript, which is enriched with bridge-authoritative arguments.
+        // This also fixes partial browser caches after a backend restart.
+        await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+      }
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
       }
@@ -142,7 +159,10 @@ async function doRestoreSession(
       }
       console.log(`${TAG} [${src}] Refreshed runtime state for existing tab ${tabId}`)
     } else {
-      const runtime = await hydrateTabEvents(sessionId)
+      const runtime = await hydrateTabEvents(sessionId, {
+        workspacePath: existingTab?.metadata?.agentProfileWorkspace,
+        fallbackToChatHistory: true,
+      })
       applySessionStatus(tabId, runtime)
       const eventCount = chatStore.getTabEvents(sessionId).length
       console.log(`${TAG} [${src}] Hydrated ${eventCount} events`)
@@ -261,12 +281,60 @@ function conversationToRestoredEvents(conversation: ChatHistoryConversation): Po
   return events
 }
 
+// Coding-provider stream events can reach persistence with an empty
+// tool_params.arguments, while the same conversation's structured tool-call
+// message has the complete arguments. Retain the raw event's timing/result and
+// hydrate only that missing input by the stable tool call id.
+function restoreToolArgumentsFromConversation(
+  events: PollingEvent[],
+  conversation: ChatHistoryConversation,
+): PollingEvent[] {
+  const argumentsByCallID = new Map<string, string>()
+  for (const message of conversation.conversation_history || []) {
+    for (const part of message.Parts || message.parts || []) {
+      if (!part || typeof part !== 'object') continue
+      const record = part as Record<string, unknown>
+      const callID = typeof record.ID === 'string' ? record.ID : ''
+      const call = record.FunctionCall
+      const args = call && typeof call === 'object' && typeof (call as Record<string, unknown>).Arguments === 'string'
+        ? (call as Record<string, unknown>).Arguments as string
+        : ''
+      if (callID && args) argumentsByCallID.set(callID, args)
+    }
+  }
+  if (argumentsByCallID.size === 0) return events
+
+  return events.map((event) => {
+    if (event.type !== 'tool_call_start') return event
+    const envelope = event.data
+    if (!envelope || typeof envelope !== 'object') return event
+    const outer = envelope as Record<string, unknown>
+    const nested = outer.data
+    if (!nested || typeof nested !== 'object') return event
+    const fields = nested as Record<string, unknown>
+    const callID = typeof fields.tool_call_id === 'string' ? fields.tool_call_id : ''
+    const args = argumentsByCallID.get(callID)
+    if (!args) return event
+    const existingParams = fields.tool_params && typeof fields.tool_params === 'object'
+      ? fields.tool_params as Record<string, unknown>
+      : {}
+    return {
+      ...event,
+      data: {
+        ...outer,
+        data: { ...fields, tool_params: { ...existingParams, arguments: args } },
+      },
+    } as PollingEvent
+  })
+}
+
 async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
   const conversation = await agentApi.getChatHistoryConversation(sessionId, workspacePath)
-  const events = (conversation.ui_events && conversation.ui_events.length > 0)
+  const rawEvents = (conversation.ui_events && conversation.ui_events.length > 0)
     ? (conversation.ui_events as PollingEvent[])
     : conversationToRestoredEvents(conversation)
+  const events = restoreToolArgumentsFromConversation(rawEvents, conversation)
 
   chatStore.setTabEvents(sessionId, events)
   chatStore.setTabLastEventIndex(sessionId, events.length - 1)
@@ -326,9 +394,16 @@ export async function hydrateTabEvents(
     if (response.has_more !== undefined) {
       chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
     }
-  } else if (options.fallbackToChatHistory && !response.session_status) {
+  } else if (options.fallbackToChatHistory) {
     const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
-    if (restored) return restored
+    if (restored) {
+      return {
+        status: response.session_status || restored.status,
+        hasRunningBackgroundAgents: response.has_running_background_agents,
+        isSyntheticTurn: response.is_synthetic_turn,
+        canSteer: response.can_steer,
+      }
+    }
   }
   return {
     status: response.session_status,

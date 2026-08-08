@@ -198,6 +198,21 @@ export function buildQueryRequestPayload(params: {
   }
 }
 
+export function applyAgentProfileBinding(payload: AgentQueryRequest, tab: ChatTab): AgentQueryRequest {
+  const metadata = tab.metadata
+  if (!metadata?.agentProfileId) return payload
+  return {
+    ...payload,
+    agent_profile_id: metadata.agentProfileId,
+    agent_profile_version: metadata.agentProfileVersion,
+    selected_folder: metadata.agentProfileWorkspace,
+    agent_profile_context: {
+      project_title: metadata.agentProfileProjectTitle || tab.name,
+      workspace_description: metadata.agentProfileWorkspaceDescription,
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 1d. resolveOrCreateTab — tab resolution + session ID guarantee for multi-agent
 // ---------------------------------------------------------------------------
@@ -212,7 +227,7 @@ export async function resolveOrCreateTab(params: {
   if (!currentTab && selectedModeCategory === 'multi-agent') {
     const chatStore = useChatStore.getState()
     const tabs = Object.values(chatStore.chatTabs).filter(tab =>
-      tab.metadata?.mode === selectedModeCategory
+      tab.metadata?.mode === selectedModeCategory && !tab.metadata?.agentProfileId
     )
 
     if (tabs.length === 0) {

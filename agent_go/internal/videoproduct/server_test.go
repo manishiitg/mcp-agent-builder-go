@@ -441,7 +441,7 @@ func TestWorkflowPanelCatalogDoesNotChangeWithLatestRun(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Workflows) != len(pipelineRegistry) || payload.Workflows[0].ID != cinematicPipeline.ID || payload.Workflows[1].ID != infographicPipeline.ID || payload.Workflows[2].ID != qualityPipeline.ID {
+	if len(payload.Workflows) != len(pipelineRegistry) || payload.Workflows[0].ID != infographicPipeline.ID || payload.Workflows[1].ID != qualityPipeline.ID {
 		t.Fatalf("workflow panel payload = %+v", payload)
 	}
 }
@@ -458,7 +458,7 @@ func TestProjectChatGetsOnlyTheReusableWorkflowTools(t *testing.T) {
 	for _, tool := range tools {
 		names = append(names, tool.Name)
 	}
-	want := []string{"execute_step", "query_step", "run_full_workflow"}
+	want := []string{"execute_step", "query_step", "send_step_message", "stop_step", "stop_all_executions", "run_full_workflow"}
 	if len(names) != len(want) {
 		t.Fatalf("workflow tools = %v, want %v", names, want)
 	}

@@ -61,8 +61,7 @@ As a workflow stage, the equivalent record is your stage's own artifact (researc
 
 - Use local editing for trims, crops, concatenation, audio, captions, and supplied footage.
 - Use programmatic overlays for exact text, branded cards, product UI, or repeatable templates.
-- Use AI generation only for footage that cannot be assembled reliably from existing assets.
-- Use the `video-shot-generation` skill for generated footage.
+- For this product, build explainers from uploaded assets and deterministic HTML/CSS composition; do not create cinematic or AI-generated footage.
 - Use the `video-editing` skill for assembly, captions, audio, and exports.
 - Use the `video-quality` skill before presenting a version as complete.
 

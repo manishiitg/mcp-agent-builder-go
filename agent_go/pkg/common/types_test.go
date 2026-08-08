@@ -16,6 +16,17 @@ func TestResolveBrowserSessionID(t *testing.T) {
 	}
 }
 
+func TestResolveBrowserSessionIDUsesInstancePrefix(t *testing.T) {
+	t.Setenv("AGENTWORKS_BROWSER_SESSION_PREFIX", "video-product-dev")
+
+	if got := ResolveBrowserSessionID("", "isolated-123"); got != "video-product-dev--isolated-123" {
+		t.Fatalf("explicit browser session should be instance-qualified, got %q", got)
+	}
+	if got := ResolveBrowserSessionID("", "video-product-dev--isolated-123"); got != "video-product-dev--isolated-123" {
+		t.Fatalf("already-qualified browser session should not be prefixed twice, got %q", got)
+	}
+}
+
 func TestPopulateMCPBridgeShortEnv(t *testing.T) {
 	env := map[string]string{
 		"MCP_API_URL":   "http://example.test/s/session-1/",

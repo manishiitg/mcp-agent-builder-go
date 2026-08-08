@@ -128,6 +128,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Mutations are internal agent/backend operations and require the workspace
 		// service token that is deliberately absent from coding-CLI shells.
 		api.POST("/mutate", requireWorkspaceAPIToken(), handlers.MutateWorkflowDB)
+		api.POST("/db/initialize", requireWorkspaceAPIToken(), handlers.InitializeWorkflowDB)
 
 		// CDP connectivity check (used by frontend to verify Chrome is reachable from container)
 		api.GET("/cdp-check", handlers.CheckCdpConnection)

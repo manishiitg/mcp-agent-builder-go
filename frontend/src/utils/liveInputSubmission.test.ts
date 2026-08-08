@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createLiveInputSubmissionCoordinator } from './liveInputSubmission'
+import {
+  createLiveInputSubmissionCoordinator,
+  shouldRefreshSessionEventStream,
+  shouldUseRetainedLiveInput,
+} from './liveInputSubmission'
 
 describe('createLiveInputSubmissionCoordinator', () => {
   it('executes a rapid duplicate live message exactly once', async () => {
@@ -28,5 +32,45 @@ describe('createLiveInputSubmissionCoordinator', () => {
     await submitLiveInput('session-a', 'first', () => submit('first-again'))
 
     expect(submit).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('shouldUseRetainedLiveInput', () => {
+  const base = {
+    requested: true,
+    fullTurnStreaming: true,
+    turnIsStreaming: false,
+    hasSession: true,
+    hasOneShotContext: false,
+  }
+
+  it('starts a tracked turn for an idle product conversation', () => {
+    expect(shouldUseRetainedLiveInput(base)).toBe(false)
+  })
+
+  it('preserves native tmux steering while the product turn is running', () => {
+    expect(shouldUseRetainedLiveInput({ ...base, turnIsStreaming: true })).toBe(true)
+  })
+
+  it('keeps the existing AgentWorks retained-input behavior outside product full-turn mode', () => {
+    expect(shouldUseRetainedLiveInput({ ...base, fullTurnStreaming: false })).toBe(true)
+  })
+
+  it('never uses retained input for one-shot context', () => {
+    expect(shouldUseRetainedLiveInput({ ...base, turnIsStreaming: true, hasOneShotContext: true })).toBe(false)
+  })
+})
+
+describe('shouldRefreshSessionEventStream', () => {
+  it('reattaches a product stream even when a stale connection object remains', () => {
+    expect(shouldRefreshSessionEventStream(true, true)).toBe(true)
+  })
+
+  it('keeps the existing AgentWorks connection when product full-turn mode is off', () => {
+    expect(shouldRefreshSessionEventStream(false, true)).toBe(false)
+  })
+
+  it('connects any surface when no stream exists', () => {
+    expect(shouldRefreshSessionEventStream(false, false)).toBe(true)
   })
 })

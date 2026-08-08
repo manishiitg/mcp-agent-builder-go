@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -944,14 +945,15 @@ func GetRawDocument(c *gin.Context) {
 	}
 
 	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	info, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, models.APIResponse[any]{
 			Success: false,
 			Message: "File not found",
 			Error:   fmt.Sprintf("File not found: %s", filePathParam),
 		})
 		return
-	} else if err != nil {
+	} else if err != nil || info.IsDir() {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
 			Success: false,
 			Message: "Failed to get file info",
@@ -960,8 +962,7 @@ func GetRawDocument(c *gin.Context) {
 		return
 	}
 
-	// Read file content
-	content, err := os.ReadFile(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
 			Success: false,
@@ -970,10 +971,19 @@ func GetRawDocument(c *gin.Context) {
 		})
 		return
 	}
+	defer file.Close()
 
-	// Serve raw content
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(filePath)))
-	c.Data(http.StatusOK, "application/octet-stream", content)
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filePath)))
+	if contentType == "" {
+		buffer := make([]byte, 512)
+		read, _ := file.Read(buffer)
+		contentType = http.DetectContentType(buffer[:read])
+		_, _ = file.Seek(0, io.SeekStart)
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(filePath)))
+	c.Header("Accept-Ranges", "bytes")
+	http.ServeContent(c.Writer, c.Request, filepath.Base(filePath), info.ModTime(), file)
 }
 
 // UpdateDocument handles PUT /api/documents/*filepath

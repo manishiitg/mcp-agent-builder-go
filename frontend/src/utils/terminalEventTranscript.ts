@@ -635,14 +635,98 @@ export function mcpToolDisplayName(raw: string): { name: string; server?: string
 function toolCallArgs(event: PollingEvent): string {
   const params = toolCallField(event, 'tool_params')
   if (params && typeof params === 'object') {
-    return textField((params as Record<string, unknown>).arguments)
+    return stringifyToolCallValue((params as Record<string, unknown>).arguments)
   }
   return ''
+}
+
+function stringifyToolCallValue(value: unknown): string {
+  const text = textField(value)
+  if (text) return text
+  if (!value || typeof value !== 'object') return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
+function isCursorMCPWrapperName(rawName: string): boolean {
+  // Cursor has emitted CallMcpTool with several spellings across its terminal
+  // and structured transports. They all describe the same wrapper, not a
+  // user-facing tool.
+  const normalizedWrapperName = rawName.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+  return normalizedWrapperName === 'callmcptool'
+}
+
+// Cursor represents every MCP invocation as its CallMcpTool wrapper. Preserve
+// compatibility with events already recorded in that form: reveal the actual
+// registered tool and its nested arguments instead of exposing the wrapper.
+function normalizeCursorMCPToolCall(rawName: string, rawArgs: string): { name: string; args: string } {
+  if (!isCursorMCPWrapperName(rawName)) return { name: rawName, args: rawArgs }
+
+  try {
+    const envelope = JSON.parse(rawArgs) as Record<string, unknown>
+    const toolName = textField(envelope.toolName) || textField(envelope.tool_name)
+    if (!toolName) return { name: rawName, args: rawArgs }
+    const server = textField(envelope.server)
+      || textField(envelope.serverName)
+      || textField(envelope.serverIdentifier)
+      || textField(envelope.providerIdentifier)
+    const name = server ? `mcp__${server}__${toolName}` : toolName
+    const nestedArgs = envelope.arguments ?? envelope.args ?? envelope.input
+    return { name, args: stringifyToolCallValue(nestedArgs) || rawArgs }
+  } catch {
+    return { name: rawName, args: rawArgs }
+  }
 }
 
 function toolCallField(event: PollingEvent, key: string): unknown {
   const fields = eventFields(event)
   return fields[key]
+}
+
+// Coding CLIs sometimes send a tool-start event before they have populated its
+// arguments. Their completed structured transcript, included on
+// llm_generation_end, contains the authoritative call id + arguments. Recover
+// those values so a restored developer view remains useful after a reload.
+function recoveredCodingToolArgs(events: PollingEvent[]): Map<string, string> {
+  const recovered = new Map<string, string>()
+  for (const event of events) {
+    const fields = eventFields(event)
+    // Live events carry generation_info directly. Persisted events preserve it
+    // within metadata, so accept both shapes when restoring a conversation.
+    const metadata = fields.metadata
+    const metadataRecord = metadata && typeof metadata === 'object'
+      ? metadata as Record<string, unknown>
+      : undefined
+    const generation = fields.generation_info ?? metadataRecord?.generation_info
+    const generationRecord = generation && typeof generation === 'object'
+      ? generation as Record<string, unknown>
+      : undefined
+    const intermediate = generationRecord?.coding_provider_intermediate_messages
+    const intermediateRecord = intermediate && typeof intermediate === 'object'
+      ? intermediate as Record<string, unknown>
+      : undefined
+    const messages = intermediateRecord?.messages
+    if (!Array.isArray(messages)) continue
+
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') continue
+      const parts = (message as Record<string, unknown>).Parts
+      if (!Array.isArray(parts)) continue
+      for (const part of parts) {
+        if (!part || typeof part !== 'object') continue
+        const record = part as Record<string, unknown>
+        const call = record.FunctionCall
+        if (!call || typeof call !== 'object') continue
+        const callID = textField(record.ID)
+        const args = textField((call as Record<string, unknown>).Arguments)
+        if (callID && args) recovered.set(callID, args)
+      }
+    }
+  }
+  return recovered
 }
 
 /**
@@ -667,10 +751,16 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
 
     const callID = textField(toolCallField(event, 'tool_call_id'))
     const rawName = textField(toolCallField(event, 'tool_name'))
+    const normalizedCall = normalizeCursorMCPToolCall(rawName, toolCallArgs(event))
     const existing = callID ? byCallID.get(callID) : undefined
 
     if (!existing) {
-      const { name, server } = mcpToolDisplayName(rawName)
+      // A few Cursor stream versions emit an orphan CallMcpTool *end* event
+      // after the useful concrete tool event. With neither nested arguments
+      // nor a resolved capability it is pure transport noise, so never show a
+      // misleading "CallMcpTool" card to the user.
+      if (isCursorMCPWrapperName(rawName) && normalizedCall.name === rawName && !normalizedCall.args) continue
+      const { name, server } = mcpToolDisplayName(normalizedCall.name)
       const item: PairedToolCall = {
         key: event.id || `${type}-${out.length}`,
         name: name || 'tool',
@@ -680,7 +770,7 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
       }
       const duration = toolCallField(event, 'duration')
       if (typeof duration === 'number') item.durationNs = duration
-      const args = toolCallArgs(event)
+      const args = normalizedCall.args
       if (args) item.args = args
       const result = textField(toolCallField(event, 'result'))
       if (result) item.result = result
@@ -694,15 +784,36 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
     else if (type === 'tool_call_end' && existing.status !== 'error') existing.status = 'ok'
     const duration = toolCallField(event, 'duration')
     if (typeof duration === 'number') existing.durationNs = duration
-    const args = toolCallArgs(event)
+    const args = normalizedCall.args
     if (args) existing.args = args
     const result = textField(toolCallField(event, 'result'))
     if (result) existing.result = result
     // A start may lack the name that the end carries (and vice versa).
-    if (existing.name === 'tool' && rawName) {
-      const { name, server } = mcpToolDisplayName(rawName)
+    if ((existing.name === 'tool' || existing.name === 'CallMcpTool') && normalizedCall.name) {
+      const { name, server } = mcpToolDisplayName(normalizedCall.name)
       existing.name = name
       existing.server = existing.server || server
+    }
+  }
+
+  const recoveredArgs = recoveredCodingToolArgs(events)
+  for (const item of out) {
+    if (item.args) continue
+    for (const event of item.events) {
+      const callID = textField(toolCallField(event, 'tool_call_id'))
+      const args = recoveredArgs.get(callID)
+      if (args) {
+        item.args = args
+        break
+      }
+    }
+
+    const normalizedCall = normalizeCursorMCPToolCall(item.name, item.args || '')
+    if (normalizedCall.name !== item.name || normalizedCall.args !== item.args) {
+      const { name, server } = mcpToolDisplayName(normalizedCall.name)
+      item.name = name
+      item.server = item.server || server
+      item.args = normalizedCall.args || item.args
     }
   }
 

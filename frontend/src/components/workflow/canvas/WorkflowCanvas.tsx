@@ -127,6 +127,8 @@ interface WorkflowCanvasProps {
   viewMode?: CanvasViewMode
   hideToolbar?: boolean
   readOnly?: boolean
+  /** Embed only the reusable read-only Plan canvas, without global workflow view switching. */
+  embeddedPlanOnly?: boolean
 }
 
 // On-pane controls for the preview (canvas) pane: a Plan/Report segmented switch
@@ -1384,7 +1386,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   className = '',
   viewMode,
   hideToolbar = false,
-  readOnly = false
+  readOnly = false,
+  embeddedPlanOnly = false,
 }, ref) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -1530,12 +1533,12 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   // Changing the device width resizes the flow pane; re-fit the diagram after the
   // CSS width transition (~300ms) so it recenters into the new width.
   useEffect(() => {
-    if (effectiveCanvasViewMode === 'report' || toolbarOnly) return
+    if (embeddedPlanOnly || effectiveCanvasViewMode === 'report' || toolbarOnly) return
     const t = setTimeout(() => {
       try { void fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }) } catch { /* ignore */ }
     }, 360)
     return () => clearTimeout(t)
-  }, [previewDevice, effectiveCanvasViewMode, fitView, toolbarOnly])
+  }, [embeddedPlanOnly, previewDevice, effectiveCanvasViewMode, fitView, toolbarOnly])
   // Highlight execution folder in workspace when selectedRunFolder changes
   // This ensures workspace shows the correct group folder during multi-group execution
   const { highlightFile } = useWorkspaceStore()
@@ -2765,8 +2768,15 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     if (!hasInitializedView.current && nodes.length > 0) {
       const fitTimer = window.setTimeout(() => {
         window.requestAnimationFrame(() => {
+          const embeddedFocusNodes = embeddedPlanOnly ? nodes.slice(0, Math.min(nodes.length, 8)) : undefined
           Promise.resolve(
-            fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM })
+            fitView({
+              padding: embeddedPlanOnly ? 0.12 : FLOW_FIT_PADDING,
+              duration: 350,
+              minZoom: embeddedPlanOnly ? 0.18 : FLOW_FIT_MIN_ZOOM,
+              maxZoom: embeddedPlanOnly ? 0.7 : FLOW_FIT_MAX_ZOOM,
+              nodes: embeddedFocusNodes,
+            })
           ).finally(() => {
             viewportStateRef.current = getViewport()
             hasInitializedView.current = true
@@ -2776,7 +2786,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
       return () => window.clearTimeout(fitTimer)
     }
-  }, [nodes, fitView, getViewport, toolbarOnly, effectiveCanvasViewMode])
+  }, [embeddedPlanOnly, nodes, fitView, getViewport, toolbarOnly, effectiveCanvasViewMode])
 
   // Track previous stepStatusMap to detect actual changes
   const prevStepStatusMapRef = React.useRef<Map<string, 'pending' | 'running' | 'completed' | 'failed'>>(new Map())
@@ -3015,11 +3025,11 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         {/* Canvas area — skip when toolbarOnly to avoid rendering 1000+ SVG nodes */}
         {toolbarOnly ? null : effectiveCanvasViewMode === 'report' ? (
           <div className="h-full min-h-0 relative">
-            <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />
+            {!embeddedPlanOnly && <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />}
             {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} reserveTopControlsSpace />}
           </div>
         ) : <div className="h-full min-h-0 relative flex">
-          <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />
+          {!embeddedPlanOnly && <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />}
           <div className={`min-h-0 h-full transition-all duration-300 ${showVariablesSidebar ? 'mr-[450px]' : ''} ${previewDevice === 'desktop' ? 'flex-1' : previewDeviceShellClass(previewDevice)}`}>
         <ReactFlow
           className="w-full h-full bg-gray-50 dark:bg-gray-900"
@@ -3100,14 +3110,14 @@ export const WorkflowCanvasWithProvider = React.memo(forwardRef<WorkflowCanvasRe
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const effectiveCanvasViewMode = props.viewMode || canvasViewMode
 
-  if (workflowWorkspaceView === 'files') {
+  if (!props.embeddedPlanOnly && workflowWorkspaceView === 'files') {
     return <WorkflowFilesCanvasInner {...props} ref={ref} />
   }
 
   // Report and Pulse (log) are lightweight preview-pane views (no React Flow tree).
   // Legacy saved Soul state opens Pulse; Goal context now lives inside the
   // database-native Pulse workspace.
-  if (effectiveCanvasViewMode === 'report' || effectiveCanvasViewMode === 'log' || effectiveCanvasViewMode === 'soul') {
+  if (!props.embeddedPlanOnly && (effectiveCanvasViewMode === 'report' || effectiveCanvasViewMode === 'log' || effectiveCanvasViewMode === 'soul')) {
     return <WorkflowReportCanvasInner {...props} ref={ref} />
   }
 

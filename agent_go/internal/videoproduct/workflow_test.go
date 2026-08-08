@@ -15,14 +15,14 @@ func TestWorkflowActivityContextUsesWorkflowAndStepTitles(t *testing.T) {
 		workflow string
 		step     string
 	}{
-		{name: "single step", tool: "execute_step", args: map[string]interface{}{"step_id": "research"}, workflow: "Cinematic video", step: "Research"},
+		{name: "single step", tool: "execute_step", args: map[string]interface{}{"step_id": "infographic-research"}, workflow: "Product explainer / infographic", step: "Brief and evidence"},
 		// A full run shows only the workflow name; the arrow form is reserved for a single stage.
-		{name: "full workflow", tool: "run_full_workflow", args: map[string]interface{}{}, workflow: "Cinematic video", step: ""},
-		{name: "future step fallback", tool: "execute_step", args: map[string]interface{}{"step_id": "custom-review"}, workflow: "Cinematic video", step: "custom-review"},
+		{name: "full workflow", tool: "run_full_workflow", args: map[string]interface{}{}, workflow: "Product explainer / infographic", step: ""},
+		{name: "future step fallback", tool: "execute_step", args: map[string]interface{}{"step_id": "custom-review"}, workflow: "Product explainer / infographic", step: "custom-review"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			workflow, step := workflowActivityContext(cinematicWorkflowName, cinematicSteps, test.tool, test.args)
+			workflow, step := workflowActivityContext(DefaultPipeline().Name, DefaultPipeline().Steps(), test.tool, test.args)
 			if workflow != test.workflow || step != test.step {
 				t.Fatalf("context = %q -> %q, want %q -> %q", workflow, step, test.workflow, test.step)
 			}
@@ -38,14 +38,14 @@ func TestWorkflowActivityContextUsesWorkflowAndStepTitles(t *testing.T) {
 func TestApplyWorkflowHumanInput(t *testing.T) {
 	history := []Message{{Role: "assistant", Body: "What should we make?"}, {Role: "user", Body: "Create a calm product launch film."}}
 
-	stepArgs := map[string]interface{}{"step_id": "research"}
+	stepArgs := map[string]interface{}{"step_id": "infographic-research"}
 	applyWorkflowHumanInput(DefaultPipeline(), "execute_step", stepArgs, history)
 	stepInput, _ := stepArgs["human_input"].(string)
 	if !strings.Contains(stepInput, "Assistant: What should we make?") || !strings.Contains(stepInput, "User: Create a calm product launch film.") {
 		t.Fatalf("execute_step human_input = %#v", stepArgs["human_input"])
 	}
 
-	explicitArgs := map[string]interface{}{"step_id": "research", "human_input": "Use the approved brief."}
+	explicitArgs := map[string]interface{}{"step_id": "infographic-research", "human_input": "Use the approved brief."}
 	applyWorkflowHumanInput(DefaultPipeline(), "execute_step", explicitArgs, history)
 	if explicitArgs["human_input"] != "Use the approved brief." {
 		t.Fatalf("explicit human_input was replaced: %#v", explicitArgs["human_input"])
@@ -54,7 +54,7 @@ func TestApplyWorkflowHumanInput(t *testing.T) {
 	fullArgs := map[string]interface{}{"human_inputs": map[string]interface{}{"proposal": "Use option B."}}
 	applyWorkflowHumanInput(DefaultPipeline(), "run_full_workflow", fullArgs, history)
 	inputs := fullArgs["human_inputs"].(map[string]interface{})
-	researchInput, _ := inputs["research"].(string)
+	researchInput, _ := inputs["infographic-research"].(string)
 	if !strings.Contains(researchInput, "User: Create a calm product launch film.") || inputs["proposal"] != "Use option B." {
 		t.Fatalf("run_full_workflow human_inputs = %#v", inputs)
 	}

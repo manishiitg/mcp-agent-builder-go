@@ -30,6 +30,7 @@ import { ChatTabs } from "./components/ChatTabs";
 import ConfirmationDialog from "./components/ui/ConfirmationDialog";
 import { useAppStore, useMCPStore, useGlobalPresetStore, useWorkspaceStore, useWorkflowStore, useChatStore } from "./stores";
 import { useModeStore } from "./stores/useModeStore";
+import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { useAuthStore } from "./stores/useAuthStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
@@ -59,6 +60,7 @@ const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewP
 const XlsxRenderer = lazy(() => import('./components/ui/XlsxRenderer').then(module => ({ default: module.XlsxRenderer })))
 const DocxRenderer = lazy(() => import('./components/ui/DocxRenderer').then(module => ({ default: module.DocxRenderer })))
 const PdfRenderer = lazy(() => import('./components/ui/PdfRenderer').then(module => ({ default: module.PdfRenderer })))
+const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
 
 const FileSurfaceFallback = () => (
   <div className="flex h-full min-h-40 items-center justify-center text-muted-foreground">
@@ -90,13 +92,14 @@ const isRecentExplicitReadOnlyWorkflowTab = (tab: ChatTab | null | undefined): t
 }
 
 const isChiefOfStaffScheduleTab = (tab: ChatTab): boolean =>
-  tab.metadata?.mode === 'multi-agent' && (
+  tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && (
     tab.metadata?.isScheduledRun === true ||
     isScheduledSession({ sessionId: tab.sessionId })
   )
 
 const isInteractiveChiefOfStaffTab = (tab: ChatTab): boolean =>
   tab.metadata?.mode === 'multi-agent' &&
+  !tab.metadata?.agentProfileId &&
   tab.metadata?.isOrganizationAssistant !== true &&
   !isChiefOfStaffScheduleTab(tab)
 
@@ -210,6 +213,8 @@ function App() {
   // Ref for ChatArea component to access its methods
   const chatAreaRef = useRef<ChatAreaRef>(null)
   const [orgHtmlPreviewDevice, setOrgHtmlPreviewDevice] = useState<OrgHtmlPreviewDevice>(() => getOrgHtmlPreviewDevice())
+  const productSurface = useProductSurfaceStore(state => state.productSurface)
+  const chatAutoScroll = useChatStore(state => state.autoScroll)
 
   // Store subscriptions
   const setAgentMode = useAppStore(state => state.setAgentMode)
@@ -227,6 +232,29 @@ function App() {
   
   // Load LLM defaults from backend
   useLLMDefaults()
+
+  useEffect(() => {
+    if (productSurface !== 'agentworks' || selectedModeCategory !== 'multi-agent') return
+    let cancelled = false
+    void waitForChatStoreHydration().then(async () => {
+      if (cancelled || useProductSurfaceStore.getState().productSurface !== 'agentworks') return
+      const chatStore = useChatStore.getState()
+      const chiefTab = Object.values(chatStore.chatTabs).find((tab) =>
+        tab.metadata?.mode === 'multi-agent' &&
+        !tab.metadata?.agentProfileId &&
+        tab.metadata?.isOrganizationAssistant !== true &&
+        tab.metadata?.isViewOnly !== true &&
+        tab.metadata?.isScheduledRun !== true &&
+        tab.metadata?.isBotRun !== true
+      )
+      if (chiefTab) {
+        chatStore.switchTab(chiefTab.tabId)
+      } else {
+        await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+      }
+    })
+    return () => { cancelled = true }
+  }, [productSurface, selectedModeCategory])
   
   // App Store subscriptions for workspace and chat
   const {
@@ -1222,6 +1250,7 @@ function App() {
       // lanes, so opening a schedule cannot replace the chat.
       const multiAgentTabs = Object.values(chatStore.chatTabs).filter(tab =>
         tab.metadata?.mode === 'multi-agent' &&
+        !tab.metadata?.agentProfileId &&
         tab.metadata?.isOrganizationAssistant !== true
       )
       const lanes = [
@@ -1246,6 +1275,7 @@ function App() {
       const activeTab = activeTabId ? chatStore.getTab(activeTabId) : null
       const hasValidActiveTab = activeTab &&
         activeTab.metadata?.mode === selectedModeCategory &&
+        !activeTab.metadata?.agentProfileId &&
         activeTab.metadata?.isOrganizationAssistant !== true
 
       if (!hasValidActiveTab && multiAgentTabs.length > 0) {
@@ -1692,6 +1722,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthWrapper>
+        {productSurface === 'video-studio' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
+        ) : (
         <TooltipProvider>
         <UpdateProgressToast />
         <GlobalHumanFeedbackPrompt />
@@ -1717,7 +1750,7 @@ function App() {
             {/* Chat Tabs - global navigation for both chat and workflow modes */}
             <ChatTabs
               onNewChat={requestNewMultiAgentChat}
-              autoScroll={useChatStore(state => state.autoScroll)}
+              autoScroll={chatAutoScroll}
               onSubmitOrgCommand={submitMultiAgentPanelCommand}
               onToggleAutoScroll={() => {
                 const chatStore = useChatStore.getState()
@@ -2368,6 +2401,7 @@ function App() {
           </div>
         )}
         </TooltipProvider>
+        )}
         </AuthWrapper>
       </ThemeProvider>
     </QueryClientProvider>

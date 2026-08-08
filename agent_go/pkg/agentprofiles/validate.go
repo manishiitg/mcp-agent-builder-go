@@ -1,0 +1,178 @@
+package agentprofiles
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"text/template"
+)
+
+var (
+	profileIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$`)
+	skillIDPattern   = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	toolIDPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$`)
+)
+
+func Validate(profile Profile) error {
+	if !profileIDPattern.MatchString(strings.TrimSpace(profile.ID)) {
+		return fmt.Errorf("invalid profile id %q", profile.ID)
+	}
+	if strings.TrimSpace(profile.Name) == "" {
+		return fmt.Errorf("profile name is required")
+	}
+	if profile.Version < 1 {
+		return fmt.Errorf("profile version must be at least 1")
+	}
+	if strings.TrimSpace(profile.SystemPromptTemplate) == "" {
+		return fmt.Errorf("system prompt is required")
+	}
+	if _, err := parsePrompt(profile.SystemPromptTemplate); err != nil {
+		return err
+	}
+	if profile.BuiltIn && strings.TrimSpace(profile.OwnerID) != "" {
+		return fmt.Errorf("built-in profile cannot have an owner")
+	}
+	if !profile.BuiltIn && strings.TrimSpace(profile.OwnerID) == "" {
+		return fmt.Errorf("user profile owner is required")
+	}
+
+	seenSkills := make(map[string]struct{}, len(profile.Skills))
+	for _, raw := range profile.Skills {
+		skill := strings.TrimSpace(raw)
+		if !skillIDPattern.MatchString(skill) {
+			return fmt.Errorf("invalid skill id %q", raw)
+		}
+		if _, exists := seenSkills[skill]; exists {
+			return fmt.Errorf("duplicate skill %q", skill)
+		}
+		seenSkills[skill] = struct{}{}
+	}
+
+	seenTools := make(map[string]struct{}, len(profile.Tools))
+	for _, binding := range profile.Tools {
+		toolID := strings.TrimSpace(binding.ID)
+		if !toolIDPattern.MatchString(toolID) {
+			return fmt.Errorf("invalid tool id %q", binding.ID)
+		}
+		if _, exists := seenTools[toolID]; exists {
+			return fmt.Errorf("duplicate tool %q", toolID)
+		}
+		seenTools[toolID] = struct{}{}
+		if len(binding.Config) > 0 && !json.Valid(binding.Config) {
+			return fmt.Errorf("tool %q has invalid JSON config", toolID)
+		}
+	}
+	for _, name := range profile.ToolPolicy.Disabled {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("tool_policy.disabled contains an empty tool name")
+		}
+	}
+
+	return validateRuntime(profile.Runtime)
+}
+
+func validateRuntime(runtime RuntimePolicy) error {
+	transport := strings.ToLower(strings.TrimSpace(runtime.Transport))
+	provider := strings.TrimSpace(runtime.Provider)
+	modelID := strings.TrimSpace(runtime.ModelID)
+	capabilities := runtime.Capabilities
+	if transport == "" {
+		transport = "auto"
+	}
+	if transport != "auto" && transport != "tmux" && transport != "structured" {
+		return fmt.Errorf("invalid runtime transport %q", runtime.Transport)
+	}
+	if mode := strings.ToLower(strings.TrimSpace(runtime.AgentTools.Mode)); mode != "" && mode != "mcp_only" && mode != "hybrid" {
+		return fmt.Errorf("invalid runtime agent_tools.mode %q", runtime.AgentTools.Mode)
+	}
+	if mode := strings.ToLower(strings.TrimSpace(runtime.Approvals.Mode)); mode != "" && mode != "provider_auto" && mode != "approve_all" {
+		return fmt.Errorf("invalid runtime approvals.mode %q", runtime.Approvals.Mode)
+	}
+	if (provider == "") != (modelID == "") {
+		return fmt.Errorf("runtime provider and model_id must be set together")
+	}
+	seenProviderOptions := make(map[string]struct{}, len(runtime.ProviderOptions))
+	defaultProviderOptions := 0
+	for _, option := range runtime.ProviderOptions {
+		id := strings.TrimSpace(option.ID)
+		if !profileIDPattern.MatchString(id) {
+			return fmt.Errorf("invalid runtime provider option id %q", option.ID)
+		}
+		if _, exists := seenProviderOptions[id]; exists {
+			return fmt.Errorf("duplicate runtime provider option %q", option.ID)
+		}
+		seenProviderOptions[id] = struct{}{}
+		if strings.TrimSpace(option.Label) == "" || strings.TrimSpace(option.Provider) == "" || strings.TrimSpace(option.ModelID) == "" {
+			return fmt.Errorf("runtime provider option %q requires label, provider, and model_id", id)
+		}
+		if option.Default {
+			defaultProviderOptions++
+		}
+	}
+	if defaultProviderOptions > 1 {
+		return fmt.Errorf("runtime provider_options has more than one default")
+	}
+
+	values := []struct {
+		name  string
+		value CapabilityRequirement
+	}{
+		{"live_input", capabilities.LiveInput},
+		{"raw_terminal", capabilities.RawTerminal},
+		{"warm_session", capabilities.WarmSession},
+		{"workflow_execution", capabilities.WorkflowExecution},
+		{"browser", capabilities.Browser},
+		{"secrets", capabilities.Secrets},
+	}
+	for _, item := range values {
+		if !validCapabilityRequirement(item.value) {
+			return fmt.Errorf("invalid %s requirement %q", item.name, item.value)
+		}
+	}
+	if transport == "structured" {
+		if capabilities.LiveInput == CapabilityRequired {
+			return fmt.Errorf("structured transport cannot require live_input")
+		}
+		if capabilities.RawTerminal == CapabilityRequired {
+			return fmt.Errorf("structured transport cannot require raw_terminal")
+		}
+		if capabilities.WarmSession == CapabilityRequired {
+			return fmt.Errorf("structured transport cannot require warm_session")
+		}
+	}
+	return nil
+}
+
+func validCapabilityRequirement(value CapabilityRequirement) bool {
+	switch value {
+	case "", CapabilityRequired, CapabilityPreferred, CapabilityOptional, CapabilityDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+func parsePrompt(source string) (*template.Template, error) {
+	parsed, err := template.New("agent-profile").Option("missingkey=error").Parse(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid system prompt template: %w", err)
+	}
+	return parsed, nil
+}
+
+func RenderPrompt(profile Profile, promptContext PromptContext) (string, error) {
+	if err := Validate(profile); err != nil {
+		return "", err
+	}
+	parsed, err := parsePrompt(profile.SystemPromptTemplate)
+	if err != nil {
+		return "", err
+	}
+	var rendered bytes.Buffer
+	if err := parsed.Execute(&rendered, promptContext); err != nil {
+		return "", fmt.Errorf("render system prompt: %w", err)
+	}
+	return rendered.String(), nil
+}

@@ -31,7 +31,45 @@ func setupWorkflowDBTest(t *testing.T) (string, string, *gin.Engine) {
 	router := gin.New()
 	router.POST("/api/query", QueryWorkflowDB)
 	router.POST("/api/mutate", MutateWorkflowDB)
+	router.POST("/api/db/initialize", InitializeWorkflowDB)
 	return rel, abs, router
+}
+
+func TestInitializeWorkflowDBCreatesManagedSchemaIdempotently(t *testing.T) {
+	rel, abs, router := setupWorkflowDBTest(t)
+	request := models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{
+		"CREATE TABLE IF NOT EXISTS ui_presentations (id TEXT PRIMARY KEY, kind TEXT NOT NULL)",
+		"CREATE INDEX IF NOT EXISTS idx_ui_presentations_kind ON ui_presentations(kind)",
+	}}
+	for attempt := 0; attempt < 2; attempt++ {
+		recorder := postWorkflowDBTest(t, router, "/api/db/initialize", request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("initialize attempt %d failed: status=%d body=%s", attempt+1, recorder.Code, recorder.Body.String())
+		}
+	}
+	db, err := sql.Open("sqlite", abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var table string
+	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='ui_presentations'").Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInitializeWorkflowDBRejectsNonIdempotentOrStackedSQL(t *testing.T) {
+	rel, _, router := setupWorkflowDBTest(t)
+	for _, migration := range []string{
+		"CREATE TABLE presentations (id TEXT)",
+		"DROP TABLE ui_presentations",
+		"CREATE TABLE IF NOT EXISTS safe (id TEXT); DELETE FROM safe",
+	} {
+		recorder := postWorkflowDBTest(t, router, "/api/db/initialize", models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{migration}})
+		if recorder.Code == http.StatusOK {
+			t.Fatalf("unsafe migration accepted: %q", migration)
+		}
+	}
 }
 
 func postWorkflowDBTest(t *testing.T, router *gin.Engine, route string, body any) *httptest.ResponseRecorder {

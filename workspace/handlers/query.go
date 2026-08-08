@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -30,6 +31,8 @@ const (
 	maximumMutationSQL  = 100_000
 	maximumStatements   = 20
 )
+
+var managedMigrationSQL = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b`)
 
 // dbTablesSampleRows is how many sample rows the inspector returns per table.
 const dbTablesSampleRows = 50
@@ -79,6 +82,69 @@ func openMutationDB(fullPath string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	return db, nil
+}
+
+// InitializeWorkflowDB is the generic, trusted database-template primitive.
+// It creates only a workspace-relative db.sqlite and accepts only idempotent
+// CREATE TABLE/INDEX migrations. Normal UI reads still use /api/query and
+// agent-owned row writes still use the authorized /api/mutate route.
+func InitializeWorkflowDB(c *gin.Context) {
+	var req models.InitializeDatabaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid request body", Error: err.Error()})
+		return
+	}
+	if len(req.Migrations) == 0 || len(req.Migrations) > maximumStatements {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid migrations", Error: fmt.Sprintf("migrations must contain 1-%d statements", maximumStatements)})
+		return
+	}
+	cleanRequest := strings.TrimSpace(filepath.ToSlash(filepath.Clean(filepath.FromSlash(req.DBPath))))
+	if !strings.HasSuffix(cleanRequest, "/db/db.sqlite") || strings.HasPrefix(cleanRequest, "../") || cleanRequest == "../db/db.sqlite" {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid db_path", Error: "managed databases must use <workspace>/db/db.sqlite"})
+		return
+	}
+	for index, migration := range req.Migrations {
+		if len(migration) > maximumMutationSQL || !managedMigrationSQL.MatchString(migration) || strings.Contains(migration, ";") {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Migration rejected", Error: fmt.Sprintf("migration %d must be one idempotent CREATE TABLE/INDEX statement", index+1)})
+			return
+		}
+	}
+
+	docsDir := viper.GetString("docs-dir")
+	fullPath, err := resolveUserPath(c, cleanRequest)
+	if err != nil || !utils.IsValidFilePath(fullPath, docsDir) {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid db_path", Error: "path escapes the workspace boundary"})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to create database folder", Error: err.Error()})
+		return
+	}
+	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to open database", Error: err.Error()})
+		return
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	tx, err := db.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to start migration", Error: err.Error()})
+		return
+	}
+	for index, migration := range req.Migrations {
+		if _, err := tx.ExecContext(c.Request.Context(), migration); err != nil {
+			_ = tx.Rollback()
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Migration failed", Error: fmt.Sprintf("migration %d: %v", index+1, err)})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to commit migration", Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse[map[string]any]{Success: true, Message: "Database initialized", Data: map[string]any{"db_path": cleanRequest}})
 }
 
 // scanRows reads all rows of a *sql.Rows into []map[string]interface{}, keyed by

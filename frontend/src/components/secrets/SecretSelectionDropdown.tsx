@@ -12,6 +12,8 @@ interface SecretSelectionDropdownProps {
   onSelectAll: (allSecretIds: string[]) => void;
   onClearAll: () => void;
   disabled?: boolean;
+  placement?: 'above' | 'below';
+  align?: 'left' | 'right';
 }
 
 export default function SecretSelectionDropdown({
@@ -19,7 +21,9 @@ export default function SecretSelectionDropdown({
   onSecretToggle,
   onSelectAll,
   onClearAll,
-  disabled = false
+  disabled = false,
+  placement = 'above',
+  align = 'left',
 }: SecretSelectionDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showManager, setShowManager] = useState(false);
@@ -105,7 +109,7 @@ export default function SecretSelectionDropdown({
               onClick={() => setIsOpen(false)}
             />
 
-            <div className="absolute bottom-full left-0 mb-1 z-50 w-64">
+            <div className={`absolute z-50 w-64 max-w-[calc(100vw-1rem)] ${align === 'right' ? 'right-0' : 'left-0'} ${placement === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
               <Card className="p-4 shadow-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">

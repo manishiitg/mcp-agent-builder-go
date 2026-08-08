@@ -52,7 +52,7 @@ type newCDPTabRequest struct {
 }
 
 func sharedCDPSessionName(port int) string {
-	return fmt.Sprintf("shared-cdp-%d", port)
+	return common.PrefixBrowserSessionID(fmt.Sprintf("shared-cdp-%d", port))
 }
 
 func sharedCDPLock(port int) *sync.Mutex {

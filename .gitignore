@@ -166,4 +166,5 @@ go.work.sum
 # real, hand-written AGENTS.md tracked, force-add it and narrow this line.
 AGENTS.md
 .codex/
+.local/
 transcript.txt

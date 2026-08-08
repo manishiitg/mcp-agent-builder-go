@@ -362,13 +362,29 @@ func GetSessionShellConfig(sessionID string) *SessionShellConfig {
 func ResolveBrowserSessionID(sessionID, requested string) string {
 	requested = strings.TrimSpace(requested)
 	if requested != "" && requested != "default" {
-		return requested
+		return PrefixBrowserSessionID(requested)
 	}
 	cfg := GetSessionShellConfig(sessionID)
 	if cfg != nil && strings.TrimSpace(cfg.BrowserSessionID) != "" {
-		return strings.TrimSpace(cfg.BrowserSessionID)
+		return PrefixBrowserSessionID(strings.TrimSpace(cfg.BrowserSessionID))
 	}
-	return requested
+	return PrefixBrowserSessionID(requested)
+}
+
+// PrefixBrowserSessionID namespaces agent-browser's process and state-file
+// identity for named AgentWorks instances. An empty prefix preserves the
+// historical session names used by the normal desktop application.
+func PrefixBrowserSessionID(session string) string {
+	session = strings.TrimSpace(session)
+	prefix := strings.TrimSpace(os.Getenv("AGENTWORKS_BROWSER_SESSION_PREFIX"))
+	if session == "" || prefix == "" {
+		return session
+	}
+	qualifiedPrefix := prefix + "--"
+	if strings.HasPrefix(session, qualifiedPrefix) {
+		return session
+	}
+	return qualifiedPrefix + session
 }
 
 // DeduplicateStrings removes duplicate strings from a slice.

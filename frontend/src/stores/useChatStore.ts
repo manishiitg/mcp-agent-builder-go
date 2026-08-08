@@ -377,6 +377,15 @@ export interface ChatTab {
     isBotRun?: boolean // True when tab is observing a bot-triggered session (read-only live view)
     botPlatform?: string // Display label for the bot platform, e.g. Slack or WhatsApp
     readOnlyRestoredAt?: number // Timestamp for an explicit user-opened Schedule/Bot restore
+    // Generic product-agent binding. These fields are durable so a project can
+    // recover its normal AgentWorks session after a refresh without maintaining
+    // a second product-specific conversation store.
+    agentProfileId?: string
+    agentProfileVersion?: number
+    agentProfileWorkspace?: string
+    agentProfileProjectId?: string
+    agentProfileProjectTitle?: string
+    agentProfileWorkspaceDescription?: string
   }
 }
 
@@ -1928,9 +1937,9 @@ export const useChatStore = create<ChatState>()(
         const timestamp = Date.now()
         const mode = metadata?.mode || 'multi-agent'
 
-        // Single-tab invariant: the interactive Chief of Staff lane has exactly
-        // ONE tab. Organization-assistant and read-only schedule/bot lanes are
-        // independent, so they must never be reused as the interactive chat.
+        // Chief of Staff has one interactive tab. Product agent profiles have
+        // one tab per immutable profile/workspace binding. Never reuse one lane
+        // for the other merely because both use AgentWorks multi-agent runtime.
         if (
           mode === 'multi-agent' &&
           !metadata?.isOrganizationAssistant &&
@@ -1938,12 +1947,18 @@ export const useChatStore = create<ChatState>()(
           !metadata?.isScheduledRun &&
           !metadata?.isBotRun
         ) {
+          const requestedProfileKey = metadata?.agentProfileId && metadata?.agentProfileWorkspace
+            ? `${metadata.agentProfileId}:${metadata.agentProfileVersion || 0}:${metadata.agentProfileWorkspace}`
+            : ''
           const existing = Object.values(get().chatTabs).find(t =>
             t.metadata?.mode === 'multi-agent' &&
             !t.metadata?.isOrganizationAssistant &&
             t.metadata?.isViewOnly !== true &&
             t.metadata?.isScheduledRun !== true &&
-            t.metadata?.isBotRun !== true
+            t.metadata?.isBotRun !== true &&
+            (requestedProfileKey
+              ? `${t.metadata?.agentProfileId || ''}:${t.metadata?.agentProfileVersion || 0}:${t.metadata?.agentProfileWorkspace || ''}` === requestedProfileKey
+              : !t.metadata?.agentProfileId)
           )
           if (existing) {
             // Restore binds the single tab to a specific backend session.

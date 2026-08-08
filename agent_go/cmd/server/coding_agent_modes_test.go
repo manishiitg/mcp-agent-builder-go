@@ -46,9 +46,8 @@ func TestCodingAgentPersistentInteractiveFlags(t *testing.T) {
 			wantCodexCLI: true,
 		},
 		{
-			name:          "cursor chat gets persistent tmux",
-			provider:      string(llm.ProviderCursorCLI),
-			wantCursorCLI: true,
+			name:     "cursor chat uses structured transport",
+			provider: string(llm.ProviderCursorCLI),
 		},
 		{
 			name:      "pi chat gets persistent tmux",
@@ -76,6 +75,9 @@ func TestCodingAgentPersistentInteractiveFlagsCoverTmuxContracts(t *testing.T) {
 		if contract.Transport != llm.CodingAgentTransportTmux {
 			continue
 		}
+		if codingAgentUsesStructuredTransport(string(contract.Provider)) {
+			continue
+		}
 		t.Run(string(contract.Provider), func(t *testing.T) {
 			gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI := codingAgentPersistentInteractiveFlags(string(contract.Provider))
 			count := 0
@@ -86,6 +88,34 @@ func TestCodingAgentPersistentInteractiveFlagsCoverTmuxContracts(t *testing.T) {
 			}
 			if count != 1 {
 				t.Fatalf("provider %q enables %d persistent flags, want exactly one", contract.Provider, count)
+			}
+		})
+	}
+}
+
+func TestCodingAgentUsesStructuredTransport(t *testing.T) {
+	if !codingAgentUsesStructuredTransport(string(llm.ProviderCursorCLI)) {
+		t.Fatal("Cursor must use structured transport")
+	}
+	if codingAgentUsesStructuredTransport(string(llm.ProviderClaudeCode)) {
+		t.Fatal("Claude Code must retain its configured transport")
+	}
+}
+
+func TestCodingAgentUsesStructuredTransportForPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, policy string
+		want                   bool
+	}{
+		{"auto keeps Cursor structured default", "cursor-cli", "auto", true},
+		{"auto keeps Claude tmux default", "claude-code", "auto", false},
+		{"Video Studio policy structures Claude", "claude-code", "structured", true},
+		{"Video Studio policy structures Codex", "codex-cli", "structured", true},
+		{"explicit tmux overrides Cursor default", "cursor-cli", "tmux", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codingAgentUsesStructuredTransportForPolicy(tc.provider, tc.policy); got != tc.want {
+				t.Fatalf("codingAgentUsesStructuredTransportForPolicy(%q, %q) = %v, want %v", tc.provider, tc.policy, got, tc.want)
 			}
 		})
 	}

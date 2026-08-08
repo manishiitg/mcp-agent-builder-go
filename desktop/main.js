@@ -10,8 +10,12 @@ const crypto = require('crypto');
 // Keep the historical data path while presenting the AgentWorks name to macOS.
 // Changing userData would make existing installs appear empty after the rename.
 const COMPAT_USER_DATA_PATH = path.join(app.getPath('appData'), 'runloop-desktop');
+const CONFIGURED_USER_DATA_PATH = String(process.env.RUNLOOP_USER_DATA_DIR || '').trim();
+const USER_DATA_PATH = CONFIGURED_USER_DATA_PATH
+  ? path.resolve(CONFIGURED_USER_DATA_PATH)
+  : COMPAT_USER_DATA_PATH;
 app.setName('AgentWorks');
-app.setPath('userData', COMPAT_USER_DATA_PATH);
+app.setPath('userData', USER_DATA_PATH);
 
 // Dynamic ports (assigned at runtime)
 let dynamicAgentPort = 0;
@@ -274,6 +278,11 @@ if (process.env.ELECTRON_REMOTE_DEBUG_PORT) {
 }
 
 function migrateLegacyUserData() {
+  // A caller-selected profile is intentionally isolated. Importing a sibling
+  // legacy profile would silently defeat that isolation on first launch.
+  if (CONFIGURED_USER_DATA_PATH) {
+    return;
+  }
   const userDataPath = app.getPath('userData');
   const hasCurrentData = fs.existsSync(userDataPath) && fs.readdirSync(userDataPath).length > 0;
   if (hasCurrentData) {

@@ -84,6 +84,15 @@ type restoredChatHistoryPersistTarget struct {
 const (
 	maxPersistedChatHistoryUIEvents = 200
 	maxChatHistoryFallbackScan      = 1000
+	// The conversation JSON is a UI record, not coding-agent context. Keep it
+	// bounded so a corrupted or unusually verbose transcript cannot become an
+	// unbounded disk record or a dangerous fallback payload.
+	maxPersistedChatHistoryMessages = 1000
+	maxPersistedChatHistoryBytes    = 4 * 1024 * 1024
+	// A provider without a native continuation handle gets only recent context.
+	// This is intentionally much smaller than the durable UI transcript.
+	maxCodingAgentFallbackMessages  = 48
+	maxCodingAgentFallbackBytes     = 512 * 1024
 	maxChatHistoryTerminalSnapshots = 1
 	maxChatHistoryTerminalBytes     = 512 * 1024
 	maxChatHistoryTerminalLines     = 10000
@@ -660,6 +669,38 @@ func mergeRestoredChatHistory(existing, incoming []llmtypes.MessageContent) []ll
 	merged = append(merged, existing...)
 	merged = append(merged, incoming...)
 	return merged
+}
+
+// boundedChatHistoryTail returns the newest messages that fit the supplied
+// limits. It is used only for durable UI storage and the explicit no-resume
+// fallback; coding providers with a native continuation never receive this
+// transcript as prompt context.
+func boundedChatHistoryTail(history []llmtypes.MessageContent, maxMessages, maxBytes int) []llmtypes.MessageContent {
+	if len(history) == 0 || maxMessages <= 0 || maxBytes <= 0 {
+		return nil
+	}
+	start := len(history)
+	usedBytes := 0
+	kept := 0
+	for i := len(history) - 1; i >= 0 && kept < maxMessages; i-- {
+		encoded, err := json.Marshal(history[i])
+		if err != nil {
+			continue
+		}
+		if kept > 0 && usedBytes+len(encoded) > maxBytes {
+			break
+		}
+		// Always retain the newest message, even when a single tool result is
+		// larger than the budget. Dropping the current user request would make
+		// a fallback incoherent.
+		start = i
+		usedBytes += len(encoded)
+		kept++
+	}
+	if start == len(history) {
+		return nil
+	}
+	return append([]llmtypes.MessageContent(nil), history[start:]...)
 }
 
 func chatHistoryHasPrefix(history, prefix []llmtypes.MessageContent) bool {

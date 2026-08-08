@@ -110,13 +110,17 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 			EditingTurnThreshold:      config.ContextEditingTurnThreshold,
 		},
 		Coding: mcpagent.CodingRuntimeConfig{
-			ClaudeCodeTransport:  config.ClaudeCodeTransport,
-			PersistentClaudeCode: config.ClaudeCodePersistentInteractiveSession,
-			PersistentCodex:      config.CodexPersistentInteractiveSession,
-			PersistentCursor:     config.CursorPersistentInteractiveSession,
-			PersistentPi:         config.PiPersistentInteractiveSession,
-			CursorBridgeTools:    config.CursorBridgeToolsMode,
-			CLISecurityPolicy:    config.CLISecurityPolicy,
+			ClaudeCodeTransport:               config.ClaudeCodeTransport,
+			PersistentClaudeCode:              config.ClaudeCodePersistentInteractiveSession,
+			PersistentCodex:                   config.CodexPersistentInteractiveSession,
+			PersistentCursor:                  config.CursorPersistentInteractiveSession,
+			PersistentPi:                      config.PiPersistentInteractiveSession,
+			CursorBridgeTools:                 config.CursorBridgeToolsMode,
+			AgentToolsMode:                    config.CodingAgentToolsMode,
+			ApprovalsMode:                     config.CodingAgentApprovalsMode,
+			BridgeRoutingInstructionsOverride: config.BridgeRoutingInstructionsOverride,
+			CLISecurityPolicy:                 config.CLISecurityPolicy,
+			SecretEnvironment:                 config.CodingAgentSecretEnvironment,
 		},
 		MCP: mcpagent.MCPRuntimeConfig{
 			SessionID: config.SessionID, UserID: config.UserID, RuntimeOverrides: config.RuntimeOverrides,
@@ -282,15 +286,22 @@ type LLMAgentConfig struct {
 	CursorPersistentInteractiveSession     bool
 	PiPersistentInteractiveSession         bool
 	CursorBridgeToolsMode                  bool
-	ClaudeCodeTransport                    string
+	CodingAgentToolsMode                   string
+	CodingAgentApprovalsMode               string
+	// BridgeRoutingInstructionsOverride replaces mcpagent's generic
+	// bridge-only preamble. Product profiles with native coding tools use an
+	// empty override because their own prompt explains the product tools.
+	BridgeRoutingInstructionsOverride *string
+	ClaudeCodeTransport               string
 	// ForceStructuredCodingAgent forces coding-agent CLI providers to use
 	// the structured JSON transport (--print/--exec) for this agent's
 	// LLM calls, overriding the default tmux behavior. Wired from the
 	// workflow step config AgentConfigs.Transport == "structured".
-	ForceStructuredCodingAgent bool
-	CodingAgentWorkingDir      string
-	CLISecurityPolicy          *llmtypes.CLISecurityPolicy
-	APIKeys                    *llm.ProviderAPIKeys // API keys for providers
+	ForceStructuredCodingAgent   bool
+	CodingAgentWorkingDir        string
+	CLISecurityPolicy            *llmtypes.CLISecurityPolicy
+	CodingAgentSecretEnvironment map[string]string
+	APIKeys                      *llm.ProviderAPIKeys // API keys for providers
 
 	// Context summarization configuration
 	EnableContextSummarization     bool    // Enable context summarization feature
@@ -1036,9 +1047,11 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		if w.config.SessionID != "" {
 			unregisterHTTPToolHook = toolcalllog.RegisterHook(w.config.SessionID, toolcalllog.Hook{
 				OnStart: func(tc toolcalllog.StartedCall) {
-					if w.agent == nil {
-						return
-					}
+					// The HTTP bridge owns the authoritative arguments for coding
+					// agents. Provider stream events can have empty ToolArgs even
+					// though the command is about to run. Emitting through the tracer
+					// does not require the in-memory Agent pointer, which may be
+					// swapped during native resume; do not discard this detail.
 					ev := events.NewToolCallStartEventWithCorrelation(
 						1,
 						tc.Name,
@@ -1051,9 +1064,6 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
-					if w.agent == nil {
-						return
-					}
 					duration := time.Duration(0)
 					if !tc.StartedAt.IsZero() {
 						duration = tc.CompletedAt.Sub(tc.StartedAt)

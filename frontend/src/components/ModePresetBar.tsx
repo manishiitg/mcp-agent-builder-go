@@ -19,7 +19,7 @@ import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { GlobalActivityMonitor } from './GlobalActivityMonitor'
 import WorkflowWalkthrough from './workflow/WorkflowWalkthrough'
-import { RunloopLockup } from './branding/RunloopLogo'
+import { ProductSurfaceSwitcher } from './ProductSurfaceSwitcher'
 import WorkspaceTopBarControls from './WorkspaceTopBarControls'
 import { useAppVersion } from './topbar/useAppVersion'
 import ConfirmationDialog from './ui/ConfirmationDialog'
@@ -621,8 +621,8 @@ export const ModePresetBar: React.FC = () => {
         <div className="flex items-center justify-between gap-3">
           {/* Left: App logo + Mode Indicator */}
           <div className="flex min-w-0 items-center gap-3">
-            {/* App logo (relocated from the former left sidebar header) */}
-            <RunloopLockup className="mr-1 shrink-0" version={appVersion} />
+            {/* Product-level navigation stays separate from AgentWorks modes. */}
+            <ProductSurfaceSwitcher className="mr-1" version={appVersion} />
 
             {/* Segmented control — single bordered container, active segment elevated */}
             <div

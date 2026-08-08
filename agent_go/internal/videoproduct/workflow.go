@@ -261,15 +261,35 @@ func writeProjectJSON(root, name string, value interface{}) error {
 }
 
 func cinematicWorkflowManifest(projectID, title string) map[string]interface{} {
+	product := mustVideoStudioManifest()
 	return map[string]interface{}{
 		"schema_version": 1, "id": "video-" + projectID, "version": "1.0.0", "label": title,
 		"capabilities": map[string]interface{}{
-			"selected_servers": []string{}, "selected_tools": []string{}, "selected_skills": []string{}, "selected_secrets": []string{},
-			"browser_mode": "none", "use_code_execution_mode": true,
-			"llm_config": map[string]interface{}{"schema_version": 2, "mode": "provider_profile", "provider": "claude-code"},
+			"selected_servers": []string{}, "selected_tools": []string{}, "selected_skills": append([]string(nil), product.Workflows.SelectedSkills...), "selected_secrets": []string{},
+			"browser_mode": product.Workflows.BrowserMode, "use_code_execution_mode": true,
+			"llm_config": videoWorkflowLLMConfig(),
 		},
 		"execution_defaults": map[string]interface{}{"always_use_same_run": true, "workshop_mode": "run"},
 		"schedules":          []interface{}{}, "created_at": time.Now().UTC().Format(time.RFC3339), "updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func videoAgentLLMConfig() map[string]interface{} {
+	return map[string]interface{}{"provider": "claude-code", "model_id": DefaultClaudeModel}
+}
+
+func videoWorkflowLLMConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"schema_version":  2,
+		"mode":            "explicit",
+		"builder_llm":     videoAgentLLMConfig(),
+		"maintenance_llm": videoAgentLLMConfig(),
+		"pulse_llm":       videoAgentLLMConfig(),
+		"tiered_config": map[string]interface{}{
+			"tier_1": videoAgentLLMConfig(),
+			"tier_2": videoAgentLLMConfig(),
+			"tier_3": videoAgentLLMConfig(),
+		},
 	}
 }
 
@@ -314,8 +334,13 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 	for _, pipeline := range pipelines {
 		for i, stage := range pipeline.Stages {
 			deps := []string{}
-			if i > 0 {
-				deps = []string{pipeline.Stages[i-1].Output}
+			// Production stages need the durable brief/story/source artifacts,
+			// not only the immediately preceding report. Carry every earlier
+			// declared output forward so later HyperFrames builders, renderers,
+			// and QA agents work from the same approved evidence and source.
+			for previous := 0; previous < i; previous++ {
+				deps = append(deps, pipeline.Stages[previous].Output)
+				deps = append(deps, pipeline.Stages[previous].Artifacts...)
 			}
 			// A stage whose only required file is its own report can pass while
 			// describing work it never did, so any concrete artifact it must
@@ -345,7 +370,7 @@ func cinematicStepConfig() map[string]interface{} { return stepConfigForAll(pipe
 
 func baseStageAgentConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"execution_llm":       map[string]interface{}{"provider": "claude-code", "model_id": DefaultClaudeModel},
+		"execution_llm":       videoAgentLLMConfig(),
 		"execution_max_turns": 100, "use_code_execution_mode": true, "declared_execution_mode": "agentic",
 		"additional_read_paths": []string{"uploads"}, "learnings_access": "none", "knowledgebase_access": "none", "db_access": "none",
 	}
@@ -484,8 +509,11 @@ func (s *WorkflowService) Tools(ctx ProjectContext, emit func(AgentEvent)) ([]ag
 	collector := &workflowToolCollector{}
 	stepworkflow.RegisterWorkshopChatTools(collector, state.session, s.logger)
 	stepworkflow.RegisterRunFullWorkflowTool(collector, state.session, s.logger)
-	allowed := map[string]bool{"execute_step": true, "query_step": true, "run_full_workflow": true}
-	result := make([]agentsession.Tool, 0, 3)
+	allowed := map[string]bool{
+		"execute_step": true, "query_step": true, "send_step_message": true,
+		"stop_step": true, "stop_all_executions": true, "run_full_workflow": true,
+	}
+	result := make([]agentsession.Tool, 0, len(allowed))
 	for _, definition := range collector.tools {
 		if !allowed[definition.name] {
 			continue

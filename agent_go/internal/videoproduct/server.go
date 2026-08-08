@@ -70,7 +70,7 @@ func NewServer(config Config) (*Server, error) {
 	_ = os.Setenv("WORKSPACE_API_URL", config.WorkspaceAPIURL)
 	// Publish this product's skills to the shared resolver before any agent
 	// exists, so a stage naming one in enabled_skills resolves it.
-	if err := registerProductSkills(); err != nil {
+	if err := RegisterProductSkills(); err != nil {
 		store.Close()
 		return nil, err
 	}

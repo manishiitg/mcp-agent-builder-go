@@ -306,6 +306,9 @@ interface ChatInputProps {
   // terminal exists, ChatArea passes false so the input does not keep showing a
   // stale "Resuming coding session" banner.
   restoredConversationPending?: boolean
+  // Product surfaces keep the shared transport but hide developer/provider
+  // controls and render a simple customer-facing composer.
+  surfaceVariant?: 'default' | 'product'
 }
 
 function isAutoNotificationMessage(msg: string): boolean {
@@ -536,7 +539,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   onStopStreaming,
   tabId: scopedTabId,
   restoredConversationPending = true,
+  surfaceVariant = 'default',
 }) => {
+  const isProductSurface = surfaceVariant === 'product'
   // Store subscriptions
   const {
     agentMode,
@@ -584,6 +589,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Get active tab and its config. Embedded workflow panes pass tabId so this
   // remains scoped to the visible pane instead of the global active chat.
   const isOrganizationAssistant = !!activeTab?.metadata?.isOrganizationAssistant
+  const agentProfileWorkspace = activeTab?.metadata?.agentProfileWorkspace
   // Memoize tabConfig to prevent unnecessary re-renders
   const tabConfig = useMemo(() => activeTab?.config, [activeTab?.config])
 
@@ -1523,6 +1529,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
       const textarea = textareaRef.current
+      // Video Studio is a compact, single-line composer. Keep long creative
+      // prompts on one horizontal line rather than growing the product surface
+      // into a terminal-like input box.
+      if (isProductSurface) {
+        textarea.style.height = '36px'
+        return
+      }
       // Fast path: the box is already at the 2-line floor and the content fits
       // (no vertical overflow). There is nothing to grow or shrink, so DON'T flip
       // height to 'auto' — that forced reflow is what jitters the flex column and
@@ -1543,7 +1556,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         textarea.style.height = newHeightPx
       }
     }
-  }, [])
+  }, [isProductSurface])
 
   // Sync tab config inputText with preset query when preset is selected
   useEffect(() => {
@@ -1588,19 +1601,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (textareaRef.current) {
       // Set initial height to 2 lines (40px) if empty
       if (!inputText || inputText.trim() === '') {
-        textareaRef.current.style.height = '40px'
+        textareaRef.current.style.height = isProductSurface ? '36px' : '40px'
       } else {
         adjustTextareaHeight()
       }
     }
-  }, [inputText, adjustTextareaHeight])
+  }, [inputText, adjustTextareaHeight, isProductSurface])
   
   // Set initial height on mount
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = '40px'
+      textareaRef.current.style.height = isProductSurface ? '36px' : '40px'
     }
-  }, [])
+  }, [isProductSurface])
 
 
   // Fetch Chats/ on demand when @ dialog opens (these may not be in the
@@ -1744,13 +1757,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const currentActiveTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : null
     if (
       currentActiveTab?.metadata?.mode === 'multi-agent' &&
+      (!!agentProfileWorkspace || !currentActiveTab.metadata?.agentProfileId) &&
       currentActiveTab.metadata?.isOrganizationAssistant !== true
     ) {
       return true
     }
 
     const modeTabs = Object.values(chatStore.chatTabs)
-      .filter(tab => tab.metadata?.mode === 'multi-agent' && tab.metadata?.isOrganizationAssistant !== true)
+      .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && tab.metadata?.isOrganizationAssistant !== true)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
 
     if (modeTabs.length > 0) {
@@ -1766,7 +1780,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       addToast('Unable to initialize a chat tab right now.', 'error')
       return false
     }
-  }, [isMultiAgentMode, showWorkflowsOverview, addToast])
+  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, addToast])
 
   // Select a multi-agent tab on mode entry, not just on input focus. After a
   // reload or mode switch, activeTabId can be null or point to a non-multi-agent
@@ -1778,15 +1792,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const store = useChatStore.getState()
     const active = store.activeTabId ? store.chatTabs[store.activeTabId] : null
     const activeIsVisibleMultiAgent =
-      active?.metadata?.mode === 'multi-agent' && active.metadata?.isOrganizationAssistant !== true
+      active?.metadata?.mode === 'multi-agent' &&
+      (!!agentProfileWorkspace || !active.metadata?.agentProfileId) &&
+      active.metadata?.isOrganizationAssistant !== true
     if (activeIsVisibleMultiAgent) return
     const modeTabs = Object.values(store.chatTabs)
-      .filter(tab => tab.metadata?.mode === 'multi-agent' && tab.metadata?.isOrganizationAssistant !== true)
+      .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && tab.metadata?.isOrganizationAssistant !== true)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     if (modeTabs.length > 0) {
       store.switchTab(modeTabs[0].tabId)
     }
-  }, [isMultiAgentMode, showWorkflowsOverview, isOrganizationAssistant, activeTabId])
+  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, isOrganizationAssistant, activeTabId])
 
   // If the user has already typed surrounding text, keep pasted content out of
   // the textarea and insert a stable marker the message can refer to.
@@ -1869,6 +1885,18 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     // Auto-resize textarea
     adjustTextareaHeight()
+
+    // Product chats intentionally do not expose AgentWorks command, workflow,
+    // skill, server, or file-reference syntax. Attachments still use the
+    // dedicated paperclip button below.
+    if (isProductSurface) {
+      setShowFileDialog(false)
+      setShowCommandDialog(false)
+      setShowWorkflowDialog(false)
+      setShowSkillPopup(false)
+      setShowServerPopup(false)
+      return
+    }
 
     // Skip most special character triggers for workflow phase chat — but allow @, /, and #.
     if (isWorkflowPhaseChat) {
@@ -2190,7 +2218,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       }
       fileRemovalTimeoutRef.current = null
     }, 500)
-  }, [chatFileContext, chatPastedAttachments, removeFileFromContext, showCommandDialog, showWorkflowDialog, activeTabId, setTabConfig, adjustTextareaHeight, isWorkflowPhaseChat])
+  }, [chatFileContext, chatPastedAttachments, removeFileFromContext, showCommandDialog, showWorkflowDialog, activeTabId, setTabConfig, adjustTextareaHeight, isProductSurface, isWorkflowPhaseChat])
 
   // Handle manual summarization
   // If messageToSendAfter is provided, it will be sent as a user message after summarization completes
@@ -2428,12 +2456,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // TMUX-TRANSPORT (CLI coding agent) — SINGLE-ENTRY routing: the frontend does not
   // inspect terminal liveness. ChatArea first asks the backend for minimal live
   // delivery; the backend either submits to the retained CLI / resumes a saved turn,
-  // or rejects it so ChatArea performs full turn setup. isStreaming remains UI-only.
+  // or rejects it so ChatArea performs full turn setup. Video Studio is the exception:
+  // its structured product turns deliberately queue follow-ups until the active turn
+  // completes, rather than attempting to steer a provider-owned CLI session.
   //
   // NON-tmux (API/LLM): isStreaming-based steer-vs-queue, unchanged.
   const routeSubmit = useCallback(async (query: string) => {
     const trimmed = query?.trim() || ''
     if (!trimmed) return
+
+    // Video Studio has a structured, completion-oriented conversation surface.
+    // A follow-up must never race the active coding-agent turn or be injected
+    // into an uncertain tmux setup window. Keep it durably in the tab queue;
+    // ChatArea flushes that queue in submission order once the turn is idle.
+    if (isProductSurface && isStreaming) {
+      clearInputState()
+      queueStreamingMessage(query)
+      return
+    }
 
     if (routeLiveInputToCLI) {
       if (hasSubmitTarget) {
@@ -2513,7 +2553,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       const reason = getSubmitBlockReason()
       if (reason) addToast(reason, 'info')
     }
-  }, [routeLiveInputToCLI, hasSubmitTarget, activeTabId, effectiveProviderForSteer, onSubmit, scheduleLiveMessageDeliveryClear, clearInputState, getSubmitBlockReason, addToast, canSubmitImmediately, canSubmit, isStreaming, queueStreamingMessage])
+  }, [routeLiveInputToCLI, hasSubmitTarget, activeTabId, effectiveProviderForSteer, onSubmit, scheduleLiveMessageDeliveryClear, clearInputState, getSubmitBlockReason, addToast, canSubmitImmediately, canSubmit, isStreaming, queueStreamingMessage, isProductSurface])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // If any selection dialog is open, let it handle keyboard events
@@ -2855,11 +2895,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   }, [])
 
   const uploadTargetFolder = useMemo(() => {
+    if (agentProfileWorkspace) {
+      return `${agentProfileWorkspace.replace(/\/$/, '')}/uploads`
+    }
     if (selectedModeCategory === 'workflow') {
       return workspaceActiveFolder || 'Workflow'
     }
     return 'Chats'
-  }, [selectedModeCategory, workspaceActiveFolder])
+  }, [agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
 
   const uploadFilesToChat = useCallback(async (files: File[]) => {
     if (files.length === 0 || isUploadingFiles) {
@@ -3160,11 +3203,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Check if query is valid (view-only tabs cannot submit)
   const hasValidQuery = Boolean(inputText?.trim())
   const inputDisabled = isSummarizing || isViewOnly || (!tabSessionId && !canBootstrapMultiAgentTab && !canBootstrapWorkflowPhaseTab)
+  // Product follow-ups are queued while a structured turn is working, including
+  // the short interval before the backend has attached the live session.
   const submitButtonDisabled = !hasValidQuery || !hasSubmitTarget || isViewOnly || isCdpDisconnected
   
   // Memoized placeholder
   const placeholder = useMemo(() => {
     if (isViewOnly) return "View only — cannot continue this conversation"
+    if (isProductSurface) return isStreaming ? 'Add a message…' : 'Describe what you want to create…'
+    if (agentProfileWorkspace) return 'Describe the video you want to make… (@ files, / commands)'
     if (isWorkflowPhaseChat) {
       return 'Chat with the automation builder... (@ files, / commands, # automations)'
     }
@@ -3172,22 +3219,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (!tabSessionId && (canBootstrapMultiAgentTab || canBootstrapWorkflowPhaseTab)) return `Ask anything... chat will initialize on send (${baseHints})`
     if (isMultiAgentMode) return `Ask anything... (${baseHints})`
     return `Ask anything... (${baseHints})`
-  }, [isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
+  }, [agentProfileWorkspace, isProductSurface, isStreaming, isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
 
   const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer)
   const liveDeliveryText = liveMessageDelivery
     ? liveMessageDelivery.status === 'sending'
-      ? `Sending to ${liveDeliveryProviderLabel}...`
+      ? isProductSurface ? 'Sending message…' : `Sending to ${liveDeliveryProviderLabel}...`
       : liveMessageDelivery.status === 'sent_to_cli'
-        ? `Sent to ${liveDeliveryProviderLabel}`
-        : liveMessageDelivery.status === 'queued_for_injection'
-          ? 'Queued for next model turn'
-          : liveMessageDelivery.status === 'next_turn_started'
-            ? `Started next ${liveDeliveryProviderLabel} turn`
-            : liveMessageDelivery.status === 'queued_locally'
-              ? 'Saved to queue'
-              : 'Could not submit live input'
+        ? isProductSurface ? 'Message sent' : `Sent to ${liveDeliveryProviderLabel}`
+      : liveMessageDelivery.status === 'queued_for_injection'
+          ? isProductSurface ? 'Message queued' : 'Queued for next model turn'
+        : liveMessageDelivery.status === 'next_turn_started'
+            ? isProductSurface ? 'Working on your follow-up' : `Started next ${liveDeliveryProviderLabel} turn`
+          : liveMessageDelivery.status === 'queued_locally'
+              ? isProductSurface ? 'Message saved' : 'Saved to queue'
+              : isProductSurface ? 'Could not send the message' : 'Could not submit live input'
     : ''
+  // The project chat already echoes an accepted message in the conversation.
+  // Do not leave an extra success banner in the composer; only transient send
+  // and failure states need a separate signal here.
+  const showLiveDelivery = Boolean(liveMessageDelivery && (!isProductSurface || liveMessageDelivery.status === 'sending' || liveMessageDelivery.status === 'failed'))
   const liveDeliveryClass = liveMessageDelivery?.status === 'failed'
     ? 'text-amber-600 dark:text-amber-300'
     : liveMessageDelivery?.status === 'sending'
@@ -3197,7 +3248,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // The multi-agent (Chief of Staff) chat pane aligns its left inset with the
   // "Chief of Staff" heading (ChatTabs header, px-3); workflow mode keeps the
   // wider px-4 so its toolbar layout is unchanged.
-  const inputPadX = isMultiAgentMode ? 'px-3' : 'px-4'
+  const inputPadX = isProductSurface ? 'px-4 sm:px-6' : isMultiAgentMode ? 'px-3' : 'px-4'
 
   // For view-only (restored) tabs, show a minimal indicator instead of the full input form
   if (isViewOnly) {
@@ -3223,7 +3274,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   return (
     <TooltipProvider>
-      <div className="space-y-2">
+      <div className={isProductSurface ? 'border-t border-slate-800 bg-slate-950 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
       {/* Pasted-text Attachments */}
       {chatPastedAttachments.length > 0 && (
         <div className={inputPadX}>
@@ -3271,7 +3322,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       )}
 
       {/* Pending resume indicator */}
-      {showRestoredConversationIndicator && (
+      {!isProductSurface && showRestoredConversationIndicator && (
         <div className={`${inputPadX} border-t border-border`}>
           <div className="mb-1 rounded-md border border-border bg-card px-2 py-1 shadow-sm">
             <div className="flex min-w-0 items-center justify-between gap-2">
@@ -3387,10 +3438,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
 
       {/* Input Form */}
-      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} py-2`}>
+      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
         <form onSubmit={handleSubmit} className="space-y-2">
-          <div className="space-y-1">
-            {liveMessageDelivery && (
+          <div className={isProductSurface ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition focus-within:border-violet-500 focus-within:ring-4 focus-within:ring-violet-950/70' : 'space-y-1'}>
+            {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>
                 {liveMessageDelivery.status === 'sending' ? (
                   <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
@@ -3398,16 +3449,21 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
                 )}
                 <span className="shrink-0 font-medium">{liveDeliveryText}</span>
-                <span className="min-w-0 truncate opacity-75">
+                {!isProductSurface && <span className="min-w-0 truncate opacity-75">
                   {liveDeliveryPreview(liveMessageDelivery.message)}
-                </span>
-                {liveMessageDelivery.detail && (
+                </span>}
+                {!isProductSurface && liveMessageDelivery.detail && (
                   <span className="shrink-0 opacity-75">({liveMessageDelivery.detail})</span>
                 )}
               </div>
             )}
             {/* Queued messages indicator */}
-            {queuedMessages.length > 0 && (
+            {queuedMessages.length > 0 && isProductSurface ? (
+              <div className="flex items-center gap-2 rounded-lg bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950/40 dark:text-violet-200">
+                <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                {queuedMessages.length} {queuedMessages.length === 1 ? 'message' : 'messages'} queued
+              </div>
+            ) : queuedMessages.length > 0 && (
               <div className="space-y-1">
                 {queuedDisplayItems.map((item, index) => {
                   if (item.type === 'auto-group') {
@@ -3456,8 +3512,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               onDragOver={handleTextareaDragOver}
               onDragLeave={handleTextareaDragLeave}
               onDrop={handleTextareaDrop}
+              rows={isProductSurface ? 1 : undefined}
+              wrap={isProductSurface ? 'off' : undefined}
               placeholder={placeholder}
-              className={`!min-h-[40px] max-h-[100px] resize-none text-xs overflow-y-auto leading-[1.3] !py-1 !px-3 placeholder:text-xs ${
+              className={`${isProductSurface ? '!min-h-[36px] !max-h-[36px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400 whitespace-nowrap !overflow-x-auto !overflow-y-hidden' : '!min-h-[40px] max-h-[100px] text-xs !py-1 !px-3 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}
@@ -3472,7 +3530,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
                 {/* Workflow and Chief of Staff both show the active agent, not selectors. */}
-                {((hideExtras && isWorkflowPhaseChat) || isMultiAgentMode) && (
+                {!isProductSurface && ((hideExtras && isWorkflowPhaseChat) || isMultiAgentMode) && (
                   <div className="flex max-w-[18rem] items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-2 py-1.5 text-xs text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400">
                     <span className="truncate">{activeLLMLabel}</span>
                   </div>
@@ -3932,6 +3990,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             }}
                             className="px-2.5"
                             data-testid="chat-upload-button"
+                            aria-label="Attach files"
                           >
                             {isUploadingFiles ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
@@ -3941,7 +4000,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{isUploadingFiles ? 'Uploading files...' : `Upload file(s) to ${uploadTargetFolder}`}</p>
+                          <p>{isUploadingFiles ? 'Uploading files...' : isProductSurface ? 'Attach files to this project' : `Upload file(s) to ${uploadTargetFolder}`}</p>
                         </TooltipContent>
                       </Tooltip>
                       {isStreaming && (
@@ -3976,8 +4035,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                               onClick={handleSendButtonClick}
                               disabled={submitButtonDisabled}
                               size="sm"
-                              className="px-3"
+                              className={isProductSurface ? 'bg-violet-600 px-3 text-white hover:bg-violet-500' : 'px-3'}
                               data-testid="chat-submit-button"
+                              aria-label="Send message"
                             >
                               <Send className="w-4 h-4" />
                             </Button>

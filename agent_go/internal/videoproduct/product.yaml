@@ -1,0 +1,177 @@
+schema_version: 2
+
+# Product dependencies are installed inside each project workspace. This keeps
+# external capabilities declarative and versioned with the product instead of
+# adding per-product backend code. The agent receives only attached skills;
+# the rest stay in skills/ for progressive disclosure.
+dependencies:
+  skills:
+    - id: hyperframes-skills
+      installer: skills-cli
+      source: heygen-com/hyperframes
+      # Install the official core plus routes used by product-infographic.
+      install:
+        - hyperframes
+        - hyperframes-core
+        - hyperframes-animation
+        - hyperframes-creative
+        - hyperframes-cli
+        - media-use
+        - hyperframes-registry
+        - hyperframes-keyframes
+        - general-video
+        - product-launch-video
+        - faceless-explainer
+        - motion-graphics
+      attach: [hyperframes]
+      refresh_hours: 24
+
+  # npx provides the renderer CLI itself. Verification both fetches the
+  # package on first use and confirms the project's native tooling is ready.
+  cli:
+    - id: hyperframes-cli
+      package:
+        ecosystem: npm
+        name: hyperframes
+        version: latest
+      execution:
+        mode: npx
+        binary: hyperframes
+      verify:
+        args: [doctor, --json]
+        # HyperFrames reports optional TTS/music/Docker failures in JSON while
+        # still returning status zero. Only these local-render prerequisites
+        # block a Video Studio project from starting production.
+        required_json_checks: [Version, Node.js, FFmpeg, FFprobe, Chrome]
+      refresh_hours: 24
+      permissions:
+        network: true
+        write_paths: [work/, outputs/, runs/]
+
+  # Future integrations are declared here. A concrete enabled server is
+  # connected by the shared agent runtime, which resolves environment values
+  # from AgentWorks secrets rather than storing values in this file.
+  mcp_servers: []
+
+prompt:
+  file: prompts/system-prompt.md
+  variables:
+    PRODUCT_NAME: Video Studio
+
+# Declarative product composition. The IDs below reference shared AgentWorks
+# skills/tools and registered product implementations; no executable code lives
+# in this file.
+profile:
+  id: video-studio
+  name: Video Studio
+  version: 2
+  skills:
+    - product-infographic
+    - video-creation
+    - video-editing
+    - video-quality
+    - hyperframes-quality
+    - html-composition
+    - hyperframes
+    - agent-browser
+  tools:
+    - id: video.show-video
+  tool_policy:
+    # Video Studio uses its selected skills, product controls and provider-native
+    # coding tools. Do not leak AgentWorks-wide administration or provider/media
+    # bridge tools into the product agent. Project-secret CRUD stays enabled.
+    disabled:
+      # Shared provider/model library administration.
+      - list_llm_capabilities
+      - estimate_llm_cost
+      - list_published_llms
+      - list_provider_models
+      - test_llm
+      - save_published_llm
+      - set_provider_auth
+      # Workspace-wide skill and MCP-server administration.
+      - list_skills
+      - import_skill
+      - uninstall_skill
+      - search_skills
+      - install_skill
+      - list_mcp_servers
+      - add_mcp_server
+      - edit_mcp_server
+      - remove_mcp_server
+      - get_mcp_server_logs
+      - trigger_mcp_discovery
+      # Shared provider-backed workspace tools. Native coding tools and the
+      # Video Studio workflow/show_video product controls remain available.
+      - execute_shell_command
+      - diff_patch_workspace_file
+      - generate_text_llm
+      - search_web_llm
+      - read_image
+      - image_gen
+      - image_edit
+      - generate_video
+      - text_to_speech
+      - speech_to_text
+      - generate_music
+  runtime:
+    # Video Studio is a non-technical surface. Every supported coding provider
+    # runs through its native structured JSON protocol: tool calls, usage, and
+    # completion are typed events rather than terminal-pane scraping.
+    transport: structured
+    provider: claude-code
+    model_id: claude-sonnet-5
+    # Enable provider-native coding tools alongside Video Studio's MCP bridge.
+    # Each provider's own automatic safety classifier reviews native actions.
+    agent_tools:
+      mode: hybrid
+    approvals:
+      mode: provider_auto
+    provider_options:
+      - id: claude-code
+        label: Claude Code
+        provider: claude-code
+        model_id: claude-sonnet-5
+        default: true
+      - id: codex
+        label: Codex
+        provider: codex-cli
+        model_id: gpt-5.6-terra
+      - id: cursor
+        label: Cursor
+        provider: cursor-cli
+        model_id: auto
+    capabilities:
+      # Structured turns are one-shot processes. Follow-ups queue at a safe
+      # boundary; they are never typed into a live terminal prompt.
+      live_input: disabled
+      raw_terminal: disabled
+      warm_session: preferred
+      workflow_execution: required
+      browser: required
+      secrets: required
+  built_in: true
+
+branding:
+  icon: video-studio
+  favicon: /video-studio-favicon.svg
+
+ui:
+  surface: video-studio
+  files_panel: true
+  workflow_panel: true
+  secrets: true
+  streaming: structured
+
+workflows:
+  enabled: [infographic, quality]
+  selected_skills:
+    - product-infographic
+    - video-creation
+    - video-editing
+    - video-quality
+    - hyperframes-quality
+    - html-composition
+    - hyperframes
+    - agent-browser
+  browser_mode: auto

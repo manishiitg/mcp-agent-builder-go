@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
 )
 
 // TestLiveClaudeUsageAPIDiffersBetweenSavedAndWorkflowCredential is an opt-in,
@@ -57,7 +59,7 @@ func TestLiveClaudeUsageAPIDiffersBetweenSavedAndWorkflowCredential(t *testing.T
 	}
 
 	configDir := t.TempDir()
-	scopedStatus := liveClaudeAuthStatus(t, claudeCredentialCheckEnv(os.Environ(), configDir, workflowToken))
+	scopedStatus := liveClaudeAuthStatus(t, claudeauth.CheckEnv(os.Environ(), configDir, workflowToken))
 	if !scopedStatus.LoggedIn || scopedStatus.AuthMethod != "oauth_token" {
 		t.Fatalf("workflow-token Claude launch reported loggedIn=%v authMethod=%q; want loggedIn=true authMethod=oauth_token",
 			scopedStatus.LoggedIn, scopedStatus.AuthMethod)

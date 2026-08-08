@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
 	"github.com/manishiitg/coding-agent-loop/workspace/security"
 	"github.com/manishiitg/mcpagent/llm"
@@ -65,10 +66,11 @@ func NewClaudeRunner(workflows ...*WorkflowService) *ClaudeRunner {
 }
 
 var builtinSkillDefinitions = []struct{ name, description, path string }{
+	{"product-infographic", "Turn verified product evidence into a clear HyperFrames explainer through an adaptive brief, specialist routing, and production QA.", "skills/product-infographic/SKILL.md"},
 	{"video-creation", "Direct a conversational video project from brief through reproducible production.", "skills/video-creation/SKILL.md"},
-	{"video-shot-generation", "Generate consistent AI video shots with references and controlled prompts.", "skills/video-shot-generation/SKILL.md"},
 	{"video-editing", "Assemble clips, captions, overlays, narration, music, and versioned exports.", "skills/video-editing/SKILL.md"},
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
+	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},
 	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
 }
 
@@ -90,7 +92,7 @@ func builtinSkills() []*llmtypes.Skill {
 	return out
 }
 
-// registerProductSkills publishes this product's embedded skills to the shared
+// RegisterProductSkills publishes this product's embedded skills to the shared
 // name-based resolver, so a workflow stage can name one in enabled_skills and
 // get the same content the main chat agent carries in memory. Nothing is
 // written to the workspace: the resolver checks the builtin registry before it
@@ -107,7 +109,7 @@ var (
 	registerProductSkillsErr  error
 )
 
-func registerProductSkills() error {
+func RegisterProductSkills() error {
 	registerProductSkillsOnce.Do(func() {
 		for _, skill := range builtinSkills() {
 			if err := skills.RegisterBuiltin(skill); err != nil {
@@ -132,8 +134,13 @@ func videoSystemPromptAt(title string, now time.Time) string {
 	}
 	offset := fmt.Sprintf("UTC%s%02d:%02d", offsetSign, offsetSeconds/3600, (offsetSeconds%3600)/60)
 	dateContext := now.Format("Monday, 2 January 2006 at 3:04 PM MST") + " (" + offset + ")"
+	return videoSystemPromptForContext(title, dateContext)
+}
 
-	return `You are Video Studio, an expert creative director, video producer, and editor for the project "` + title + `". You are one persistent creative collaborator who remembers the project's conversation, references, decisions, and previous work. In ordinary conversation, identify yourself as Video Studio rather than by the underlying coding-agent provider or runtime.
+func videoSystemPromptForContext(title, dateContext string) string {
+	return renderProductPrompt(title, dateContext)
+
+	return `You are Video Studio, an expert creative director, video producer, and editor. The project workspace is named "` + title + `". That name is organisational metadata only: it is not a creative brief, a product identity, or permission to reuse a prior video's brand, copy, assets, or claims. The user's current conversation is the authority on what product a new video is for. You are one persistent creative collaborator who remembers the project's conversation, references, decisions, and previous work. In ordinary conversation, identify yourself as Video Studio rather than by the underlying coding-agent provider or runtime.
 
 Current local date and time: ` + dateContext + `. Use this when interpreting relative dates such as today, tomorrow, or latest; do not guess when a request depends on another timezone.
 
@@ -151,7 +158,9 @@ For structured production, use the existing workflow tools. The plan holds three
 
 Choose the execution mode yourself; users should describe the video, not the workflow machinery:
 
+- Treat the structured workflow as the preferred best-practice route for a new, multi-stage production: it gives durable specialist handoffs, approvals, and reproducible artifacts. It is guidance, not a gate. When direct chat is the better fit, you may build the video yourself instead of starting a workflow; first read and follow every relevant attached video skill, keep the work within this project, and apply the same QA and presentation requirements. Never skip skills merely because you chose direct chat.
 - First decide whether the user is asking for a new production or changing a video that already exists in this project. Treat requests to extend or shorten an existing video, revise its copy, timing, layout, motion, sound, aspect ratio, or visual style as revisions even when the requested change is substantial.
+- A named product, brand, customer, or subject is part of a production's identity. If the user introduces a different one (for example, asks for a video “for AgentWorks” after a LumaDesk teaser), this is a new production — never rename, reposition, or reuse the prior video's brand assets, copy, or claims. Ask only for the missing brief details, then use the appropriate workflow route. Do not infer that a new product is background context for the prior video.
 - Work directly in chat for revisions to an existing composition or render. Reuse its existing source project, make the requested changes, render a new version, run QA, and present it. Do not start run_full_workflow merely because a revision increases the duration or requires several edits; for example, "make this 60 seconds" after a 10-second video is a direct revision, not a new cinematic workflow.
 - Also work directly in chat for quick creations that are one coherent local task and other work that does not need durable specialist-stage handoffs.
 - Use execute_step when the user asks for one specific production stage, when one failed or outdated stage must be retried, or when an approval boundary means only the next stage is currently authorised.
@@ -175,6 +184,28 @@ Saved credentials are available only to shell commands as environment variables 
 This product is for video creators, including non-technical users. Keep all implementation details internal unless the user explicitly asks for them. Do not mention shell commands, package installation, tool names, file paths, codecs, frame counts, ffprobe, lint, runtime checks, JSON fields, or other engineering diagnostics in ordinary chat. While working, give only short creative progress updates such as "Building the longer version now." When finished, describe the creative result in plain language, state its approximate duration and format when useful, and tell the user it is ready in the Videos panel. If something fails, explain what the user can do next in ordinary language without dumping command output or internal errors.
 
 When work produces a video, name its path under outputs/ internally, but do not include that path in the user-facing reply unless the user asks for it.`
+}
+
+func BuiltinAgentProfile() agentprofiles.Profile {
+	manifest := mustVideoStudioManifest()
+	profile := manifest.Profile
+	// The prompt has trusted runtime placeholders, so it is rendered here while
+	// all reusable product selections come from product.yaml.
+	profile.SystemPromptTemplate = videoSystemPromptForContext("{{.ProjectTitle}}", "{{.LocalDateTime}}")
+	return profile
+}
+
+// BuiltinAgentProfiles keeps the immutable v1 binding resolvable for already
+// open tabs while exposing v2 as the current Video Studio profile. Version 2
+// pins the main agent to Claude Code/Sonnet 5 instead of inheriting the global
+// AgentWorks chat model.
+func BuiltinAgentProfiles() []agentprofiles.Profile {
+	current := BuiltinAgentProfile()
+	legacy := current
+	legacy.Version = 1
+	legacy.Runtime.Provider = ""
+	legacy.Runtime.ModelID = ""
+	return []agentprofiles.Profile{legacy, current}
 }
 
 func shellOutput(cmd *exec.Cmd) (string, error) {
@@ -449,6 +480,14 @@ func (r *ClaudeRunner) Run(ctx context.Context, project ProjectContext, emit fun
 		}
 	}
 	turnCtx, cancel := context.WithCancel(ctx)
+	emit(AgentEvent{Type: "tool", Tool: "Sync production skills", Status: "running"})
+	managedSkills, managedErr := managedProductSkills(turnCtx, project.WorkspacePath)
+	if managedErr != nil {
+		emit(AgentEvent{Type: "tool", Tool: "Sync production skills", Status: "failed"})
+		cancel()
+		return AgentResult{}, managedErr
+	}
+	emit(AgentEvent{Type: "tool", Tool: "Sync production skills", Status: "completed"})
 	tools := []agentsession.Tool{videoShellTool(project.WorkspacePath, project.SecretEnv, emit)}
 	if r.workflows != nil {
 		tools = append(tools, showVideoTool(r.workflows.store, project.Project.ID, project.WorkspacePath, emit))
@@ -462,7 +501,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, project ProjectContext, emit fun
 	cfg := agentsession.Config{
 		Provider: llm.ProviderClaudeCode, ModelID: DefaultClaudeModel, WorkingDir: project.WorkspacePath,
 		SystemPrompt: videoSystemPrompt(project.Project.Title), Tools: tools,
-		Skills: builtinSkills(), SessionID: "video-project-" + project.Project.ID, SessionHandle: handle,
+		Skills: append(builtinSkills(), managedSkills...), SessionID: "video-project-" + project.Project.ID, SessionHandle: handle,
 		ClaudeCodeOAuthToken: project.ProviderToken, RequireProviderToken: true,
 		StreamCallback: func(text string) {
 			if text != "" {

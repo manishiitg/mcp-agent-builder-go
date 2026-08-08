@@ -1,0 +1,399 @@
+package videoproduct
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
+)
+
+const presentationsMigration = `CREATE TABLE IF NOT EXISTS ui_presentations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, schema_version INTEGER NOT NULL, session_id TEXT, title TEXT NOT NULL, payload_json TEXT NOT NULL, resources_json TEXT NOT NULL, actions_json TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`
+const presentationsKindIndexMigration = `CREATE INDEX IF NOT EXISTS idx_ui_presentations_kind ON ui_presentations(kind)`
+
+type integratedProductManifest struct {
+	SchemaVersion int    `json:"schema_version"`
+	Product       string `json:"product"`
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Description   string `json:"description,omitempty"`
+	SessionID     string `json:"session_id"`
+}
+
+func marshalWorkspaceJSON(value interface{}) (string, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
+}
+
+func updateWorkspaceJSON(ctx context.Context, client *workspace.Client, path string, value interface{}) error {
+	content, err := marshalWorkspaceJSON(value)
+	if err != nil {
+		return err
+	}
+	_, err = client.UpdateWorkspaceFile(ctx, workspace.UpdateWorkspaceFileParams{Filepath: path, Content: content})
+	return err
+}
+
+func workspaceFileExists(ctx context.Context, client *workspace.Client, path string) bool {
+	_, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: path})
+	return err == nil
+}
+
+// Profile metadata stores the user-relative workspace path (Chats/...), while
+// the session folder guard is intentionally rooted at the physical user scope
+// (_users/<id>/Chats/...). Go-side profile tools must use the same canonical
+// scope as the guard. The workspace API accepts this canonical form and still
+// applies the authenticated X-User-ID boundary.
+func profileWorkspaceRoot(userID, workspacePath string) string {
+	cleanWorkspace := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(strings.TrimSpace(workspacePath))), "/")
+	if strings.HasPrefix(cleanWorkspace, "_users/") {
+		return cleanWorkspace
+	}
+	cleanUser := strings.TrimSpace(userID)
+	if cleanUser == "" {
+		cleanUser = "default"
+	}
+	cleanUser = filepath.Base(filepath.Clean(cleanUser))
+	return filepath.ToSlash(filepath.Join("_users", cleanUser, cleanWorkspace))
+}
+
+// profileWorkspaceLocalPath resolves the same user-scoped workspace to the
+// host folder used by the native workspace service. Managed vendor installers
+// need a real cwd for npx; all agent-facing reads still go through the normal
+// workspace API and skills resolver after installation.
+func profileWorkspaceLocalPath(userID, workspacePath string) (string, error) {
+	docsRoot := strings.TrimSpace(os.Getenv("WORKSPACE_DOCS_PATH"))
+	if docsRoot == "" {
+		return "", errors.New("WORKSPACE_DOCS_PATH is required for managed product skills")
+	}
+	absRoot, err := filepath.Abs(docsRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace docs root: %w", err)
+	}
+	local := filepath.Join(absRoot, filepath.FromSlash(profileWorkspaceRoot(userID, workspacePath)))
+	absLocal, err := filepath.Abs(local)
+	if err != nil {
+		return "", fmt.Errorf("resolve product workspace: %w", err)
+	}
+	if absLocal != absRoot && !strings.HasPrefix(absLocal, absRoot+string(os.PathSeparator)) {
+		return "", errors.New("managed product workspace escapes WORKSPACE_DOCS_PATH")
+	}
+	return absLocal, nil
+}
+
+func integratedWorkflowManifest(projectID, title string) map[string]interface{} {
+	manifest := cinematicWorkflowManifest(projectID, title)
+	if capabilities, ok := manifest["capabilities"].(map[string]interface{}); ok {
+		product := mustVideoStudioManifest()
+		// Reuse AgentWorks' built-in browser skill in workflow stages too; the
+		// browser executor remains the generic managed implementation.
+		capabilities["selected_skills"] = append([]string(nil), product.Workflows.SelectedSkills...)
+		capabilities["browser_mode"] = product.Workflows.BrowserMode
+	}
+	return manifest
+}
+
+func integratedStepConfig() map[string]interface{} {
+	return stepConfigForAll(pipelineRegistry)
+}
+
+func reconcileIntegratedLLMConfig(ctx context.Context, client *workspace.Client, workspacePath string) error {
+	workflowPath := filepath.ToSlash(filepath.Join(workspacePath, "workflow.json"))
+	workflowFile, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: workflowPath})
+	if err != nil {
+		return fmt.Errorf("read workflow LLM config: %w", err)
+	}
+	var workflowConfig map[string]interface{}
+	if err := json.Unmarshal([]byte(workflowFile.Content), &workflowConfig); err != nil {
+		return fmt.Errorf("decode workflow LLM config: %w", err)
+	}
+	capabilities, ok := workflowConfig["capabilities"].(map[string]interface{})
+	if !ok {
+		capabilities = map[string]interface{}{}
+		workflowConfig["capabilities"] = capabilities
+	}
+	wantedWorkflowLLM := videoWorkflowLLMConfig()
+	if !reflect.DeepEqual(capabilities["llm_config"], wantedWorkflowLLM) {
+		capabilities["llm_config"] = wantedWorkflowLLM
+		if err := updateWorkspaceJSON(ctx, client, workflowPath, workflowConfig); err != nil {
+			return fmt.Errorf("pin workflow LLM config: %w", err)
+		}
+	}
+
+	stepConfigPath := filepath.ToSlash(filepath.Join(workspacePath, "planning/step_config.json"))
+	stepConfigFile, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: stepConfigPath})
+	if err != nil {
+		return fmt.Errorf("read step LLM config: %w", err)
+	}
+	var stepConfig map[string]interface{}
+	if err := json.Unmarshal([]byte(stepConfigFile.Content), &stepConfig); err != nil {
+		return fmt.Errorf("decode step LLM config: %w", err)
+	}
+	changed := false
+	steps, _ := stepConfig["steps"].([]interface{})
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		agentConfig, ok := step["agent_configs"].(map[string]interface{})
+		if !ok {
+			agentConfig = map[string]interface{}{}
+			step["agent_configs"] = agentConfig
+		}
+		wantedExecutionLLM := videoAgentLLMConfig()
+		if !reflect.DeepEqual(agentConfig["execution_llm"], wantedExecutionLLM) {
+			agentConfig["execution_llm"] = wantedExecutionLLM
+			changed = true
+		}
+	}
+	if changed {
+		if err := updateWorkspaceJSON(ctx, client, stepConfigPath, stepConfig); err != nil {
+			return fmt.Errorf("pin step LLM config: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtime agentprofiles.RuntimeContext) error {
+	client := workspace.NewClient(workspaceAPIURL, workspace.WithUserID(runtime.UserID))
+	manifestPath := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "product.json"))
+	manifestFile, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: manifestPath})
+	if err != nil {
+		return fmt.Errorf("read product manifest: %w", err)
+	}
+	var product integratedProductManifest
+	if err := json.Unmarshal([]byte(manifestFile.Content), &product); err != nil {
+		return fmt.Errorf("decode product manifest: %w", err)
+	}
+	if product.SchemaVersion != 1 || product.Product != "video-studio" || strings.TrimSpace(product.ID) == "" || strings.TrimSpace(product.Title) == "" {
+		return errors.New("product.json is not a valid Video Studio project manifest")
+	}
+
+	for _, folder := range []string{"uploads", "work", "outputs", "planning", "variables", "soul", "db"} {
+		if err := client.CreateFolder(ctx, filepath.ToSlash(filepath.Join(runtime.WorkspacePath, folder))); err != nil && !strings.Contains(strings.ToLower(err.Error()), "exist") {
+			return fmt.Errorf("create %s folder: %w", folder, err)
+		}
+	}
+	// This initializer is the real AgentWorks chat lifecycle used by Video
+	// Studio. Sync YAML-declared vendor skills here before selected_skills is
+	// resolved, so the generic AgentWorks loader finds ordinary skills/<name>/
+	// folders for the main agent and every workflow stage.
+	localWorkspace, err := profileWorkspaceLocalPath(runtime.UserID, runtime.WorkspacePath)
+	if err != nil {
+		return err
+	}
+	if err := syncManagedProductSkills(ctx, localWorkspace); err != nil {
+		return fmt.Errorf("sync Video Studio managed skills: %w", err)
+	}
+	seeded := map[string]interface{}{
+		"planning/plan.json":        planForAll(pipelineRegistry),
+		"planning/step_config.json": integratedStepConfig(),
+		"workflow.json":             integratedWorkflowManifest(product.ID, product.Title),
+		"variables/variables.json":  map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
+	}
+	// Upgrade prior generated Video Studio plans too. Besides retiring the old
+	// cinematic route and panel-PNG/FFmpeg contract, keep product-owned plans in
+	// sync when the high-quality route gains a new production gate. The
+	// fingerprints are deliberately specific: a plan must already be the Video
+	// Studio infographic route, so an unrelated user-authored plan is preserved.
+	refreshGeneratedWorkflow := false
+	planPath := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "planning/plan.json"))
+	if existingPlan, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: planPath}); err == nil {
+		refreshGeneratedWorkflow = shouldRefreshGeneratedVideoStudioPlan(existingPlan.Content)
+	}
+	for relative, value := range seeded {
+		path := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, relative))
+		generatedWorkflowFile := relative == "planning/plan.json" || relative == "planning/step_config.json" || relative == "workflow.json"
+		if workspaceFileExists(ctx, client, path) && !(refreshGeneratedWorkflow && generatedWorkflowFile) {
+			continue
+		}
+		if err := updateWorkspaceJSON(ctx, client, path, value); err != nil {
+			return fmt.Errorf("seed %s: %w", relative, err)
+		}
+	}
+	if err := reconcileIntegratedLLMConfig(ctx, client, runtime.WorkspacePath); err != nil {
+		return err
+	}
+	soulPath := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "soul/soul.md"))
+	if !workspaceFileExists(ctx, client, soulPath) {
+		soul := "# " + product.Title + "\n\n## Objective\nCreate strong, source-grounded videos through a clear, approval-led production process.\n\n## Success Criteria\nThe story is coherent, visual and audio quality are checked, and every final export is reproducible from project assets and workflow artifacts.\n\n## Constraints\nDo not publish. Do not invent facts. Do not generate paid media without explicit approval.\n"
+		if _, err := client.UpdateWorkspaceFile(ctx, workspace.UpdateWorkspaceFileParams{Filepath: soulPath, Content: soul}); err != nil {
+			return err
+		}
+	}
+	return client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{
+		DBPath:     filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "db/db.sqlite")),
+		Migrations: []string{presentationsMigration, presentationsKindIndexMigration},
+	})
+}
+
+func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
+	// Old product generations used one of these legacy signatures. The current
+	// product plan is also deliberately upgraded when it lacks the critic gates;
+	// those gates are a required part of the high-quality workflow, not an
+	// optional template addition. Requiring both route-specific identifiers
+	// avoids overwriting a user-created workflow that happens to mention video.
+	if strings.Contains(content, `"cinematic"`) ||
+		strings.Contains(content, `"infographic-design.md"`) ||
+		strings.Contains(content, `Build each panel in HTML/CSS`) {
+		return true
+	}
+	return strings.Contains(content, `"route_id": "infographic"`) &&
+		strings.Contains(content, `"infographic-research"`) &&
+		!strings.Contains(content, `"infographic-render-critique"`)
+}
+
+func resolveWorkspaceEvidence(ctx context.Context, client *workspace.Client, projectRoot, rawPath, reportPath string) (string, []byte, error) {
+	clean, err := cleanProjectPath(rawPath)
+	if err != nil {
+		return "", nil, err
+	}
+	read := func(relative string) ([]byte, error) {
+		return client.DownloadFile(ctx, filepath.ToSlash(filepath.Join(projectRoot, relative)))
+	}
+	if data, err := read(clean); err == nil && len(data) > 0 {
+		return clean, data, nil
+	}
+	executionRoot := filepath.ToSlash(filepath.Dir(filepath.Dir(filepath.FromSlash(reportPath))))
+	if filepath.Base(executionRoot) != "execution" {
+		return clean, nil, fmt.Errorf("file is missing or empty: %s", clean)
+	}
+	resolved, err := cleanProjectPath(filepath.ToSlash(filepath.Join(executionRoot, filepath.FromSlash(clean))))
+	if err != nil {
+		return "", nil, err
+	}
+	data, err := read(resolved)
+	if err != nil || len(data) == 0 {
+		return resolved, nil, fmt.Errorf("file is missing or empty: %s", resolved)
+	}
+	return resolved, data, nil
+}
+
+func validateWorkspaceQualityReport(ctx context.Context, client *workspace.Client, projectRoot, videoPath, rawReportPath, note string) (string, error) {
+	reportPath, err := cleanProjectPath(rawReportPath)
+	if err != nil || filepath.Base(reportPath) != "quality-report.json" {
+		return "", errors.New("QA report must be a project-relative quality-report.json")
+	}
+	reportFile, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: filepath.ToSlash(filepath.Join(projectRoot, reportPath))})
+	if err != nil {
+		return "", errors.New("the required quality-report.json does not exist")
+	}
+	var report qualityReport
+	if err := json.Unmarshal([]byte(reportFile.Content), &report); err != nil || report.SchemaVersion != 1 {
+		return "", errors.New("quality-report.json is invalid or unsupported")
+	}
+	candidatePath, candidate, err := resolveWorkspaceEvidence(ctx, client, projectRoot, report.CandidatePath, reportPath)
+	if err != nil || candidatePath != videoPath || len(candidate) == 0 {
+		return "", errors.New("the QA report names a different or missing video")
+	}
+	if !report.ReadyToPresent || (report.Verdict != "pass" && report.Verdict != "placeholder-pass") || report.RecommendedAction != "present" {
+		return "", errors.New("the QA verdict is not ready to present")
+	}
+	if report.Verdict == "placeholder-pass" && !strings.Contains(strings.ToLower(note), "placeholder") {
+		return "", errors.New("a placeholder-pass must be clearly labelled as a placeholder")
+	}
+	for _, name := range []string{"technical", "visual", "audio", "content", "captions", "promise"} {
+		check, ok := report.Checks[name]
+		if !ok || (check.Status != "pass" && check.Status != "not_applicable") || len(check.Evidence) == 0 {
+			return "", fmt.Errorf("the %s check is not supported by passing evidence", name)
+		}
+	}
+	if len(report.SampledFrames) < 4 {
+		return "", errors.New("fewer than four inspected frames were recorded")
+	}
+	if _, data, err := resolveWorkspaceEvidence(ctx, client, projectRoot, report.ContactSheetPath, reportPath); err != nil || len(data) == 0 {
+		return "", errors.New("the QA contact sheet is missing or empty")
+	}
+	for _, frame := range report.SampledFrames {
+		if _, data, err := resolveWorkspaceEvidence(ctx, client, projectRoot, frame.Path, reportPath); err != nil || len(data) == 0 {
+			return "", errors.New("an inspected frame is missing or empty")
+		}
+	}
+	return report.Verdict, nil
+}
+
+func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		client := workspace.NewClient(
+			workspaceAPIURL,
+			workspace.WithUserID(runtime.UserID),
+			workspace.WithExtraEnv(map[string]string{"MCP_SESSION_ID": runtime.SessionID}),
+		)
+		projectRoot := profileWorkspaceRoot(runtime.UserID, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "show_video", Category: "presentation_tools",
+			Description: "Present the exact finished video in the product Videos panel after its quality-report.json has passed. Repeating the same path updates the existing presentation.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path":           map[string]interface{}{"type": "string", "description": "Project-relative path to the exact video"},
+				"qa_report_path": map[string]interface{}{"type": "string", "description": "Project-relative path to quality-report.json"},
+				"title":          map[string]interface{}{"type": "string"},
+				"note":           map[string]interface{}{"type": "string"},
+			}, "required": []string{"path", "qa_report_path", "title"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rawPath, _ := args["path"].(string)
+				videoPath, err := cleanProjectPath(rawPath)
+				if err != nil || !videoExtensions[strings.ToLower(filepath.Ext(videoPath))] {
+					return "show_video requires a project-relative video path.", nil
+				}
+				reportPath, _ := args["qa_report_path"].(string)
+				title, _ := args["title"].(string)
+				note, _ := args["note"].(string)
+				title = strings.TrimSpace(title)
+				if title == "" {
+					title = filepath.Base(videoPath)
+				}
+				verdict, err := validateWorkspaceQualityReport(ctx, client, projectRoot, videoPath, reportPath, note)
+				if err != nil {
+					return "Quality assurance has not passed for this video: " + err.Error(), nil
+				}
+				hash := sha256.Sum256([]byte(videoPath))
+				presentationID := "video-" + hex.EncodeToString(hash[:8])
+				now := time.Now().UTC().Format(time.RFC3339Nano)
+				payload, _ := json.Marshal(map[string]interface{}{"path": videoPath, "qa_report_path": reportPath, "note": strings.TrimSpace(note), "verdict": verdict})
+				resources, _ := json.Marshal([]map[string]string{{"kind": "workspace.file", "path": videoPath, "role": "primary"}})
+				// The workspace database API applies X-User-ID isolation itself and
+				// explicitly rejects _users/... request paths. Keep this route
+				// user-relative; evidence reads above use projectRoot because those
+				// also pass through the session folder guard in the agent process.
+				dbPath := filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "db/db.sqlite"))
+				_, err = client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{DBPath: dbPath, Statements: []workspace.WorkflowDBMutationStatement{{
+					SQL:    `INSERT INTO ui_presentations (id,kind,schema_version,session_id,title,payload_json,resources_json,actions_json,status,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,title=excluded.title,payload_json=excluded.payload_json,resources_json=excluded.resources_json,status=excluded.status,revision=ui_presentations.revision+1,updated_at=excluded.updated_at`,
+					Params: []interface{}{presentationID, "media.video", 1, runtime.SessionID, title, string(payload), string(resources), "[]", "ready", 1, now, now},
+				}}})
+				if err != nil {
+					return "", fmt.Errorf("persist video presentation: %w", err)
+				}
+				if runtime.Emit != nil {
+					runtime.Emit(map[string]interface{}{"type": "presentation_created", "presentation_id": presentationID, "kind": "media.video", "workspace_path": runtime.WorkspacePath})
+				}
+				return fmt.Sprintf("Showing %q in the Videos panel.", title), nil
+			},
+		}, nil
+	}
+}
+
+// RegisterAgentProfileRuntime connects Video Studio's product-owned workspace
+// initializer and QA-gated presentation tool to the generic Agent Profile
+// registry. Authentication, sessions, streaming, and tool execution remain
+// owned by AgentWorks.
+func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIURL string) error {
+	if err := registry.RegisterInitializer("video-studio", func(ctx context.Context, runtime agentprofiles.RuntimeContext) error {
+		return ensureIntegratedProject(ctx, workspaceAPIURL, runtime)
+	}); err != nil {
+		return err
+	}
+	return registry.RegisterToolFactory("video.show-video", showVideoFactory(workspaceAPIURL))
+}

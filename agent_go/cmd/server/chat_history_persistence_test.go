@@ -1680,6 +1680,48 @@ func TestSeedCodingAgentRuntimeFromCurrentConversationRestoresClaude(t *testing.
 	}
 }
 
+func TestSeedCodingAgentRuntimeFromCurrentConversationReplacesIncompleteCursorHandle(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	convDir := filepath.Join(root, "Workflow", "video", "builder", "conversation", "2026-08-08")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(convDir, "session-cursor-chat-conversation.json"), []byte(`{
+  "session_id": "cursor-chat",
+  "workshop_mode": "builder",
+  "runtime": {
+    "kind": "coding_agent",
+    "provider": "cursor-cli",
+    "external_session_id": "cursor-native-restored",
+    "resume_supported": true,
+    "resume_flag": "--resume",
+    "agent_session_handle": {
+      "session_id": "cursor-chat",
+      "provider": {"provider": "cursor-cli", "transport": "structured", "native_session_id": "cursor-native-restored"}
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &StreamingAPI{}
+	// A newly configured agent has provider metadata but no native Cursor
+	// session. It must not mask the durable handle above.
+	agent := testAgentWithHandle("cursor-chat", llmtypes.CodingProviderSessionHandle{
+		Provider: "cursor-cli", Transport: "structured", Model: "auto", WorkingDir: "/tmp/video",
+	})
+
+	seeded, _ := api.seedCodingAgentRuntimeFromCurrentConversation("cursor-chat", "default", "cursor-cli", "builder", "Workflow/video", agent)
+	if !seeded {
+		t.Fatal("expected incomplete Cursor handle to be replaced with the persisted native session")
+	}
+	if got := requireAgentHandle(t, agent).Provider.NativeSessionID; got != "cursor-native-restored" {
+		t.Fatalf("native session ID = %q", got)
+	}
+}
+
 func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresCodex(t *testing.T) {
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
@@ -1875,5 +1917,87 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRejectsWorkshopModeMismat
 	}
 	if handle := mcpagent.SnapshotAgentSession(agent); handle != nil && handle.Provider.NativeSessionID != "" {
 		t.Fatalf("unexpected native session ID = %q", handle.Provider.NativeSessionID)
+	}
+}
+
+func TestRestorePersistedConversationHistoryHydratesStableProjectSession(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	sessionID := "video-studio:project:lumadesk"
+	dateDir := filepath.Join(root, "_users", "default", "chat_history", time.Now().Format("2006-01-02"))
+	if err := os.MkdirAll(dateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conversationPath := filepath.Join(dateDir, chatHistoryConversationFileName(sessionID))
+	conversation := `{
+  "session_id": "video-studio:project:lumadesk",
+  "conversation_history": [
+    {"Role": "human", "Parts": [{"Text": "Create an AgentWorks infographic"}]},
+    {"Role": "ai", "Parts": [{"Text": "I will prepare the infographic."}]}
+  ],
+  "runtime": {
+    "kind": "coding_agent",
+    "provider": "claude-code",
+    "external_session_id": "old-claude-session",
+    "resume_supported": true,
+    "transport": "tmux"
+  }
+}`
+	if err := os.WriteFile(conversationPath, []byte(conversation), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &StreamingAPI{}
+	if !api.restorePersistedConversationHistory(sessionID, "default", "") {
+		t.Fatal("expected durable project transcript to restore into the empty cache")
+	}
+	if api.restorePersistedConversationHistory(sessionID, "default", "") {
+		t.Fatal("second restore must not replace the warm in-memory transcript")
+	}
+	api.conversationMux.RLock()
+	history := api.conversationHistory[sessionID]
+	api.conversationMux.RUnlock()
+	if len(history) != 2 {
+		t.Fatalf("restored history length = %d, want 2", len(history))
+	}
+	if target, ok := api.rememberedRestoredConversationPersistTarget(sessionID); !ok || target.ConversationPath == "" {
+		t.Fatal("expected recovered session to keep its original persistence target")
+	}
+}
+
+func TestBoundedChatHistoryTailKeepsNewestCompleteMessages(t *testing.T) {
+	history := make([]llmtypes.MessageContent, 0, 5)
+	for _, text := range []string{"one", "two", "three", "four", "five"} {
+		history = append(history, llmtypes.MessageContent{
+			Role:  llmtypes.ChatMessageTypeHuman,
+			Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: text}},
+		})
+	}
+
+	tail := boundedChatHistoryTail(history, 3, 1024)
+	if len(tail) != 3 {
+		t.Fatalf("tail length = %d, want 3", len(tail))
+	}
+	for i, want := range []string{"three", "four", "five"} {
+		part, ok := tail[i].Parts[0].(llmtypes.TextContent)
+		if !ok || part.Text != want {
+			t.Fatalf("tail[%d] = %#v, want text %q", i, tail[i], want)
+		}
+	}
+}
+
+func TestBoundedChatHistoryTailRetainsNewestOversizedMessage(t *testing.T) {
+	history := []llmtypes.MessageContent{
+		{Role: llmtypes.ChatMessageTypeHuman, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "old"}}},
+		{Role: llmtypes.ChatMessageTypeHuman, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: strings.Repeat("x", 4096)}}},
+	}
+
+	tail := boundedChatHistoryTail(history, 48, 128)
+	if len(tail) != 1 {
+		t.Fatalf("tail length = %d, want only the newest oversized message", len(tail))
+	}
+	part, ok := tail[0].Parts[0].(llmtypes.TextContent)
+	if !ok || len(part.Text) != 4096 {
+		t.Fatalf("tail did not retain the newest oversized message: %#v", tail[0])
 	}
 }

@@ -9,15 +9,78 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
+
+func TestBuiltinAgentProfileIsValidAndRenderSafe(t *testing.T) {
+	profile := BuiltinAgentProfile()
+	if err := agentprofiles.Validate(profile); err != nil {
+		t.Fatalf("invalid built-in profile: %v", err)
+	}
+	rendered, err := agentprofiles.RenderPrompt(profile, agentprofiles.PromptContext{
+		ProjectTitle:  "Launch Film",
+		LocalDateTime: "Friday, 7 August 2026",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rendered, "Launch Film") || !strings.Contains(rendered, "Friday, 7 August 2026") {
+		t.Fatalf("profile context was not rendered: %q", rendered[:min(len(rendered), 300)])
+	}
+	if profile.Version != 2 || profile.Runtime.Provider != "claude-code" || profile.Runtime.ModelID != DefaultClaudeModel {
+		t.Fatalf("Video Studio main agent is not pinned to Claude Code/Sonnet 5: version=%d runtime=%+v", profile.Version, profile.Runtime)
+	}
+	hasBrowserSkill := false
+	for _, skill := range profile.Skills {
+		if skill == "agent-browser" {
+			hasBrowserSkill = true
+			break
+		}
+	}
+	if profile.Runtime.Capabilities.Browser != agentprofiles.CapabilityRequired || profile.Runtime.Capabilities.Secrets != agentprofiles.CapabilityRequired || !hasBrowserSkill {
+		t.Fatalf("Video Studio does not reuse AgentWorks browser/secrets capabilities: runtime=%+v skills=%v", profile.Runtime.Capabilities, profile.Skills)
+	}
+	if profile.Runtime.AgentTools.Mode != "hybrid" || profile.Runtime.Approvals.Mode != "provider_auto" {
+		t.Fatalf("Video Studio native-tool policy = %+v %+v, want hybrid/provider_auto", profile.Runtime.AgentTools, profile.Runtime.Approvals)
+	}
+	profiles := BuiltinAgentProfiles()
+	if len(profiles) != 2 || profiles[0].Version != 1 || profiles[0].Runtime.Provider != "" || profiles[1].Version != 2 {
+		t.Fatalf("unexpected immutable profile versions: %+v", profiles)
+	}
+}
+
+func TestIntegratedWorkflowPinsClaudeCodeSonnet5(t *testing.T) {
+	manifest := integratedWorkflowManifest("demo", "Demo")
+	capabilities := manifest["capabilities"].(map[string]interface{})
+	llmConfig := capabilities["llm_config"].(map[string]interface{})
+	if llmConfig["mode"] != "explicit" {
+		t.Fatalf("workflow LLM mode = %v, want explicit", llmConfig["mode"])
+	}
+	builderLLM := llmConfig["builder_llm"].(map[string]interface{})
+	if builderLLM["provider"] != "claude-code" || builderLLM["model_id"] != DefaultClaudeModel {
+		t.Fatalf("workflow builder LLM = %+v", builderLLM)
+	}
+	config := integratedStepConfig()
+	steps := config["steps"].([]map[string]interface{})
+	if len(steps) == 0 {
+		t.Fatal("integrated step config has no steps")
+	}
+	for _, step := range steps {
+		executionLLM := step["agent_configs"].(map[string]interface{})["execution_llm"].(map[string]interface{})
+		if executionLLM["provider"] != "claude-code" || executionLLM["model_id"] != DefaultClaudeModel {
+			t.Fatalf("step %v execution LLM = %+v", step["id"], executionLLM)
+		}
+	}
+}
 
 func TestBuiltinVideoSkills(t *testing.T) {
 	want := map[string]string{
-		"video-creation":        "work/production.json",
-		"video-shot-generation": "reference",
-		"video-editing":         "hard cuts",
-		"video-quality":         "work/qa/",
-		"html-composition":      "headless Chrome",
+		"product-infographic": "BRIEF.md",
+		"video-creation":      "work/production.json",
+		"video-editing":       "hard cuts",
+		"video-quality":       "work/qa/",
+		"html-composition":    "headless Chrome",
 	}
 
 	skills := builtinSkills()
@@ -45,12 +108,12 @@ func TestHyperFramesRuntimeIsAgentManaged(t *testing.T) {
 	const managedCommand = "npx --yes hyperframes@latest"
 
 	prompt := videoSystemPrompt("Runtime test")
-	if strings.Contains(prompt, managedCommand) || strings.Contains(prompt, "HyperFrames") {
-		t.Fatalf("video system prompt contains runtime-specific HyperFrames instructions")
+	if strings.Contains(prompt, managedCommand) {
+		t.Fatalf("video system prompt contains an executable HyperFrames command")
 	}
-	for _, required := range []string{"read the relevant attached video skills", "Runtime dependencies are Studio-owned", "Never ask the user to install production dependencies"} {
+	for _, required := range []string{"read the relevant attached video skills", "Runtime dependencies are Studio-owned", "Never ask the user to install production dependencies", "HyperFrames is the primary composition system", "YAML-managed HyperFrames skills"} {
 		if !strings.Contains(prompt, required) {
-			t.Fatalf("video system prompt is missing generic skill/runtime guidance %q", required)
+			t.Fatalf("video system prompt is missing product/runtime guidance %q", required)
 		}
 	}
 
@@ -83,20 +146,41 @@ func TestVideoPromptKeepsTechnicalWorkInternal(t *testing.T) {
 	}
 }
 
+func TestVideoPromptExplainsDirectProjectTools(t *testing.T) {
+	prompt := videoSystemPrompt("Tool guidance test")
+	for _, required := range []string{
+		"normal coding-agent tools",
+		"`show_video`",
+		"The browser is skill-led",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("video system prompt is missing tool guidance %q", required)
+		}
+	}
+	for _, removed := range []string{"`execute_shell_command`", "`diff_patch_workspace_file`"} {
+		if strings.Contains(prompt, removed) {
+			t.Fatalf("video system prompt must not direct native-tool agents to %s", removed)
+		}
+	}
+}
+
 func TestVideoPromptHasProductIdentityAndCurrentTime(t *testing.T) {
 	zone := time.FixedZone("IST", 5*60*60+30*60)
 	now := time.Date(2026, time.August, 6, 20, 15, 0, 0, zone)
 	prompt := videoSystemPromptAt("Identity test", now)
 	for _, required := range []string{
 		"You are Video Studio, an expert creative director, video producer, and editor",
-		"one persistent creative collaborator",
-		"identify yourself as Video Studio",
+		"user's current conversation is the authority",
+		"Identify yourself as Video Studio",
 		"Thursday, 6 August 2026 at 8:15 PM IST (UTC+05:30)",
-		"today, tomorrow, or latest",
+		"Current local date and time",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("video system prompt is missing identity/time guidance %q", required)
 		}
+	}
+	if strings.Contains(prompt, "Identity test") {
+		t.Fatalf("project title leaked into system prompt: %q", prompt)
 	}
 	if strings.Contains(prompt, "You are Claude Code") || strings.Contains(prompt, "Video Studio coding agent") {
 		t.Fatalf("video system prompt exposes implementation identity")
@@ -106,20 +190,22 @@ func TestVideoPromptHasProductIdentityAndCurrentTime(t *testing.T) {
 func TestVideoPromptChoosesExistingExecutionTools(t *testing.T) {
 	prompt := videoSystemPrompt("Routing test")
 	for _, required := range []string{
-		"Choose the execution mode yourself",
-		"Work directly in chat",
-		"Use execute_step",
-		"Use run_full_workflow",
-		"make this 60 seconds",
-		"direct revision, not a new cinematic workflow",
-		"ground-up reconcept",
-		"new versioned group_name",
-		"Ordinary revisions should remain direct chat edits",
-		"AgentWorks already owns branch routing",
+		"Skills are the default production path",
+		"Do not start a full workflow merely because the request is multi-stage",
+		"Work directly in chat by default",
+		"This includes new productions, revisions, and ground-up reconcepts",
+		"does not create cinematic or AI-generated footage",
+		"infographic",
+		"quality",
+		"Product-control tools are schema-on-demand",
+		"get_api_spec",
+		"query_step",
+		"send_step_message",
+		"stop_step",
+		"stop_all_executions",
 		`{"route": "quality"}`,
 		"QA is mandatory after every render",
 		"qa_report_path",
-		"do not ask for a separate \"workflow approval.\"",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("video system prompt is missing orchestration guidance %q", required)

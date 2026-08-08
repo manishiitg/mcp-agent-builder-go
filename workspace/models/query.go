@@ -48,6 +48,15 @@ type MutationResponse struct {
 	TotalRowsAffected int64                     `json:"total_rows_affected"`
 }
 
+// InitializeDatabaseRequest creates a missing managed SQLite database and
+// applies idempotent schema migrations. The route is protected by the
+// workspace service token and is intended for trusted platform initializers,
+// never arbitrary agent SQL.
+type InitializeDatabaseRequest struct {
+	DBPath     string   `json:"db_path" binding:"required"`
+	Migrations []string `json:"migrations" binding:"required"`
+}
+
 // DBTablesResponse describes the tables in a workflow's SQLite DB, for the
 // read-only DatabasePopup inspector.
 type DBTablesResponse struct {

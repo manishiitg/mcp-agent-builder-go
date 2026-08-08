@@ -89,6 +89,9 @@ func (api *StreamingAPI) handlePublicFile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	req.Header.Set("X-User-ID", uid)
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
 
 	resp, err := workspaceHTTPClient.Do(req)
 	if err != nil {
@@ -98,18 +101,22 @@ func (api *StreamingAPI) handlePublicFile(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("[PUBLIC-FILE] Workspace returned %d: %s", resp.StatusCode, string(body))
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
-	// Proxy content-type and body — force inline display (no download)
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
+	// Proxy streaming/range headers so media players can seek through the same
+	// generic workspace surface used by every product.
+	for _, header := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified"} {
+		if value := resp.Header.Get(header); value != "" {
+			w.Header().Set(header, value)
+		}
 	}
 	w.Header().Set("Content-Disposition", "inline")
+	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
 
