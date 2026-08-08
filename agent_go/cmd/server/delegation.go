@@ -268,6 +268,18 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 	// root chat agent resolves them (no preset at delegation time).
 	applySharedLLMAgentTuning(&subAgentConfig, &parentReq, nil)
 
+	// A child must not exceed the tool surface its product declared, or
+	// delegating becomes a way around tool_policy. The profile is resolved from
+	// the same parent request rather than threaded down, so parent and child
+	// derive their surface from one source instead of two — the divergence that
+	// let a background child come up short of its parent in the first place.
+	if subProfile, profileErr := api.resolveAgentProfileForQuery(ctx, &parentReq, subAgentUserID, sessionID); profileErr != nil {
+		log.Printf("[DELEGATION] Could not resolve the parent agent profile for the sub-agent tool surface: %v", profileErr)
+	} else if gate := newProductToolGate(subProfile); gate.enforcing() {
+		subAgentConfig.AdmitTool = gate.Admit
+		defer gate.logSurface(sessionID)
+	}
+
 	// Create sub-agent using the wrapper (same as parent agent creation)
 	subAgent, err := agent.NewLLMAgentWrapper(ctx, subAgentConfig, nil, api.logger)
 	if err != nil {

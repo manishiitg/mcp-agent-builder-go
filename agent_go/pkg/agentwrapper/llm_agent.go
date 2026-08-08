@@ -39,7 +39,9 @@ type LLMAgentWrapper struct {
 	finalized  bool
 	definition mcpagent.AgentDefinition
 	observers  []mcpagent.AgentEventListener
-	toolPolicy mcpagent.ToolPolicy
+	// admitTool, when set, decides whether a tool may join the definition at
+	// all. Fixed at construction from LLMAgentConfig.AdmitTool.
+	admitTool func(string) bool
 
 	// In-memory conversation history for multi-turn state
 	history    []llmtypes.MessageContent
@@ -276,6 +278,22 @@ type LLMAgentConfig struct {
 	AgentMode          mcpagent.AgentMode // Agent mode (Simple or ReAct)
 	SelectedTools      []string           // Selected tools in "server:tool" format
 
+	// AdmitTool decides which tools may enter this agent's definition. It is a
+	// construction input rather than a setter because the decision is only
+	// meaningful before the first registration: it defines the agent's identity,
+	// which is fixed once assembled.
+	//
+	// This is not ToolPolicy. ToolPolicy narrows a finished agent per turn and
+	// also rewrites the session-wide code-execution registry, so it reaches
+	// actors the caller did not intend and can hide a tool the agent has already
+	// been told about. Admission decides membership once, before the coding CLI
+	// caches its catalog, so a declined tool is never advertised and a retained
+	// one can never silently disappear.
+	//
+	// nil admits everything. Invoked while the wrapper's lock is held, so it
+	// must not call back into the wrapper.
+	AdmitTool func(name string) bool
+
 	// Unified fallback configuration (replaces FallbackModels and CrossProviderFallback)
 	Fallbacks []FallbackModel // Fallback models with optional provider override
 	// Code execution mode: When enabled, only virtual tools are added to LLM
@@ -457,6 +475,7 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		},
 		tracer: tracer, traceID: traceID, logger: logger,
 		runtime: runtime, definition: definition,
+		admitTool: config.AdmitTool,
 	}
 	if mainTraceID == "" {
 		logger.Info(fmt.Sprintf("Created agent trace for conversation: %s", traceID))
@@ -496,7 +515,6 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 		return "", errors.New("agent is closed")
 	}
 	runtimeAgent := w.agent
-	toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 	// Use the passed messages directly, don't overwrite internal history
 	w.mu.Unlock()
 
@@ -549,7 +567,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if providerNeedsPlainTextHistory(w.config.Provider) {
 		messages = sanitizeHistoryForPlainTextProvider(messages)
 	}
-	result, err := runtimeAgent.Run(timeoutCtx, mcpagent.Turn{History: messages, ToolPolicy: toolPolicy})
+	result, err := runtimeAgent.Run(timeoutCtx, mcpagent.Turn{History: messages})
 	response := result.Text
 	updatedMessages := result.History
 	duration := time.Since(startTime)
@@ -659,12 +677,6 @@ func (w *LLMAgentWrapper) AddObserver(observer mcpagent.AgentEventListener) erro
 	return nil
 }
 
-func (w *LLMAgentWrapper) SetToolPolicy(toolNames []string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
-}
-
 // SetCodingAgentWorkingDir updates construction-time runtime state before the
 // immutable Agent is finalized. It deliberately does not mutate a live Agent.
 func (w *LLMAgentWrapper) SetCodingAgentWorkingDir(dir string) error {
@@ -703,6 +715,12 @@ func (w *LLMAgentWrapper) RegisterCustomToolWithTimeout(name, description string
 	defer w.mu.Unlock()
 	if err := w.ensureDefinitionMutable(); err != nil {
 		return err
+	}
+	// Registration admission. Declining is not an error: the caller registered
+	// a tool this agent's profile does not include, which is a policy outcome,
+	// not a failure. Callers treat a returned error as fatal to the session.
+	if w.admitTool != nil && !w.admitTool(name) {
+		return nil
 	}
 	tool := mcpagent.ToolDefinition{
 		Name: name, Description: description, InputSchema: parameters,
@@ -1090,11 +1108,9 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		// as one result.
 		w.mu.RLock()
 		runtimeAgent := w.agent
-		toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 		w.mu.RUnlock()
 		result, err := runtimeAgent.Run(ctx, mcpagent.Turn{
 			History:           messages,
-			ToolPolicy:        toolPolicy,
 			StreamingCallback: streamingCallback,
 		})
 		response := result.Text

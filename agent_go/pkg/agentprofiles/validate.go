@@ -69,6 +69,30 @@ func Validate(profile Profile) error {
 			return fmt.Errorf("tool_policy.disabled contains an empty tool name")
 		}
 	}
+	if mode := strings.TrimSpace(profile.ToolPolicy.Mode); mode != "" && !profile.ToolPolicy.IsAllowlist() {
+		return fmt.Errorf("invalid tool_policy.mode %q (want %q or empty)", profile.ToolPolicy.Mode, ToolPolicyModeAllowlist)
+	}
+	seenEnabled := make(map[string]struct{}, len(profile.ToolPolicy.Enabled))
+	for _, name := range profile.ToolPolicy.Enabled {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return fmt.Errorf("tool_policy.enabled contains an empty tool name")
+		}
+		if _, exists := seenEnabled[trimmed]; exists {
+			return fmt.Errorf("tool_policy.enabled lists %q twice", trimmed)
+		}
+		seenEnabled[trimmed] = struct{}{}
+	}
+	// An allowlist is the complete set; a deny-list alongside it would be a
+	// second place deciding the same thing, which is the drift this replaces.
+	if profile.ToolPolicy.IsAllowlist() {
+		if len(profile.ToolPolicy.Enabled) == 0 {
+			return fmt.Errorf("tool_policy.mode=%s requires a non-empty enabled list", ToolPolicyModeAllowlist)
+		}
+		if len(profile.ToolPolicy.Disabled) > 0 {
+			return fmt.Errorf("tool_policy.mode=%s cannot be combined with tool_policy.disabled", ToolPolicyModeAllowlist)
+		}
+	}
 
 	return validateRuntime(profile.Runtime)
 }

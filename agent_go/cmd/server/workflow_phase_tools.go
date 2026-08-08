@@ -19,18 +19,17 @@ import (
 
 // installWorkflowPhaseTools registers the phase-specific tool set on an agent
 // (plan modification tools, workshop chat tools, evaluation tools, run_full_workflow,
-// guidance/reference doc tools, etc.) and optionally applies a workshop-mode tool
-// allow list.
+// guidance/reference doc tools, etc.).
 //
 // Extracted from the /api/query path in server.go (was the 358-line inline block
-// inside the workflow-phase setup block). Two callers exist:
+// inside the workflow-phase setup block), which is its only caller.
 //
-//  1. /api/query — passes the live request's options and applyAllowList=true so the
-//     per-turn mode allow list narrows the visible tool set.
-//  2. The chat-history auto-restore path (setupWorkflowPhaseToolsForRestore) —
-//     passes a synthesized request built from the saved runtime + manifest and
-//     applyAllowList=false so the restored CLI sees the superset; /api/query later
-//     narrows it via SetToolAllowList when the first user turn arrives.
+// It registers one complete tool surface and applies no workshop-mode narrowing.
+// It used to take setToolPolicy/applyAllowList so /api/query could narrow the
+// set per turn while the restore path deliberately did not — two paths that
+// could disagree about what the CLI had been told exists, which is precisely
+// how a registered tool became undiscoverable. Mode is a focus rule now and
+// lives in the Builder prompt. See docs/design/agent_tool_surface_single_source.md.
 //
 // Returns an error instead of fatal-exiting on RegisterPlanModificationTools
 // failure. /api/query wraps the error with log.Fatalf to preserve the pre-refactor
@@ -39,7 +38,6 @@ import (
 func (api *StreamingAPI) installWorkflowPhaseTools(
 	ctx context.Context,
 	definitionAgent definitionRegistrar,
-	setToolPolicy func([]string),
 	sessionID, userID, workflowPhaseID, phaseWorkspacePath, phaseRunFolder string,
 	phaseTemplateVars map[string]string,
 	selectedServers []string,
@@ -48,7 +46,6 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	phaseWriteFile func(ctx context.Context, p, content string) error,
 	phaseMoveFile func(ctx context.Context, src, dst string) error,
 	syntheticReq QueryRequest,
-	applyAllowList bool,
 ) error {
 	// Register phase-appropriate tools
 	// PHASE_TOOL_RACE_DIAGNOSTIC: these are the registrations that
@@ -435,27 +432,20 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	log.Printf("[PHASE_TOOL_RACE] PHASE_TOOL_REGISTER_END for session=%s phase=%s elapsed=%s",
 		sessionID, workflowPhaseID, time.Since(phaseRegisterStart))
 
-	// Apply per-turn tool allow list based on current workshop mode.
-	// This restricts which tools the LLM can see/call, enforcing mode boundaries
-	// (e.g. DEBUG mode cannot execute steps, BUILD mode cannot optimize).
-	// The allow list is applied in conversation.go (filteredTools) and buildToolIndex() (code exec).
+	// No per-turn tool narrowing happens here. Workshop mode is a focus rule,
+	// and it is stated in the Builder system prompt rather than enforced by
+	// hiding tools.
 	//
-	// Skipped at restore time (applyAllowList=false): the auto-restore path
-	// registers the superset so a later /api/query can narrow it once the user's
-	// workshop mode is known. Narrowing at restore would lock the CLI to an
-	// out-of-date mode (it could even be empty if the saved mode never made it
-	// into the runtime).
-	if applyAllowList {
-		if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
-			workshopMode := phaseTemplateVars["WorkshopMode"]
-			allowedTools := todo_creation_human.GetToolsForWorkshopMode(workshopMode)
-			setToolPolicy(allowedTools)
-			log.Printf("[WORKSHOP_TOOLS] Applied tool allow list for mode=%s (%d tools): %v", workshopMode, len(allowedTools), allowedTools)
-		} else {
-			// Non-workshop phases get all tools
-			setToolPolicy(nil)
-		}
-	}
+	// The old allow list filtered the catalog the coding CLI caches at launch,
+	// so an omitted-but-registered tool was undiscoverable rather than
+	// rejected: the agent never learned it existed and shelled out instead.
+	// That silently cost set_user_secret and list_llm_capabilities. It also
+	// wrote through to the session-wide code-execution registry, which reaches
+	// execution agents and sub-agents that workshop mode was never meant to
+	// govern. See docs/design/agent_tool_surface_single_source.md.
+	//
+	// Authority (Reader/Writer, irreversible actions) is still enforced in code
+	// — at the executor, and at construction for tool agents.
 
 	return nil
 }

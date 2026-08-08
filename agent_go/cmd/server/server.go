@@ -4273,10 +4273,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		for _, secret := range mergeGlobalSecrets(req.DecryptedSecrets, req.SelectedGlobalSecrets) {
 			codingAgentSecretEnvironment["SECRET_"+secret.Name] = secret.Value
 		}
+		// The product tool gate is the one place a profile decides its tool
+		// surface. It is a construction input, so every registration path is
+		// covered without each one having to remember to consult a policy.
+		// Without tool_policy.mode=allowlist it only observes and logs, which is
+		// how a real enabled: list gets seeded from a live session rather than
+		// guessed.
+		toolGate := newProductToolGate(resolvedProfile)
+		defer toolGate.logSurface(sessionID)
+
 		agentConfig := agent.LLMAgentConfig{
 			Name:               "chat-agent",
 			ServerName:         serverList, // Use full server list, not just first one
 			ConfigPath:         api.mcpConfigPath,
+			AdmitTool:          toolGate.Admit,
 			Provider:           llm.Provider(finalProvider),
 			ModelID:            finalModelID,
 			Options:            resolvedPrimaryOptions,
@@ -5548,13 +5558,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Register phase-appropriate tools via the shared helper.
-				// The /api/query path passes the live request's options and
-				// applyAllowList=true so the per-turn mode allow list narrows
-				// the tool set. The chat-history auto-restore path
-				// (setupWorkflowPhaseToolsForRestore) calls the same helper with
-				// a synthesized request + applyAllowList=false so the restored
-				// CLI sees the superset; this /api/query later narrows it.
+				// Register phase-appropriate tools via the shared helper. The
+				// chat-history auto-restore path calls the same helper with a
+				// synthesized request, and both now install the identical
+				// surface — there is no per-turn narrowing for one path to
+				// apply and the other to miss.
 				syntheticReq := QueryRequest{
 					LLMConfig:             req.LLMConfig,
 					ExecutionOptions:      req.ExecutionOptions,
@@ -5563,11 +5571,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PresetQueryID:         req.PresetQueryID,
 				}
 				if err := api.installWorkflowPhaseTools(
-					setupCtx, llmAgent, llmAgent.SetToolPolicy, sessionID, currentUserID,
+					setupCtx, llmAgent, sessionID, currentUserID,
 					workflowPhaseID, phaseWorkspacePath, phaseRunFolder,
 					phaseTemplateVars, selectedServers, mergedAPIKeys,
 					phaseReadFile, phaseWriteFile, phaseMoveFile,
-					syntheticReq, true, // applyAllowList=true
+					syntheticReq,
 				); err != nil {
 					// Preserve the original Fatal semantics for the /api/query
 					// caller: the workflow-builder system prompt advertises the

@@ -178,6 +178,7 @@ func cloneProfile(profile Profile) Profile {
 		cloned.Tools[i] = binding
 		cloned.Tools[i].Config = append(json.RawMessage(nil), binding.Config...)
 	}
+	cloned.ToolPolicy.Enabled = append([]string(nil), profile.ToolPolicy.Enabled...)
 	cloned.ToolPolicy.Disabled = append([]string(nil), profile.ToolPolicy.Disabled...)
 	return cloned
 }

@@ -102,9 +102,25 @@ missing input to its canonical constructor, not a competing model.
 
 ## Fix: Video Studio
 
-Gate 2 is already inert here — `workflow_phase_tools.go:449` takes the
-`setToolPolicy(nil)` branch for non-Builder phases. So Video Studio becomes a
-genuine one-gate system with no runtime work.
+### Which Video Studio
+
+There are two surfaces, and only one of them has this problem:
+
+- **The AgentWorks-embedded profile** — `videoproduct.BuiltinAgentProfiles()`,
+  registered into the profile registry at `server.go:1473` and resolved per
+  request as `resolvedProfile`. Its agent is an `LLMAgentWrapper`, and the
+  platform pools arrive by default, filtered only by `tool_policy.disabled`.
+  **This is what `tool_policy` governs and what the gate covers.**
+- **The standalone `internal/videoproduct` server** — its own
+  `agentsession`-based agent, which hand-builds its tool list
+  (`videoShellTool`, `showVideoTool`, `workflowTools`) at `agent.go:491-503`.
+  No platform pool ever arrives, so it is already opt-in by construction and
+  needs no gate. `tool_policy` does not reach it, and `[PRODUCT_TOOL_GATE]`
+  will not appear in its logs.
+
+Gate 2 is already inert on the embedded path — `workflow_phase_tools.go` took
+the `setToolPolicy(nil)` branch for non-Builder phases even before its removal.
+So Video Studio becomes a genuine one-gate system with no runtime work.
 
 1. **Extend `ToolPolicy`** (`agent_go/pkg/agentprofiles/types.go:88-90`):
 
@@ -176,14 +192,23 @@ Higher risk — it touches every workflow — so it comes second.
 **Delete gate 2.** Workshop-mode narrowing goes away entirely. Mode discipline
 moves to the system prompt, which already describes the modes.
 
-There are only two call sites:
+`SetToolPolicy` has two callers, and only one of them is gate 2. They must be
+told apart before deleting anything:
 
-- `workflow_phase_tools.go:449-458` (the mode if/else), plus the `setToolPolicy`
-  parameter threaded in from `server.go:5566`
-- `interactive_workshop_manager.go:1925`
+| Caller | Supplies | Axis | Action |
+|---|---|---|---|
+| `workflow_phase_tools.go` mode if/else | `GetToolsForWorkshopMode(mode)` | **focus** — BUILD vs DEBUG | delete |
+| `interactive_workshop_manager.go` tool-agent registration | `goalAdvisorReadOnly…` / `goalAdvisorFinalizerApproved…` / `pulseFixerStage…`, paired with `writePaths` | **authority** — Reader vs Writer | keep |
 
-plus `GetToolsForWorkshopMode()` itself (`interactive_workshop_manager.go:1473`)
-and the exception list in `toolset_invariant_test.go:12-33`.
+The second is the reviewer/fixer separation the canonical doc's acceptance
+criterion 7 protects; deleting it would let a reviewer mutate the workflow DB.
+It should eventually move to construction-time admission too, but that is the
+canonical refactor's job, not this one.
+
+So the deletion is: the mode if/else and its `setToolPolicy`/`applyAllowList`
+parameters, the `server.go` wiring, `GetToolsForWorkshopMode()` itself, the
+now-dead `LLMAgentWrapper.SetToolPolicy` and its `toolPolicy` field, and the
+exception list in `toolset_invariant_test.go`. `BaseAgent.SetToolPolicy` stays.
 
 ### Why not keep it as call-time rejection
 

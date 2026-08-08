@@ -107,7 +107,6 @@ type BaseAgent struct {
 	maxTurns     int
 	provider     string
 	mcpSessionID string
-	toolPolicy   mcpagent.ToolPolicy
 	definition   mcpagent.AgentDefinition
 	runtime      mcpagent.RuntimeConfig
 	lastHandle   *mcpagent.AgentSessionHandle
@@ -327,9 +326,8 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		orchestratorCtx = context.WithValue(orchestratorCtx, common.ChatSessionIDKey, ba.mcpSessionID)
 	}
 	result, err := ba.session.Run(orchestratorCtx, mcpagent.Turn{
-		Input:      userMessage,
-		History:    conversationHistory,
-		ToolPolicy: ba.toolPolicy,
+		Input:   userMessage,
+		History: conversationHistory,
 	})
 	ba.lastHandle = result.Handle
 
@@ -543,12 +541,6 @@ func (ba *BaseAgent) Resume(ctx context.Context, handle *mcpagent.AgentSessionHa
 // SessionHandle returns the latest opaque continuation state produced by Run.
 func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
 	return ba.lastHandle
-}
-
-// SetToolPolicy applies a runtime authorization view to subsequent turns. It
-// does not mutate the agent definition or its request-time tool registry.
-func (ba *BaseAgent) SetToolPolicy(toolNames []string) {
-	ba.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
 }
 
 // SetWorkspacePolicy configures filesystem enforcement as runtime policy,

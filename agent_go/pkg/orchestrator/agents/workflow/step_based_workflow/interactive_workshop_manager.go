@@ -150,7 +150,7 @@ func newDerivedPulseReviewIdentity(now time.Time, pulseRunID, todoID, module str
 }
 
 func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, marker string) string {
-	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\n", workspacePath)
+	scopeHeader := fmt.Sprintf("READ-ONLY REVIEW SCOPE: inspect only %s. If any evidence path resolves outside this workflow, stop and return scope_error. Keep narrative prose compact, retain every evidence-backed finding, and do not use wide tables. Do not emit progress text as the final answer.\n\nYOU HOLD TOOLS YOU MUST NOT USE: every workshop stage agent is built with the same tool surface, so you can see mutation tools — mutate_workflow_db, the plan/step/config editors, the report widget writers, the schedule editors, and the Pulse lifecycle writers. Holding one is not permission to call it. You are the independent check on changes you did not make; changing the evidence you are reviewing destroys that. Read with query_workflow_db, execute_shell_command, and get_pulse_state, and report what you find. The repair belongs to the Fixer. This also applies through the shell: do not reach past a tool with sqlite3, a redirect, or an in-place edit to write something a tool would have written.\n\n", workspacePath)
 	artifactContract := ""
 	if strings.TrimSpace(resultPath) != "" {
 		artifactContract = fmt.Sprintf("ARTIFACT-FIRST RESULT CONTRACT: Your complete final response is the exact Markdown findings body that the trusted backend will store in SQLite as %s. It is rendered for humans from the database; do not write a file. Do not add greetings, progress narration, notification prose, or a second summary. The parent receives only the database review identity and loads it with get_pulse_state(view=\"review\").\n\nVERIFY BEFORE DISCOVERING: you are the independent check on fixes you did not make. Before looking for anything new, call get_pulse_state(view=\"backlog\") for this module and take every `changed_unverified` finding whose recorded next_check evidence has since arrived — the named run completed, the table advanced, the artifact was produced. Judge each against that post-change evidence and report `passed`, `failed`, or `inconclusive` with what you expected and what you observed. For every verdict emit one single-line machine-readable marker, then explain it briefly for the human reader:\n`PULSE_VERIFICATION_JSON: {\"finding_id\":\"<issue.id>\",\"fingerprint\":\"<internal fingerprint from the same backlog row>\",\"attempt_id\":\"<the attempt being checked>\",\"verdict\":\"passed|failed|inconclusive\",\"expected\":\"<post-change expectation>\",\"observed\":\"<what the new evidence shows>\",\"evidence\":[\"<exact refs>\"],\"next_check\":\"<required only when inconclusive>\"}`\nThe backend validates these markers and returns them as structured data with the saved review. Return verification separately from new findings, and do not count it against your finding limit. Leave a finding inconclusive when its evidence has genuinely not arrived yet and name the remaining boundary in next_check.\n\nBACKLOG RECONCILIATION: before reporting findings, call get_pulse_state(view=\"module\") for this workflow and compare every candidate with the complete active and suppressed backlog. Decide whether two reports are the same issue from their affected behavior, expected outcome, and observed failure — never from an ID, fingerprint, or wording alone. Classify each candidate as `existing_unchanged`, `existing_with_new_evidence`, `reopened`, or `new`. For either existing class, reuse the exact existing CONCERNS payload so the backend links new evidence to the existing issue instead of filing reworded duplicates. Do not rediscover an unchanged suppressed/external finding. In the human-readable finding, state the classification compactly; do not emit a separate technical manifest and do not invent IDs or target keys for ordinary workflow issues.\n\nTRACKABLE FINDINGS: for each finding that should still be tracked if nobody acts on it this run, add one line in this exact form on its own line:\n`CONCERNS: <the finding, with the affected artifact or operation named>`\nThe backend files these durably and counts how many runs report the same one, so a recurring problem stops looking new every cycle. Keep the full evidence in the Markdown body — the CONCERNS: line is the trackable one-line form, not a replacement for the review. Do not emit one for routine observations, for something you confirmed is fine, or for work that was already completed this run.\n\nSTRUCTURED HARNESS ISSUES: when and only when the evidence proves the root cause is the shared harness/runtime/bridge/tool API rather than this workflow's plan, arguments, credentials, or data, add one compact single-line JSON marker immediately before its matching CONCERNS line:\n`PULSE_FINDING_JSON: {\"concern\":\"<exact same text as the CONCERNS payload>\",\"finding_id\":\"HARNESS-...\",\"target_key\":\"harness:<stable component>:<defect>\",\"issue_kind\":\"harness_issue\",\"classification\":\"correctness_bug|efficiency_or_coaching\",\"severity\":\"critical|high|medium|low\",\"summary\":\"<plain language>\",\"impact\":\"<user/workflow impact>\",\"workaround\":\"<temporary workaround or empty>\",\"evidence\":[\"<exact evidence refs>\"],\"reproduction\":{\"safe\":true,\"setup\":\"<side-effect-free setup>\",\"action\":\"<inert steps or command text; never executed by the UI>\",\"expected\":\"<expected>\",\"observed\":\"<observed>\",\"limitations\":\"<remaining gap>\"}}`\nSet reproduction.safe=true only after proving the described reproduction has no external side effects. If it cannot be safely reproduced, set safe=false, leave action descriptive rather than executable, and state the exact limitation. The marker decorates the matching filed concern; it never replaces the human-readable finding or CONCERNS line.\n\n", resultPath)
@@ -160,7 +160,7 @@ func buildPulseReviewerInstruction(workspacePath, resultPath, instructions, mark
 }
 
 func buildPulseFixerInstruction(workspacePath, instructions, marker string) string {
-	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer. Reviewers are read-only; this instruction deliberately grants bounded mutation and lifecycle tools. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\n", workspacePath)
+	scope := fmt.Sprintf("PULSE FIXER WRITE SCOPE: repair only %s for the supplied trusted Pulse run. You are the pass's single writer, and your write authority is keyed to that run. Never publish, notify, run externally producing actions, or change goal meaning without an approved decision.\n\nBOUNDED REPAIR — TOOLS YOU HOLD BUT MUST NOT USE HERE: every workshop stage agent is built with the same tool surface, so you can see plan-reshaping tools. Repair is bounded: fix what a review actually found. Do not call create_plan, delete_plan_steps, cleanup_orphan_step_configs, the add_*_step tools, or the group editors — reshaping the plan is a Goal Advisor decision under explicit approval, not a bounded repair, and reaching for one means the finding needed a proposal instead. Do not call record_pulse_worklist: deciding which modules are due belongs to a full pass, and a stage child recording one could report a pass it never ran. Same rule through the shell — do not use sqlite3 or a file edit to make a change these tools would have refused you.\n\n", workspacePath)
 	queue := "CONSOLIDATED FIX QUEUE: load every due module, saved SQLite review, active finding, pending verification, answered decision, unfinished attempt, and the retained impact ledger before mutating. Build one short ordered list of coherent repair bundles. A bundle may link multiple findings only when they have the same root cause, compatible target changes, and one verification condition. Never merge conflicting repairs merely to shorten the list. Waiting-on-run, waiting-on-user, proposal-only, and externally owned findings remain visible but are not actionable queue items. Process verification outcomes first, then repairs, sequentially. The backend opens the durable fix-attempt record from the disposition you write, so there is no attempt to declare and no attempt_id to carry. Checkpoint and disposition each bundle before starting the next so one failure cannot erase completed work. Before finishing, call record_pulse_impact once when there is a coherent verified intervention, a matured before/after assessment, or a trustworthy observation Gate missed. Load the ledger first and do not duplicate Gate's current-run observations. Classify enabling work as reliability, measurement, or presentation_maintenance rather than claiming direct goal impact. Mark every due module exactly once before finishing.\n\n"
 	return scope + queue + strings.TrimSpace(instructions) + pulseReviewerCompletionContract(marker)
 }
@@ -1457,215 +1457,6 @@ func (iwm *InteractiveWorkshopManager) SetToolCallQuery(mainSessionID string, qu
 	iwm.toolCallQueryFunc = queryFunc
 }
 
-// GetToolsForWorkshopMode returns the list of tool names that should be available
-// for the given workshop mode. This is used as the per-turn ToolPolicy to dynamically
-// restrict tools per-turn as the user switches modes from the frontend.
-//
-// Tools are grouped into categories:
-//   - System tools: always included (shell, workspace, human interaction/notification, virtual tools)
-//   - Workshop execution tools: execute_step, query_step, send_step_message, stop, list, run_in_background
-//   - Step config/tools: update_step_config, review_step_code
-//   - Plan modification tools: add/update/delete steps and routes
-//   - Variable/config tools: update_variable, groups, workflow config
-//   - Schedule tools: list/create/update/delete schedules
-//   - Skill tools: list/search/install/uninstall skills
-//   - Eval tools: validate_evaluation_plan, run_full_evaluation
-func GetToolsForWorkshopMode(mode string) []string {
-	// System tools — always available regardless of mode.
-	// Includes workspace, shell, virtual tools, and human interaction/notification.
-	system := []string{
-		// Workspace advanced tools. Basic workspace file tools are intentionally
-		// not in the central workspace registry; use shell/diff/image/media tools.
-		"execute_shell_command", "diff_patch_workspace_file",
-		"read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db", "mutate_workflow_db",
-		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",
-		// Secret management tools. Global secrets are read-only; workflow/user
-		// encrypted stores are writable when the corresponding tools are registered.
-		"list_secrets", "set_workflow_secret", "delete_workflow_secret", "set_user_secret", "delete_user_secret",
-		// Human tools are appended below from virtualtools.WorkshopHumanToolNames()
-		// (single source shared with registration, so the allow-list can't drift).
-		// Browser (if registered)
-		"agent_browser",
-		// mcpagent virtual tools (get_api_spec, get_prompt, get_resource)
-		"get_api_spec", "get_prompt", "get_resource",
-		// Read-only LLM capability discovery. The prompts instruct agents to check
-		// capabilities before pinning a provider/model, and llm-selection.md leans on
-		// it, but the allow-list never granted it — so a real, registered tool was
-		// rejected as "not available in the current workshop mode". Registration and
-		// this list live in different files, which is how they drifted.
-		"list_llm_capabilities",
-		// Sub-agent execution tools — used by execution agents running inside steps.
-		// These must always be allowed because SetToolAllowList also gates the code
-		// execution registry (HTTP calls), which blocks execution agents from calling
-		// sub-agents even though the restriction is intended only for the phase agent LLM.
-		"call_sub_agent", "call_generic_agent", "get_sub_agent_conversation", "get_route_description",
-	}
-	// Human tools from the single source shared with registration (createCustomTools),
-	// so the allow-list and what's actually registered cannot drift apart.
-	system = append(system, virtualtools.WorkshopHumanToolNames()...)
-
-	// Read-only info tools — safe in all modes
-	readOnly := []string{
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
-	}
-
-	// Workshop execution tools
-	execution := []string{
-		"execute_step", "query_step", "send_step_message", "stop_step", "stop_all_executions",
-		"list_executions", "run_in_background",
-	}
-
-	// Step config & analysis tools
-	stepConfig := []string{
-		"update_step_config", "review_step_code",
-	}
-
-	// LLM config tools — inspect published/available models and save tiered LLM
-	// configuration directly to workflow.json capabilities.llm_config.
-	llmConfig := []string{
-		"list_published_llms", "list_provider_models", "test_llm", "set_workflow_llm_config",
-	}
-
-	// Plan modification tools
-	planMod := []string{
-		"create_plan",
-		"migrate_message_sequence_code_items",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
-		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
-		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
-		"update_validation_schema",
-		"update_evaluation_plan",
-	}
-
-	// Variable & config tools
-	variableConfig := []string{
-		"update_variable", "add_group", "update_group", "delete_group",
-		"update_workflow_config",
-	}
-
-	// Schedule tools
-	schedule := []string{
-		"list_schedules", "create_schedule", "create_calendar_schedule", "update_schedule",
-		"delete_schedule", "trigger_schedule", "get_schedule_runs",
-	}
-
-	// Skill tools
-	skills := []string{
-		"list_skills", "search_skills", "install_skill", "uninstall_skill", "import_skill",
-	}
-
-	// Eval tools
-	eval := []string{
-		"validate_evaluation_plan", "run_full_evaluation",
-	}
-
-	// Report tools — manage reports/report_plan.json and validate/preview against real db/ + KB sources.
-	// Available in Workshop mode. Run mode may read report data
-	// for answers, but does not author report_plan.json.
-	report := []string{
-		"get_report_plan", "upsert_report_widget", "remove_report_widget", "move_report_widget", "toggle_report_widget",
-		"set_report_theme", "set_section_layout",
-		"validate_report_plan", "preview_report_render",
-	}
-
-	// Auto-improvement tools. capture_context is also available in run mode so
-	// users can say "remember this" while executing the workflow, with explicit
-	// confirmation.
-	autoImprovement := []string{
-		"capture_context",
-		"run_goal_advisor_review",
-		"get_workflow_command_guidance", // canonical slash-command prose; see guidance package.
-	}
-
-	// Pulse state tools are only for scheduled/manual Pulse maintenance in
-	// workshop mode. Run mode can inspect outcomes, but should not mutate the
-	// dynamic Pulse worklist/result state.
-	pulseState := []string{
-		"get_pulse_state",
-		"begin_pulse_fixer_run",
-		"record_pulse_worklist",
-		"record_pulse_result",
-		"record_pulse_impact",
-		"resolve_run_concern",
-		"mark_changelog_artifact_reviewed",
-	}
-
-	var tools []string
-	tools = append(tools, system...)
-	tools = append(tools, readOnly...)
-
-	// Normalize every legacy alias before selecting a tool surface. Production
-	// callers normally do this earlier, but direct callers must not fall through
-	// to an unintended tool set.
-	if canonical := canonicalWorkshopMode(mode); canonical != "" {
-		mode = canonical
-	}
-
-	switch mode {
-	case "workshop":
-		// WORKSHOP: full toolkit for designing,
-		// running, evaluating, reviewing, and evolving a workflow. The agent
-		// derives the current "phase" from workspace state (does a plan
-		// exist? are there successful runs?) and uses the appropriate tools.
-		// Tools that only make sense post-runs (Bug Review,
-		// eval, and plan-edit tools are present here; their
-		// downstream agents check evidence and refuse
-		// when state isn't ready.
-		tools = append(tools, execution...)
-		tools = append(tools, stepConfig...)
-		tools = append(tools, planMod...)
-		tools = append(tools, variableConfig...)
-		tools = append(tools, schedule...)
-		tools = append(tools, skills...)
-		tools = append(tools, llmConfig...)
-		tools = append(tools, "debug_step")
-		tools = append(tools, "run_full_workflow")
-		tools = append(tools, "review_plan")
-		tools = append(tools, "review_workflow_timing")
-		tools = append(tools, "review_workflow_costs")
-		tools = append(tools, eval...)
-		tools = append(tools, report...)
-		tools = append(tools, autoImprovement...)
-		tools = append(tools, pulseState...)
-
-	case "run":
-		// RUN: deployed/user-facing runtime for workflow-backed work, Slack, WhatsApp,
-		// and direct operational requests. It can answer directly from workflow state,
-		// run individual steps including orphan utility steps, or run the full workflow.
-		// No plan changes, no optimization, and no config changes — those belong to
-		// Workshop.
-		// The only framework mutation allowed here is capture_context after user
-		// confirmation, so context learned during a run is not lost.
-		// Read-only review tools stay available for outcome inspection.
-		tools = append(tools, execution...)
-		tools = append(tools, "run_full_workflow")
-		tools = append(tools, "debug_step")
-		tools = append(tools, "review_plan")
-		tools = append(tools, "review_workflow_timing")
-		tools = append(tools, "review_workflow_costs")
-		tools = append(tools, "get_workflow_command_guidance") // /review-* commands need this even in run mode
-		tools = append(tools, "capture_context")
-
-	default:
-		// Unknown mode — allow everything (no restriction)
-		tools = append(tools, execution...)
-		tools = append(tools, stepConfig...)
-		tools = append(tools, planMod...)
-		tools = append(tools, variableConfig...)
-		tools = append(tools, schedule...)
-		tools = append(tools, skills...)
-		tools = append(tools, llmConfig...)
-		tools = append(tools, eval...)
-		tools = append(tools, report...)
-		tools = append(tools, "debug_step")
-	}
-
-	return tools
-}
-
 func filterWorkspaceToolsByName(allTools []llmtypes.Tool, allExecutors map[string]interface{}, allowedToolNames []string) ([]llmtypes.Tool, map[string]interface{}) {
 	allowed := make(map[string]bool, len(allowedToolNames))
 	for _, name := range allowedToolNames {
@@ -1714,161 +1505,82 @@ const (
 	goalAdvisorStagePulseFixer
 )
 
-func goalAdvisorCommonMutationToolAgentAllowedToolNames() []string {
+// workshopStageToolAgentToolNames is the single tool surface every workshop
+// stage agent is constructed with — reviewer, Goal Advisor analyst, finalizer,
+// and Pulse Fixer alike.
+//
+// There used to be five per-stage lists, narrowed at runtime with SetToolPolicy.
+// They were never the boundary they appeared to be, and the reviewer list said
+// so itself: execute_shell_command is registered with no path parameters, so a
+// reviewer holding it could always run `sqlite3 db/db.sqlite "UPDATE ..."`
+// regardless of what the list withheld. Narrowing bought the appearance of
+// enforcement while creating a failure mode that shipped twice — guidance
+// instructing an agent to call a tool it was never given, failing silently.
+//
+// So role differences are stated in each stage's brief instead. What a reviewer,
+// a bounded Fixer, and an approved finalizer may do is a focus rule, and focus
+// rules live in prompts.
+//
+// The boundaries that are real are untouched by this list:
+//   - Pulse write authority is keyed by session id, so a reviewer still cannot
+//     record module results or close findings while holding those tools. That is
+//     what keeps one writer per Pulse run.
+//   - The workspace folder guard still filters path-bearing tools by write path.
+//
+// record_pulse_worklist is absent because no stage ever had it: deciding which
+// modules are due belongs to a full pass, not to a stage child.
+func workshopStageToolAgentToolNames() []string {
 	return []string{
-		// Workspace/file tools for evidence and bounded HTML/report updates.
+		// Evidence gathering and bounded file edits.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db",
+		"query_workflow_db", "mutate_workflow_db",
 
-		// Dynamic command guidance is builder-owned. Attached reference access
-		// is intrinsic mcpagent identity and therefore is not allow-listed here:
-		// turn_session.go injects read_skill into the per-turn session allow list
-		// itself when it is an intrinsic identity tool, so the builder must not
-		// claim a grant mcpagent already guarantees.
+		// Dynamic command guidance is builder-owned. read_skill is intrinsic
+		// mcpagent identity and is injected per turn, so it is not listed here.
 		"get_workflow_command_guidance",
 
-		// Tool-surface discovery. The allow-list gates the code-execution bridge
-		// too, and it is checked before get_api_spec can reach its virtual-tool
-		// partition — so omitting it left every stage agent unable to find out
-		// which tools it actually has. That turns any denial into a guess: on
-		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
-		// surface and concluded its session was in the wrong workshop mode.
-		// Discovery grants no capability this list does not already grant.
+		// Tool-surface discovery. Without it a denial is a guess: on 2026-08-04 a
+		// Fixer denied update_schedule had no way to check its own surface and
+		// concluded its session was in the wrong workshop mode.
 		"get_api_spec",
 
 		// Read-only workflow state.
 		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
 		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
 
-		// Report/dashboard shape plus the durable Pulse question flow.
+		// Report/dashboard shape plus the durable question flow.
 		"get_report_plan", "upsert_report_widget", "remove_report_widget",
 		"move_report_widget", "toggle_report_widget", "set_report_theme",
 		"set_section_layout", "validate_report_plan", "preview_report_render",
-		"create_human_input_request",
-	}
-}
+		"create_human_input_request", "mark_human_input_consumed",
 
-func goalAdvisorFinalizerProposalToolAgentAllowedToolNames() []string {
-	return goalAdvisorCommonMutationToolAgentAllowedToolNames()
-}
-
-// pulseFixerStageToolAgentAllowedToolNames is the Fixer's surface: the bounded
-// mutation tools it needs to repair a workflow, plus the lifecycle writers that
-// record what it did.
-//
-// It deliberately omits record_pulse_worklist. A fixer stage must not decide
-// which modules are due, so a fixer child cannot impersonate a complete pass.
-// Declaring a Pulse finished is likewise not its job: record_pulse_result is
-// granted for module results, and the finalizer stage is the only caller told to
-// use its command form. It also omits create_plan and the step add/delete tools:
-// reshaping the plan is a Goal Advisor decision under explicit approval, not
-// something a bounded repair reaches for.
-func pulseFixerStageToolAgentAllowedToolNames() []string {
-	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
-	tools = append(tools,
-		// Bounded repair of what a review actually found.
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
-		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
-		"update_step_config", "update_validation_schema", "update_evaluation_plan", "validate_evaluation_plan",
-		"update_variable", "update_workflow_config",
-
-		// Durable finding lifecycle: read module state, the backlog, and saved
-		// reviews, then record one honest disposition per finding.
-		"get_pulse_state",
-		"record_pulse_result", "record_pulse_impact", "resolve_run_concern",
-		"mark_changelog_artifact_reviewed",
-		// Write access to the workflow database. Reading it (query_workflow_db)
-		// and read_skill come from the common list every agent inherits; only the
-		// single writer gets mutate.
-		"mutate_workflow_db",
-
-		// Scheduler repair. pulse-fixer-practices.md gives this agent a
-		// "Scheduler and lifecycle repair" section, so withholding the schedule
-		// tools made its own instructions unfollowable — it burned four calls on
-		// update_schedule and reported the workflow unchanged. Creating and
-		// deleting schedules stay out: those reshape the run surface, which is a
-		// Workshop decision, not a bounded repair.
-		"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule",
-	)
-	return tools
-}
-
-func goalAdvisorFinalizerApprovedToolAgentAllowedToolNames() []string {
-	tools := append([]string{}, goalAdvisorCommonMutationToolAgentAllowedToolNames()...)
-	tools = append(tools,
-		// Strategic plan/config/eval changes are only available when code has
-		// verified an approved plan-proposal answer and a critic approve verdict.
+		// Plan and config editing. Which of these a given stage should touch is
+		// its brief's business: bounded repair for the Fixer, approved plan change
+		// for the finalizer, none at all for a reviewer.
 		"create_plan",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
-		"update_step_config", "update_validation_schema", "validate_evaluation_plan",
+		"update_step_config", "update_validation_schema",
+		"update_evaluation_plan", "validate_evaluation_plan",
 		"update_variable", "add_group", "update_group", "delete_group",
 		"update_workflow_config", "test_llm", "set_workflow_llm_config",
-		"mark_human_input_consumed",
-	)
-	return tools
-}
 
-// goalAdvisorReadOnlyToolAgentAllowedToolNames is the reviewer surface.
-//
-// "Read-only" here is a contract these agents are held to by their briefs, not
-// a property the tool list establishes. It never was: execute_shell_command is
-// registered with no path parameters, so the folder guard has nothing to
-// validate and cannot stop `sqlite3 db/db.sqlite "UPDATE ..."` or a shell
-// redirect into a workflow file. Only diff_patch_workspace_file is actually
-// filtered when write paths are empty.
-//
-// Narrowing the rest of the list therefore bought the appearance of enforcement
-// rather than enforcement, while creating a failure mode that has shipped twice
-// here: guidance instructs an agent to call a tool it was never given, and the
-// call fails silently. So the list is not the boundary and is not maintained as
-// one.
-//
-// The boundaries that are real and stay real: Pulse write authority is keyed by
-// session id, so a reviewer cannot record module results, open fix attempts, or
-// close findings even holding those tools — it was never lent authority. That
-// is what keeps one writer per Pulse run.
-func goalAdvisorReadOnlyToolAgentAllowedToolNames() []string {
-	return []string{
-		// Evidence gathering. Reviewers are told to read, not write; the shell
-		// is general-purpose and that instruction is what bounds it.
-		"execute_shell_command", "read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db",
-
-		// Dynamic command guidance is builder-owned. Attached reference access
-		// is intrinsic mcpagent identity and therefore is not allow-listed here:
-		// turn_session.go injects read_skill into the per-turn session allow list
-		// itself when it is an intrinsic identity tool, so the builder must not
-		// claim a grant mcpagent already guarantees.
-		"get_workflow_command_guidance",
-
-		// Tool-surface discovery. The allow-list gates the code-execution bridge
-		// too, and it is checked before get_api_spec can reach its virtual-tool
-		// partition — so omitting it left every stage agent unable to find out
-		// which tools it actually has. That turns any denial into a guess: on
-		// 2026-08-04 a Fixer denied update_schedule had no way to check its own
-		// surface and concluded its session was in the wrong workshop mode.
-		// Discovery grants no capability this list does not already grant.
-		"get_api_spec",
-
-		// Read-only workflow state and report inspection.
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
-		"list_skills", "search_skills", "list_published_llms", "list_provider_models",
-		"get_report_plan", "validate_report_plan", "preview_report_render",
-
-		// Backlog reconciliation. A reviewer must classify each candidate
-		// against what is already tracked, so it needs to read the lifecycle —
-		// including saved reviews, which is how it tells a recurrence from a
-		// genuinely new finding.
+		// Pulse finding lifecycle. Session-keyed write authority still decides who
+		// may actually record.
 		"get_pulse_state",
+		"record_pulse_result", "record_pulse_impact", "resolve_run_concern",
+		"mark_changelog_artifact_reviewed",
+
+		// Scheduler repair.
+		"list_schedules", "get_schedule_runs", "update_schedule", "trigger_schedule",
 	}
 }
 
-func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent(agent agents.OrchestratorAgent, workspacePath, agentName string, allowedToolNames []string, logger loggerv2.Logger) {
+func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent(agent agents.OrchestratorAgent, workspacePath, agentName string, logger loggerv2.Logger) {
 	if agent == nil || agent.GetBaseAgent() == nil || agent.GetBaseAgent().Agent() == nil {
 		logger.Warn(fmt.Sprintf("⚠️ %s: cannot register workshop mutation tools; base agent unavailable", agentName))
 		return
@@ -1922,8 +1634,7 @@ func (iwm *InteractiveWorkshopManager) registerWorkshopMutationToolsForToolAgent
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ %s: failed to register report preview tool: %v", agentName, err))
 	}
-	agent.GetBaseAgent().SetToolPolicy(allowedToolNames)
-	logger.Info(fmt.Sprintf("🔧 %s: registered workshop mutation tools and applied allow list (%d tools)", agentName, len(allowedToolNames)))
+	logger.Info(fmt.Sprintf("🔧 %s: registered workshop mutation tools", agentName))
 }
 
 func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool(mcpAgent DefinitionToolRegistrar, workspacePath string, logger loggerv2.Logger) error {
@@ -2632,6 +2343,14 @@ The workflow has a **live frontend report viewer** at the top toolbar's "Report"
 {{end}}
 
 	{{if eq .WorkshopMode "run"}}
+	## Workshop-Owned Tools — Visible But Not Yours
+
+	You can see every tool this workflow registers, including Workshop-owned ones. Seeing a tool is not permission to call it. Run mode executes and inspects; it does not repair, redesign, or record maintenance state.
+
+	Do not call these in Run mode — they belong to Workshop: `+"`get_pulse_state`"+`, `+"`begin_pulse_fixer_run`"+`, `+"`record_pulse_worklist`"+`, `+"`record_pulse_result`"+`, `+"`record_pulse_impact`"+`, `+"`resolve_run_concern`"+`, `+"`mark_changelog_artifact_reviewed`"+`, and the plan/step/eval modification tools.
+
+	If the user asks for something that needs one of them, say the work belongs in Workshop mode and offer to switch, rather than calling the tool or improvising a shell equivalent.
+
 	## Context Capture — Allowed In Run Mode
 
 	Run mode can execute workflow-backed work directly, run individual/orphan steps, run the full workflow, and inspect results. It may read KB/learnings/db/report/run artifacts whenever they are needed to answer correctly, but it does not edit plan/config/eval/report artifacts. One exception is durable user-owned runtime context. If the user says something that future workflow runs should remember — rules, preferences, constraints, ICP filters, approval rules, brand voice, examples, or domain assumptions — ask whether to capture it.
@@ -10282,18 +10001,16 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 		knowledgebasePath,
 		"Chats",
 	}
+	// Every stage is constructed with the same tool surface; what each may do
+	// with it is stated in its brief. The write-path guard stays: it is
+	// filesystem enforcement, not a tool permission.
 	writePaths := []string{}
-	allowedToolNames := goalAdvisorReadOnlyToolAgentAllowedToolNames()
+	allowedToolNames := workshopStageToolAgentToolNames()
 	switch access {
-	case goalAdvisorStageFinalizerProposal:
+	case goalAdvisorStageFinalizerProposal,
+		goalAdvisorStageFinalizerApprovedMutation,
+		goalAdvisorStagePulseFixer:
 		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = goalAdvisorFinalizerProposalToolAgentAllowedToolNames()
-	case goalAdvisorStageFinalizerApprovedMutation:
-		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
-	case goalAdvisorStagePulseFixer:
-		writePaths = workshopWritePaths(workspacePath)
-		allowedToolNames = pulseFixerStageToolAgentAllowedToolNames()
 	}
 
 	if access == goalAdvisorStagePulseFixer && strings.TrimSpace(pulseRunID) == "" {
@@ -10390,7 +10107,7 @@ func (iwm *InteractiveWorkshopManager) runGoalAdvisorStageAgentSequence(ctx cont
 		defer closeBackgroundMessageSequenceAgent(agent, config, name)
 	}
 
-	iwm.registerWorkshopMutationToolsForToolAgent(agent, workspacePath, stageAgentIdentity, allowedToolNames, logger)
+	iwm.registerWorkshopMutationToolsForToolAgent(agent, workspacePath, stageAgentIdentity, logger)
 	// Pulse reviewers and Fixers run here, and their prompts tell them to load
 	// fix-verification, strategy-auditor, pulse-bug-review, llm-selection, and
 	// review-artifact-drift. That used to work through the global

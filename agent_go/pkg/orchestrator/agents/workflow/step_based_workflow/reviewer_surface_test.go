@@ -22,7 +22,7 @@ func toolSet(names []string) map[string]bool {
 // Reviewers are told to reconcile candidates against the tracked backlog, so
 // the tools that reconciliation needs must be present.
 func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
-	surface := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
+	surface := toolSet(workshopStageToolAgentToolNames())
 	for _, required := range []string{
 		"get_pulse_state",
 		"get_workflow_command_guidance",
@@ -42,11 +42,9 @@ func TestReviewerSurfaceCoversEveryToolItsContractNames(t *testing.T) {
 // which belongs to Gate, and a fixer holding it could report a complete pass it
 // never ran.
 func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
-	surface := toolSet(pulseFixerStageToolAgentAllowedToolNames())
+	surface := toolSet(workshopStageToolAgentToolNames())
 	for _, denied := range []string{
 		"record_pulse_worklist",
-		"create_plan",
-		"delete_plan_steps",
 	} {
 		if surface[denied] {
 			t.Fatalf("Pulse Fixer surface includes %q, which lets it impersonate or overreach a scheduled pass", denied)
@@ -63,32 +61,18 @@ func TestPulseFixerSurfaceCannotImpersonateACompletePass(t *testing.T) {
 	}
 }
 
-// TestOnlyTheFixerHoldsLifecycleWriters records where the real boundary sits.
+// TestLifecycleWritersAreOnTheSharedSurface records where the real boundary sits.
 //
-// The reviewer surface is not a security boundary: execute_shell_command is
-// registered with no path parameters, so the folder guard cannot constrain it
-// and a reviewer could write files or the database through a shell. What
-// actually separates the two roles is delegated Pulse write authority, keyed by
-// session id and unreachable by prompt.
-//
-// The lifecycle writers stay out of the reviewer surface anyway, because a
-// reviewer holding them could only ever be refused — offering a tool whose every
-// call fails is worse than not offering it.
-func TestOnlyTheFixerHoldsLifecycleWriters(t *testing.T) {
-	reviewer := toolSet(goalAdvisorReadOnlyToolAgentAllowedToolNames())
-	fixer := toolSet(pulseFixerStageToolAgentAllowedToolNames())
-	for _, writer := range []string{"record_pulse_result", "record_pulse_impact"} {
-		if reviewer[writer] {
-			t.Fatalf("reviewer surface holds %q, which it can never be authorized to call", writer)
-		}
-		if !fixer[writer] {
-			t.Fatalf("Fixer surface is missing %q, which its contract requires", writer)
-		}
-	}
-	// Both read the backlog: reconciliation is a reviewer duty, not a fixer one.
-	for _, reader := range []string{"get_pulse_state"} {
-		if !reviewer[reader] || !fixer[reader] {
-			t.Fatalf("%q must be readable by both roles", reader)
+// The surface is not a security boundary and never was: execute_shell_command is
+// registered with no path parameters, so a reviewer could always write files or
+// the database through a shell. What separates the roles is delegated Pulse
+// write authority, keyed by session id and unreachable by prompt — a reviewer
+// calling a lifecycle writer is refused there, not here.
+func TestLifecycleWritersAreOnTheSharedSurface(t *testing.T) {
+	surface := toolSet(workshopStageToolAgentToolNames())
+	for _, name := range []string{"record_pulse_result", "record_pulse_impact", "get_pulse_state"} {
+		if !surface[name] {
+			t.Fatalf("shared stage surface is missing %q, which the Fixer contract requires", name)
 		}
 	}
 }

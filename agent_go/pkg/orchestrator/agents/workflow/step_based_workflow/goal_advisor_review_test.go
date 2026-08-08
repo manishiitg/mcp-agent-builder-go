@@ -134,41 +134,22 @@ func TestBuildPulseFixerInstructionDoesNotInheritReadOnlyReviewerContract(t *tes
 	}
 }
 
-func TestGoalAdvisorToolAllowlistsSeparateReadOnlyAndFinalizerActions(t *testing.T) {
-	readOnly := goalAdvisorReadOnlyToolAgentAllowedToolNames()
-	proposal := goalAdvisorFinalizerProposalToolAgentAllowedToolNames()
-	approved := goalAdvisorFinalizerApprovedToolAgentAllowedToolNames()
+// The stage surface is shared, so what separates a reviewer from a finalizer is
+// its brief, not a withheld tool. Two things still hold on the shared surface.
+func TestSharedStageSurfaceKeepsItsNonRoleInvariants(t *testing.T) {
+	surface := workshopStageToolAgentToolNames()
 
-	for _, tool := range []string{"get_workflow_command_guidance", "execute_shell_command"} {
-		assertToolListContains(t, readOnly, tool)
-		assertToolListContains(t, proposal, tool)
-		assertToolListContains(t, approved, tool)
+	// Named by every stage contract, so absence is always a wiring bug.
+	for _, tool := range []string{"get_workflow_command_guidance", "execute_shell_command", "get_pulse_state"} {
+		assertToolListContains(t, surface, tool)
 	}
-	for name, tools := range map[string][]string{"read-only": readOnly, "proposal": proposal, "approved": approved} {
-		if toolSet(tools)["read_skill"] {
-			t.Fatalf("%s builder allowlist should not own mcpagent's intrinsic read_skill tool", name)
-		}
+	// mcpagent injects read_skill per turn; the builder must not claim that grant.
+	if toolSet(surface)["read_skill"] {
+		t.Fatal("stage surface should not own mcpagent's intrinsic read_skill tool")
 	}
-	for _, tool := range []string{"get_pulse_state"} {
-		assertToolListContains(t, readOnly, tool)
-	}
-
-	for _, tool := range []string{"diff_patch_workspace_file", "create_human_input_request", "upsert_report_widget"} {
-		assertToolListDoesNotContain(t, readOnly, tool)
-		assertToolListContains(t, proposal, tool)
-		assertToolListContains(t, approved, tool)
-	}
-
-	for _, tool := range []string{"mark_human_input_consumed", "update_scripted_step", "update_step_config", "update_validation_schema"} {
-		assertToolListDoesNotContain(t, readOnly, tool)
-		assertToolListDoesNotContain(t, proposal, tool)
-		assertToolListContains(t, approved, tool)
-	}
-
-	for _, tool := range []string{"harden_workflow", "record_pulse_result", "notify_user"} {
-		assertToolListDoesNotContain(t, readOnly, tool)
-		assertToolListDoesNotContain(t, proposal, tool)
-		assertToolListDoesNotContain(t, approved, tool)
+	// Never granted to a stage child: these belong to a full pass or the parent.
+	for _, tool := range []string{"harden_workflow", "record_pulse_worklist", "notify_user"} {
+		assertToolListDoesNotContain(t, surface, tool)
 	}
 }
 

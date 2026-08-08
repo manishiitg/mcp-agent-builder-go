@@ -126,10 +126,10 @@ RegisterCustomTool(name, def, params, exec, category)  →  a.customTools[name] 
 Instructions()  →  buildToolIndex()              <span class="c">// compact request-time manifest</span>
                 →  buildPreDiscoveredToolSpecs() <span class="c">// allowed preloaded schemas</span>
 get_api_spec(tool_name) → authorize → schema cache → internal route</pre>
-  <p>For a tool to be callable by a CLI agent, both must hold for the <b>scoped</b> agent:</p>
+  <p>For a tool to be callable by a CLI agent, one thing must hold for the <b>scoped</b> agent:</p>
   <div class="grid2">
-    <div class="tile"><h4>1 · Registered</h4><p>In that agent's <code>a.customTools</code> with a non-empty category.</p></div>
-    <div class="tile"><h4>2 · Allowed</h4><p><code>GetToolsForWorkshopMode</code> → <code>SetToolAccess</code>; gates manifest, schema discovery, and execution.</p></div>
+    <div class="tile"><h4>1 · Registered</h4><p>In that agent's <code>a.customTools</code> with a non-empty category. Registration completes before the CLI caches its catalog.</p></div>
+    <div class="tile"><h4>2 · <s>Allowed</s> &mdash; removed</h4><p>A second per-turn gate (<code>GetToolsForWorkshopMode</code> &rarr; <code>SetToolPolicy</code>) used to filter the manifest and schema discovery. It was deleted: filtering the catalog before launch made a registered tool undiscoverable rather than rejected, which is the bug below. Mode is now a prompt rule. See <code>docs/design/agent_tool_surface_single_source.md</code>.</p></div>
   </div>
 
   <!-- 06 -->
@@ -141,7 +141,7 @@ get_api_spec(tool_name) → authorize → schema cache → internal route</pre>
     <li><b>So it's "registered" and "invisible" at once.</b> The scope routing is exactly the mechanism that lets both be true: present on the children, absent from the parent the CLI is pinned to.</li>
     <li><b>The monitor is the clean proof.</b> Its scoped agent registered <b>zero</b> human tools, so <code>notify</code> could never appear there regardless.</li>
   </ol>
-  <div class="note bad"><b>Root cause:</b> <code>notify_user</code> is not in the <code>a.customTools</code> of the <b>scoped (parent/conversational) agent</b> that serves <code>get_api_spec</code>. The allow-list fix (gate 2) was necessary but not sufficient — the tool must be <b>registered onto that parent agent</b> (gate 1).</div>
+  <div class="note bad"><b>Root cause:</b> <code>notify_user</code> is not in the <code>a.customTools</code> of the <b>scoped (parent/conversational) agent</b> that serves <code>get_api_spec</code>. The allow-list fix (gate 2, since removed) was necessary but not sufficient — the tool must be <b>registered onto that parent agent</b> (gate 1).</div>
 
   <!-- 07 -->
   <h2 id="fix"><span class="n">07</span>The fix</h2>
@@ -155,7 +155,7 @@ get_api_spec(tool_name) → authorize → schema cache → internal route</pre>
     <li><b>Never trust the agent's self-report.</b> Have it run <code>get_api_spec</code> and show the category, or read the server log.</li>
     <li><b>Which instance?</b> Match the <code>agent_ptr</code> / scope serving <code>get_api_spec</code> against where the tool was <code>Registered custom tool</code>. Mismatch → scope/instance bug (this case).</li>
     <li><b>Registered on the scoped agent?</b> <code>TOOLINDEX_DIAG</code> / <code>Built tool index</code> for that instance.</li>
-    <li><b>Allow-listed?</b> <code>Applied tool allow list</code> / <code>buildToolIndex blocked custom tools</code>.</li>
+    <li><b>Registered but missing from the catalog?</b> There is no longer an allow-list to check &mdash; if it is registered it is in <code>get_api_spec</code>. A gap now means registration ran after the CLI launched (see <code>[PHASE_TOOL_RACE]</code>), or a product profile's <code>tool_policy</code> filtered it (see <code>[PRODUCT_TOOL_GATE]</code>).</li>
     <li><b>Mis-routed call?</b> <code>server=&lt;guess&gt; … not found in tool-to-server mapping</code> means the tool wasn't cleanly in the spec under its category, so the agent invented a server.</li>
     <li><b>Right binary running?</b> Confirm the desktop app version and that the server restarted.</li>
   </ol>

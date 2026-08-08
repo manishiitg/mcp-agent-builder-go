@@ -9,9 +9,9 @@ import (
 // wrong in the direction of adding it.
 //
 // The reasoning that fails: prompts tell every agent to load reference docs with
-// read_skill, get_reference_doc no longer exists, and SetToolAllowList gates the
+// read_skill, get_reference_doc no longer exists, and a tool policy also gates the
 // code-execution registry — so an unlisted tool is refused over the bridge. That
-// is exactly why GetToolsForWorkshopMode lists get_api_spec. By analogy
+// is exactly why the stage tool-agent surfaces below list get_api_spec. By analogy
 // read_skill looks like it needs listing too.
 //
 // It does not. mcpagent injects it itself, per turn, in turn_session.go:
@@ -44,18 +44,14 @@ func TestEveryStageAgentCanQueryTheWorkflowDatabase(t *testing.T) {
 	}
 }
 
-// Writing is not symmetric. The Pulse Fixer is the single writer for a pass; a
-// reviewer that could mutate the database would break that guarantee.
-func TestOnlyTheSingleWriterCanMutateTheDatabase(t *testing.T) {
-	if !slices.Contains(pulseFixerStageToolAgentAllowedToolNames(), "mutate_workflow_db") {
-		t.Errorf("the Pulse Fixer is the single writer but cannot mutate the workflow database")
-	}
-	for name, list := range map[string][]string{
-		"goalAdvisorReadOnly":      goalAdvisorReadOnlyToolAgentAllowedToolNames(),
-		"goalAdvisorFinalProposal": goalAdvisorFinalizerProposalToolAgentAllowedToolNames(),
-	} {
-		if slices.Contains(list, "mutate_workflow_db") {
-			t.Errorf("%s can mutate the workflow database; only the single writer may", name)
+// Writing is no longer asymmetric. The Pulse Fixer is still the single writer
+// for a pass, but that is enforced by session-keyed Pulse write authority, not
+// by withholding the tool: a reviewer holding execute_shell_command could always
+// reach the database through sqlite3 regardless of this list.
+func TestEveryStageAgentCanMutateTheWorkflowDatabase(t *testing.T) {
+	for name, list := range stageAgentAllowLists() {
+		if !slices.Contains(list, "mutate_workflow_db") {
+			t.Errorf("%s cannot call mutate_workflow_db", name)
 		}
 	}
 }
@@ -75,11 +71,5 @@ func TestAllowListsHaveNoDuplicates(t *testing.T) {
 }
 
 func stageAgentAllowLists() map[string][]string {
-	return map[string][]string{
-		"pulseFixerStage":          pulseFixerStageToolAgentAllowedToolNames(),
-		"goalAdvisorCommonMut":     goalAdvisorCommonMutationToolAgentAllowedToolNames(),
-		"goalAdvisorReadOnly":      goalAdvisorReadOnlyToolAgentAllowedToolNames(),
-		"goalAdvisorFinalProposal": goalAdvisorFinalizerProposalToolAgentAllowedToolNames(),
-		"goalAdvisorFinalApproved": goalAdvisorFinalizerApprovedToolAgentAllowedToolNames(),
-	}
+	return map[string][]string{"workshopStage": workshopStageToolAgentToolNames()}
 }

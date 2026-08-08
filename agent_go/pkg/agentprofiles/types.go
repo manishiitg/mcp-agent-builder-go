@@ -3,6 +3,7 @@ package agentprofiles
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type CapabilityRequirement string
@@ -83,8 +84,31 @@ type Profile struct {
 
 // ToolPolicy controls generic AgentWorks capabilities a product receives.
 // Product-specific tools are still declared in Tools above.
+//
+// Mode selects how the policy is read:
+//
+//	""          legacy deny-list. Every platform pool is registered except the
+//	            names in Disabled. New platform tools reach the product agent
+//	            automatically, which is how registered-but-invisible drift
+//	            started (see docs/design/agent_tool_surface_single_source.md).
+//	"allowlist" only the names in Enabled are registered, whichever pool they
+//	            come from. Disabled is ignored.
+//
+// An allowlist fails closed, so ToolPolicyGate records every name it filters:
+// a missing capability must be diagnosable from the session log rather than
+// from confused agent behavior.
 type ToolPolicy struct {
+	Mode     string   `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Enabled  []string `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Disabled []string `json:"disabled,omitempty" yaml:"disabled,omitempty"`
+}
+
+// ToolPolicyModeAllowlist is the opt-in mode: Enabled is the complete set.
+const ToolPolicyModeAllowlist = "allowlist"
+
+// IsAllowlist reports whether this policy names its tools explicitly.
+func (p ToolPolicy) IsAllowlist() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Mode), ToolPolicyModeAllowlist)
 }
 
 type PromptContext struct {
