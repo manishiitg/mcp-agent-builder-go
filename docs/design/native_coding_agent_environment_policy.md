@@ -107,14 +107,32 @@ tool was registered and correctly specced, purely because no instruction
 mentioned it. Add a criterion that a profile declaring `native_shell`
 documents the route in its system prompt.
 
-### 4. The token's exposure surface is unaddressed
+### 4. The token's exposure surface
 
 The non-goals cover prompts, logs, chat history, tool results, and UI events.
-They do not cover the two places the value actually sits: `-H "$MCP_AUTH"`
-puts the bearer on curl's argv, visible in `ps`, and every command the agent
-runs can read the whole environment — including `env`, which agents run when
-debugging. Take a position: short-lived tokens, transcript redaction, or
-passing the header by file rather than argument.
+They do not cover the two places the value actually sits.
+
+**Position taken.** The bearer is accepted as visible to the agent's own
+process tree, and is contained by scope rather than by secrecy:
+
+- `MCP_API_TOKEN` and `MCP_AUTH` are minted per session and are bound to that
+  session's routes. A leaked value grants what the agent could already do.
+- The environment is readable by any command the agent runs, including `env`.
+  This is inherent to giving native Bash a route at all, and is the trade the
+  transport makes in exchange for not exposing `execute_shell_command`.
+- `-H "$MCP_AUTH"` places the header on curl's argv, visible in `ps` to other
+  processes of the same user. On a single-tenant local install that is the same
+  trust boundary; on shared infrastructure it is not, and such a deployment
+  should prefer `--config` or a header file.
+
+**Therefore two rules, neither of which is secrecy.** Transcripts and events
+must redact anything matching the token value, since the agent will paste
+command output back. And the token must remain session-scoped and short-lived,
+so its blast radius stays equal to the session that already holds it.
+
+What is NOT acceptable is echoing it deliberately: the agent must never print
+`$MCP_AUTH` or `$MCP_API_TOKEN`, and must never write either into a file,
+a URL it reports, or a chat message.
 
 ### 5. Say how to extend the set
 

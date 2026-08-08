@@ -95,8 +95,10 @@ profile:
     # Two surfaces this list does not govern: mcpagent's intrinsic tools
     # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
     # itself, and the coding CLI's own native tools under agent_tools.mode
-    # hybrid — Video Studio runs ffmpeg through the provider's shell, which is
-    # why the shared execute_shell_command is absent rather than suppressed.
+    # Hybrid — Video Studio also has provider-native tools. The shared shell
+    # bridge is deliberately disabled: native coding-agent tools handle
+    # workspace work, while a future native-shell API transport will handle
+    # product HTTP APIs without re-exposing execute_shell_command.
     mode: allowlist
     enabled:
       # The product's own control.
@@ -124,12 +126,15 @@ profile:
     transport: structured
     provider: claude-code
     model_id: claude-sonnet-5
-    # Enable provider-native coding tools alongside Video Studio's MCP bridge.
+    # Enable provider-native coding tools. This is mutually exclusive with
+    # execute_shell_command; product APIs use api_transport.native_shell below.
     # Each provider's own automatic safety classifier reviews native actions.
     agent_tools:
       mode: hybrid
     approvals:
       mode: provider_auto
+    api_transport:
+      mode: native_shell
     provider_options:
       - id: claude-code
         label: Claude Code

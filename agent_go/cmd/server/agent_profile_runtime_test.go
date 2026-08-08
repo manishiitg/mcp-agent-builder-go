@@ -2,10 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"strings"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/chathistory"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 )
 
@@ -73,6 +78,54 @@ func TestResolveAgentProfileRejectsWorkspaceEscape(t *testing.T) {
 	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err == nil {
 		t.Fatal("workspace escape was accepted")
 	}
+}
+
+func TestResolveAgentProfileInjectsProjectScopedSecretsIntoNativeEnvironment(t *testing.T) {
+	t.Setenv("AUTH_SECRET", "test-auth-secret-with-enough-entropy")
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userID = "user-1"
+	const workspacePath = "Chats/Video Studio/projects/launch"
+	if err := store.UpsertWorkflowSecret(context.Background(), userID, workspacePath, "PEXELS_API_KEY", encryptProfileSecretForTest(t, userID, "test-key")); err != nil {
+		t.Fatalf("store project secret: %v", err)
+	}
+
+	registry := agentprofiles.NewRegistry()
+	if err := registry.RegisterProfile(agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "{{.ProjectTitle}}",
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "structured", Capabilities: agentprofiles.RuntimeCapabilities{Secrets: agentprofiles.CapabilityRequired}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry, chatStore: store}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "video-studio", SelectedFolder: workspacePath, AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"}}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(req.DecryptedSecrets) != 1 || req.DecryptedSecrets[0].Name != "PEXELS_API_KEY" || req.DecryptedSecrets[0].Value != "test-key" {
+		t.Fatalf("profile secret selection = %#v, want only the project-scoped secret", req.DecryptedSecrets)
+	}
+}
+
+func encryptProfileSecretForTest(t *testing.T, userID, value string) string {
+	t.Helper()
+	block, err := aes.NewCipher(deriveSecretsKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	sealed := gcm.Seal(nil, nonce, []byte(value), []byte(userID))
+	return base64.StdEncoding.EncodeToString(append(nonce, sealed...))
 }
 
 func TestResolveProfileRuntimeModelUsesOnlyYAMLProviderOptions(t *testing.T) {

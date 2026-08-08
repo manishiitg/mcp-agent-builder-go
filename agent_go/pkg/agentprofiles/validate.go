@@ -94,7 +94,22 @@ func Validate(profile Profile) error {
 		}
 	}
 
-	return validateRuntime(profile.Runtime)
+	if err := validateRuntime(profile.Runtime); err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(profile.Runtime.AgentTools.Mode), "hybrid") {
+		if !profile.ToolPolicy.IsAllowlist() {
+			return fmt.Errorf("runtime agent_tools.mode=hybrid requires tool_policy.mode=%q", ToolPolicyModeAllowlist)
+		}
+		if _, present := seenEnabled["execute_shell_command"]; present {
+			return fmt.Errorf("runtime agent_tools.mode=hybrid cannot enable %q; use runtime.api_transport instead", "execute_shell_command")
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(profile.Runtime.APITransport.Mode), "native_shell") &&
+		!strings.EqualFold(strings.TrimSpace(profile.Runtime.AgentTools.Mode), "hybrid") {
+		return fmt.Errorf("runtime api_transport.mode=native_shell requires runtime agent_tools.mode=hybrid")
+	}
+	return nil
 }
 
 func validateRuntime(runtime RuntimePolicy) error {
@@ -113,6 +128,9 @@ func validateRuntime(runtime RuntimePolicy) error {
 	}
 	if mode := strings.ToLower(strings.TrimSpace(runtime.Approvals.Mode)); mode != "" && mode != "provider_auto" && mode != "approve_all" {
 		return fmt.Errorf("invalid runtime approvals.mode %q", runtime.Approvals.Mode)
+	}
+	if mode := strings.ToLower(strings.TrimSpace(runtime.APITransport.Mode)); mode != "" && mode != "bridge_shell" && mode != "native_shell" && mode != "disabled" {
+		return fmt.Errorf("invalid runtime api_transport.mode %q", runtime.APITransport.Mode)
 	}
 	if (provider == "") != (modelID == "") {
 		return fmt.Errorf("runtime provider and model_id must be set together")

@@ -47,6 +47,21 @@ func TestValidateRequiresCompleteRuntimeModelBinding(t *testing.T) {
 	}
 }
 
+func TestValidateHybridRejectsExecuteShellCommand(t *testing.T) {
+	profile := validProfile()
+	profile.ToolPolicy = ToolPolicy{Mode: ToolPolicyModeAllowlist, Enabled: []string{"execute_shell_command"}}
+	profile.Runtime.AgentTools.Mode = "hybrid"
+	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "cannot enable") {
+		t.Fatalf("expected hybrid/execute_shell_command contradiction, got %v", err)
+	}
+
+	profile.ToolPolicy.Enabled = []string{"show_video"}
+	profile.Runtime.APITransport.Mode = "native_shell"
+	if err := Validate(profile); err != nil {
+		t.Fatalf("hybrid native-shell profile should be valid: %v", err)
+	}
+}
+
 func TestRenderPromptUsesAllowListedContext(t *testing.T) {
 	profile := validProfile()
 	rendered, err := RenderPrompt(profile, PromptContext{ProjectTitle: "Launch Film", LocalDateTime: "Friday"})

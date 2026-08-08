@@ -19,7 +19,8 @@ The rule this skill exists to enforce: **HTML owns the look, ffmpeg owns the tim
 
 ## Render frames with headless Chrome
 
-Screenshot through Playwright's Chromium with an explicit viewport, from `execute_shell_command`:
+Screenshot through Playwright's Chromium with an explicit viewport, using your
+native Bash tool:
 
 ```python
 from playwright.sync_api import sync_playwright

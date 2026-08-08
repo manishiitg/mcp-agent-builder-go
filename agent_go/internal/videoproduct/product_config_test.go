@@ -37,11 +37,14 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 			t.Fatalf("Video Studio needs %q: %+v", name, manifest.Profile.ToolPolicy)
 		}
 	}
+	if enabled["execute_shell_command"] {
+		t.Fatalf("Video Studio must keep the legacy shell API bridge disabled: %+v", manifest.Profile.ToolPolicy)
+	}
 	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
 	// orchestration, and scheduling are not this product's business.
 	for _, name := range []string{
 		"set_provider_auth", "install_skill", "add_mcp_server",
-		"execute_shell_command", "diff_patch_workspace_file", "generate_video",
+		"diff_patch_workspace_file", "generate_video",
 		"delegate", "query_agent", "create_workflow_schedule", "notify_user",
 	} {
 		if enabled[name] {
@@ -56,6 +59,9 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	}
 	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
 		t.Fatalf("Video Studio native-tool policy = %+v %+v, want hybrid/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
+	}
+	if manifest.Profile.Runtime.APITransport.Mode != "native_shell" {
+		t.Fatalf("Video Studio API transport = %q, want native_shell", manifest.Profile.Runtime.APITransport.Mode)
 	}
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)

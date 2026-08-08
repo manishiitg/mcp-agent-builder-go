@@ -122,7 +122,8 @@ func envPositiveInt(name string, fallback int) int {
 }
 
 // buildSecretNamesPrompt renders the system-prompt section listing available
-// secret names (never values — those live in env vars for execute_shell_command).
+// secret names (never values — those live in the current coding agent's shell
+// environment).
 // Shared by the root chat agent and delegated sub-agents so both describe
 // secrets to the LLM identically. Returns "" when there are no secrets.
 func buildSecretNamesPrompt(secrets []struct {
@@ -136,5 +137,5 @@ func buildSecretNamesPrompt(secrets []struct {
 	for _, s := range secrets {
 		secretNames = append(secretNames, "- `SECRET_"+s.Name+"` → accessible as `os.environ[\"SECRET_"+s.Name+"\"]` in Python or `$SECRET_"+s.Name+"` in bash")
 	}
-	return "\n## Secrets\n\nThe following secrets are available as environment variables in execute_shell_command. Do NOT ask the user for these values — read them from the environment.\n\n" + strings.Join(secretNames, "\n")
+	return "\n## Secrets\n\nThe following secrets are available as environment variables in your available coding-agent shell tool. Do NOT ask the user for these values — read them from the environment.\n\n" + strings.Join(secretNames, "\n")
 }

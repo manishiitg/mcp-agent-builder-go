@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -414,7 +415,15 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 	if logger == nil {
 		logger = loggerv2.NewDefault()
 	}
-	logger.Info(fmt.Sprintf("NewLLMAgentWrapper received config: %+v", config))
+	// Never format the full config here: CodingAgentSecretEnvironment contains
+	// plaintext SECRET_* values for the native child process. Logging the struct
+	// with %+v would disclose those values to the server debug log.
+	secretNames := make([]string, 0, len(config.CodingAgentSecretEnvironment))
+	for name := range config.CodingAgentSecretEnvironment {
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+	logger.Info(fmt.Sprintf("NewLLMAgentWrapper config: name=%s provider=%s model=%s code_execution=%t coding_agent_tools=%s approvals=%s secret_names=%v session=%s", config.Name, config.Provider, config.ModelID, config.UseCodeExecutionMode, config.CodingAgentToolsMode, config.CodingAgentApprovalsMode, secretNames, config.SessionID))
 	if providerUsesNativeContextManagement(config.Provider) {
 		if config.EnableContextSummarization {
 			logger.Info(fmt.Sprintf("📝 Context summarization disabled for %s - CLI provider manages context natively", config.Provider))

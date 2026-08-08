@@ -56,9 +56,11 @@ frontend. It does not start Electron or the retired standalone product.
 ## Secrets
 
 Secrets are managed through the AgentWorks secret UI or the registered secret
-tools. They must never be passed through shell commands, URLs, or ordinary
-debug logs. Structured coding-agent turns receive selected secrets only as
-`SECRET_<NAME>` subprocess environment variables.
+tools. Structured coding-agent turns receive selected secrets only as
+`SECRET_<NAME>` subprocess environment variables. Product tools are delivered
+through `get_api_spec`; its HTTP bridge uses `execute_shell_command` inside the
+guarded workspace executor. Do not paste a secret in chat: a shell payload can
+be logged. Use the Secret UI for entering a value whenever possible.
 
 If a key is ever pasted into chat, treat it as exposed: revoke/rotate it and
 avoid copying it into test output or issue descriptions.

@@ -4273,6 +4273,35 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		for _, secret := range mergeGlobalSecrets(req.DecryptedSecrets, req.SelectedGlobalSecrets) {
 			codingAgentSecretEnvironment["SECRET_"+secret.Name] = secret.Value
 		}
+		if resolvedProfile != nil && strings.EqualFold(strings.TrimSpace(resolvedProfile.Definition.Runtime.APITransport.Mode), "native_shell") {
+			// Product APIs remain session-scoped HTTP endpoints, but this profile
+			// deliberately does not expose AgentWorks' execute_shell_command.
+			// Give the native coding CLI only the derived bridge routes and its
+			// bearer header, so its own Bash tool can call a documented API without
+			// inheriting the broad server shell executor.
+			nativeAPIEnv := map[string]string{
+				"MCP_API_URL":    strings.TrimRight(os.Getenv("MCP_API_URL"), "/") + "/s/" + sessionID,
+				"MCP_API_TOKEN":  os.Getenv("MCP_API_TOKEN"),
+				"MCP_SESSION_ID": sessionID,
+			}
+			if strings.TrimSpace(os.Getenv("MCP_API_URL")) != "" && strings.TrimSpace(os.Getenv("MCP_API_TOKEN")) != "" {
+				common.PopulateMCPBridgeShortEnv(nativeAPIEnv)
+				for name, value := range nativeAPIEnv {
+					codingAgentSecretEnvironment[name] = value
+				}
+			} else {
+				// Fail closed. This profile has no execute_shell_command and its
+				// product tools are only reachable over these routes, so starting
+				// the turn without them yields an agent that cannot call anything
+				// and cannot tell a missing route from a missing tool. It reports
+				// an outage and asks the user to reload, which is exactly the
+				// failure this transport was introduced to remove — and it did
+				// that while logging this line, which nobody read.
+				logfWithContext(queryLogCtx, "[API_TRANSPORT] native_shell requested but MCP bridge environment is incomplete (MCP_API_URL/MCP_API_TOKEN unset); refusing the turn")
+				sendError("This product's API transport is not configured on the server: MCP_API_URL and MCP_API_TOKEN must be set for a native_shell profile. No product tool can be called until that is fixed.", true)
+				return
+			}
+		}
 		// The product tool gate is the one place a profile decides its tool
 		// surface. It is a construction input, so every registration path is
 		// covered without each one having to remember to consult a policy.

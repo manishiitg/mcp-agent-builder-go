@@ -21,13 +21,18 @@ type RuntimePolicy struct {
 	ModelID         string              `json:"model_id,omitempty" yaml:"model_id,omitempty"`
 	ProviderOptions []ProviderOption    `json:"provider_options,omitempty" yaml:"provider_options,omitempty"`
 	Capabilities    RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
-	// AgentTools selects whether a coding provider receives only the MCP bridge
-	// (mcp_only) or both bridge and native tools (hybrid). Empty preserves
-	// mcp_only for existing profiles.
+	// AgentTools selects whether a coding provider receives only AgentWorks MCP
+	// tools (mcp_only) or provider-native tools (hybrid). Hybrid is deliberately
+	// incompatible with execute_shell_command; use APITransport for product APIs.
+	// Empty preserves mcp_only for existing profiles.
 	AgentTools AgentToolsPolicy `json:"agent_tools,omitempty" yaml:"agent_tools,omitempty"`
 	// Approvals controls the native-tool approval policy when AgentTools enables
 	// native tools. Empty preserves provider_auto.
 	Approvals ApprovalsPolicy `json:"approvals,omitempty" yaml:"approvals,omitempty"`
+	// APITransport selects how product-specific HTTP APIs are invoked. Native
+	// shell keeps the guarded AgentWorks shell tool absent while giving a native
+	// coding CLI its scoped, session-bound API endpoint environment.
+	APITransport APITransportPolicy `json:"api_transport,omitempty" yaml:"api_transport,omitempty"`
 }
 
 type AgentToolsPolicy struct {
@@ -35,6 +40,10 @@ type AgentToolsPolicy struct {
 }
 
 type ApprovalsPolicy struct {
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+type APITransportPolicy struct {
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 

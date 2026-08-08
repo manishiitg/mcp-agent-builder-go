@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -139,6 +140,28 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		req.DecryptedSecrets = nil
 		noGlobalSecrets := []string{}
 		req.SelectedGlobalSecrets = &noGlobalSecrets
+	} else if api.chatStore != nil && userID != "" {
+		// A product project owns its workflow-scoped secrets. Attach their names
+		// automatically for every direct-chat turn so native coding-agent tools
+		// receive SECRET_<NAME> without the model ever seeing a value. User-wide
+		// secrets remain opt-in through the existing selected-secret mechanism;
+		// a project secret with the same name deliberately resolves to the
+		// project value.
+		stored, secretErr := api.chatStore.ListWorkflowSecrets(ctx, userID, workspacePath)
+		if secretErr != nil {
+			log.Printf("[SECRETS] Failed to list product workspace secrets for %s (%s): %v", userID, workspacePath, secretErr)
+		} else {
+			selectedNames := make([]string, 0, len(req.DecryptedSecrets)+len(stored))
+			for _, secret := range req.DecryptedSecrets {
+				selectedNames = appendUniqueStrings(selectedNames, secret.Name)
+			}
+			for _, secret := range stored {
+				selectedNames = appendUniqueStrings(selectedNames, secret.Name)
+			}
+			if len(selectedNames) > 0 {
+				req.DecryptedSecrets = api.loadSelectedSecrets(ctx, userID, workspacePath, selectedNames)
+			}
+		}
 	}
 	browserRequirement := profile.Runtime.Capabilities.Browser
 	if browserRequirement == agentprofiles.CapabilityRequired || browserRequirement == agentprofiles.CapabilityPreferred || browserRequirement == agentprofiles.CapabilityOptional {
