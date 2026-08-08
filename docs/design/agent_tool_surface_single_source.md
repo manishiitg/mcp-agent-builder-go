@@ -1,0 +1,258 @@
+# Agent tool surface: one source of truth
+
+**Status:** Proposed
+**Date:** 2026-08-08
+**Supersedes:** [product_tool_registration_and_visibility.md](product_tool_registration_and_visibility.md)
+**Related:** [canonical_agent_definition_construction.md](../refactor/canonical_agent_definition_construction.md)
+
+## Problem
+
+"What tools does this agent have?" is answered in five places today, in three
+different styles. A tool must survive all of them, and any one of them can
+silently drop it.
+
+| Tool group | Decision lives in | Style |
+|---|---|---|
+| Product tools (`video.show-video`) | `product.yaml` `tools:` → `agent_profile_runtime.go:211` | opt-in, YAML |
+| Platform pools (workspace, media/LLM, skills, MCP) | `product.yaml` `tool_policy.disabled` → `agent_profile_runtime.go:234`, four call sites (`server.go:4590,5002,5011,5029`) | opt-out, YAML |
+| Workflow tools (`query_step`, `execute_step`, `run_full_workflow`, …) | hardcoded Go map `agentProfileWorkflowToolNames`, `agent_profile_workflow.go:21-29` | opt-in, Go |
+| Secret tools (`list_secrets`, `set_user_secret`, …) | no policy at all — always registered, `server.go:5041` | always on |
+| `createCustomTools` pool | no profile check, `server.go:~4891` | always on |
+
+On top of that sits a second, independent list: `GetToolsForWorkshopMode()`
+(`interactive_workshop_manager.go:1473`), applied per turn via `SetToolPolicy`
+→ `mcpagent.Turn.ToolPolicy.AllowedTools`.
+
+### The same bug has now happened three times
+
+- **Video Studio secrets.** `set_user_secret` / `set_workflow_secret` were
+  registered but absent from the workshop-mode list. The agent could not call
+  them or discover them via `get_api_spec`, and fell back to a shell bridge
+  Video Studio deliberately disables.
+- **`list_llm_capabilities`.** Same shape, documented in the code at
+  `interactive_workshop_manager.go:1494-1497`: *"a real, registered tool was
+  rejected … Registration and this list live in different files, which is how
+  they drifted."*
+- **Builder background child (2026-08-08).** Failed at registration instead:
+  the child called `prepareCustomTools(nil)` while the parent registered a
+  richer workshop surface.
+
+`toolset_invariant_test.go:12-33` exists only to hold two hand-maintained lists
+in sync. It is a band-aid over the design, not a fix.
+
+## The key asymmetry
+
+A coding CLI caches its tool catalog **once, at launch**, via `get_api_spec`
+(`chat_history_routes.go:143`). From that follows:
+
+- **Removing** a tool the agent already knows about degrades gracefully — it
+  calls, gets an error, adapts. `guidance.go:360` already does this well:
+  *"error: kind %q is not available in mode %q … Tell the user they need to
+  switch workshop mode."*
+- **Adding** a tool after launch is invisible. The agent cannot ask for what it
+  was never told exists, so it shells out instead.
+
+**You can always take away. You can never add.**
+
+This is why filtering the catalog is dangerous. `GetToolsForWorkshopMode` does
+not only reject calls — it filters `buildToolIndex()` / `get_api_spec`, i.e. the
+catalog read at launch. An exclusion applied there is indistinguishable from
+never registering the tool: no discovery, no error, silent shell fallback. That
+is exactly how the secrets bug became unrecoverable.
+
+## Design
+
+Three rules.
+
+1. **One source of truth.** A single declarative list per agent role decides
+   what is registered. Registration is complete before the CLI launches.
+2. **Never filter the catalog.** `get_api_spec` and the tool index render
+   everything registered. Discovery is always complete.
+3. **Focus rules live in the prompt; code enforces authority only.**
+
+The agent then always knows what exists. Nothing can silently vanish.
+
+### What code may still enforce
+
+| Rule type | Example | Where |
+|---|---|---|
+| Focus / workflow discipline | "don't optimize while still building" | Prompt — the agent decides |
+| Authority | a reviewer must not mutate the workflow DB | Code — executor check |
+| Irreversible / external | spend, delete, send outward | Code — executor check |
+
+The test is whether this is something the agent should not be *trusted* to
+decide, or merely something it might get wrong. Only the first belongs in Go.
+Reviewer-cannot-mutate protects the reviewer/fixer separation and is exactly
+what the canonical doc's Reader/Writer contract exists for. "Which workshop mode
+am I in" is not that — and encoding it in Go duplicates a rule the system prompt
+already states, which is the same one-decision-two-places failure this document
+exists to remove.
+
+### Relationship to the canonical refactor
+
+[canonical_agent_definition_construction.md](../refactor/canonical_agent_definition_construction.md)
+fixes drift *across construction paths* (parent vs child, scheduled vs
+converted-chat) via one `AgentDefinition`. This document fixes drift *across
+consumers within one path* (registered vs agent-visible vs API spec).
+
+The canonical doc's Reader/Writer contract cannot express this axis — "this tool
+exists for the HTTP UI but not for the agent" and "this tool is unavailable on
+this provider" are not authority facts. The declarative list below is the
+missing input to its canonical constructor, not a competing model.
+
+## Fix: Video Studio
+
+Gate 2 is already inert here — `workflow_phase_tools.go:449` takes the
+`setToolPolicy(nil)` branch for non-Builder phases. So Video Studio becomes a
+genuine one-gate system with no runtime work.
+
+1. **Extend `ToolPolicy`** (`agent_go/pkg/agentprofiles/types.go:88-90`):
+
+   ```go
+   type ToolPolicy struct {
+       Mode     string   `yaml:"mode,omitempty"`     // "allowlist" | "" (legacy deny)
+       Enabled  []string `yaml:"enabled,omitempty"`
+       Disabled []string `yaml:"disabled,omitempty"` // retained for other profiles
+   }
+   ```
+
+2. **Add one registrar gate.** Follow the existing working pattern —
+   `agentProfileWorkflowRegistrar` (`agent_profile_workflow.go:30-77`) already
+   wraps `definitionToolRegistrar` and gates every registration by name:
+
+   ```go
+   type productToolGate struct {
+       target   definitionToolRegistrar
+       allowed  map[string]struct{}
+       filtered []string
+   }
+   ```
+
+   This works regardless of which pool a tool came from, because every path
+   funnels through `RegisterCustomTool`.
+
+3. **Pass the gate instead of `llmAgent`** into every `register*Tools(...)`
+   call. All of them already accept the `definitionToolRegistrar` interface —
+   `registerSecretManagementTools` (`secrets_tools.go:31`),
+   `registerMultiAgentLLMTools` (`multiagent_llm_tools.go:1163`),
+   `registerAgentProfileTools` (`agent_profile_runtime.go:211`) — so this is
+   wiring, not refactoring.
+
+4. **Retire the redundant mechanisms**: `tool_policy.disabled` for this profile,
+   the `agentProfileWorkflowToolNames` map, and the always-on secrets
+   special-case. They collapse into the one `enabled:` list.
+
+5. **Log every filtered tool** at session start. An allowlist fails closed, so a
+   missing capability must be diagnosable from logs rather than from confused
+   agent behavior.
+
+Result in `product.yaml`:
+
+```yaml
+tool_policy:
+  mode: allowlist
+  enabled:
+    - video.show-video
+    - list_secrets
+    - set_workflow_secret
+    - delete_workflow_secret
+    - query_step
+    - execute_step
+    - run_full_workflow
+```
+
+### Building the list safely
+
+Do not guess it. Run a real Video Studio session, capture the effective set from
+the existing log lines (`[CUSTOM TOOLS] Registered custom tool: %s`,
+`[WORKSPACE TOOLS] Registering %d workspace tools`), seed `enabled:` from that,
+confirm behavior is unchanged, then trim. Behavior-preserving first, minimal
+second.
+
+## Fix: AgentWorks (Workflow Builder)
+
+Higher risk — it touches every workflow — so it comes second.
+
+**Delete gate 2.** Workshop-mode narrowing goes away entirely. Mode discipline
+moves to the system prompt, which already describes the modes.
+
+There are only two call sites:
+
+- `workflow_phase_tools.go:449-458` (the mode if/else), plus the `setToolPolicy`
+  parameter threaded in from `server.go:5566`
+- `interactive_workshop_manager.go:1925`
+
+plus `GetToolsForWorkshopMode()` itself (`interactive_workshop_manager.go:1473`)
+and the exception list in `toolset_invariant_test.go:12-33`.
+
+### Why not keep it as call-time rejection
+
+Because the allow-list drives two unrelated surfaces. `mcpagent`'s
+`agent/turn_session.go:186-192`:
+
+```go
+allowed := policy.allowedMap()
+codeexec.SetSessionToolAllowList(s.agent.sessionID, allowed)
+```
+
+- **Surface A** — the tool list offered to the model this turn
+  (`agent/agent.go:3622`). The intended use.
+- **Surface B** — the **session-wide** code-execution HTTP registry, which
+  execution agents and sub-agents call from generated `main.py`.
+
+Surface B is keyed by session, not by actor. Narrowing the Builder's tools to
+enforce its workshop mode therefore also narrows the HTTP bridge for every other
+actor in that session. That is why four unrelated names are pinned in the
+always-allowed block at `interactive_workshop_manager.go:1499-1502` — not
+because modes should permit them, but because omitting them broke execution
+agents.
+
+Two consequences make this unfixable in place:
+
+1. **The rule is inexpressible.** "The Builder LLM should not call sub-agents in
+   this mode" cannot be stated, because stating it also disables sub-agent calls
+   for execution agents.
+2. **There is a hidden maintenance obligation.** Any tool any execution agent
+   might ever call over HTTP must also appear in the Builder's mode list, or it
+   silently breaks — a coupling invisible from either file, and on top of the
+   registration drift that caused the three incidents.
+
+### Honest tradeoff
+
+Mode discipline becomes advisory: the LLM sees every registered tool and follows
+the prompt. A model may occasionally act out of phase. That is a visible,
+recoverable error — versus the current failure, where a tool silently disappears
+and the agent quietly shells out instead. Builder prompts should state the mode
+boundaries explicitly, since they become the only place the rule lives.
+
+## Sequencing
+
+1. Video Studio gate + `enabled:` list (isolated, gate 2 inert, small blast radius)
+2. AgentWorks: delete gate 2; move mode boundaries into the Builder prompts
+3. Keep executor-level authority checks (Reader/Writer, irreversible actions)
+4. Delete superseded mechanisms and the invariant band-aid
+
+Steps 1 and 2 independently close a shipped bug class and can land separately.
+
+## Verification
+
+- **Video Studio:** run a session; assert the filtered-tool log is empty of
+  anything expected; confirm secret tools and workflow tools appear in
+  `get_api_spec`; store and read back a workflow secret through the real bridge.
+- **AgentWorks:** in each workshop mode, assert every registered tool appears in
+  `get_api_spec`; assert a mode-blocked call returns the actionable error rather
+  than being absent.
+- **Invariant test (replaces the exception list):** for every profile, the set
+  in `get_api_spec` equals the set actually registered. No hand-maintained
+  membership list.
+
+## Open questions
+
+1. Skills register through `AttachSkill`, a separate method. In scope for the
+   gate, or governed separately?
+2. Provider-native tools (`agent_tools: mode: hybrid`) never reach this
+   registrar — the CLI supplies its own file/shell tools. They stay governed by
+   `approvals`. Confirm no product expects the list to cover them.
+3. MCP bridge tools carry their own `MCPToolPolicy`
+   (`productdeps/dependencies.go:89`). Verify whether that is a fourth
+   registration path needing the same gate.
