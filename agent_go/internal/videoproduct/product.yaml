@@ -77,43 +77,46 @@ profile:
   tools:
     - id: video.show-video
   tool_policy:
-    # Video Studio uses its selected skills, product controls and provider-native
-    # coding tools. Do not leak AgentWorks-wide administration or provider/media
-    # bridge tools into the product agent. Project-secret CRUD stays enabled.
-    disabled:
-      # Shared provider/model library administration.
-      - list_llm_capabilities
-      - estimate_llm_cost
-      - list_published_llms
-      - list_provider_models
-      - test_llm
-      - save_published_llm
-      - set_provider_auth
-      # Workspace-wide skill and MCP-server administration.
-      - list_skills
-      - import_skill
-      - uninstall_skill
-      - search_skills
-      - install_skill
-      - list_mcp_servers
-      - add_mcp_server
-      - edit_mcp_server
-      - remove_mcp_server
-      - get_mcp_server_logs
-      - trigger_mcp_discovery
-      # Shared provider-backed workspace tools. Native coding tools and the
-      # Video Studio workflow/show_video product controls remain available.
-      - execute_shell_command
-      - diff_patch_workspace_file
-      - generate_text_llm
-      - search_web_llm
-      - read_image
-      - image_gen
-      - image_edit
-      - generate_video
-      - text_to_speech
-      - speech_to_text
-      - generate_music
+    # Video Studio names the tools it needs. Everything AgentWorks registers that
+    # is not listed here never reaches the agent.
+    #
+    # This is an allow list rather than the old `disabled:` deny list because a
+    # deny list silently widens: every new platform tool reaches this product
+    # until someone remembers to block it. Naming the surface also makes the
+    # registered set and what get_api_spec advertises the same thing, which is
+    # what stopped set_workflow_secret from being registered-but-invisible.
+    # See docs/design/agent_tool_surface_single_source.md.
+    #
+    # Not listed, deliberately: AgentWorks provider/model, skill and MCP-server
+    # administration; the shared media/LLM bridge tools; sub-agent orchestration
+    # (delegate, query_agent, list_agents, terminate_agent); every schedule tool;
+    # and human_feedback / notify_user.
+    #
+    # Two surfaces this list does not govern: mcpagent's intrinsic tools
+    # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
+    # itself, and the coding CLI's own native tools under agent_tools.mode
+    # hybrid — Video Studio runs ffmpeg through the provider's shell, which is
+    # why the shared execute_shell_command is absent rather than suppressed.
+    mode: allowlist
+    enabled:
+      # The product's own control.
+      - show_video
+      # Managed browser capability, matching the agent-browser skill above.
+      - agent_browser
+      # Project and user secret CRUD. ui.secrets is required for this product.
+      - list_secrets
+      - set_workflow_secret
+      - delete_workflow_secret
+      - set_user_secret
+      - delete_user_secret
+      # Running the production pipeline and inspecting it.
+      - run_full_workflow
+      - execute_step
+      - query_step
+      - send_step_message
+      - stop_step
+      - stop_all_executions
+      - list_executions
   runtime:
     # Video Studio is a non-technical surface. Every supported coding provider
     # runs through its native structured JSON protocol: tool calls, usage, and

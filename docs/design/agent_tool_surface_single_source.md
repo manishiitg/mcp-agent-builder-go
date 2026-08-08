@@ -104,19 +104,17 @@ missing input to its canonical constructor, not a competing model.
 
 ### Which Video Studio
 
-There are two surfaces, and only one of them has this problem:
+One surface: the AgentWorks-embedded profile. `videoproduct.BuiltinAgentProfiles()`
+is registered into the profile registry at `server.go:1473` and resolved per
+request as `resolvedProfile`. Its agent is an `LLMAgentWrapper`, the platform
+pools arrive by default, and `tool_policy` is what filters them — so this is
+what the gate covers.
 
-- **The AgentWorks-embedded profile** — `videoproduct.BuiltinAgentProfiles()`,
-  registered into the profile registry at `server.go:1473` and resolved per
-  request as `resolvedProfile`. Its agent is an `LLMAgentWrapper`, and the
-  platform pools arrive by default, filtered only by `tool_policy.disabled`.
-  **This is what `tool_policy` governs and what the gate covers.**
-- **The standalone `internal/videoproduct` server** — its own
-  `agentsession`-based agent, which hand-builds its tool list
-  (`videoShellTool`, `showVideoTool`, `workflowTools`) at `agent.go:491-503`.
-  No platform pool ever arrives, so it is already opt-in by construction and
-  needs no gate. `tool_policy` does not reach it, and `[PRODUCT_TOOL_GATE]`
-  will not appear in its logs.
+A standalone Video Studio application used to run beside it on its own port,
+with an `agentsession` agent whose tool list was hand-built rather than drawn
+from the platform pools. It never had this problem and `tool_policy` never
+reached it. It was removed once the embedded profile was sufficient for live
+projects, so no second surface remains to keep in sync.
 
 Gate 2 is already inert on the embedded path — `workflow_phase_tools.go` took
 the `setToolPolicy(nil)` branch for non-Builder phases even before its removal.

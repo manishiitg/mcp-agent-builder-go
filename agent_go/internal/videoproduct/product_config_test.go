@@ -13,16 +13,39 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.Profile.ID != "video-studio" || manifest.Profile.Runtime.Capabilities.Browser != "required" || manifest.Profile.Runtime.Capabilities.Secrets != "required" || manifest.Profile.Runtime.Capabilities.LiveInput != "disabled" {
 		t.Fatalf("unexpected declarative profile: %+v", manifest.Profile)
 	}
-	disabled := map[string]bool{}
-	for _, name := range manifest.Profile.ToolPolicy.Disabled {
-		disabled[name] = true
+	// Video Studio names its surface rather than blocking a list. Anything not
+	// named never reaches the agent, so a new AgentWorks tool cannot widen this
+	// product by default — the failure mode a deny list has.
+	if !manifest.Profile.ToolPolicy.IsAllowlist() {
+		t.Fatalf("Video Studio should declare an allow list: %+v", manifest.Profile.ToolPolicy)
 	}
+	if len(manifest.Profile.ToolPolicy.Disabled) != 0 {
+		t.Fatalf("an allow list is the complete surface; a deny list beside it is a second source: %+v", manifest.Profile.ToolPolicy)
+	}
+	enabled := map[string]bool{}
+	for _, name := range manifest.Profile.ToolPolicy.Enabled {
+		enabled[name] = true
+	}
+	// The product controls and the secret CRUD its ui.secrets surface needs.
+	// set_workflow_secret is here because it was registered-but-invisible once.
+	for _, name := range []string{
+		"show_video", "agent_browser",
+		"list_secrets", "set_workflow_secret", "set_user_secret",
+		"run_full_workflow", "execute_step",
+	} {
+		if !enabled[name] {
+			t.Fatalf("Video Studio needs %q: %+v", name, manifest.Profile.ToolPolicy)
+		}
+	}
+	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
+	// orchestration, and scheduling are not this product's business.
 	for _, name := range []string{
 		"set_provider_auth", "install_skill", "add_mcp_server",
 		"execute_shell_command", "diff_patch_workspace_file", "generate_video",
+		"delegate", "query_agent", "create_workflow_schedule", "notify_user",
 	} {
-		if !disabled[name] {
-			t.Fatalf("expected Video Studio to disable %q: %+v", name, manifest.Profile.ToolPolicy)
+		if enabled[name] {
+			t.Fatalf("Video Studio should not carry %q: %+v", name, manifest.Profile.ToolPolicy)
 		}
 	}
 	if manifest.UI.Surface != "video-studio" || !manifest.UI.Secrets || manifest.Branding.Favicon != "/video-studio-favicon.svg" {
