@@ -124,6 +124,11 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 			BridgeRoutingInstructionsOverride: config.BridgeRoutingInstructionsOverride,
 			CLISecurityPolicy:                 config.CLISecurityPolicy,
 			SecretEnvironment:                 config.CodingAgentSecretEnvironment,
+			CodexNetworkAccess:                config.CodexNetworkAccess,
+			// The same predicate that admits tool registration also decides what
+			// the coding-agent bridge advertises, so its catalog can never offer
+			// a tool this session would refuse to execute.
+			BridgeToolAdmit: config.AdmitTool,
 		},
 		MCP: mcpagent.MCPRuntimeConfig{
 			SessionID: config.SessionID, UserID: config.UserID, RuntimeOverrides: config.RuntimeOverrides,
@@ -320,6 +325,12 @@ type LLMAgentConfig struct {
 	CodingAgentWorkingDir        string
 	CLISecurityPolicy            *llmtypes.CLISecurityPolicy
 	CodingAgentSecretEnvironment map[string]string
+	// CodexNetworkAccess lets codex's sandboxed native shell reach the network.
+	// A native_shell profile's product APIs are session-scoped HTTP endpoints,
+	// so without this codex's own shell cannot call any product tool at all —
+	// codex's workspace-write sandbox blocks network unless asked otherwise,
+	// whereas Claude Code's native Bash has no equivalent restriction.
+	CodexNetworkAccess bool
 	APIKeys                      *llm.ProviderAPIKeys // API keys for providers
 
 	// Context summarization configuration

@@ -39,8 +39,16 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 			t.Fatalf("Video Studio needs %q: %+v", name, manifest.Profile.ToolPolicy)
 		}
 	}
-	if enabled["execute_shell_command"] {
-		t.Fatalf("Video Studio must keep the legacy shell API bridge disabled: %+v", manifest.Profile.ToolPolicy)
+	// The bridge shell is how product HTTP APIs are reached. Reaching them from
+	// each CLI's own shell instead (api_transport.native_shell) is implemented
+	// but deliberately not enabled — every provider can call the bridge as an
+	// MCP tool, and Codex can ONLY do that. See
+	// docs/design/product_api_transport_for_coding_agents.md.
+	if !enabled["execute_shell_command"] {
+		t.Fatalf("Video Studio reaches product APIs through the bridge shell; removing it leaves Codex with no path at all: %+v", manifest.Profile.ToolPolicy)
+	}
+	if mode := strings.TrimSpace(manifest.Profile.Runtime.APITransport.Mode); mode == "native_shell" {
+		t.Fatalf("native_shell is intentionally off for now (see docs/design/product_api_transport_for_coding_agents.md); enabling it needs the bridge-shell entry above reconsidered too")
 	}
 	// video.show-video must declare what it presents. Without this the
 	// factory refuses every call (see TestShowVideoRequiresADeclaredPresentationKind)
@@ -77,9 +85,7 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
 		t.Fatalf("Video Studio native-tool policy = %+v %+v, want hybrid/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
 	}
-	if manifest.Profile.Runtime.APITransport.Mode != "native_shell" {
-		t.Fatalf("Video Studio API transport = %q, want native_shell", manifest.Profile.Runtime.APITransport.Mode)
-	}
+
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)
 	}

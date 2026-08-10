@@ -105,13 +105,22 @@ func Validate(profile Profile) error {
 		if !profile.ToolPolicy.IsAllowlist() {
 			return fmt.Errorf("runtime agent_tools.mode=hybrid requires tool_policy.mode=%q", ToolPolicyModeAllowlist)
 		}
-		if _, present := seenEnabled["execute_shell_command"]; present {
-			return fmt.Errorf("runtime agent_tools.mode=hybrid cannot enable %q; use runtime.api_transport instead", "execute_shell_command")
-		}
 	}
-	if strings.EqualFold(strings.TrimSpace(profile.Runtime.APITransport.Mode), "native_shell") &&
-		!strings.EqualFold(strings.TrimSpace(profile.Runtime.AgentTools.Mode), "hybrid") {
-		return fmt.Errorf("runtime api_transport.mode=native_shell requires runtime agent_tools.mode=hybrid")
+	// The exclusion is between the two API transports, not between hybrid and
+	// the bridge shell. native_shell replaces execute_shell_command, so having
+	// both is genuinely ambiguous — but hybrid alone does not imply the CLI can
+	// reach product APIs from its own shell. Codex cannot: it operates through a
+	// JS sandbox with no network and no environment, so the bridge shell is its
+	// only path. Requiring hybrid profiles to drop it left Codex with no way to
+	// call any product API at all. See
+	// docs/design/product_api_transport_for_coding_agents.md.
+	if strings.EqualFold(strings.TrimSpace(profile.Runtime.APITransport.Mode), "native_shell") {
+		if !strings.EqualFold(strings.TrimSpace(profile.Runtime.AgentTools.Mode), "hybrid") {
+			return fmt.Errorf("runtime api_transport.mode=native_shell requires runtime agent_tools.mode=hybrid")
+		}
+		if _, present := seenEnabled["execute_shell_command"]; present {
+			return fmt.Errorf("runtime api_transport.mode=native_shell cannot also enable %q; the native shell replaces it", "execute_shell_command")
+		}
 	}
 	return nil
 }

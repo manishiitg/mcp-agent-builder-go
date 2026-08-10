@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
@@ -138,5 +139,40 @@ func TestProductToolGateTrimsAndDeduplicates(t *testing.T) {
 	registered, _ := gate.summary()
 	if !reflect.DeepEqual(registered, []string{"query_step"}) {
 		t.Fatalf("registered = %v, want one de-duplicated entry", registered)
+	}
+}
+
+// The gate decides what a session may execute AND what its coding-agent bridge
+// advertises. Those were separate: the bridge's hardcoded core list
+// (execute_shell_command, diff_patch_workspace_file, agent_browser) synthesized
+// a definition for a tool the profile had removed, so the CLI was offered a
+// shell whose own description says to use it for HTTP calls, called it, and was
+// refused with "not registered for session" — Claude Code silently retried on
+// its native Bash, Codex reported the product broken.
+//
+// agent_browser is the control: hybrid profiles genuinely want it, because no
+// coding CLI has a native equivalent for driving the user's signed-in browser.
+func TestProductToolGateGovernsTheCodingAgentBridgeCatalog(t *testing.T) {
+	manifest, err := videoproduct.VideoStudioManifest()
+	if err != nil {
+		t.Fatalf("load Video Studio manifest: %v", err)
+	}
+	gate := newProductToolGate(&resolvedAgentProfile{Definition: manifest.Profile})
+	if !gate.enforcing() {
+		t.Fatal("Video Studio declares tool_policy.mode=allowlist; the gate must enforce")
+	}
+
+	// diff_patch_workspace_file stays out: every supported CLI has its own file
+	// editor. execute_shell_command stays IN: it is how product HTTP APIs are
+	// reached, and Codex can reach it only as an MCP tool (its JS code-mode
+	// sandbox has no network and no env). See
+	// docs/design/product_api_transport_for_coding_agents.md.
+	if gate.Admit("diff_patch_workspace_file") {
+		t.Fatal("diff_patch_workspace_file must stay out of a hybrid profile's surface: the CLI supplies its own")
+	}
+	for _, kept := range []string{"execute_shell_command", "agent_browser"} {
+		if !gate.Admit(kept) {
+			t.Fatalf("%q is allowlisted and has no usable native equivalent for every provider; it must survive", kept)
+		}
 	}
 }

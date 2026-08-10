@@ -47,16 +47,27 @@ func TestValidateRequiresCompleteRuntimeModelBinding(t *testing.T) {
 	}
 }
 
-func TestValidateHybridRejectsExecuteShellCommand(t *testing.T) {
+// The exclusion is between the two API transports. native_shell replaces
+// execute_shell_command, so declaring both is ambiguous — but hybrid ALONE must
+// keep the bridge shell available: Codex reaches product APIs only through it
+// (its JS sandbox has no network and no environment), so forbidding the pair
+// left it unable to call any product API. See
+// docs/design/product_api_transport_for_coding_agents.md.
+func TestValidateRejectsBothAPITransportsAtOnce(t *testing.T) {
 	profile := validProfile()
 	profile.ToolPolicy = ToolPolicy{Mode: ToolPolicyModeAllowlist, Enabled: []string{"execute_shell_command"}}
 	profile.Runtime.AgentTools.Mode = "hybrid"
-	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "cannot enable") {
-		t.Fatalf("expected hybrid/execute_shell_command contradiction, got %v", err)
+
+	if err := Validate(profile); err != nil {
+		t.Fatalf("hybrid with the bridge shell is the supported default; it must validate: %v", err)
+	}
+
+	profile.Runtime.APITransport.Mode = "native_shell"
+	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "cannot also enable") {
+		t.Fatalf("expected native_shell/execute_shell_command contradiction, got %v", err)
 	}
 
 	profile.ToolPolicy.Enabled = []string{"show_video"}
-	profile.Runtime.APITransport.Mode = "native_shell"
 	if err := Validate(profile); err != nil {
 		t.Fatalf("hybrid native-shell profile should be valid: %v", err)
 	}

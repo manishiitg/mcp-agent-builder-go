@@ -68,6 +68,12 @@ confirm the failure is actually visible — otherwise a fix cannot be verified.
 |---|---|
 | [what_the_runtime_tells_an_agent_about_itself.md](what_the_runtime_tells_an_agent_about_itself.md) | Seven defects from one `grep '[TOOL_ERROR]'` over a 5h37m window (137 markers). Four sharpen the house pattern into something worse: **the runtime named a cause the code had evidence against** — a denial blaming "workshop mode" the registry has never heard of, a shell tool description asserting a working directory that was never true, a guard advising a workspace path for a file that cannot exist there, and a Pulse pre-check answered with an identity error the validator two lines above had just disproved. Also: a 100KB cap that turned out to live on a test fixture while the live path was uncapped, allow-lists withholding tools the prompts instruct agents to call, and a deliberate re-registration that became fatal when a map became a slice — which killed the Chief of Staff daily pass two days running. |
 
+## The agent-facing contract, part three (2026-08-10)
+
+| Document | What it establishes |
+|---|---|
+| [hybrid_profile_told_it_has_no_shell.md](hybrid_profile_told_it_has_no_shell.md) | The house pattern at two layers at once, exposed by the first profile to combine `agent_tools: hybrid`, `api_transport: native_shell`, and a `tool_policy` allow-list. **The tool gate guarded execution but not advertisement**: `defaultBridgeToolDef` synthesizes a definition for an unregistered core tool, so the bridge kept offering `execute_shell_command` — described as *"use this to call HTTP endpoints with curl"* — after the profile removed it. Claude Code absorbed the failed call and fell back to `Bash`, which is why it read as "the allow-list working" for six weeks. **And a second prompt source contradicted the first**: `BuildCLIToolEnvironmentPrompt` asserts "your native tools are **disabled**" to any CLI provider, never asking the profile, though `resolvedProfile` is in scope 118 lines above. Both fixed and verified. A third defect — Codex reporting no native shell while every flag says it has one — is recorded **unresolved with the contradiction intact**, plus the `functions.exec` vs `exec_command` naming trap that makes two comments in this repo appear to disagree. |
+
 ## Earlier incidents
 
 - [session_tool_registry_lifecycle_leak.md](session_tool_registry_lifecycle_leak.md)

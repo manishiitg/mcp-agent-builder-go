@@ -102,14 +102,20 @@ profile:
     # Two surfaces this list does not govern: mcpagent's intrinsic tools
     # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
     # itself, and the coding CLI's own native tools under agent_tools.mode
-    # Hybrid — Video Studio also has provider-native tools. The shared shell
-    # bridge is deliberately disabled: native coding-agent tools handle
-    # workspace work, while a future native-shell API transport will handle
-    # product HTTP APIs without re-exposing execute_shell_command.
+    # Hybrid — Video Studio also has provider-native tools for workspace work.
+    # Product HTTP APIs still go through the shared shell bridge, because every
+    # provider can call it as an MCP tool. Reaching them from each CLI's OWN
+    # shell was tried and reverted: see
+    # docs/design/product_api_transport_for_coding_agents.md.
     mode: allowlist
     enabled:
       # The product's own control.
       - show_video
+      # The bridge shell is how product HTTP APIs are called. Every provider can
+      # reach it (Codex only through its JS code-mode sandbox, which has no
+      # network and no env of its own), so it is not redundant with the CLI's
+      # native shell.
+      - execute_shell_command
       # Managed browser capability, matching the agent-browser skill above.
       - agent_browser
       # Project and user secret CRUD. ui.secrets is required for this product.
@@ -133,15 +139,16 @@ profile:
     transport: structured
     provider: claude-code
     model_id: claude-sonnet-5
-    # Enable provider-native coding tools. This is mutually exclusive with
-    # execute_shell_command; product APIs use api_transport.native_shell below.
+    # Enable provider-native coding tools for workspace work (rendering, files,
+    # QA). Product HTTP APIs deliberately still go through the bridge shell
+    # above rather than each CLI's own shell — api_transport.native_shell is
+    # implemented and left OFF; the reasoning and evidence are in
+    # docs/design/product_api_transport_for_coding_agents.md.
     # Each provider's own automatic safety classifier reviews native actions.
     agent_tools:
       mode: hybrid
     approvals:
       mode: provider_auto
-    api_transport:
-      mode: native_shell
     provider_options:
       - id: claude-code
         label: Claude Code
