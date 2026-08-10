@@ -158,15 +158,22 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 		return nil
 	}
 
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow := calculatePricingFromModelData(modelTokenData)
-	totalTokens := modelTokenData.InputTokens + modelTokenData.OutputTokens
-	var contextUsagePercent float64
-	if contextWindow > 0 {
-		contextUsagePercent = (float64(totalTokens) / float64(contextWindow)) * 100.0
-		if contextUsagePercent > 100.0 {
-			contextUsagePercent = 100.0
-		}
-	}
+	// PLAT-072/B. context_window_usage/context_usage_percent removed from the
+	// persisted ledger by operator decision (2026-08-10). This function
+	// unconditionally recomputed both from modelTokenData.InputTokens+
+	// OutputTokens — the call's TOTAL token count, not a context-window
+	// snapshot — silently ignoring the correctly-scoped ModelTokenData.
+	// ContextWindowUsage field entirely. Once accumulated across a day's calls
+	// via ApplyModelTokenData, that produced e.g. 4,469,416 against a 200,000
+	// window (23x over, permanently pinned at the 100% clamp below) — a live
+	// misreading, not real context pressure. Traced but not consumed by any
+	// gate/summarization decision downstream: purely display (CostsPopup UI)
+	// and Pulse review-finding evidence text, both now equally misleading.
+	// The one place this concept is genuinely load-bearing — live in-session
+	// context editing during the actual API transfer — is
+	// mcpagent/agent.go's contextWindowUsageKnown-gated path (2026-08-10,
+	// commit 0ebd5c8) and is untouched by this change.
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
 
 	return &ModelTokenUsage{
 		Provider:            modelTokenData.Provider,
@@ -192,9 +199,6 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 		CacheReadCost:       modelTokenData.CacheReadCost,
 		CacheWriteCost:      modelTokenData.CacheWriteCost,
 		TotalCost:           totalCost,
-		ContextWindowUsage:  totalTokens,
-		ModelContextWindow:  contextWindow,
-		ContextUsagePercent: contextUsagePercent,
 	}
 }
 
@@ -222,7 +226,7 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 	}
 
 	modelTokenData := buildModelTokenDataFromUsage(modelID, usage)
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow := calculatePricingFromModelData(modelTokenData)
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
 
 	if inputCost > 0 || outputCost > 0 || reasoningCost > 0 || cacheCost > 0 || totalCost > 0 {
 		usage.PricingModelID = modelID
@@ -236,18 +240,7 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 		usage.TotalCost = totalCost
 	}
 
-	if usage.ModelContextWindow == 0 && contextWindow > 0 {
-		usage.ModelContextWindow = contextWindow
-	}
-	if usage.ContextWindowUsage == 0 {
-		usage.ContextWindowUsage = usage.InputTokens + usage.OutputTokens
-	}
-	if usage.ContextUsagePercent == 0 && usage.ModelContextWindow > 0 && usage.LLMCallCount <= 1 {
-		usage.ContextUsagePercent = (float64(usage.ContextWindowUsage) / float64(usage.ModelContextWindow)) * 100.0
-		if usage.ContextUsagePercent > 100.0 {
-			usage.ContextUsagePercent = 100.0
-		}
-	}
+	// PLAT-072/B: no longer backfilled here — see buildModelTokenUsage.
 }
 
 func EnsureTokenUsageFilePricing(tokenFile *TokenUsageFile) {
@@ -363,13 +356,8 @@ func ApplyModelTokenData(dst *ModelTokenUsage, modelTokenData *ModelTokenData) *
 	if usage.Provider != "" {
 		dst.Provider = usage.Provider
 	}
-	if usage.ModelContextWindow > 0 {
-		dst.ModelContextWindow = usage.ModelContextWindow
-		if modelTokenData.LLMCallCount <= 1 {
-			dst.ContextWindowUsage = usage.ContextWindowUsage
-			dst.ContextUsagePercent = usage.ContextUsagePercent
-		}
-	}
+	// PLAT-072/B: ModelContextWindow/ContextWindowUsage/ContextUsagePercent no
+	// longer propagated here — see buildModelTokenUsage.
 
 	return dst
 }
@@ -479,15 +467,8 @@ func MergeModelTokenUsage(dst, src *ModelTokenUsage) *ModelTokenUsage {
 	if src.PricingVersion != "" {
 		dst.PricingVersion = src.PricingVersion
 	}
-	if src.ModelContextWindow > 0 {
-		dst.ModelContextWindow = src.ModelContextWindow
-	}
-	if src.ContextWindowUsage > 0 {
-		dst.ContextWindowUsage = src.ContextWindowUsage
-	}
-	if src.ContextUsagePercent > dst.ContextUsagePercent {
-		dst.ContextUsagePercent = src.ContextUsagePercent
-	}
+	// PLAT-072/B: ModelContextWindow/ContextWindowUsage/ContextUsagePercent no
+	// longer propagated here — see buildModelTokenUsage.
 
 	return dst
 }
