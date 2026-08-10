@@ -334,7 +334,10 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		extra = append(extra, enginedetect.ChatMessage{Role: "tool", Tool: "scene", HTML: sceneOut})
 	}
 	persistConversationReplyWithExtras("child", activityDir, messages, reply, extra...)
-	recordActivityLogEntry(activityDir) // powers the "This Week" view (week.go) — deduped per day+activity
+	// powers the "This Week" view (week.go) — accumulates onto today's entry
+	// for this activity; trace.duration() excludes queue wait, not just raw
+	// elapsed time (see its own comment).
+	recordActivityLogEntry(activityDir, trace.duration())
 
 	return parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut}
 }

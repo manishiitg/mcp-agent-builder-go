@@ -182,11 +182,12 @@ func setChildScheduleTool(sinks parentToolSinks) agentsession.Tool {
 	return agentsession.Tool{
 		Name: "set_child_schedule",
 		Description: "Save one or more recurring weekly commitments to the child's schedule — school hours, tuition, sports " +
-			"practice, anything that happens on the same day/time every week — once the parent tells you. ADDS to the " +
-			"existing schedule (never replaces it), so call this again for each new fact as it comes up rather than trying " +
-			"to restate the whole week at once. Powers the parent's \"This Week\" view, showing her free study time around " +
-			"these commitments — ask about her class schedule if it's still empty and the conversation is about planning " +
-			"or study time.",
+			"practice, anything that happens on the same day/time every week — once the parent tells you, or you notice one " +
+			"from context (not only while the schedule is still empty). ADDS to the existing schedule (never replaces it), " +
+			"so call this again for each new fact as it comes up rather than trying to restate the whole week at once — an " +
+			"entry that exactly matches one already saved is silently skipped, so it's safe to call even if you're not " +
+			"fully sure it's new. Powers the parent's \"This Week\" view, showing her free study time around these " +
+			"commitments.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",
@@ -229,7 +230,26 @@ func setChildScheduleTool(sinks parentToolSinks) agentsession.Tool {
 			}
 			stateMu.Lock()
 			cur := loadState()
-			cur.Schedule.Entries = append(cur.Schedule.Entries, added...)
+			// Skip anything that exactly matches an existing entry. This tool is
+			// additive with no other dedup, which was tolerable while the only
+			// caller was a parent reading the conversation live — a duplicate
+			// Pulse can now add unprompted (see pulse.go's schedule check) is
+			// easy to miss, sitting as one line inside an automated summary
+			// rather than something said to the parent directly.
+			newEntries := make([]ScheduleEntry, 0, len(added))
+			for _, e := range added {
+				dup := false
+				for _, ex := range cur.Schedule.Entries {
+					if ex.Day == e.Day && ex.Start == e.Start && ex.End == e.End && ex.Label == e.Label {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					newEntries = append(newEntries, e)
+				}
+			}
+			cur.Schedule.Entries = append(cur.Schedule.Entries, newEntries...)
 			err := saveState(cur)
 			sched := cur.Schedule
 			stateMu.Unlock()
@@ -238,7 +258,7 @@ func setChildScheduleTool(sinks parentToolSinks) agentsession.Tool {
 			}
 			mirrorChildSchedule(sched) // keep memory/child-schedule.json (read by skills) in sync
 			sinks.event(toolEvent{Tool: "set_child_schedule"})
-			return fmt.Sprintf(`{"status":"ok","added":%d,"total_entries":%d}`, len(added), len(sched.Entries)), nil
+			return fmt.Sprintf(`{"status":"ok","added":%d,"total_entries":%d}`, len(newEntries), len(sched.Entries)), nil
 		},
 	}
 }

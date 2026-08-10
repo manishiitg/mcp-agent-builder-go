@@ -1240,6 +1240,7 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-week-block { font-size: var(--text-secondary); line-height: 1.4; padding: 8px 10px; border-radius: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-week-block.is-busy { background: var(--surface-2); color: var(--muted, #6b7690); border: 1px dashed var(--line); }
 .fl-week-block.is-activity { background: var(--mint-soft); color: #1f7a52; font-weight: 700; }
+.fl-week-block-time { font-weight: 400; opacity: .75; }
 .fl-week-block.is-deadline { background: var(--blue-soft); color: #2b5a8a; font-weight: 700; }
 .fl-week-block.is-deadline.is-test { background: #ffe3df; color: #a2372a; }
 

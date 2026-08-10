@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +119,24 @@ func pulseChecks(s familyState) []pulseCheck {
 	}
 
 	checks = append(checks, pulseCheck{
+		trigger: "Automated check-in — reviewing the weekly schedule",
+		instruction: "This is an automated Pulse check-in, focused ONLY on " + who + "'s recurring weekly schedule and whether it's " +
+			"actually being followed — two things, in one check, since they share the same two facts below. " +
+			"CURRENT SAVED SCHEDULE: " + formatScheduleForPulse(s.Schedule.Entries) + ". " +
+			"WHAT ACTUALLY HAPPENED THE LAST 7 DAYS (activity log): " + recentActivityLogForPulse(7) + ". " +
+			"FIRST — maintain: look back over recent conversations (conversations/parent.json, and any child activity " +
+			"conversations) for a recurring weekly commitment mentioned that ISN'T already in the saved schedule above " +
+			"— a new class, a season starting, tuition added, a practice time that changed. If you find one, save it " +
+			"with set_child_schedule; it silently skips anything that exactly matches an existing entry, so it's fine " +
+			"to call even if you're not fully sure it's new. Do NOT invent a commitment that was never actually " +
+			"mentioned. SECOND — cross-check: compare the saved schedule against the last 7 days above. If a " +
+			"recurring slot clearly meant for study/schoolwork (not something like a sports practice — those aren't " +
+			"expected to show activity) had NOTHING logged against it this week, that's worth a gentle, specific " +
+			"mention (which slot, which day) — not an accusation, just useful visibility. If nothing stands out on " +
+			"either front, say so briefly rather than manufacturing a finding." + pulseReplyRules,
+	})
+
+	checks = append(checks, pulseCheck{
 		trigger: "Automated check-in — updating what I remember about your preferences",
 		instruction: "This is an automated Pulse check-in, focused ONLY on your working memory of the parent's preferences. Read " +
 			"skills/update-preferences/SKILL.md and follow it: check memory/preferences.md against what the parent has actually said across " +
@@ -148,6 +167,94 @@ func pulseChecks(s familyState) []pulseCheck {
 
 	_ = engine
 	return checks
+}
+
+// formatScheduleForPulse renders the saved recurring schedule as plain text
+// for a Pulse check's instruction, so the model can see what's already there
+// without having to go read+parse memory/child-schedule.json itself.
+func formatScheduleForPulse(entries []ScheduleEntry) string {
+	if len(entries) == 0 {
+		return "(none saved yet)"
+	}
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		parts = append(parts, e.Day+" "+e.Start+"-"+e.End+" "+e.Label)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// recentActivityLogForPulse renders activity-log.json entries from the last
+// `days` days as plain text, for cross-checking against the schedule.
+func recentActivityLogForPulse(days int) string {
+	cutoff := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	var parts []string
+	for _, e := range loadActivityLog() {
+		if e.Date >= cutoff {
+			parts = append(parts, e.Date+" "+e.Title)
+		}
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("(nothing logged in the last %d days)", days)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// upcomingDeadlinesForPulse filters+sorts deadlines due within the next
+// `days` days (inclusive of today), soonest first.
+func upcomingDeadlinesForPulse(deadlines []SchoolDeadline, days int) []SchoolDeadline {
+	today := time.Now().Format("2006-01-02")
+	until := time.Now().AddDate(0, 0, days).Format("2006-01-02")
+	var out []SchoolDeadline
+	for _, d := range deadlines {
+		if d.DueDate >= today && d.DueDate <= until {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DueDate < out[j].DueDate })
+	return out
+}
+
+// formatDeadlinesForPulse renders deadlines as plain text for a Pulse check's
+// instruction.
+func formatDeadlinesForPulse(deadlines []SchoolDeadline) string {
+	parts := make([]string, 0, len(deadlines))
+	for _, d := range deadlines {
+		kind := d.Kind
+		if kind == "" {
+			kind = "assignment"
+		}
+		subj := ""
+		if d.Subject != "" {
+			subj = " (" + d.Subject + ")"
+		}
+		parts = append(parts, d.DueDate+" "+kind+": "+d.Title+subj)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// recentActivityBySubjectForPulse renders activity-log.json entries from the
+// last `days` days as plain text, each tagged with its inferred subject (the
+// activity dir's first path segment, e.g. "Mathematics/Lines and
+// Angles/..." -> "Mathematics") — an approximate match, good enough for the
+// model to reason over rather than a precise join, since deadlines and
+// activities come from two entirely separate, loosely-related sources.
+func recentActivityBySubjectForPulse(days int) string {
+	cutoff := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	var parts []string
+	for _, e := range loadActivityLog() {
+		if e.Date < cutoff {
+			continue
+		}
+		subject := e.ActivityDir
+		if i := strings.Index(subject, "/"); i >= 0 {
+			subject = subject[:i]
+		}
+		parts = append(parts, e.Date+" "+subject+": "+e.Title)
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("(nothing logged in the last %d days)", days)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Pulse is SparkQuill's version of AgentWorks' Pulse feature (see the design
@@ -249,6 +356,44 @@ func runPulseOnce(ctx context.Context, force bool) error {
 		// check failing (or the process dying) doesn't lose the ones already done.
 		messages = appendPulseTurn(messages, c.trigger, reply)
 		persistConversation("parent", convID, messages)
+	}
+
+	// Deadline readiness is built and run HERE, after the main loop — NOT as
+	// an entry in pulseChecks(s), which is called once at the very top of
+	// this function, before any check runs. school-deadlines.json is
+	// rewritten BY the school-portal check above, in this SAME cycle — a
+	// deadline-readiness check built inside pulseChecks(s) would read that
+	// file as it stood BEFORE this cycle's own portal check ran, defeating
+	// its purpose on exactly the cycle a new deadline first appears (it'd
+	// gate itself off or use stale data, only catching up next cycle, up to
+	// CadenceHours later). notifyCheck below already established this same
+	// pattern — read that cycle's own results — for the same reason.
+	if deadlines := loadSchoolDeadlines(); len(deadlines) > 0 {
+		if upcoming := upcomingDeadlinesForPulse(deadlines, 14); len(upcoming) > 0 {
+			who := "the child"
+			if s.Child != nil && strings.TrimSpace(s.Child.Name) != "" {
+				who = s.Child.Name
+			}
+			deadlineCheck := pulseCheck{
+				trigger: "Automated check-in — checking deadline readiness",
+				instruction: "This is an automated Pulse check-in, focused ONLY on whether " + who + " is actually ready for what's " +
+					"coming up soon — not just whether it's on the calendar. UPCOMING (next 14 days): " + formatDeadlinesForPulse(upcoming) + ". " +
+					"RECENT PRACTICE BY SUBJECT (last 14 days, from the activity log): " + recentActivityBySubjectForPulse(14) + ". " +
+					"For each upcoming item, judge whether there's been recent practice in that SAME subject — if a test or " +
+					"assignment is close and you see little or no matching recent activity, that's worth mentioning specifically " +
+					"(which one, when it's due, what subject). You MAY prepare study material or a practice test for a genuine " +
+					"gap (skills/create-study-material/SKILL.md, skills/create-test/SKILL.md) — but do NOT create or hand off an " +
+					"activity for it; nothing gets handed to " + who + " without the parent explicitly asking, so just mention " +
+					"what you made. If everything upcoming already has reasonable recent practice, say so briefly rather than " +
+					"manufacturing a gap." + pulseReplyRules,
+			}
+			reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, deadlineCheck)
+			if err != nil {
+				return fmt.Errorf("%q check failed: %w", deadlineCheck.trigger, err)
+			}
+			messages = appendPulseTurn(messages, deadlineCheck.trigger, reply)
+			persistConversation("parent", convID, messages)
+		}
 	}
 
 	// The agent decides what's worth telling the parent and sends it — Go's

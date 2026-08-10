@@ -97,6 +97,18 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig, sch
 			"this powers the parent's \"This Week\" view, showing her free study time around these commitments. If the " +
 			"conversation is about planning, study time, or when she's free, ask about her class schedule and save what " +
 			"you learn with set_child_schedule. Not urgent otherwise — no need to interrupt an unrelated conversation for it.\n"
+	} else {
+		// A schedule already existing doesn't mean it's complete — a season
+		// starting, a class changing, tuition getting added are all normal
+		// mid-year. Capture those AS THEY COME UP rather than only ever
+		// asking once while the list happened to be empty; this is the
+		// timely path (immediate, this turn) — the Pulse schedule check is
+		// only a backstop for whatever this misses.
+		scheduleNudge = "You already have some of " + name + "'s recurring weekly schedule saved. If the parent mentions a NEW " +
+			"recurring commitment in conversation (a new class, a season starting, tuition added) that isn't already " +
+			"saved, capture it with set_child_schedule right then — it's safe to call even if you're not fully sure " +
+			"it's new, since an entry that exactly matches one already saved is silently skipped. Don't proactively ask " +
+			"for more, though — only capture what genuinely comes up on its own.\n"
 	}
 	// Configured connectors the parent may reference in normal conversation
 	// (not just during Pulse) — e.g. "did the school email anything?" or "check

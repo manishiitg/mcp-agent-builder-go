@@ -171,6 +171,21 @@ function dateOnlyLabel(iso?: string): string {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
+// formatDuration renders an activity-log entry's accumulated turn time for
+// the "This Week" grid, e.g. "12m", "1h 5m". This is approximate (server
+// round-trip time per turn, not real reading/thinking time between turns —
+// see recordActivityLogEntry's own comment) — deliberately NOT precise to
+// the second, and callers should present it as "~Xm" rather than an exact
+// duration. Empty string when there's nothing meaningful to show.
+function formatDuration(seconds?: number): string {
+  if (!seconds || seconds < 60) return ''
+  const totalMinutes = Math.round(seconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes}m`
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
+}
+
 // activityMode turns an activity's teaching_mode into the one word a parent
 // actually cares about when scanning their library: is this something she'll
 // be taught, something she'll practise, or something she's being tested on?
@@ -296,7 +311,7 @@ const THEME_KEY = 'sparkquill.theme'
 // "This Week" tab types — mirror week.go's ScheduleEntry/ActivityLogEntry/
 // SchoolDeadline/weekResponse Go structs exactly (JSON field names match).
 type ScheduleEntry = { day: string; start: string; end: string; label: string }
-type WeekActivityEntry = { date: string; activity_dir: string; title: string }
+type WeekActivityEntry = { date: string; activity_dir: string; title: string; duration_seconds?: number }
 type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
 type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
 type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
@@ -3678,9 +3693,14 @@ export default function LearningApp() {
                             {(day.schedule ?? []).map((s, i) => (
                               <div key={i} className="fl-week-block is-busy" title={`${s.start}–${s.end}`}>{s.label}</div>
                             ))}
-                            {(day.activities ?? []).map((a, i) => (
-                              <div key={i} className="fl-week-block is-activity" title={a.title}>{a.title}</div>
-                            ))}
+                            {(day.activities ?? []).map((a, i) => {
+                              const dur = formatDuration(a.duration_seconds)
+                              return (
+                                <div key={i} className="fl-week-block is-activity" title={dur ? `${a.title} — ~${dur}` : a.title}>
+                                  {a.title}{dur && <span className="fl-week-block-time"> · ~{dur}</span>}
+                                </div>
+                              )
+                            })}
                             {(day.deadlines ?? []).map((d, i) => (
                               <div key={i} className={`fl-week-block is-deadline is-${d.kind || 'assignment'}`} title={d.title}>{d.kind === 'test' ? '📝 ' : '📌 '}{d.title}</div>
                             ))}
