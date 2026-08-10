@@ -5,7 +5,8 @@ vi.mock('../../services/api', () => ({
   getApiBaseUrl: () => 'http://localhost:8000',
   getAuthToken: () => null,
 }))
-import { parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime } from './videoStudioData'
+import { agentApi } from '../../services/api'
+import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime } from './videoStudioData'
 
 describe('Video Studio workspace data', () => {
   it('accepts only a complete Video Studio product manifest', () => {
@@ -51,5 +52,42 @@ describe('Video Studio workspace data', () => {
     expect(steps[0].routes?.[0]).toEqual({ id: 'cinematic', title: 'Cinematic', nextStepId: 'story' })
     expect(projectSlug('  Café / Product Launch!  ')).toBe('cafe-product-launch')
     expect(relativeTime('2026-08-07T09:55:00Z', Date.parse('2026-08-07T10:00:00Z'))).toBe('5m ago')
+  })
+
+  // Captured from the live workspace listing: it returns the requested folder
+  // as a node whose children are the projects, AND each project again as a
+  // top-level sibling. Flattening that walks every product.json twice, which
+  // rendered two cards per project and fetched every manifest twice.
+  it('returns one project per manifest when the listing describes a file twice', async () => {
+    const manifest = (id: string) => JSON.stringify({
+      schema_version: 1, product: 'video-studio', id, title: id,
+      session_id: `video-studio:project:${id}`, created_at: '2026-08-07T09:00:00Z',
+    })
+    const projectNode = (slug: string) => ({
+      filepath: `Chats/Video Studio/projects/${slug}`,
+      type: 'folder',
+      children: [{ filepath: `Chats/Video Studio/projects/${slug}/product.json`, last_modified: '2026-08-07T10:00:00Z' }],
+    })
+    const listing = {
+      data: [
+        { filepath: 'Chats/Video Studio/projects', type: 'folder', children: [projectNode('alpha'), projectNode('beta')] },
+        projectNode('alpha'),
+        projectNode('beta'),
+      ],
+    }
+
+    const getPlannerFileContent = vi.fn(async (filepath: string) => ({
+      data: { content: manifest(filepath.includes('alpha') ? 'alpha' : 'beta'), last_modified: '2026-08-07T10:00:00Z' },
+    }))
+    Object.assign(agentApi, {
+      getPlannerFiles: vi.fn(async () => listing),
+      getPlannerFileContent,
+      queryWorkflowDB: vi.fn(async () => ({ data: { rows: [{ count: 0 }] } })),
+    })
+
+    const projects = await loadVideoProjects()
+
+    expect(projects.map((project) => project.id)).toEqual(['alpha', 'beta'])
+    expect(getPlannerFileContent).toHaveBeenCalledTimes(2)
   })
 })

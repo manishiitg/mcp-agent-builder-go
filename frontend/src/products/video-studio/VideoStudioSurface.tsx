@@ -187,7 +187,7 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
           <>
             <div className="relative">
               <label className="sr-only" htmlFor={`video-agent-provider-${projectTabId}`}>Project agent provider</label>
-              <select id={`video-agent-provider-${projectTabId}`} value={selectedProviderID} onChange={(event) => updateProvider(event.target.value)} className="h-8 appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-3 pr-8 text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:border-violet-300 hover:bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-violet-700 dark:hover:bg-slate-800 dark:focus:border-violet-500 dark:focus:ring-violet-950" aria-label="Project agent provider">
+              <select id={`video-agent-provider-${projectTabId}`} data-testid="video-studio-agent-provider-select" value={selectedProviderID} onChange={(event) => updateProvider(event.target.value)} className="h-8 appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-3 pr-8 text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:border-violet-300 hover:bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-violet-700 dark:hover:bg-slate-800 dark:focus:border-violet-500 dark:focus:ring-violet-950" aria-label="Project agent provider">
                 {providerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -252,6 +252,8 @@ function ProjectCard({ project, index, onOpen }: { project: VideoProject; index:
     <button
       type="button"
       aria-label={`Open ${project.title}`}
+      data-testid="video-studio-project-card"
+      data-project-id={project.id}
       onClick={onOpen}
       className="group overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-1 hover:border-violet-200 hover:shadow-xl hover:shadow-violet-950/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-slate-800 dark:bg-slate-900"
     >
@@ -307,7 +309,7 @@ function CreateProjectDialog({
         <p className="mt-2 text-sm leading-6 text-slate-500">Conversation, source files, workflow runs, QA, and finished videos stay together.</p>
         <label className="mt-6 block text-xs font-semibold text-slate-700 dark:text-slate-300">
           Project name
-          <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Product story" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-950 dark:focus:ring-violet-950" />
+          <input autoFocus data-testid="video-studio-create-project-name-input" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Product story" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-950 dark:focus:ring-violet-950" />
         </label>
         <label className="mt-4 block text-xs font-semibold text-slate-700 dark:text-slate-300">
           Brief <span className="font-normal text-slate-400">(optional)</span>
@@ -316,7 +318,7 @@ function CreateProjectDialog({
         {error ? <p className="mt-3 flex items-center gap-2 text-xs text-red-600"><AlertCircle className="h-3.5 w-3.5" />{error}</p> : null}
         <div className="mt-6 flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={submitting} className="rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
-          <button type="submit" disabled={!title.trim() || submitting} className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="submit" data-testid="video-studio-create-project-submit" disabled={!title.trim() || submitting} className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             {submitting ? 'Creating…' : 'Create project'}
           </button>
@@ -371,6 +373,9 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
       <video
         ref={videoRef}
         key={`${presentation.id}:${presentation.revision}`}
+        data-testid="video-studio-presentation-player"
+        data-presentation-id={presentation.id}
+        data-presentation-revision={presentation.revision}
         controls
         playsInline
         preload="auto"
@@ -454,7 +459,7 @@ function VideosPanel({ project, videos }: { project: VideoProject; videos: Video
   if (!selected) return <div className="grid h-full place-items-center p-8 text-center"><div className="w-full max-w-sm"><span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-violet-300 bg-white text-violet-500 dark:border-violet-800 dark:bg-slate-900"><Film className="h-6 w-6" /></span><h2 className="mt-4 text-sm font-semibold text-slate-800 dark:text-slate-200">No presented videos yet</h2><p className="mt-1 text-xs leading-5 text-slate-400">When the final checks pass, your finished video will appear here.</p><div className="mt-4 text-left">{uploadDropZone}</div></div></div>
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
-  return <div className="min-h-0 flex-1 overflow-y-auto p-4"><div className="mb-3">{uploadDropZone}</div><div className="overflow-hidden rounded-2xl bg-black shadow-lg"><PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} /></div><div className="mt-3 flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3><p className="mt-1 flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</p></div><a href={mediaURL} download className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a></div>{selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}{videos.length > 1 ? <div className="mt-5 space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">{videos.map((video) => <button key={video.id} type="button" onClick={() => setSelectedId(video.id)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left ${video.id === selected.id ? 'border-violet-500/60 bg-slate-900 shadow-sm shadow-violet-950/30' : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800'}`}><span className="grid h-9 w-12 shrink-0 place-items-center rounded-lg bg-slate-950 text-white"><Play className="h-3.5 w-3.5" fill="currentColor" /></span><span className="min-w-0"><strong className={`block truncate text-xs ${video.id === selected.id ? 'text-slate-50' : 'text-slate-800 dark:text-slate-200'}`}>{video.title}</strong><small className={video.id === selected.id ? 'text-[10px] text-slate-300' : 'text-[10px] text-slate-400'}>Revision {video.revision}</small></span></button>)}</div> : null}</div>
+  return <div data-testid="video-studio-videos-panel" data-video-count={videos.length} className="min-h-0 flex-1 overflow-y-auto p-4"><div className="mb-3">{uploadDropZone}</div><div className="overflow-hidden rounded-2xl bg-black shadow-lg"><PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} /></div><div className="mt-3 flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3><p className="mt-1 flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</p></div><a href={mediaURL} download className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a></div>{selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}{videos.length > 1 ? <div className="mt-5 space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">{videos.map((video) => <button key={video.id} type="button" data-testid="video-studio-video-list-item" data-video-id={video.id} data-selected={video.id === selected.id} onClick={() => setSelectedId(video.id)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left ${video.id === selected.id ? 'border-violet-500/60 bg-slate-900 shadow-sm shadow-violet-950/30' : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800'}`}><span className="grid h-9 w-12 shrink-0 place-items-center rounded-lg bg-slate-950 text-white"><Play className="h-3.5 w-3.5" fill="currentColor" /></span><span className="min-w-0"><strong className={`block truncate text-xs ${video.id === selected.id ? 'text-slate-50' : 'text-slate-800 dark:text-slate-200'}`}>{video.title}</strong><small className={video.id === selected.id ? 'text-[10px] text-slate-300' : 'text-[10px] text-slate-400'}>Revision {video.revision}</small></span></button>)}</div> : null}</div>
 }
 
 function FilesPanel({ project }: { project: VideoProject }) {
@@ -663,7 +668,7 @@ export function VideoStudioSurface() {
         <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
             <div><h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">Your video projects</h1><p className="mt-2 text-sm text-muted-foreground">Continue a production conversation or start a new video from an idea.</p></div>
-            <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-xs font-semibold text-white shadow-lg shadow-violet-600/20 transition hover:-translate-y-0.5 hover:bg-violet-500"><Plus className="h-4 w-4" /> New project</button>
+            <button type="button" data-testid="video-studio-new-project-button" onClick={() => setCreateOpen(true)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-xs font-semibold text-white shadow-lg shadow-violet-600/20 transition hover:-translate-y-0.5 hover:bg-violet-500"><Plus className="h-4 w-4" /> New project</button>
           </div>
           <section className="relative mt-8 overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-950 px-7 py-8 text-white shadow-2xl shadow-indigo-950/15 sm:px-9 sm:py-10">
             <div className="absolute -right-14 -top-28 h-72 w-72 rounded-full border border-white/10 shadow-[0_0_0_46px_rgba(255,255,255,0.035),0_0_0_92px_rgba(255,255,255,0.025)]" />

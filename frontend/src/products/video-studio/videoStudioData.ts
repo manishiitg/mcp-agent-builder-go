@@ -127,6 +127,17 @@ function flattenFiles(items: PlannerFile[], result: PlannerFile[] = []): Planner
   return result
 }
 
+// Keeps the first entry per filepath, preserving listing order. The listing can
+// describe one file from more than one branch of the tree it returns.
+function dedupeByFilepath(files: PlannerFile[]): PlannerFile[] {
+  const seen = new Set<string>()
+  return files.filter((file) => {
+    if (seen.has(file.filepath)) return false
+    seen.add(file.filepath)
+    return true
+  })
+}
+
 function responseContent(response: unknown): { content: string; lastModified?: string } | null {
   if (!response || typeof response !== 'object') return null
   const envelope = response as { data?: unknown; content?: unknown; last_modified?: unknown }
@@ -197,8 +208,15 @@ async function projectVideoCount(workspacePath: string): Promise<number> {
 
 export async function loadVideoProjects(): Promise<VideoProject[]> {
   const response = await agentApi.getPlannerFiles(VIDEO_PROJECTS_ROOT, -1, 2)
-  const manifests = flattenFiles(responseFiles(response))
-    .filter((file) => file.type !== 'folder' && file.filepath.endsWith('/product.json'))
+  // The listing returns the requested folder as a node whose children are the
+  // projects, AND each project again as a top-level sibling, so a flatten walks
+  // every product.json twice. Key by filepath: the same physical manifest must
+  // produce one project, or the grid renders duplicate React keys and every
+  // manifest is fetched twice.
+  const manifests = dedupeByFilepath(
+    flattenFiles(responseFiles(response))
+      .filter((file) => file.type !== 'folder' && file.filepath.endsWith('/product.json')),
+  )
 
   const projects = await Promise.all(manifests.map(async (file) => {
     try {
