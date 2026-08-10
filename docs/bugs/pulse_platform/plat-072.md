@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — closure mechanism shipped and first sweep applied; lifecycle stamping still open |
+| Ticket state | `implemented` — closure mechanism, first sweep, and version stamping all shipped |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P1 — stale findings actively mislead, and the count only grows
@@ -72,6 +72,24 @@ Two were deliberately **left open** despite matching the same theme, which is th
 
 - social-media `5e248d9ec6e7244f` — *"Re-using `runs/iteration-0/default` deletes the previous occupant's artifacts"*. `0f6519640` archives cost and evaluation-score paths on rotation; whether workflow **artifacts** are archived rather than deleted was not verified, so this stays open.
 - tectonicusadaytrading `d00ae7bdcb14a1ff` — learnings `_freshness.json` misattribution. Adjacent wording, different subsystem, untouched by that commit.
+
+## Shipped: version stamping (2026-08-10)
+
+The third piece — a finding now records the platform revision it was **first** observed against, so staleness stops being a memory test.
+
+- `run_concerns.first_seen_platform_version`, written on INSERT only. The `ON CONFLICT` branch deliberately leaves it alone: a recurrence must not overwrite it with a newer revision, which would erase the signal.
+- `PlatformVersion()` (`platform_version.go`), resolved once per process.
+- Migration for existing databases; pre-existing rows keep an empty value, which is correct — their revision is genuinely unknown, and back-filling today's would assert something false.
+- `pulse_close_stale.py --list` shows the revision, rendering unknown as `?` rather than blank.
+
+**Go's own VCS stamping could not supply this, and that took verifying rather than assuming.** A `go.work` above the repo puts every build in workspace mode, which disables `-buildvcs` *silently* — a real `go build ./cmd/server` produced no `vcs.*` settings even with `-buildvcs=true`. The revision is therefore injected at link time by `run_server_with_logging.sh` via `-ldflags -X`, with build info kept as a fallback for other build modes. Verified by running the injected build, not by inspecting the binary: an initial `strings` check reported zero matches and was simply the wrong probe.
+
+**Empty means unknown, never old.** A sweep that treated an unstamped finding as stale would close live findings — precisely the failure this mechanism exists to prevent. That contract is pinned by a test and stated at every layer.
+
+Two defects were caught by this work rather than shipped:
+
+- A bare `INSERT ... SELECT` in `migrateDuplicatePulseFindingIdentities` relied on positional column order and broke on the 15th column (`table run_concerns has 15 columns but 14 values were supplied`). Now names its target columns, so future columns cannot silently break it.
+- The sweep tool's `--list` initially swallowed the missing-column error on un-migrated databases and reported **zero** findings for the whole board. It now falls back to the pre-migration query — reporting an empty board when 75 findings exist is a worse failure than the one the tool addresses.
 
 ## Acceptance
 

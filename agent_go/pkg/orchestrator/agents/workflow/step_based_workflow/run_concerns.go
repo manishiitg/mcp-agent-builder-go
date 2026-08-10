@@ -47,7 +47,8 @@ const runConcernsSchema = `CREATE TABLE IF NOT EXISTS run_concerns (
 	status TEXT NOT NULL DEFAULT 'open',
 	resolved_at TEXT NOT NULL DEFAULT '',
 	resolved_by TEXT NOT NULL DEFAULT '',
-	resolution_note TEXT NOT NULL DEFAULT ''
+	resolution_note TEXT NOT NULL DEFAULT '',
+	first_seen_platform_version TEXT NOT NULL DEFAULT ''
 )`
 
 // Phases a concern can be raised from. The step body and its two closing turns
@@ -270,9 +271,13 @@ func recordRunConcernLinesAtWithFingerprints(
 		// run happened and did not resolve it, so awaiting_run reopens too.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
+		// first_seen_platform_version is written on INSERT only; the ON CONFLICT
+		// branch deliberately leaves it alone. It answers "what was this first
+		// observed against", so a recurrence must not overwrite it with a newer
+		// revision — that would erase exactly the signal a staleness sweep reads.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
-			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(fingerprint) DO UPDATE SET
 				text = excluded.text,
 				phase = excluded.phase,
@@ -284,7 +289,7 @@ func recordRunConcernLinesAtWithFingerprints(
 					ELSE 1
 				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
+			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err

@@ -484,6 +484,46 @@ type pulseFindingLifecycleDB interface {
 	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
 }
 
+// migrateRunConcernPlatformVersionColumn adds first_seen_platform_version to
+// databases created before PLAT-072.
+//
+// Existing rows keep an empty value, which is correct and must stay that way:
+// their platform revision is genuinely unknown and back-filling the current one
+// would assert they were first seen against today's build — the exact false
+// claim the column exists to prevent. Those rows continue to be triaged by
+// reading; only findings recorded from now on can be judged mechanically.
+func migrateRunConcernPlatformVersionColumn(ctx context.Context, db pulseFindingLifecycleDB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(run_concerns)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	present := false
+	for rows.Next() {
+		var (
+			cid                        int
+			name, colType              string
+			notNull, primaryKey        int
+			defaultValue               sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "first_seen_platform_version" {
+			present = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	_, err = db.ExecContext(ctx,
+		`ALTER TABLE run_concerns ADD COLUMN first_seen_platform_version TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
 func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifecycleDB) error {
 	for _, ddl := range []string{
 		runConcernsSchema,
@@ -496,6 +536,9 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return err
 		}
+	}
+	if err := migrateRunConcernPlatformVersionColumn(ctx, db); err != nil {
+		return err
 	}
 	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
 		return err
@@ -723,8 +766,12 @@ func mergePulseIdentityGroup(ctx context.Context, db pulseFindingLifecycleDB, ta
 			continue
 		}
 		if !initialized {
+			// Target columns are named rather than relying on positional order, so
+			// adding a column to run_concerns cannot silently break this copy with
+			// a "table has N columns but M values were supplied" error.
 			if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO run_concerns
-				SELECT ?, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note
+				(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note, first_seen_platform_version)
+				SELECT ?, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note, first_seen_platform_version
 				FROM run_concerns WHERE fingerprint=?`, target, old); err != nil {
 				return err
 			}

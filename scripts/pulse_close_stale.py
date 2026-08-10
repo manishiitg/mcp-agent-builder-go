@@ -25,7 +25,8 @@ caller: name the ticket, the evidence, and the exact fingerprints. The tool's
 job is to make that closure safe, uniform, and auditable.
 
 Usage:
-  # see what is on the board
+  # see what is on the board (the version column is the revision a finding was
+  # FIRST observed against; "?" means unknown, which is not the same as old)
   python3 scripts/pulse_close_stale.py --list
   python3 scripts/pulse_close_stale.py --list --workflow social-media
 
@@ -62,19 +63,40 @@ def list_findings(root, workflow_filter):
             continue
         try:
             conn = sqlite3.connect(db)
+        except sqlite3.Error:
+            continue
+        try:
             rows = list(conn.execute(
-                "select fingerprint, first_seen_at, seen_count, text "
+                "select fingerprint, first_seen_at, seen_count, "
+                "coalesce(first_seen_platform_version,''), text "
                 "from run_concerns where status=? order by first_seen_at",
                 (EXTERNAL,)))
+        except sqlite3.OperationalError:
+            # first_seen_platform_version arrives with the PLAT-072 migration,
+            # which only runs when the server next opens this database. Fall back
+            # rather than skipping the workflow: silently reporting zero findings
+            # for an un-migrated database would hide the very board this tool
+            # exists to show.
+            try:
+                rows = [(fp, first, seen, "", text) for fp, first, seen, text in conn.execute(
+                    "select fingerprint, first_seen_at, seen_count, text "
+                    "from run_concerns where status=? order by first_seen_at",
+                    (EXTERNAL,))]
+            except sqlite3.Error:
+                continue
         except sqlite3.Error:
             continue
         if not rows:
             continue
         print(f"\n=== {wf} ({len(rows)}) ===")
-        for fp, first, seen, text in rows:
+        for fp, first, seen, version, text in rows:
             total += 1
             oneline = " ".join((text or "").split())
-            print(f"  {fp}  {(first or '')[:10]}  seen={seen:<3} {oneline[:110]}")
+            # Findings recorded before PLAT-072 carry no revision. Shown as "?"
+            # rather than blank so it reads as unknown, never as old — an unknown
+            # revision must always fall back to reading the finding.
+            ver = version or "?"
+            print(f"  {fp}  {(first or '')[:10]}  {ver:<14} seen={seen:<3} {oneline[:96]}")
     print(f"\ntotal external_action_required: {total}")
 
 
