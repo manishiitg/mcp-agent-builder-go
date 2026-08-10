@@ -3759,3 +3759,44 @@ func TestDueCronOccurrencesDoesNotDropMinuteOccurrencesWithinRecoveryWindow(t *t
 		t.Fatalf("unexpected occurrence bounds: first=%s last=%s", got[0], got[len(got)-1])
 	}
 }
+
+// TestWorkshopRunStartedDuringInvocationIgnoresBaseline pins the reason this
+// helper exists separately from workshopRunProducedEvidence: it must answer
+// correctly with no before-set at all.
+//
+// social-media 2026-08-10: the run completed at 12:15:18Z, the workshop idle
+// wait expired 34 minutes later, and because that path returns before the
+// evidence check, ProducedRunEvidence kept its initialized false. Pulse was told
+// "the workflow did not run" and skipped publish — against a run that had landed
+// 19 actions, 18 of them independently verified. The durable record said
+// "completed" the whole time; nothing consulted it.
+func TestWorkshopRunStartedDuringInvocationIgnoresBaseline(t *testing.T) {
+	since := time.Date(2026, 8, 10, 9, 30, 53, 0, time.UTC)
+	folders := []RunFolderInfo{
+		// Pre-existing folder reused by this invocation — the shape that made the
+		// baseline-dependent helper unreliable here. iteration-0 always exists.
+		{Name: "iteration-0", Metadata: &RunMetadata{
+			Status:    "completed",
+			StartedAt: since.Add(4 * time.Minute),
+		}},
+	}
+	if !workshopRunStartedDuringInvocation(folders, since) {
+		t.Fatal("a run whose own metadata says it started during this invocation is evidence, baseline or not")
+	}
+}
+
+// TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped proves the
+// helper cannot manufacture evidence: a run from a previous invocation, and a
+// record with no usable timestamp, both count as nothing. The caller treats
+// false as "no evidence recorded", which is the pre-existing behaviour.
+func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T) {
+	since := time.Date(2026, 8, 10, 9, 30, 53, 0, time.UTC)
+	folders := []RunFolderInfo{
+		{Name: "iteration-254", Metadata: &RunMetadata{Status: "completed", StartedAt: since.Add(-2 * time.Hour)}},
+		{Name: "iteration-253", Metadata: &RunMetadata{Status: "failed"}}, // no timestamps
+		{Name: "iteration-252"},                                          // no metadata
+	}
+	if workshopRunStartedDuringInvocation(folders, since) {
+		t.Fatal("older or unstamped runs must not be reported as evidence for this invocation")
+	}
+}

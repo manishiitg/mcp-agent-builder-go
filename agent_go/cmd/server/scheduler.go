@@ -2872,6 +2872,26 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		s.stampScheduleNameOnSession(sessionID, sctx)
 
 		if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
+			// A stalled session says the turn stopped progressing. It says nothing
+			// about whether the workflow ran. This path returns before the
+			// evidence check further below, so ProducedRunEvidence would keep its
+			// initialized false and Pulse would be told "the workflow did not run"
+			// purely because the wait expired — while run_metadata.json recorded a
+			// completed run. Observed on social-media 2026-08-10: the run completed
+			// at 12:15:18Z, the idle wait expired 34 minutes later at 12:49:35Z, and
+			// the finalizer skipped publish with "no Pulse Gate/reviewer/Fixer"
+			// against a run that had landed 19 verified actions.
+			//
+			// Consult the durable record before returning. Deliberately the
+			// baseline-free check: the pre-run snapshot can itself be lost
+			// (PLAT-070), and an empty baseline would make every folder look new
+			// and answer "evidence" unconditionally — the opposite error.
+			if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil {
+				if workshopRunStartedDuringInvocation(folders, invocationStartedAt) {
+					sctx.ProducedRunEvidence = true
+					s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but a run started during this invocation and its own metadata is the authority; preserving run evidence for Pulse", sctx.Schedule.ID)
+				}
+			}
 			return sessionID, runFolder, fmt.Errorf("workshop idle wait failed after turn %d (%s): %w", i+1, turn.label, err)
 		}
 
@@ -2975,6 +2995,33 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 // when its independently written metadata says it started during this
 // invocation, which covers workflows configured to reuse iteration-0. Status is
 // intentionally irrelevant: failed runs are valuable Pulse evidence too.
+// workshopRunStartedDuringInvocation reports whether any run's own metadata says
+// it started during this invocation, using only the durable record.
+//
+// Deliberately takes no before-set. workshopRunProducedEvidence answers "is this
+// folder new?" first, which is correct when it holds a real baseline but inverts
+// when it does not: an empty baseline (a failed listing — PLAT-070) makes the
+// very first folder look new and returns true unconditionally. On the idle-wait
+// failure path the question is narrower and has a trustworthy answer that needs
+// no baseline at all — did a run actually start? — so ask only that.
+//
+// A run whose metadata carries no usable timestamp is not counted. The caller
+// treats a false here as "no evidence recorded", which is the pre-existing
+// behaviour, so an unreadable record never manufactures evidence.
+func workshopRunStartedDuringInvocation(after []RunFolderInfo, since time.Time) bool {
+	for _, folder := range after {
+		if folder.Name == "" || folder.Metadata == nil {
+			continue
+		}
+		for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
+			if !stamp.IsZero() && !stamp.Before(since) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, since time.Time) bool {
 	for _, folder := range after {
 		if folder.Name == "" {
