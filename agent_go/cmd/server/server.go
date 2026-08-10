@@ -4273,7 +4273,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		for _, secret := range mergeGlobalSecrets(req.DecryptedSecrets, req.SelectedGlobalSecrets) {
 			codingAgentSecretEnvironment["SECRET_"+secret.Name] = secret.Value
 		}
+		nativeShellAPITransport := false
 		if resolvedProfile != nil && strings.EqualFold(strings.TrimSpace(resolvedProfile.Definition.Runtime.APITransport.Mode), "native_shell") {
+			nativeShellAPITransport = true
 			// Product APIs remain session-scoped HTTP endpoints, but this profile
 			// deliberately does not expose AgentWorks' execute_shell_command.
 			// Give the native coding CLI only the derived bridge routes and its
@@ -4344,7 +4346,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			CodingAgentWorkingDir:                  chatWorkingDir,
 			CLISecurityPolicy:                      cliSecurityPolicy,
 			CodingAgentSecretEnvironment:           codingAgentSecretEnvironment,
-			APIKeys:                                mergedAPIKeys,
+			// A native_shell profile reaches its product APIs over session-scoped
+			// HTTP from the CLI's own shell, so codex's workspace-write sandbox
+			// has to allow network. macOS does not actually enforce codex's
+			// network_access=false (verified against codex 0.147.0: curl
+			// succeeds either way), so this changes nothing locally — Linux
+			// enforces it, which is where this would otherwise silently break.
+			CodexNetworkAccess: nativeShellAPITransport,
+			APIKeys:            mergedAPIKeys,
 			// Tool timeout, context summarization/editing, large-output offloading,
 			// and parallel tool execution are set by applySharedLLMAgentTuning below
 			// (shared with sub-agent creation in executeDelegatedTask).
@@ -5154,26 +5163,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// 2. WORKSPACE MAP — compact folder listing with absolute paths and access levels.
-			if isWorkflowPhase {
-				_ = llmAgent.AddInstructions(GetWorkflowPhaseWorkspaceMap(shellRoot, workflowPhaseFolder))
-			} else if resolvedProfile != nil {
-				_ = llmAgent.AddInstructions(GetWorkspaceMap(shellRoot, agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)))
-			} else {
-				_ = llmAgent.AddInstructions(GetWorkspaceMap(shellRoot, perUserChatsFolder))
-			}
-			if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-				_ = llmAgent.AddInstructions(capabilitySection)
-				log.Printf("[LLM TOOLS] Added LLM/media capability snapshot to system prompt")
-			}
-
-			// 3. CONTEXT — workflow references, skills (what the agent needs to know).
-			if len(req.WorkflowContextPaths) > 0 {
-				if workflowPrompt := buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL()); workflowPrompt != "" {
-					_ = llmAgent.AddInstructions(workflowPrompt)
-					log.Printf("[WORKFLOW-CTX] Added workflow context to system prompt (%d workflows)", len(req.WorkflowContextPaths))
-				}
-			}
+			// 2. CONTEXT — skills. Attaching a skill is not an instruction
+			//    section (AttachSkill, not AddInstructions), so it stays here
+			//    rather than in the prompt-section registry below.
 			if len(req.SelectedSkills) > 0 {
 				// Phase 3 rewire: skills are now first-class on the agent.
 				// mcpagent's ensureSystemPrompt auto-injects the progressive-
@@ -5188,22 +5180,39 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Channel formatting rules — tell the agent which markup subset
-			// the bot platform renders, so replies don't arrive with stray
-			// "## Headers" or "[link](url)" syntax that WhatsApp / Slack
-			// display literally. No-op when BotPlatform is empty (chat UI).
-			if channelPrompt := buildChannelFormattingInstructions(req.BotPlatform); channelPrompt != "" {
-				_ = llmAgent.AddInstructions(channelPrompt)
-				log.Printf("[CHANNEL] Added %s formatting rules to system prompt", req.BotPlatform)
+			// 3. INSTRUCTION SECTIONS — workspace map, capabilities, workflow
+			//    context, channel formatting, browser pointer, reference docs,
+			//    grants, and the CLI tool environment. Each is a named section
+			//    with its condition beside every other section's, and the
+			//    assembler logs what it applied. See prompt_sections.go for why
+			//    these stopped being inline ifs.
+			promptCtx := promptContext{
+				Provider:            req.Provider,
+				HasProfile:          resolvedProfile != nil,
+				IsWorkflowPhase:     isWorkflowPhase,
+				ShellRoot:           shellRoot,
+				PerUserChatsFolder:  perUserChatsFolder,
+				WorkflowPhaseFolder: workflowPhaseFolder,
+				ProfileWorkspace:    agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder),
+				CapabilitySection:   buildLLMCapabilityPromptSection(r.Context()),
+				// The snapshot instructs the agent to call these. The gate is the
+				// authority on whether it can, so ask it rather than assuming.
+				HasLLMCapabilityTools: toolGate.Admit("list_llm_capabilities") ||
+					toolGate.Admit("text_to_speech") ||
+					toolGate.Admit("generate_music") ||
+					toolGate.Admit("set_provider_auth"),
+				ChannelFormatting: buildChannelFormattingInstructions(req.BotPlatform),
+				GrantSections:     resolvedGrants.PromptSections,
 			}
-
-			// 4. MODE-SPECIFIC — browser.
-			//
-			// The full guide lives in the builder-reference mega-skill
-			// (`browser-usage`) and is loaded on demand. We only
-			// inject a one-line pointer per capability so the agent KNOWS the
-			// surface exists, without paying for the ~10KB browser block on every
-			// single turn.
+			if resolvedProfile != nil {
+				promptCtx.ProfileID = resolvedProfile.Definition.ID
+				promptCtx.NativeCodingTools = strings.EqualFold(strings.TrimSpace(resolvedProfile.Definition.Runtime.AgentTools.Mode), "hybrid")
+			}
+			if len(req.WorkflowContextPaths) > 0 {
+				promptCtx.WorkflowContext = buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL())
+			}
+			// The full browser guide is a ~10KB on-demand skill; this is only a
+			// pointer so the agent knows the surface exists.
 			chatBrowserCfg := buildChatBrowserConfig(req)
 			if chatBrowserCfg.HasAgentBrowser {
 				browserPrompt := "\n## Browser\n\nThis session has a browser tool configured (mode=" + chatBrowserCfg.Mode + "). " +
@@ -5212,21 +5221,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					_, endpointGuidance := cdpPromptEndpoints(chatBrowserCfg.CdpPorts, chatBrowserCfg.CdpPort)
 					browserPrompt += endpointGuidance + " These endpoints are configured candidates; live status is authoritative.\n"
 				}
-				_ = llmAgent.AddInstructions(browserPrompt)
-				log.Printf("[BROWSER] Added dynamic browser pointer to system prompt (configured_mode=%s candidate_cdp_ports=%v)",
-					chatBrowserCfg.Mode, chatBrowserCfg.CdpPorts)
+				promptCtx.BrowserPointer = browserPrompt
 			}
-			// 5. REFERENCE DOCS — detailed config schemas, workflow structure, workflow creation.
-			//    Only for worker agents (workflow phase). The orchestrator delegates all file
-			//    work so it doesn't need 300+ lines of config schemas and parsing commands.
-			if isWorkflowPhase {
-				_ = llmAgent.AddInstructions(GetWorkspaceReference(shellRoot, perUserChatsFolder))
+			if common.IsCLIProvider(req.Provider) {
+				promptCtx.CLIToolEnvironment = virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider)
 			}
 
-			// 6. SUPPLEMENTARY — conditional grants, CLI provider overrides.
-			for _, section := range resolvedGrants.PromptSections {
-				_ = llmAgent.AddInstructions(section)
+			includedSections, skippedSections, sectionErr := assemblePromptSections(llmAgent, promptCtx)
+			if sectionErr != nil {
+				sendError(fmt.Sprintf("Failed to assemble the system prompt: %v", sectionErr), true)
+				return
 			}
+			logPromptAssembly(promptCtx, includedSections, skippedSections)
 			if len(resolvedGrants.PromptSections) > 0 {
 				log.Printf("[GRANTS] Appended %d prompt section(s) for active grants: %v", len(resolvedGrants.PromptSections), resolvedGrants.AppliedNames)
 			}
@@ -5243,13 +5249,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("[SYSTEM_PROMPT] Final assembled prompt length=%d chars, hasGuidance=%v", len(llmAgent.AssemblyInstructions()), req.LLMGuidance != "" || llmGuidance != "")
 
-			// Add CLI-specific tool mapping for providers that use the api-bridge.
-			// Tool names differ by CLI: Claude Code uses mcp__api-bridge__* while
-			// Codex/Gemini expose the same bridge as mcp_api-bridge_*.
-			if common.IsCLIProvider(req.Provider) {
-				_ = llmAgent.AddInstructions(virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider))
-				log.Printf("[CLI PROVIDER] Added custom tool HTTP API mapping for %s", req.Provider)
-			}
 			// --- Workflow Phase Chat Mode ---
 			// Override system prompt and register plan modification tools for conversational phase editing
 			if isWorkflowPhase && workflowPhaseID != "" {
@@ -5470,17 +5469,29 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					phaseSystemPrompt += "\n\n" + codeExecInstructions
 				}
 
+				// Config schemas and workflow structure belong to this prompt: they
+				// describe the phase agent's own job and no other mode ever gets
+				// them. They used to be appended as a shared section BEFORE the
+				// reset below, which silently discarded them — they never reached
+				// an agent. Building them into the base is what keeps them.
+				phaseSystemPrompt += "\n\n" + GetWorkspaceReference(shellRoot, perUserChatsFolder)
+
 				// Override the agent's system prompt — use SetSystemPrompt to properly set tracking flags
 				// so that rebuildSystemPromptWithUpdatedToolStructure preserves this prompt
 				_ = llmAgent.ResetInstructions(phaseSystemPrompt)
 				log.Printf("[WORKFLOW_PHASE] Overrode system prompt (%d chars) for phase=%s", len(phaseSystemPrompt), workflowPhaseID)
 
-				// Re-append supplementary prompts after system prompt override
-				// (ClearAppendedSystemPrompts above wiped browser/secrets instructions)
-				if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-					_ = llmAgent.AddInstructions(capabilitySection)
-					log.Printf("[WORKFLOW_PHASE] Appended LLM/media capability snapshot to %s system prompt", workflowPhaseID)
+				// ResetInstructions replaces the whole instruction string, so every
+				// shared section assembled earlier is gone. Re-run the SAME
+				// assembler rather than hand-restoring a subset: the previous
+				// hand-written list rebuilt browser/secrets/capability and silently
+				// dropped the workspace map, grants, and channel formatting.
+				phaseIncluded, phaseSkipped, phaseSectionErr := assemblePromptSections(llmAgent, promptCtx)
+				if phaseSectionErr != nil {
+					sendError(fmt.Sprintf("Failed to reassemble the system prompt for phase %s: %v", workflowPhaseID, phaseSectionErr), true)
+					return
 				}
+				logPromptAssembly(promptCtx, phaseIncluded, phaseSkipped)
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					if notificationPrompt := buildWorkflowNotificationInstructionsPrompt(req.NotificationRunSummaryInstructions, req.NotificationPulseSummaryInstructions); notificationPrompt != "" {
 						_ = llmAgent.AddInstructions(notificationPrompt)

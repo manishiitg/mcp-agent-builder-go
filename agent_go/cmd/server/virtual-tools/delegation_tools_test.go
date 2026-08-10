@@ -402,3 +402,27 @@ func TestGetMultiAgentDelegationInstructionsSize(t *testing.T) {
 			size, minBytes)
 	}
 }
+
+// This prompt is bridge-only by construction: it asserts the CLI's native tools
+// are disabled and that execute_shell_command replaces them. That is true for an
+// mcp_only profile and false for a hybrid one, so handleQuery must not inject it
+// for hybrid.
+//
+// The claims are asserted here so the coupling is visible from this side too: if
+// someone softens this text, the caller's hybrid guard may no longer be needed,
+// and if someone strengthens it, the guard matters more. Codex read these exact
+// sentences, concluded it had no shell, and reported the product broken while
+// holding a working shell.
+func TestCLIToolEnvironmentPromptClaimsNativeToolsAreDisabled(t *testing.T) {
+	for _, provider := range []string{"claude-code", "codex-cli"} {
+		prompt := BuildCLIToolEnvironmentPrompt(provider)
+		for _, claim := range []string{
+			"Your native tools (Bash, Read, Write, etc.) are **disabled**",
+			"Run any shell command (replaces Bash/Read/Write)",
+		} {
+			if !strings.Contains(prompt, claim) {
+				t.Fatalf("%s: expected the bridge-only claim %q; if this text changed, revisit the hybrid guard in handleQuery", provider, claim)
+			}
+		}
+	}
+}
