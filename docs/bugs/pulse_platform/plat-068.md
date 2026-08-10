@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — wiring shipped; verification blocked until `llm_ops_review` is re-enabled |
+| Ticket state | `implemented` — wiring shipped; `llm_ops_review` re-enabled 2026-08-10, so verification is now possible on the next passes |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P2 — no incorrect behaviour; an entire review dimension simply never runs
@@ -62,7 +62,9 @@ The item closes by re-binding to the evidence bar and stating the asymmetric ris
 
 **One defect found while writing it**, of exactly the PLAT-062 class (a prompt naming a path that does not resolve): the checklist is projected as `workflow-commands/references/design-plan.md`, not under `builder-reference`, which separately carries a different authoring-time `plan-design.md`. The first draft named the wrong skill and would have failed at read time. Corrected, with the distinction noted inline so the next editor does not repeat it.
 
-**Deliberately not done:** `llm_ops_review` stays disabled at the Gate. The operator's instruction was to get this into the best possible shape *for* enablement, not to enable it — the core-loop verification phase has not met its own bar, and two fresh orchestration defects were found the same day. This ticket removes the reason re-enabling would have been useless.
+**Enablement (updated 2026-08-10).** This shipped while `llm_ops_review` was still disabled, deliberately: the instruction was to get it into the best possible shape *for* enablement. The operator then chose to re-enable it ahead of `goal_advisor` and `strategy_auditor`, on the grounds that the same workflows are run repeatedly, so per-run inefficiency compounds every cycle and this is the only lens that can see it — or judge the same day's default-tier retune against outcome.
+
+The Gate block now makes `workflow_review` and `llm_ops_review` the two selectable modules, which makes the two-module cap reachable for the first time. Two guards were added with it, because drainage rather than detection is the current bottleneck: Engineering Review keeps priority whenever it has real work (production failure or awaited verification outranks cost advisory), and `llm_ops_review` must report narrowly on its first passes rather than emptying a long-accumulated backlog of cost evidence into a system already carrying 352 findings awaiting a producing run.
 
 ## Acceptance
 

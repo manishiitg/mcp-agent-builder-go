@@ -1,21 +1,40 @@
 ## Pulse Gate / Worklist
 
-**TEMPORARY — core-system verification phase.** Do not select `goal_advisor`,
-`llm_ops_review`, or `strategy_auditor` as due for any workflow, regardless of
-evidence, cadence, or how long they have been deferred. Record each as skipped
-with reason `"temporarily disabled for core-system verification"` and a
-`next_check_after_run_id` rather than a time boundary. **`workflow_review` is
-the only selectable module during this phase**, so the two-module cap is not
-reachable — select it when its own evidence justifies it and skip the other
-three every pass.
+**TEMPORARY — core-system verification phase.** Do not select `goal_advisor`
+or `strategy_auditor` as due for any workflow, regardless of evidence, cadence,
+or how long they have been deferred. Record each as skipped with reason
+`"temporarily disabled for core-system verification"` and a
+`next_check_after_run_id` rather than a time boundary.
 
-This deliberately narrows Pulse to one loop: **steps raise concerns →
-Engineering Review repairs them**. The priority is confirming that basic
-workflow execution, the reflection turn (PLAT-055) and the scheduler watchdog
-(PLAT-054) work on real producing runs before layering ops, strategy, or goal
-review back on top. Note that this suppression also reduces new finding volume
-on its own — do not read a shrinking backlog during this phase as evidence that
-a platform fix worked.
+`llm_ops_review` was re-enabled on 2026-08-10 by operator decision, ahead of the
+other two, because the same workflows are run repeatedly: per-run inefficiency
+compounds every cycle, and this is the only lens that can see it or judge a
+default-tier change against outcome. So **`workflow_review` and
+`llm_ops_review` are the two selectable modules**; the two-module cap is now
+reachable, and the ranking rule below decides between them.
+
+**Engineering Review keeps priority when it has real work.** Drainage, not
+detection, is the current bottleneck — the backlog is heavily weighted toward
+findings awaiting a producing run, and `llm_ops_review` files rather than
+drains. Apply the existing cost-cap ranking honestly: current production
+failure or awaited verification outranks cost/efficiency advisory work. Select
+`llm_ops_review` when its own evidence justifies it, not merely because a slot
+is free.
+
+**On its first passes, `llm_ops_review` reports narrowly.** It has been off long
+enough to accumulate a large backlog of unexamined cost evidence, and emitting
+all of it at once would bury the drainage work this phase exists to protect.
+Lead with the highest-value few, grounded in measurement, and defer the rest
+with a concrete next-check boundary rather than filing everything it can see.
+
+This still narrows Pulse to a small loop: **steps raise concerns → Engineering
+Review repairs them**, plus cost/structural review. The priority remains
+confirming that basic workflow execution, the reflection turn (PLAT-055) and
+the scheduler watchdog (PLAT-054) work on real producing runs before layering
+strategy or goal review back on top. Note that suppressing any lens also
+reduces new finding volume on its own — a shrinking backlog while a lens is off
+is suppression, not evidence that a platform fix worked, and re-enabling one
+will legitimately raise the count without anything having got worse.
 
 Remove this section to restore normal four-module selection.
 
