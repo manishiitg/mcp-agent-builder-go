@@ -1026,9 +1026,16 @@ func completePlanChangelogEntry(entry *PlanChangelogEntry) {
 		}
 	}
 	if entry.BeforeRef == "" {
-		if entry.BeforeSnapshot != nil {
+		switch {
+		case entry.BeforeSnapshot != nil:
 			entry.BeforeRef = artifactContentRef(entry.BeforeSnapshot)
-		} else {
+		case len(entry.DeletedSteps) > 0:
+			// No explicit snapshot, but the caller captured the real
+			// pre-mutation content as DeletedSteps (e.g. delete_plan_steps,
+			// delete_todo_task_route) — hash that instead of collapsing to
+			// the empty-Changes placeholder (PLAT-074).
+			entry.BeforeRef = artifactContentRef(entry.DeletedSteps)
+		default:
 			before := make([]interface{}, 0, len(entry.Changes))
 			for _, change := range entry.Changes {
 				before = append(before, change.OldValue)
@@ -1037,9 +1044,14 @@ func completePlanChangelogEntry(entry *PlanChangelogEntry) {
 		}
 	}
 	if entry.AfterRef == "" {
-		if entry.AfterSnapshot != nil {
+		switch {
+		case entry.AfterSnapshot != nil:
 			entry.AfterRef = artifactContentRef(entry.AfterSnapshot)
-		} else {
+		case len(entry.AddedSteps) > 0:
+			// Same fallback for the add side (e.g. add_scripted_step and its
+			// siblings) — AddedSteps already carries the real added content.
+			entry.AfterRef = artifactContentRef(entry.AddedSteps)
+		default:
 			after := make([]interface{}, 0, len(entry.Changes))
 			for _, change := range entry.Changes {
 				after = append(after, change.NewValue)
@@ -5299,10 +5311,21 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 			return "", fmt.Errorf("route was added but required scripted configuration for its regular execution boundary could not be saved: %w", err)
 		}
 
+		// Marshal the route as it actually landed in the plan (post orphan-ref
+		// resolution), not the pre-resolution local var, so the changelog's
+		// after_ref reflects what was really written (PLAT-074).
+		var addedRouteJSON []json.RawMessage
+		if addedRoute, err := json.Marshal(todoTaskStep.PredefinedRoutes[len(todoTaskStep.PredefinedRoutes)-1]); err == nil {
+			addedRouteJSON = []json.RawMessage{addedRoute}
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal added route %s for changelog: %v", newRoute.RouteID, err))
+		}
+
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:    "add_todo_task_route",
-			Reason:  reason,
-			StepIDs: []string{parentStepID, newRoute.RouteID},
+			Tool:       "add_todo_task_route",
+			Reason:     reason,
+			StepIDs:    []string{parentStepID, newRoute.RouteID},
+			AddedSteps: addedRouteJSON,
 		}, readFile, writeFile, logger)
 
 		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, newRoute.RouteID, "added", readFile, writeFile, logger)
@@ -5375,6 +5398,17 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 				availableRouteIDs = append(availableRouteIDs, route.RouteID)
 			}
 			return "", fmt.Errorf("route with route_id '%s' not found in todo task step '%s'. Available route IDs: %v", existingRouteID, parentStepID, availableRouteIDs)
+		}
+
+		// Capture the pre-mutation route content so the changelog can record a
+		// real before/after diff instead of collapsing to a placeholder
+		// (PLAT-074) — routeToUpdate is a pointer into the live plan, so this
+		// must happen before any field is touched below.
+		var beforeRouteSnapshot interface{}
+		if beforeRouteJSON, err := json.Marshal(*routeToUpdate); err == nil {
+			beforeRouteSnapshot = json.RawMessage(beforeRouteJSON)
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal pre-update route %s for changelog: %v", existingRouteID, err))
 		}
 
 		// Update fields if provided
@@ -5455,10 +5489,19 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			return "", fmt.Errorf("route was updated but required scripted configuration for its regular execution boundary could not be saved: %w", err)
 		}
 
+		var afterRouteSnapshot interface{}
+		if afterRouteJSON, err := json.Marshal(*routeToUpdate); err == nil {
+			afterRouteSnapshot = json.RawMessage(afterRouteJSON)
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal post-update route %s for changelog: %v", existingRouteID, err))
+		}
+
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:    "update_todo_task_route",
-			Reason:  reason,
-			StepIDs: []string{parentStepID, existingRouteID},
+			Tool:           "update_todo_task_route",
+			Reason:         reason,
+			StepIDs:        []string{parentStepID, existingRouteID},
+			BeforeSnapshot: beforeRouteSnapshot,
+			AfterSnapshot:  afterRouteSnapshot,
 		}, readFile, writeFile, logger)
 
 		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, existingRouteID, "updated", readFile, writeFile, logger)

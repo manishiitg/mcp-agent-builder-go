@@ -244,6 +244,7 @@ Rules:
 | [PLAT-070](pulse_platform/plat-070.md) | A failed run-folder listing makes the scheduler blame an old failure on today's run | unassigned | `implemented` (runtime reverify pending) | scheduler run-outcome reconciliation, workspace state loading |
 | [PLAT-071](pulse_platform/plat-071.md) | An idle-wait timeout is treated as proof the workflow never ran | unassigned | `implemented` (record corruption); session stall still open | scheduler workshop turn loop |
 | [PLAT-072](pulse_platform/plat-072.md) | `external_action_required` has no exit path, so solved problems keep being re-reported as open | unassigned | `implemented` (sweep tool + version stamping; board 81→75) | Pulse finding lifecycle |
+| [PLAT-074](pulse_platform/plat-074.md) | 6 of 16 plan-mutation call sites never fed the changelog writer real diff/snapshot data, collapsing before_ref/after_ref to a meaningless placeholder | unassigned | `implemented` (4 of 6 call sites fixed; runtime reverify pending) | plan changelog writer (`planning_agent.go`) |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -592,7 +593,7 @@ priority and historical run context.
 | [PLAT-058](pulse_platform/plat-058.md) | [PLAT-059](pulse_platform/plat-059.md) | [PLAT-060](pulse_platform/plat-060.md) | [PLAT-061](pulse_platform/plat-061.md) |
 | [PLAT-062](pulse_platform/plat-062.md) | [PLAT-063](pulse_platform/plat-063.md) | [PLAT-064](pulse_platform/plat-064.md) | [PLAT-065](pulse_platform/plat-065.md) |
 | [PLAT-066](pulse_platform/plat-066.md) | [PLAT-067](pulse_platform/plat-067.md) | [PLAT-068](pulse_platform/plat-068.md) | [PLAT-069](pulse_platform/plat-069.md) |
-| [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) |  |
+| [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-074](pulse_platform/plat-074.md) |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

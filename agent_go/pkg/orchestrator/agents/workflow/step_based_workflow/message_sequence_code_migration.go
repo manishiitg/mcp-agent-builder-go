@@ -189,6 +189,12 @@ func createMigrateMessageSequenceCodeItemsExecutor(
 			Tool:    "migrate_message_sequence_code_items",
 			Reason:  "Move deterministic code out of hidden message-sequence items into visible standalone scripted steps for workflow contract v1.0.10.",
 			StepIDs: append(append([]string{}, result.SequenceIDs...), result.ScriptedIDs...),
+			// planContent/migratedPlan are the real pre/post planning/plan.json
+			// content already in scope from the rewrite above — wire them in so
+			// the changelog records a real diff instead of the empty-Changes
+			// placeholder (PLAT-074).
+			BeforeSnapshot: json.RawMessage(planContent),
+			AfterSnapshot:  json.RawMessage(migratedPlan),
 		}, readFile, withPlanMutationWriteAccess(workspacePath, writeFile), logger)
 
 		payload, _ := json.Marshal(result)
