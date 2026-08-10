@@ -26,6 +26,12 @@ import { useChatStore } from '../../stores/useChatStore'
 import { useRunningWorkflowsStore } from '../../stores/useRunningWorkflowsStore'
 import { createBoundedCache } from '../../utils/boundedCache'
 import {
+  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
+  isReportPreviewDevice,
+  readReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../utils/reportPreviewPreference'
+import {
   applyWidgetFilter,
   evaluateShowIf,
   parseReportPlan,
@@ -44,15 +50,6 @@ const InteractionWidget = lazy(() =>
   import('./reportWidgets/InteractionWidget').then(module => ({ default: module.InteractionWidget })),
 )
 
-export const REPORT_PREVIEW_PREFERENCE_KEY = 'workflow_report_preview_preference'
-export const REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT = 'workflow-report-preview-preference-changed'
-
-// The device-width preview preference is PER WORKFLOW — scope the storage key by
-// the workflow's workspacePath so a choice in one workflow doesn't leak to others.
-// A workflow with no saved choice defaults to mobile.
-export function reportPreviewPreferenceKey(scopeId?: string | null): string {
-  return scopeId ? `${REPORT_PREVIEW_PREFERENCE_KEY}:${scopeId}` : REPORT_PREVIEW_PREFERENCE_KEY
-}
 const REPORT_SVG_EXPORT_SCALE = 2
 const REPORT_PNG_EXPORT_SCALE = 1
 const REPORT_PNG_EXPORT_MAX_SIDE = 16000
@@ -712,27 +709,17 @@ export function ReportViewer({ workspacePath, isOpen, onClose }: ReportViewerPro
 // Inline content — renders the report plan directly without modal chrome. Used by the
 // workflow canvas when canvasViewMode === 'report'.
 function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusTier, reserveTopControlsSpace = false }: ReportViewProps) {
-  // Three explicit preview widths plus 'auto'. The internal name 'desktop' is
+  // Three explicit preview widths. The internal name 'desktop' is
   // surfaced as "Laptop" in the UI to match the user's mental model — laptop
-  // viewports are what fill the full max-width shell. 'auto' falls back to
-  // desktop unless the parent explicitly requests a focused mobile pane.
-  const [previewPreference, setPreviewPreference] = useState<'auto' | 'desktop' | 'tablet' | 'mobile'>(() => {
-    try {
-      const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-      return saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto'
-    } catch {
-      return 'auto'
-    }
-  })
+  // viewports are what fill the full max-width shell. The shared preference
+  // utility owns the single Tablet default.
+  const [previewPreference, setPreviewPreference] = useState<ReportPreviewDevice>(
+    () => readReportPreviewPreference(workspacePath),
+  )
   // Re-read the per-workflow preference when the workflow (workspacePath) changes,
   // since this component can be reused across workflows without remounting.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-      setPreviewPreference(saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto')
-    } catch {
-      setPreviewPreference('auto')
-    }
+    setPreviewPreference(readReportPreviewPreference(workspacePath))
   }, [workspacePath])
   const [loading, setLoading] = useState(false)
   const initialSnapshot = reportDataCache.get(workspacePath)
@@ -888,7 +875,7 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusT
       // Only react to changes for THIS workflow (scoped per workspacePath).
       if ((detail?.scopeId ?? null) !== (workspacePath ?? null)) return
       const p = detail?.preference
-      if (p === 'mobile' || p === 'tablet' || p === 'desktop' || p === 'auto') setPreviewPreference(p)
+      if (isReportPreviewDevice(p)) setPreviewPreference(p)
     }
     const onDataStale = (e: Event) => {
       const stalePath = (e as CustomEvent).detail?.workspacePath
@@ -966,11 +953,7 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusT
   // Mobile the parent passes focusTier='mobile' so the report fits the narrow pane;
   // otherwise it follows the user's saved preference. Device selection lives in the
   // shared on-pane bar (PreviewPaneControls).
-  const previewMode: 'desktop' | 'tablet' | 'mobile' = focusTier
-    ? focusTier
-    : (previewPreference === 'mobile' || previewPreference === 'tablet' || previewPreference === 'desktop'
-        ? previewPreference
-        : 'desktop')
+  const previewMode: ReportPreviewDevice = focusTier || previewPreference
   useLayoutEffect(() => {
     if (!hasAnyContent) return
     const container = reportScrollContainerRef.current

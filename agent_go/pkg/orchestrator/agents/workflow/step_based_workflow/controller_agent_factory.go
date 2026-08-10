@@ -1301,11 +1301,28 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// Check for isolated browser session ID (from share_browser=false in sub-agent tools)
 	if isolatedSessionID, ok := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string); ok && isolatedSessionID != "" {
+		// The isolated session is minted fresh (`<parent>-isolated-<nanos>`) and
+		// carries no session-scoped setup of its own. Everything configured above
+		// was keyed to execSessionID, but from here on this is the session the
+		// agent's tools actually call through, so each binding has to be re-applied
+		// or it is silently absent for the whole step:
+		//   - folder guard: without it the step's read/write scope is not enforced
+		//     at session level;
+		//   - workflow DB: carries the access level AND the db.sqlite deny paths
+		//     that force use of the managed DB tools instead of raw sqlite;
+		//   - run-concern identity: record_run_concern attributes from the trusted
+		//     session identity, so without it the tool fails with "no trusted step
+		//     identity" even though it is registered and advertised to the agent.
+		// Guard first — configureWorkflowDBSession appends its deny paths to
+		// whatever the session config already carries.
+		hcpo.configureSubAgentSessionGuard(isolatedSessionID, "exec-isolated", stepID, readPaths, writePaths)
 		if cfg := common.GetSessionShellConfig(config.MCPSessionID); cfg != nil && strings.TrimSpace(cfg.WorkingDir) != "" {
 			common.SetSessionWorkingDir(isolatedSessionID, cfg.WorkingDir)
 		}
+		configureWorkflowDBSession(isolatedSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+		hcpo.configureRunConcernSession(isolatedSessionID, stepID, ConcernPhaseExecution)
 		config.MCPSessionID = isolatedSessionID
-		hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: overriding MCPSessionID to %s", isolatedSessionID))
+		hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: overriding MCPSessionID to %s (folder guard, workflow DB, and run-concern identity re-bound)", isolatedSessionID))
 	}
 
 	// 5. Prepare custom tools (filtered by step config)

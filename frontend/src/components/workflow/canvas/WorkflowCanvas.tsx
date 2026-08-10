@@ -22,10 +22,15 @@ import { WorkflowToolbar } from './WorkflowToolbar'
 import { VariablesSidebar } from './VariablesSidebar'
 import { BatchProgressHeader } from '../BatchProgressHeader'
 import {
-  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
-  reportPreviewPreferenceKey,
   ReportView,
 } from '../ReportViewer'
+import {
+  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
+  isReportPreviewDevice,
+  readReportPreviewPreference,
+  writeReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../../utils/reportPreviewPreference'
 import { usePlanData, type PlanChanges } from '../hooks/usePlanData'
 import { useEvaluationPlanData } from '../hooks/useEvaluationPlanData'
 import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
@@ -143,32 +148,25 @@ const PREVIEW_DEVICE_OPTS = [
   { mode: 'tablet' as const, Icon: Tablet, label: 'Tablet preview' },
   { mode: 'desktop' as const, Icon: Laptop, label: 'Laptop preview' },
 ]
-type PreviewDevice = 'mobile' | 'tablet' | 'desktop'
+type PreviewDevice = ReportPreviewDevice
 
 // Shared device-width preference, synced across the on-pane bar, the report
 // shell, and the plan/flow shell via REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT.
 // Per-workflow device preference, scoped by `scopeId` (the workflow's
-// workspacePath). A workflow with no saved choice defaults to desktop so the
-// report/plan uses the available workspace unless the user explicitly chooses
-// the phone preview.
+// workspacePath). A workflow with no saved choice defaults to tablet so the
+// report and chat share the available workspace evenly.
 // Exported for focused layout tests; this module also owns the production canvas.
 // eslint-disable-next-line react-refresh/only-export-components
 export function usePreviewDevice(scopeId?: string | null): PreviewDevice {
-  const read = (): PreviewDevice => {
-    try {
-      const v = localStorage.getItem(reportPreviewPreferenceKey(scopeId))
-      return v === 'mobile' || v === 'tablet' || v === 'desktop' ? v : 'desktop'
-    } catch { return 'desktop' }
-  }
-  const [pref, setPref] = React.useState<PreviewDevice>(read)
+  const [pref, setPref] = React.useState<PreviewDevice>(() => readReportPreviewPreference(scopeId))
   React.useEffect(() => {
     // Re-read when the workflow (scope) changes.
-    setPref(read())
+    setPref(readReportPreviewPreference(scopeId))
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if ((detail?.scopeId ?? null) !== (scopeId ?? null)) return
       const p = detail?.preference
-      if (p === 'mobile' || p === 'tablet' || p === 'desktop') setPref(p)
+      if (isReportPreviewDevice(p)) setPref(p)
     }
     window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
     return () => window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
@@ -177,8 +175,7 @@ export function usePreviewDevice(scopeId?: string | null): PreviewDevice {
   return pref
 }
 function setPreviewDevice(mode: PreviewDevice, scopeId?: string | null) {
-  try { localStorage.setItem(reportPreviewPreferenceKey(scopeId), mode) } catch { /* ignore */ }
-  window.dispatchEvent(new CustomEvent(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, { detail: { preference: mode, scopeId: scopeId ?? null } }))
+  writeReportPreviewPreference(scopeId, mode)
 }
 // Tailwind shell width for a device preview (centered, constrained).
 // eslint-disable-next-line react-refresh/only-export-components

@@ -876,7 +876,7 @@ func deleteScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
-			if IsDefaultBuiltinSchedule(id) && !IsSlashManagedBuiltinSchedule(id) {
+			if IsDefaultBuiltinSchedule(id) && (!IsSlashManagedBuiltinSchedule(id) || CanDirectlyToggleBuiltinSchedule(id)) {
 				userID := GetUserIDFromContext(r.Context())
 				if _, _, writeErr := writeBuiltinMultiAgentScheduleOverride(r.Context(), userID, id, func(s *WorkflowSchedule) {
 					s.Enabled = false
@@ -893,7 +893,7 @@ func deleteScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		if result.SourceType == "multi-agent" {
-			if IsSlashManagedBuiltinSchedule(id) {
+			if IsSlashManagedBuiltinSchedule(id) && !CanDirectlyToggleBuiltinSchedule(id) {
 				http.Error(w, SlashManagedBuiltinError(id, "disable or change"), http.StatusConflict)
 				return
 			}
@@ -938,7 +938,7 @@ func enableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
-			if IsDefaultBuiltinSchedule(id) && !IsSlashManagedBuiltinSchedule(id) {
+			if IsDefaultBuiltinSchedule(id) && (!IsSlashManagedBuiltinSchedule(id) || CanDirectlyToggleBuiltinSchedule(id)) {
 				userID := GetUserIDFromContext(r.Context())
 				f, idx, writeErr := writeBuiltinMultiAgentScheduleOverride(r.Context(), userID, id, func(s *WorkflowSchedule) {
 					s.Enabled = true
@@ -962,7 +962,7 @@ func enableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		var resp ScheduledJobResponse
 
 		if result.SourceType == "multi-agent" {
-			if IsSlashManagedBuiltinSchedule(id) {
+			if IsSlashManagedBuiltinSchedule(id) && !CanDirectlyToggleBuiltinSchedule(id) {
 				http.Error(w, SlashManagedBuiltinError(id, "change"), http.StatusConflict)
 				return
 			}

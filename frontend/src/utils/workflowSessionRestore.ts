@@ -12,6 +12,7 @@ import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { liveWorkflowTerminalSessionForPreset } from './workflowTerminalActivity'
 import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
+import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -27,16 +28,10 @@ type OpenWorkflowPresetPageOptions = {
   scrollToBottom?: boolean
 }
 
-const REPORT_PREVIEW_PREFERENCE_KEY = 'workflow_report_preview_preference'
-const REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT = 'workflow-report-preview-preference-changed'
 const WORKFLOW_TERMINAL_LOOKUP_TIMEOUT_MS = 1500
 
 function normalizeWorkspacePath(path?: string): string {
   return (path || '').replace(/\/+$/, '')
-}
-
-function reportPreviewPreferenceKey(scopeId?: string | null): string {
-  return scopeId ? `${REPORT_PREVIEW_PREFERENCE_KEY}:${scopeId}` : REPORT_PREVIEW_PREFERENCE_KEY
 }
 
 function isActiveWorkflowSession(session: ActiveSessionInfo): boolean {
@@ -291,23 +286,11 @@ function requestChatScrollToBottom(): void {
   setTimeout(() => window.dispatchEvent(new CustomEvent('chat-scroll-to-bottom')), 400)
 }
 
-function forceMobilePreview(scopeId?: string | null): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(reportPreviewPreferenceKey(scopeId), 'mobile')
-  } catch {
-    // UI preference only.
-  }
-  window.dispatchEvent(new CustomEvent(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, {
-    detail: { preference: 'mobile', scopeId: scopeId ?? null },
-  }))
-}
-
 function revealWorkflowTerminal(tabId: string, workspacePath?: string | null): void {
   const chatStore = useChatStore.getState()
   chatStore.setTabViewMode(tabId, 'terminal')
 
-  forceMobilePreview(workspacePath)
+  openWorkflowInDefaultPreview(workspacePath)
 
   const workflowStore = useWorkflowStore.getState()
   workflowStore.setShowChatArea(true)
@@ -668,4 +651,22 @@ export async function openActiveSession(
   const tabId = await restoreSession(session.session_id, { title: options.title, source: options.source })
   activateTab(tabId)
   requestChatScrollToBottom()
+}
+
+// Global workflow navigation is workflow-scoped, not child-execution-scoped.
+// Resolve the workflow preset first so every global entry point lands on the
+// canonical root/main session selected by openWorkflowPresetPage.
+export async function openCanonicalActivitySession(
+  session: ActiveSessionInfo,
+  options: { title?: string; source?: string } = {},
+): Promise<void> {
+  const isWorkflow = (session.agent_mode || '').toLowerCase().includes('workflow')
+  if (isWorkflow) {
+    const preset = findWorkflowPresetForSession(session)
+    if (preset) {
+      await openWorkflowPresetPage(preset, options)
+      return
+    }
+  }
+  await openActiveSession(session, options)
 }

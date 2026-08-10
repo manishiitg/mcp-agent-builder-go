@@ -77,6 +77,14 @@ func IsSlashManagedBuiltinSchedule(scheduleID string) bool {
 	return scheduleID == builtinOrgPulseID
 }
 
+// CanDirectlyToggleBuiltinSchedule separates a safe operational pause/resume
+// from editing a product-managed schedule. Org Pulse setup still owns its
+// cadence and content, but the operator must be able to stop or resume it
+// immediately from the Chief of Staff control.
+func CanDirectlyToggleBuiltinSchedule(scheduleID string) bool {
+	return scheduleID == builtinOrgPulseID
+}
+
 func SlashManagedBuiltinSetupCommand(scheduleID string) string {
 	switch scheduleID {
 	case builtinOrgPulseID:

@@ -7,7 +7,7 @@ import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import type { ActiveSessionInfo } from '../services/api-types'
 import { activateTab } from '../utils/activateTab'
-import { openActiveSession, openWorkflowPresetPage, pickWorkflowActiveSession, workflowSessionBotPlatform } from '../utils/workflowSessionRestore'
+import { openCanonicalActivitySession, openWorkflowPresetPage, pickWorkflowActiveSession, workflowSessionBotPlatform } from '../utils/workflowSessionRestore'
 import { runtimeHasBackgroundAgents, runtimeNeedsUserInput, sessionRuntimeStatus } from '../utils/runtimeActivity'
 import { hasIdleAliveCodingAgent, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
@@ -356,7 +356,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
     if (item.type === 'active') {
       // Shared path with the header activity monitor so opening the same session
       // behaves identically from either surface.
-      await openActiveSession(item.session, {
+      await openCanonicalActivitySession(item.session, {
         title: item.label,
         source: 'quick-switcher',
       })

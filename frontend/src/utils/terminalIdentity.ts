@@ -14,3 +14,16 @@ export function isMainAgentTerminal(terminal: TerminalSnapshot): boolean {
 
   return canonicalOwner || canonicalTerminalID || kind === 'main_agent' || kind === 'main' || kind === 'chat'
 }
+
+export function preferredTerminalForContext(
+  mainTerminal: TerminalSnapshot | null,
+  fallbackTerminals: Array<TerminalSnapshot | null | undefined>,
+  isWorkflowContext: boolean,
+): TerminalSnapshot | null {
+  if (mainTerminal) return mainTerminal
+  // Workflow navigation always lands on the main agent. A child may appear
+  // before the main terminal snapshot is published, but it must only become
+  // the active pane after the user explicitly selects it from the rail.
+  if (isWorkflowContext) return null
+  return fallbackTerminals.find((terminal): terminal is TerminalSnapshot => Boolean(terminal)) || null
+}

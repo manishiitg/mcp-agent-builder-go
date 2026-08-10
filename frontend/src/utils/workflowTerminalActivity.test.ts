@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalSnapshot } from '../services/api-types'
-import { activeSessionFromWorkflowTerminal, isLiveWorkflowTerminal } from './workflowTerminalActivity'
+import {
+  activeSessionFromWorkflowTerminal,
+  isLiveWorkflowTerminal,
+  liveWorkflowTerminalSessionForPreset,
+} from './workflowTerminalActivity'
 
 function terminal(overrides: Partial<TerminalSnapshot>): TerminalSnapshot {
   return {
@@ -51,5 +55,55 @@ describe('isLiveWorkflowTerminal', () => {
     }))
     expect(session.has_running_background_agents).toBeUndefined()
     expect(session.has_retained_tmux_session).toBe(true)
+  })
+})
+
+describe('liveWorkflowTerminalSessionForPreset', () => {
+  const preset = {
+    id: 'example',
+    label: 'Example',
+    selectedFolder: { filepath: 'Workflow/example' },
+  } as Parameters<typeof liveWorkflowTerminalSessionForPreset>[1]
+
+  it('opens the canonical main agent instead of a newer active child', () => {
+    const main = terminal({
+      session_id: 'workflow-root',
+      terminal_id: 'workflow-root:main:workflow-root',
+      owner_id: 'main:workflow-root',
+      execution_kind: 'main_agent',
+      label: 'Main agent',
+      tmux_session: 'main-tmux',
+      state: 'completed',
+      active: false,
+      updated_at: '2026-08-10T08:00:00Z',
+    })
+    const child = terminal({
+      session_id: 'workflow-root',
+      terminal_id: 'workflow-root:workflow-step:review',
+      owner_id: 'workflow-step:review',
+      execution_kind: 'workflow_step',
+      label: 'Child reviewer',
+      tmux_session: 'child-tmux',
+      state: 'running',
+      active: true,
+      updated_at: '2026-08-10T08:05:00Z',
+    })
+
+    const restored = liveWorkflowTerminalSessionForPreset([child, main], preset, 'Example')
+    expect(restored?.session_id).toBe(main.session_id)
+    expect(restored?.current_execution_name).toBe('Main agent')
+  })
+
+  it('does not use a child terminal as the workflow landing session', () => {
+    const child = terminal({
+      session_id: 'child-only',
+      terminal_id: 'child-only:workflow-step:review',
+      owner_id: 'workflow-step:review',
+      execution_kind: 'workflow_step',
+      active: true,
+      state: 'running',
+    })
+
+    expect(liveWorkflowTerminalSessionForPreset([child], preset, 'Example')).toBeUndefined()
   })
 })

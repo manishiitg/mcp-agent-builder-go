@@ -25,7 +25,7 @@ import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
 import type { Theme } from '../contexts/ThemeContext'
 import { normalizeAnsiForEmbeddedXterm } from '../utils/ansiSanitize'
 import { preserveTerminalContinuity } from '../utils/terminalContinuity'
-import { isMainAgentTerminal } from '../utils/terminalIdentity'
+import { isMainAgentTerminal, preferredTerminalForContext } from '../utils/terminalIdentity'
 import { hasFreshTerminalDetailBody } from '../utils/terminalDetailFreshness'
 import {
   canonicalTerminalRailSelection,
@@ -3188,7 +3188,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const selected = groupedTerminals.orderedTerminals.find(terminal => terminalPaneKey(terminal) === selectedID)
     const userSelected = groupedTerminals.orderedTerminals.find(terminal => terminalPaneKey(terminal) === userSelectedID)
     const latestActive = groupedTerminals.activeTerminals[0]
-    const preferredTerminal = currentMainTerminal || latestActive || groupedTerminals.currentTerminals[0] || groupedTerminals.orderedTerminals[0]
+    const preferredTerminal = preferredTerminalForContext(
+      currentMainTerminal,
+      [latestActive, groupedTerminals.currentTerminals[0], groupedTerminals.orderedTerminals[0]],
+      isWorkflowTerminalContext,
+    )
 
     const canonicalSelected = canonicalTerminalRailSelection(groupedTerminals.logicalGroups, selected)
     if (selected && canonicalSelected && canonicalSelected.terminal_id !== selected.terminal_id) {
@@ -3221,10 +3225,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       return
     }
 
-    if (!selectedID || !selected) {
+    if ((!selectedID || !selected) && preferredTerminal) {
       setSelectedID(terminalPaneKey(preferredTerminal))
     }
-  }, [currentMainTerminal, groupedTerminals, selectedID, userSelectedID])
+  }, [currentMainTerminal, groupedTerminals, isWorkflowTerminalContext, selectedID, userSelectedID])
 
   const selectedTerminal = useMemo(
     () => {
