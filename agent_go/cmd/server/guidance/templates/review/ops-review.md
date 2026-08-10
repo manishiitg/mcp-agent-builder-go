@@ -81,20 +81,38 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      evidence, never the description alone. Judgment, synthesis, adaptive
      discovery, and browser/UI work stay agentic; do not propose scripting them
      to save cost.
-   - **Sequence shape.** Report a turn whose tool-call count is large enough to
-     dominate the step's wall time, and say what would batch. Every tool call is
-     a serial model round-trip that re-reads the whole accumulated context, so
-     call count — not payload size — is usually the multiplier. Propose merging
-     adjacent steps only when they genuinely share context, and splitting only
-     at a boundary the checklist recognises (credentials/security, independent
-     outputs or retries, clean-room independence, human/routing boundaries,
-     context contamination). "It is long" is not a boundary.
+   - **Sequence shape.** Establish where a step's time actually goes before
+     recommending anything, measuring four things separately rather than
+     collapsing them into one: **model turns** (a recorded tool call is not
+     automatically its own round-trip — code-execution mode and batching can
+     issue many underlying calls inside a single model action), **tool-call
+     count**, **payload size** (a large result is not just slow to transfer; it
+     enlarges the context every later turn re-reads, so it can cost more than
+     the call that produced it), and **parallelism** (serial calls that could
+     have run concurrently). Name which of the four dominates, with the
+     measurement, and recommend against that one — batching a step whose cost is
+     really payload growth, or trimming payloads when the real cost is serial
+     round-trips, both spend effort for nothing. Propose merging adjacent steps
+     only when they genuinely share context, and splitting only at a boundary
+     the checklist recognises (credentials/security, independent outputs or
+     retries, clean-room independence, human/routing boundaries, context
+     contamination). "It is long" is not a boundary.
    - **Reflection yield.** `reflection:<step-id>` is attributed separately from
      `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
-     sits beside the execution timing files. A reflection turn costing real time
-     and tokens while its `wrote_learnings`/`wrote_kb` stay false is overhead:
-     recommend sharpening the objective or dropping the step to
-     `learnings_access: "read"`, not making the turn faster.
+     sits beside the execution timing files. **A single reflection turn that
+     recorded no learning is not waste** — a turn that examined the run and
+     correctly concluded there was nothing new to record is the mechanism
+     working, and treating it as overhead would penalise honesty and push the
+     next turn toward inventing a learning to look productive. Judge the pattern
+     instead: only where several comparable runs (same route, materially
+     equivalent configuration) each show meaningful reflection cost together
+     with consistently absent contribution — `wrote_learnings`/`wrote_kb` false,
+     corroborated by `has_new_learning` in
+     `learnings/<step-id>/.learning_metadata.json` `detection_history` — is
+     there a finding. Then the recommendation is to sharpen the objective, or
+     drop the step to `learnings_access: "read"` when it should consume but not
+     contribute; not to make the turn faster. State the number of runs the
+     judgment rests on.
    Any recommendation here still obeys item 8: state current state, exact
    suggestion, expected benefit, risk, and evidence. A step-type change carries
    real risk — scripting a step that is not actually deterministic breaks it —
