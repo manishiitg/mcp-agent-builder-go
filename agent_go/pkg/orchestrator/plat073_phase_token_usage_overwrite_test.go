@@ -5,59 +5,70 @@ import (
 	"time"
 )
 
-// TestApplyModelUsageToPhaseTokenUsageFileOverwritesRatherThanAccumulates
-// pins the PLAT-073 cluster B fix (e6be98dfd6f4d639): the caller (workflow
-// builder chat) passes the coding agent's session-cumulative usage snapshot
-// on every turn, not a per-turn delta. The old merge-based implementation
-// added that growing cumulative total on top of what earlier turns already
-// wrote, so a two-turn session's persisted total was roughly 3x the real
-// spend (turn 1's cumulative, plus turn 2's larger cumulative added on top).
-func TestApplyModelUsageToPhaseTokenUsageFileOverwritesRatherThanAccumulates(t *testing.T) {
+func TestCumulativeSessionUsageAddsOnlyNewTurnDelta(t *testing.T) {
 	file := &PhaseTokenUsageFile{}
 	now := time.Now()
 
-	// Turn 1: session cumulative so far.
-	turn1 := &ModelTokenUsage{InputTokens: 1000, OutputTokens: 500, TotalCost: 0.10}
-	ApplyModelUsageToPhaseTokenUsageFile(file, "workflow-builder", "claude-sonnet-5", turn1, now)
+	ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{
+		InputTokens: 1000, OutputTokens: 500, LLMCallCount: 1,
+	}, now)
+	delta := ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{
+		InputTokens: 2200, OutputTokens: 1100, LLMCallCount: 2,
+	}, now)
 
+	if delta.InputTokens != 1200 || delta.OutputTokens != 600 || delta.LLMCallCount != 1 {
+		t.Fatalf("second turn delta = %+v, want 1200 input / 600 output / 1 call", delta)
+	}
 	got := file.ByModel["claude-sonnet-5"]
-	if got.InputTokens != 1000 || got.TotalCost != 0.10 {
-		t.Fatalf("after turn 1: InputTokens=%d TotalCost=%.4f, want 1000/0.10", got.InputTokens, got.TotalCost)
-	}
-
-	// Turn 2: mcpagent reports the NEW session-cumulative total (which
-	// already includes turn 1's tokens), not a delta for turn 2 alone.
-	turn2Cumulative := &ModelTokenUsage{InputTokens: 2200, OutputTokens: 1100, TotalCost: 0.22}
-	ApplyModelUsageToPhaseTokenUsageFile(file, "workflow-builder", "claude-sonnet-5", turn2Cumulative, now)
-
-	got = file.ByModel["claude-sonnet-5"]
-	if got.InputTokens != 2200 || got.TotalCost != 0.22 {
-		t.Fatalf("after turn 2: InputTokens=%d TotalCost=%.4f, want 2200/0.22 (the fresh cumulative snapshot, not 1000+2200=3200)", got.InputTokens, got.TotalCost)
-	}
-
-	byPhase := file.ByPhaseAndModel["workflow-builder"]["claude-sonnet-5"]
-	if byPhase.InputTokens != 2200 || byPhase.TotalCost != 0.22 {
-		t.Fatalf("by_phase_and_model after turn 2: InputTokens=%d TotalCost=%.4f, want 2200/0.22", byPhase.InputTokens, byPhase.TotalCost)
+	if got.InputTokens != 2200 || got.OutputTokens != 1100 || got.LLMCallCount != 2 {
+		t.Fatalf("same-session aggregate = %+v, want cumulative 2200/1100/2", got)
 	}
 }
 
-// TestApplyModelUsageToPhaseTokenUsageFileClonesRatherThanAliases guards
-// against a regression where the stored bucket and the caller's usage
-// pointer become the same object — a later in-place mutation of the
-// caller's ModelTokenUsage (e.g. EnsureModelTokenUsagePricing re-run on the
-// same pointer) must not silently rewrite an already-persisted snapshot.
-func TestApplyModelUsageToPhaseTokenUsageFileClonesRatherThanAliases(t *testing.T) {
+func TestCumulativeSessionUsagePreservesOtherChatsUsingSameModel(t *testing.T) {
 	file := &PhaseTokenUsageFile{}
 	now := time.Now()
 
-	usage := &ModelTokenUsage{InputTokens: 500, TotalCost: 0.05}
-	ApplyModelUsageToPhaseTokenUsageFile(file, "workflow-builder", "claude-sonnet-5", usage, now)
+	ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{
+		InputTokens: 2200, OutputTokens: 1100, LLMCallCount: 2,
+	}, now)
+	delta := ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-b", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{
+		InputTokens: 700, OutputTokens: 300, LLMCallCount: 1,
+	}, now)
 
-	usage.InputTokens = 999999
-	usage.TotalCost = 999.0
-
+	if delta.InputTokens != 700 || delta.OutputTokens != 300 {
+		t.Fatalf("new chat delta = %+v, want its full first snapshot", delta)
+	}
 	got := file.ByModel["claude-sonnet-5"]
-	if got.InputTokens != 500 || got.TotalCost != 0.05 {
-		t.Fatalf("stored bucket was aliased to the caller's usage pointer: InputTokens=%d TotalCost=%.4f, want 500/0.05", got.InputTokens, got.TotalCost)
+	if got.InputTokens != 2900 || got.OutputTokens != 1400 || got.LLMCallCount != 3 {
+		t.Fatalf("cross-chat aggregate = %+v, want 2900/1400/3", got)
+	}
+}
+
+func TestCumulativeSessionUsageAttributesOnlyNewDeltaAfterModelChange(t *testing.T) {
+	file := &PhaseTokenUsageFile{}
+	now := time.Now()
+
+	ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{
+		InputTokens: 1000, OutputTokens: 500, LLMCallCount: 1,
+	}, now)
+	ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-opus-5", &ModelTokenUsage{
+		InputTokens: 1600, OutputTokens: 800, LLMCallCount: 2,
+	}, now)
+
+	sonnet := file.ByModel["claude-sonnet-5"]
+	opus := file.ByModel["claude-opus-5"]
+	if sonnet.InputTokens != 1000 || opus.InputTokens != 600 {
+		t.Fatalf("model split sonnet=%+v opus=%+v, want 1000 then 600 input tokens", sonnet, opus)
+	}
+}
+
+func TestCumulativeSessionUsageTreatsCounterResetAsFreshEpoch(t *testing.T) {
+	file := &PhaseTokenUsageFile{}
+	now := time.Now()
+	ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{InputTokens: 1000, LLMCallCount: 2}, now)
+	delta := ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(file, "chat-a", "workflow-builder", "claude-sonnet-5", &ModelTokenUsage{InputTokens: 250, LLMCallCount: 1}, now)
+	if delta.InputTokens != 250 || file.ByModel["claude-sonnet-5"].InputTokens != 1250 {
+		t.Fatalf("reset delta=%+v aggregate=%+v, want 250 and 1250", delta, file.ByModel["claude-sonnet-5"])
 	}
 }

@@ -4,8 +4,8 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | unassigned |
-| Ticket state | `implemented` — the one real bug fixed and tested; two findings resolved by documentation; one left as an explicit design-only gap |
+| Assigned agent | Codex |
+| Ticket state | `implemented` — corrected after review to preserve totals across separate chats; two findings resolved by documentation; one left as an explicit design-only gap |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P2 — a real, silently-compounding cost-ledger inflation bug,
@@ -45,31 +45,34 @@ The code's own comment directly above the call site already stated the
 intended behavior: *"One file per session — overwrites on each follow-up with
 the full cumulative history."* The implementation just didn't match it.
 
-## Fix
+## Fix and review correction
 
-`ApplyModelUsageToPhaseTokenUsageFile` (`cost_storage.go`) now **replaces**
-(`CloneModelTokenUsage`) the stored `ByModel`/`ByPhaseAndModel` bucket instead
-of merging onto it, matching the caller's own documented intent. This
-function has exactly one call site (the two calls at `server.go:6174` and
-`:6199` both come from the same workflow-builder chat block, both fed the
-same cumulative snapshot) — safe to change unconditionally, no other caller
-depends on additive-merge semantics.
+The first implementation in `8afa79b32` changed the aggregate bucket from
+merge to replace. That fixed repeated turns in one chat, but review found a
+more serious cross-chat regression: `costs/phase/token_usage.json` and its
+daily counterpart are workflow-wide/date-wide. A second chat using the same
+model would replace and erase the first chat's contribution. The original
+test covered two turns in one chat only, so it could not catch this.
 
-**Known residual limitation, not fixed**: `mcpagent.ReadAgentDiagnostics`
-carries no per-model breakdown, only one blended cumulative total. If a
-session's model changes mid-session, the new model's bucket is overwritten
-with a total that already includes the prior model's tokens, while the prior
-model's own bucket is left stale (not cleared). This is a data-source gap in
-mcpagent's usage tracking, not something the ledger side can correct — it
-would need mcpagent to track cumulative usage per-model. Documented in the
-function's own comment rather than silently left unstated.
+The corrected implementation persists the last cumulative diagnostic
+checkpoint **per chat session**, subtracts it from the next cumulative
+snapshot, and adds only that new-turn delta to the workflow aggregate. The
+same delta is added to the current daily file. This preserves three required
+properties together:
+
+1. later turns in one chat are not double-counted;
+2. separate chats using the same model add together instead of erasing one
+   another; and
+3. after a model switch, only the newly incurred delta is attributed and
+   priced under the new model.
+
+If the coding CLI's cumulative counters move backwards after a runtime reset,
+the current snapshot is treated as a fresh epoch rather than producing a
+negative delta.
 
 Tests (`pkg/orchestrator/plat073_phase_token_usage_overwrite_test.go`):
-`TestApplyModelUsageToPhaseTokenUsageFileOverwritesRatherThanAccumulates`
-(a two-turn scenario where the naive sum would be 3200 tokens but the correct
-overwritten value is 2200 — the fresh cumulative snapshot) and
-`TestApplyModelUsageToPhaseTokenUsageFileClonesRatherThanAliases` (the stored
-bucket must not alias the caller's pointer).
+cover two turns in one chat, two independent chats on the same model, a
+mid-chat model change, and a cumulative-counter reset.
 
 ## 2. `e6be98dfd6f4d639`'s second claim — NOT a bug, documented
 
@@ -142,7 +145,7 @@ endpoint the Pulse review agent can call directly.
 
 - `go build ./...` clean.
 - New tests pass:
-  `go test ./pkg/orchestrator/... -run TestApplyModelUsageToPhaseTokenUsageFile`.
+  `go test ./pkg/orchestrator/... -run TestCumulativeSessionUsage`.
 - Full baseline (`go test ./cmd/server/... ./pkg/orchestrator/...`) still
   shows exactly 22 pre-existing failures — no new failures.
 - **Not yet reverified live** — requires a restart and a multi-turn
@@ -155,9 +158,8 @@ endpoint the Pulse review agent can call directly.
 
 ## Acceptance
 
-- A multi-turn workflow-builder chat session's persisted `costs/phase/`
-  totals equal the session's actual final cumulative usage, not a multiple
-  of it.
+- A multi-turn workflow-builder chat adds only each turn's delta, while two
+  separate chats using the same model both remain in persisted totals.
 - `file-layout.md` states the true scope of `costs/phase/*` and warns against
   comparing it to `costs/execution/*` as if they were the same total.
 - `a8ab091308579946`/`e717a5e1a962a81f` remain open, correctly, pending a

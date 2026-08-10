@@ -6170,8 +6170,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if modelID == "" {
 					modelID = runtimeInfo.LLMConfig.ModelID
 				}
-				orchestrator.EnsureModelTokenUsagePricing(modelID, modelUsage)
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, modelID, modelUsage, now)
+				deltaUsage := orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(&tokenFile, persistSessionID, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), tokenFilePath, string(tokenJSON)); err != nil {
@@ -6182,7 +6181,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 								log.Printf("[BUILDER LOG] Failed to delete legacy token_usage.json: %v", err)
 							}
 						}
-						log.Printf("[BUILDER LOG] Updated %s (phase=%s, $%.4f this turn)", tokenFilePath, phaseKey, totalCost)
+						turnCost := 0.0
+						if deltaUsage != nil {
+							turnCost = deltaUsage.TotalCost
+						}
+						log.Printf("[BUILDER LOG] Updated %s (phase=%s, $%.4f this turn)", tokenFilePath, phaseKey, turnCost)
 					}
 				}
 
@@ -6196,7 +6199,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if dailyTokenFile.TokenUsage == nil {
 					dailyTokenFile.TokenUsage = &orchestrator.PhaseTokenUsageFile{}
 				}
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, modelID, modelUsage, now)
+				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, modelID, deltaUsage, now)
 
 				if dailyTokenJSON, err := json.MarshalIndent(dailyTokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), dailyTokenFilePath, string(dailyTokenJSON)); err != nil {

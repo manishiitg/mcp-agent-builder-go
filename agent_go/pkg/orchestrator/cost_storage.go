@@ -176,29 +176,29 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
 
 	return &ModelTokenUsage{
-		Provider:            modelTokenData.Provider,
-		PricingModelID:      modelTokenData.ModelID,
-		PricingVersion:      modelPricingVersion,
-		InputTokens:         modelTokenData.InputTokens,
-		OutputTokens:        modelTokenData.OutputTokens,
-		InputTokensM:        formatTokensM(modelTokenData.InputTokens),
-		OutputTokensM:       formatTokensM(modelTokenData.OutputTokens),
-		CacheTokens:         modelTokenData.CacheTokens,
-		CacheTokensM:        formatTokensM(modelTokenData.CacheTokens),
-		CacheReadTokens:     modelTokenData.CacheReadTokens,
-		CacheReadTokensM:    formatTokensM(modelTokenData.CacheReadTokens),
-		CacheWriteTokens:    modelTokenData.CacheWriteTokens,
-		CacheWriteTokensM:   formatTokensM(modelTokenData.CacheWriteTokens),
-		ReasoningTokens:     modelTokenData.ReasoningTokens,
-		ReasoningTokensM:    formatTokensM(modelTokenData.ReasoningTokens),
-		LLMCallCount:        modelTokenData.LLMCallCount,
-		InputCost:           inputCost,
-		OutputCost:          outputCost,
-		ReasoningCost:       reasoningCost,
-		CacheCost:           cacheCost,
-		CacheReadCost:       modelTokenData.CacheReadCost,
-		CacheWriteCost:      modelTokenData.CacheWriteCost,
-		TotalCost:           totalCost,
+		Provider:          modelTokenData.Provider,
+		PricingModelID:    modelTokenData.ModelID,
+		PricingVersion:    modelPricingVersion,
+		InputTokens:       modelTokenData.InputTokens,
+		OutputTokens:      modelTokenData.OutputTokens,
+		InputTokensM:      formatTokensM(modelTokenData.InputTokens),
+		OutputTokensM:     formatTokensM(modelTokenData.OutputTokens),
+		CacheTokens:       modelTokenData.CacheTokens,
+		CacheTokensM:      formatTokensM(modelTokenData.CacheTokens),
+		CacheReadTokens:   modelTokenData.CacheReadTokens,
+		CacheReadTokensM:  formatTokensM(modelTokenData.CacheReadTokens),
+		CacheWriteTokens:  modelTokenData.CacheWriteTokens,
+		CacheWriteTokensM: formatTokensM(modelTokenData.CacheWriteTokens),
+		ReasoningTokens:   modelTokenData.ReasoningTokens,
+		ReasoningTokensM:  formatTokensM(modelTokenData.ReasoningTokens),
+		LLMCallCount:      modelTokenData.LLMCallCount,
+		InputCost:         inputCost,
+		OutputCost:        outputCost,
+		ReasoningCost:     reasoningCost,
+		CacheCost:         cacheCost,
+		CacheReadCost:     modelTokenData.CacheReadCost,
+		CacheWriteCost:    modelTokenData.CacheWriteCost,
+		TotalCost:         totalCost,
 	}
 }
 
@@ -321,6 +321,9 @@ func EnsurePhaseTokenUsageFileInitialized(tokenFile *PhaseTokenUsageFile) {
 	}
 	if tokenFile.ByModel == nil {
 		tokenFile.ByModel = make(map[string]*ModelTokenUsage)
+	}
+	if tokenFile.SessionCumulative == nil {
+		tokenFile.SessionCumulative = make(map[string]*ModelTokenUsage)
 	}
 }
 
@@ -646,10 +649,11 @@ func ClonePhaseTokenUsageFile(src *PhaseTokenUsageFile) *PhaseTokenUsageFile {
 	}
 
 	clone := &PhaseTokenUsageFile{
-		CreatedAt:       src.CreatedAt,
-		UpdatedAt:       src.UpdatedAt,
-		ByPhaseAndModel: make(map[string]map[string]*ModelTokenUsage),
-		ByModel:         make(map[string]*ModelTokenUsage),
+		CreatedAt:         src.CreatedAt,
+		UpdatedAt:         src.UpdatedAt,
+		ByPhaseAndModel:   make(map[string]map[string]*ModelTokenUsage),
+		ByModel:           make(map[string]*ModelTokenUsage),
+		SessionCumulative: make(map[string]*ModelTokenUsage),
 	}
 
 	for modelID, usage := range src.ByModel {
@@ -661,6 +665,9 @@ func ClonePhaseTokenUsageFile(src *PhaseTokenUsageFile) *PhaseTokenUsageFile {
 		for modelID, usage := range modelMap {
 			clone.ByPhaseAndModel[phaseID][modelID] = CloneModelTokenUsage(usage)
 		}
+	}
+	for sessionID, usage := range src.SessionCumulative {
+		clone.SessionCumulative[sessionID] = CloneModelTokenUsage(usage)
 	}
 
 	return clone
@@ -686,6 +693,9 @@ func MergePhaseTokenUsageFiles(dst, src *PhaseTokenUsageFile) *PhaseTokenUsageFi
 	if dst.ByPhaseAndModel == nil {
 		dst.ByPhaseAndModel = make(map[string]map[string]*ModelTokenUsage)
 	}
+	if dst.SessionCumulative == nil {
+		dst.SessionCumulative = make(map[string]*ModelTokenUsage)
+	}
 
 	for modelID, usage := range src.ByModel {
 		dst.ByModel[modelID] = MergeModelTokenUsage(dst.ByModel[modelID], usage)
@@ -697,6 +707,12 @@ func MergePhaseTokenUsageFiles(dst, src *PhaseTokenUsageFile) *PhaseTokenUsageFi
 		}
 		for modelID, usage := range modelMap {
 			dst.ByPhaseAndModel[phaseID][modelID] = MergeModelTokenUsage(dst.ByPhaseAndModel[phaseID][modelID], usage)
+		}
+	}
+	for sessionID, usage := range src.SessionCumulative {
+		current := dst.SessionCumulative[sessionID]
+		if current == nil || modelUsageSnapshotIsNewer(usage, current) {
+			dst.SessionCumulative[sessionID] = CloneModelTokenUsage(usage)
 		}
 	}
 
@@ -722,27 +738,9 @@ func ApplyModelTokenDataToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, ph
 	tokenFile.ByPhaseAndModel[phaseKey][modelID] = ApplyModelTokenData(tokenFile.ByPhaseAndModel[phaseKey][modelID], modelTokenData)
 }
 
-// ApplyModelUsageToPhaseTokenUsageFile has exactly one caller (the
-// workflow-builder chat cost writer in cmd/server/server.go), which passes
-// the coding agent's session-CUMULATIVE usage snapshot on every turn, not a
-// per-turn delta. This must REPLACE the stored bucket, matching that call
-// site's own comment ("overwrites on each follow-up with the full cumulative
-// history"). Merging here — the prior behavior — added the same growing
-// cumulative total on top of what earlier turns already wrote, so a bucket's
-// persisted totals inflated every single turn and compounded across turns
-// (PLAT-073 cluster B, e6be98dfd6f4d639): confirmed live as an opus-tagged
-// bucket priced at sonnet's rate after a mid-session model change, but the
-// overcounting itself applied even with no model change at all.
-//
-// Known residual limitation: usage is a single blended cumulative total
-// across every model used in the session (mcpagent's diagnostics carry no
-// per-model breakdown), so if the model changes mid-session, the new
-// modelID's bucket is overwritten with a total that already includes the
-// prior model's tokens, while that prior model's own bucket is left stale
-// rather than cleared. That is a data-source gap in mcpagent's usage
-// tracking, not something this function can correct — call sites that need
-// genuine per-model attribution should use ApplyModelTokenData instead,
-// which is fed real per-call deltas.
+// ApplyModelUsageToPhaseTokenUsageFile adds a per-turn or per-call delta to
+// workflow-wide phase totals. Cumulative coding-session snapshots must first
+// pass through ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile.
 func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseKey, modelID string, usage *ModelTokenUsage, now time.Time) {
 	if tokenFile == nil || usage == nil || strings.TrimSpace(phaseKey) == "" || strings.TrimSpace(modelID) == "" {
 		return
@@ -754,9 +752,74 @@ func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseK
 	}
 	tokenFile.UpdatedAt = now
 
-	tokenFile.ByModel[modelID] = CloneModelTokenUsage(usage)
+	tokenFile.ByModel[modelID] = MergeModelTokenUsage(tokenFile.ByModel[modelID], usage)
 	if tokenFile.ByPhaseAndModel[phaseKey] == nil {
 		tokenFile.ByPhaseAndModel[phaseKey] = make(map[string]*ModelTokenUsage)
 	}
-	tokenFile.ByPhaseAndModel[phaseKey][modelID] = CloneModelTokenUsage(usage)
+	tokenFile.ByPhaseAndModel[phaseKey][modelID] = MergeModelTokenUsage(tokenFile.ByPhaseAndModel[phaseKey][modelID], usage)
+}
+
+// ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile turns the coding
+// agent's session-cumulative diagnostics into a delta, adds that delta to the
+// workflow-wide totals, and returns it so the caller can add the same delta to
+// the current daily ledger. Keeping the prior snapshot by session prevents
+// both same-session double counting and cross-session data loss.
+func ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, sessionID, phaseKey, modelID string, cumulative *ModelTokenUsage, now time.Time) *ModelTokenUsage {
+	if tokenFile == nil || cumulative == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(phaseKey) == "" || strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	EnsurePhaseTokenUsageFileInitialized(tokenFile)
+	previous := tokenFile.SessionCumulative[sessionID]
+	delta := subtractCumulativeModelUsage(cumulative, previous)
+	EnsureModelTokenUsagePricing(modelID, delta)
+	ApplyModelUsageToPhaseTokenUsageFile(tokenFile, phaseKey, modelID, delta, now)
+	tokenFile.SessionCumulative[sessionID] = CloneModelTokenUsage(cumulative)
+	return delta
+}
+
+func subtractCumulativeModelUsage(current, previous *ModelTokenUsage) *ModelTokenUsage {
+	if current == nil {
+		return nil
+	}
+	if previous == nil || !modelUsageSnapshotIsNewer(current, previous) {
+		return CloneModelTokenUsage(current)
+	}
+	delta := CloneModelTokenUsage(current)
+	delta.InputTokens -= previous.InputTokens
+	delta.OutputTokens -= previous.OutputTokens
+	delta.CacheTokens -= previous.CacheTokens
+	delta.CacheReadTokens -= previous.CacheReadTokens
+	delta.CacheWriteTokens -= previous.CacheWriteTokens
+	delta.ReasoningTokens -= previous.ReasoningTokens
+	delta.LLMCallCount -= previous.LLMCallCount
+	delta.InputCost -= previous.InputCost
+	delta.OutputCost -= previous.OutputCost
+	delta.ReasoningCost -= previous.ReasoningCost
+	delta.CacheCost -= previous.CacheCost
+	delta.CacheReadCost -= previous.CacheReadCost
+	delta.CacheWriteCost -= previous.CacheWriteCost
+	delta.TotalCost -= previous.TotalCost
+	delta.InputTokensM = formatTokensM(delta.InputTokens)
+	delta.OutputTokensM = formatTokensM(delta.OutputTokens)
+	delta.CacheTokensM = formatTokensM(delta.CacheTokens)
+	delta.CacheReadTokensM = formatTokensM(delta.CacheReadTokens)
+	delta.CacheWriteTokensM = formatTokensM(delta.CacheWriteTokens)
+	delta.ReasoningTokensM = formatTokensM(delta.ReasoningTokens)
+	return delta
+}
+
+// A lower counter means the coding CLI started a fresh diagnostic epoch (for
+// example after a process/session reset). Treat the whole current snapshot as
+// new usage instead of producing negative deltas.
+func modelUsageSnapshotIsNewer(current, previous *ModelTokenUsage) bool {
+	if current == nil || previous == nil {
+		return current != nil
+	}
+	return current.InputTokens >= previous.InputTokens &&
+		current.OutputTokens >= previous.OutputTokens &&
+		current.CacheTokens >= previous.CacheTokens &&
+		current.CacheReadTokens >= previous.CacheReadTokens &&
+		current.CacheWriteTokens >= previous.CacheWriteTokens &&
+		current.ReasoningTokens >= previous.ReasoningTokens &&
+		current.LLMCallCount >= previous.LLMCallCount
 }

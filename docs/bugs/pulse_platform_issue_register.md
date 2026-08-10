@@ -250,7 +250,7 @@ Rules:
 | [PLAT-077](pulse_platform/plat-077.md) | Human-input answer/dismiss had no concurrent-writer guard; harness findings could split invisibly across two fingerprints | unassigned | `implemented` (runtime reverify pending) | report-human-input lifecycle, pulse finding identity migration |
 | [PLAT-078](pulse_platform/plat-078.md) | Spilled bridge tool output (large agent_browser snapshots) landed outside every granted read path | unassigned | `implemented` (folder-guard fix only; snapshot size cap still open) | step execution folder guard |
 | [PLAT-080](pulse_platform/plat-080.md) | An old cron schedule with no durable fire-decision row restarted from “now” and silently lost earlier due occurrences | Codex | `implemented` (runtime reverify pending) | scheduler cron-cursor bootstrap |
-| [PLAT-081](pulse_platform/plat-081.md) | Workflow-builder chat cost writer merged a session-cumulative snapshot onto the ledger every turn instead of overwriting it | unassigned | `implemented` (1 bug fixed, 2 findings documented, 1 left design-only) | phase token-usage cost ledger |
+| [PLAT-081](pulse_platform/plat-081.md) | Workflow-builder chat cost writer merged cumulative usage repeatedly; first replacement fix could erase other chats | Codex | `implemented` (per-chat delta fix tested, 2 findings documented, 1 left design-only) | phase token-usage cost ledger |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,

@@ -234,4 +234,8 @@ type PhaseTokenUsageFile struct {
 	UpdatedAt       time.Time                              `json:"updated_at"`
 	ByPhaseAndModel map[string]map[string]*ModelTokenUsage `json:"by_phase_and_model"` // Nested map: phase -> modelID -> token usage
 	ByModel         map[string]*ModelTokenUsage            `json:"by_model"`           // Aggregated by model (across all phases)
+	// SessionCumulative records the last cumulative diagnostic snapshot seen for
+	// each chat. It is bookkeeping, not another cost total: the next turn is
+	// reduced to a delta before it is added to the workflow-wide aggregates.
+	SessionCumulative map[string]*ModelTokenUsage `json:"session_cumulative,omitempty"`
 }
