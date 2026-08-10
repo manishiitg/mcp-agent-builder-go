@@ -4,9 +4,9 @@
 > **Current architecture** and **Current decisions** for the system that should
 > exist now. The sections under **Historical migration record** preserve why the
 > system changed; they are not implementation instructions. Executable agent
-> guidance remains in
-> `agent_go/cmd/server/guidance/templates/system/post-run-monitor.md`, while Go
-> registries and lifecycle validation remain the final runtime authority.
+> guidance is split across `pulse-gate.md`, `pulse-review-fixer.md`, and
+> `pulse-finalizer.md`, while Go registries and lifecycle validation remain the
+> final runtime authority.
 
 ## Documentation ownership
 
@@ -15,7 +15,7 @@ Keep Pulse documentation split by purpose, not by competing versions:
 | Question | Authoritative place |
 |---|---|
 | What is the current Pulse design, and why? | This document |
-| What must a running agent do? | `post-run-monitor.md` and the focused skills it loads |
+| What must a running agent do? | `pulse-gate.md`, `pulse-review-fixer.md`, `pulse-finalizer.md`, and the focused module references they load |
 | What does Go actually permit and persist? | The Pulse module registry, scheduler, worklist, finding lifecycle, and impact-ledger code |
 | What does the user see? | [`workflow_monitoring.md`](./workflow_monitoring.md) |
 | What experiments, objections, and measurements led here? | [`pulse_v2_proof_carrying_architecture.md`](./pulse_v2_proof_carrying_architecture.md) |

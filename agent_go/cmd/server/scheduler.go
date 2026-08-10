@@ -50,6 +50,13 @@ type ScheduleContext struct {
 	// ScheduledFor is the durable identity of a cron/calendar occurrence. It is
 	// empty for a manual trigger, whose actual trigger time is its identity.
 	ScheduledFor time.Time
+
+	// ProducedRunEvidence reports whether this invocation actually started the
+	// workflow and created or restarted a run folder. It is deliberately
+	// independent of success: a failed run still produced evidence that Pulse
+	// should review. A preflight abort against a pre-existing, untouched run
+	// folder (e.g. a workflow reusing iteration-0) did not.
+	ProducedRunEvidence bool
 }
 
 const manualWorkflowPulseScheduleID = "manual-pulse"
@@ -1907,7 +1914,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 				s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
 					RunID: runID, To: schedulerstate.StatePulseGate, Reason: "Pulse enabled for workflow", SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
 				})
-				pulseResult = s.runPostRunMonitor(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID)
+				pulseResult = s.runPostRunMonitor(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
 			}
 		}
 	}
@@ -2112,7 +2119,7 @@ const (
 	postRunMonitorStopped   postRunMonitorResult = "stopped"
 )
 
-func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID string) (pulseResult postRunMonitorResult) {
+func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult postRunMonitorResult) {
 	pulseResult = postRunMonitorPartial
 
 	// Resume the SAME session the workflow run just used, so Pulse continues in the
@@ -2256,65 +2263,78 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		return true
 	}
 
+	// A scheduled Pulse reviews evidence produced by this invocation. A run that
+	// failed still counts; a preflight abort against a pre-existing, untouched
+	// run folder does not. Manual PulseOnly is the intentional exception because
+	// it explicitly reviews retained evidence without executing the workflow.
+	reviewEvidenceAvailable := sctx.ProducedRunEvidence || sctx.PulseOnly
+	if !reviewEvidenceAvailable {
+		s.sessionLogf(sctx, sessionID, "[PULSE] workflow did not start in this invocation; skipping Gate, reviewers, Fixer, dashboard and publish")
+	}
+
 	var steps []postRunMonitorStep
-	gateStep := postRunMonitorGateStep(pulseRunID, runFolder, runStatus)
-	gateCompleted := false
-	for attempt := 1; attempt <= 2; attempt++ {
-		result := runStep(gateStep)
-		if abortIfInterrupted(gateStep, result) {
-			return
+	if !reviewEvidenceAvailable {
+		steps = postRunMonitorNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
+	} else {
+		gateStep := postRunMonitorGateStep(pulseRunID, runFolder, runStatus)
+		gateCompleted := false
+		for attempt := 1; attempt <= 2; attempt++ {
+			result := runStep(gateStep)
+			if abortIfInterrupted(gateStep, result) {
+				return
+			}
+			if abortIfTurnStillBusy(gateStep, result) {
+				return
+			}
+			if result.outcome == postRunMonitorStepCompleted {
+				if err := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); err == nil {
+					gateCompleted = true
+					break
+				} else {
+					s.sessionLogf(sctx, sessionID, "[PULSE] Gate completion contract failed (attempt %d/2): %v", attempt, err)
+					result = postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
+				}
+			} else if err := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); err == nil {
+				// The agent may time out after it has already committed the
+				// complete durable worklist. Preserve the failure truth, but do
+				// not discard its due-module routing.
+				handleStepFailure(gateStep, result, true)
+				gateCompleted = true
+				s.sessionLogf(sctx, sessionID, "[PULSE] Gate stage failed after recording a complete durable worklist; continuing with selected modules")
+				break
+			}
+			if attempt == 1 {
+				handleStepFailure(gateStep, result, true)
+				continue
+			}
+			handleStepFailure(gateStep, result, true)
 		}
-		if abortIfTurnStillBusy(gateStep, result) {
-			return
-		}
-		if result.outcome == postRunMonitorStepCompleted {
+		if !gateCompleted {
 			if err := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); err == nil {
 				gateCompleted = true
-				break
-			} else {
-				s.sessionLogf(sctx, sessionID, "[PULSE] Gate completion contract failed (attempt %d/2): %v", attempt, err)
-				result = postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed, err: err}
+				s.sessionLogf(sctx, sessionID, "[PULSE] recovered complete durable Gate worklist after the stage failure")
 			}
-		} else if err := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); err == nil {
-			// The agent may time out after it has already committed the
-			// complete durable worklist. Preserve the failure truth, but do
-			// not discard its due-module routing.
-			handleStepFailure(gateStep, result, true)
-			gateCompleted = true
-			s.sessionLogf(sctx, sessionID, "[PULSE] Gate stage failed after recording a complete durable worklist; continuing with selected modules")
-			break
 		}
-		if attempt == 1 {
-			handleStepFailure(gateStep, result, true)
-			continue
-		}
-		handleStepFailure(gateStep, result, true)
-	}
-	if !gateCompleted {
-		if err := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); err == nil {
-			gateCompleted = true
-			s.sessionLogf(sctx, sessionID, "[PULSE] recovered complete durable Gate worklist after the stage failure")
-		}
-	}
-	if gateCompleted {
-		if due, err := pulseWorklistHasDueModule(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
-			s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving Review+Fix turn: %v", err)
-			steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
-		} else if due {
-			steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
+		if gateCompleted {
+			if due, err := pulseWorklistHasDueModule(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
+				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving Review+Fix turn: %v", err)
+				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
+			} else if due {
+				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
+			} else {
+				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting Review+Fix turn")
+			}
+			steps = append(steps, postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
+			if len(steps) > 0 && !isPostRunMonitorFinalStep(steps[0].label) {
+				s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
+					RunID: scheduleRunID, To: schedulerstate.StatePulseModules, Reason: "Pulse Gate recorded due modules",
+					SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
+				})
+			}
+			s.sessionLogf(sctx, sessionID, "[PULSE] selected %d post-gate steps for %s", len(steps), sctx.Schedule.ID)
 		} else {
-			s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting Review+Fix turn")
+			steps = postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 		}
-		steps = append(steps, postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
-		if len(steps) > 0 && !isPostRunMonitorFinalStep(steps[0].label) {
-			s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
-				RunID: scheduleRunID, To: schedulerstate.StatePulseModules, Reason: "Pulse Gate recorded due modules",
-				SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
-			})
-		}
-		s.sessionLogf(sctx, sessionID, "[PULSE] selected %d post-gate steps for %s", len(steps), sctx.Schedule.ID)
-	} else {
-		steps = postRunMonitorFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	}
 
 	for i, st := range steps {
@@ -2503,6 +2523,40 @@ func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities)
 		runSummaryRecipients:   append([]string(nil), notifications.RunSummaryRecipients...),
 		pulseSummaryRecipients: append([]string(nil), notifications.PulseSummaryRecipients...),
 	}
+}
+
+// postRunMonitorNoRunSteps is the truthful finalizer for an invocation that
+// never produced new run evidence — the workshop session ran but the workflow
+// itself never started or restarted a run folder (e.g. a preflight abort
+// against a pre-existing, untouched iteration-0). There is no run to review or
+// render, so it skips Gate, Review+Fix, and dashboard, preserves any preflight
+// edits through the normal backup contract, and tells the user why no result
+// exists.
+func postRunMonitorNoRunSteps(pulseRunID, reason string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
+	ownerInstructions := workflowNotificationContentInstructions{}
+	if len(instructions) > 0 {
+		ownerInstructions = instructions[0]
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "the scheduler recorded no error, but no workflow run was started or resumed during this invocation"
+	}
+	routing := ""
+	if len(ownerInstructions.runSummaryChannels) > 0 {
+		routing += fmt.Sprintf(" Configured run-summary channels: %s; the backend enforces them from notification_kind.", notificationChannelSummary(ownerInstructions.runSummaryChannels))
+	}
+	if len(ownerInstructions.runSummaryRecipients) > 0 {
+		routing += fmt.Sprintf(" The backend addresses email from the workflow's saved run-summary recipients (%s); do not pass email_to.", notificationRecipientSummary(ownerInstructions.runSummaryRecipients))
+	}
+	content := ""
+	if runInstructions := strings.TrimSpace(ownerInstructions.runSummary); runInstructions != "" {
+		content = "\n\nApply these saved run-summary content instructions without changing the facts:\n" + runInstructions
+	}
+	return []postRunMonitorStep{{"finalize", fmt.Sprintf(
+		"PULSE FINALIZER — WORKFLOW DID NOT RUN. pulse_run_id=%q. The scheduled workflow never started in this invocation, so there is no new run evidence. Gate, reviewers, Fixer, dashboard, and publish were intentionally skipped. Do not run them, do not read old evidence as this run, do not write builder/improve.html, and do not invent an outcome.\n\n"+
+			"Do these actions in order and record every command with record_pulse_result(command=..., result=..., reason=...): (1) mark dashboard skipped because no run exists; (2) run the configured source-hash-gated backup and record its truthful terminal result; (3) mark publish skipped because nothing was produced; (4) call notify_user exactly once with notification_kind=\"run_summary\" and plainly say the workflow did not start, no results were produced, and the next schedule will retry unless the cause is fixed; then record notify truthfully.%s\n\nThe scheduler's reason is:\n%s%s",
+		pulseRunID, routing, reason, content,
+	)}}
 }
 
 func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
@@ -2731,6 +2785,8 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// NEW run folder created by this invocation from a pre-existing one.
 	preRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	preRunFolderNames := runFolderNameSet(preRunFolders)
+	invocationStartedAt := time.Now().UTC()
+	sctx.ProducedRunEvidence = false
 
 	sessionID := s.newScheduleSessionID(sctx)
 
@@ -2873,6 +2929,10 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// (BUG-20260729-10, social-media 2026-07-29: the scheduler recorded
 	// "success" for a run that fully failed at its first posting step).
 	postRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
+	sctx.ProducedRunEvidence = workshopRunProducedEvidence(preRunFolderNames, postRunFolders, invocationStartedAt)
+	if !sctx.ProducedRunEvidence {
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] no run folder was created or restarted during this invocation for %s; Pulse evidence-dependent stages will be skipped", sctx.Schedule.ID)
+	}
 	if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
@@ -2890,6 +2950,31 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 		}
 	}
 	return names
+}
+
+// workshopRunProducedEvidence reports whether this invocation actually ran the
+// workflow. A new run folder is evidence. A pre-existing folder also counts
+// when its independently written metadata says it started during this
+// invocation, which covers workflows configured to reuse iteration-0. Status is
+// intentionally irrelevant: failed runs are valuable Pulse evidence too.
+func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, since time.Time) bool {
+	for _, folder := range after {
+		if folder.Name == "" {
+			continue
+		}
+		if !before[folder.Name] {
+			return true
+		}
+		if folder.Metadata == nil {
+			continue
+		}
+		for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
+			if !stamp.IsZero() && !stamp.Before(since) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reconcileWorkshopRunOutcome finds the first run folder created during this

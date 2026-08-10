@@ -3572,6 +3572,92 @@ func TestPulseHasNoDashboardStage(t *testing.T) {
 	}
 }
 
+func TestWorkshopRunProducedEvidence(t *testing.T) {
+	start := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	before := map[string]bool{"iteration-0": true}
+
+	tests := []struct {
+		name  string
+		after []RunFolderInfo
+		want  bool
+	}{
+		{
+			name: "pre-existing folder untouched",
+			after: []RunFolderInfo{{Name: "iteration-0", Metadata: &RunMetadata{
+				StartedAt: start.Add(-2 * time.Hour), CreatedAt: start.Add(-3 * time.Hour), Status: "completed",
+			}}},
+			want: false,
+		},
+		{
+			name: "new folder created",
+			after: []RunFolderInfo{
+				{Name: "iteration-0", Metadata: &RunMetadata{StartedAt: start.Add(-2 * time.Hour)}},
+				{Name: "iteration-1", Metadata: &RunMetadata{StartedAt: start.Add(time.Minute)}},
+			},
+			want: true,
+		},
+		{
+			name: "existing folder restarted",
+			after: []RunFolderInfo{{Name: "iteration-0", Metadata: &RunMetadata{
+				StartedAt: start.Add(30 * time.Second), CreatedAt: start.Add(-3 * time.Hour),
+			}}},
+			want: true,
+		},
+		{
+			name:  "failed new run still counts",
+			after: []RunFolderInfo{{Name: "iteration-2", Metadata: &RunMetadata{StartedAt: start.Add(time.Minute), Status: "failed"}}},
+			want:  true,
+		},
+		{
+			name:  "known folder without metadata proves nothing",
+			after: []RunFolderInfo{{Name: "iteration-0"}},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workshopRunProducedEvidence(before, tt.after, start); got != tt.want {
+				t.Fatalf("workshopRunProducedEvidence() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
+	reason := `workflow upgrade preflight upgrade-1.0.18 did not stamp required version "1.0.18"; normal schedule message was not started`
+	steps := postRunMonitorNoRunSteps("pulse-run-1", reason, workflowNotificationContentInstructions{
+		runSummaryChannels:   []string{"electron", "slack"},
+		runSummaryRecipients: []string{"owner@example.com"},
+	})
+	if len(steps) != 1 || steps[0].label != "finalize" {
+		t.Fatalf("no-run finalizer = %#v, want one finalize step", steps)
+	}
+	for _, want := range []string{
+		"WORKFLOW DID NOT RUN",
+		"Gate, reviewers, Fixer, dashboard, and publish were intentionally skipped",
+		`notification_kind="run_summary"`,
+		"mark dashboard skipped",
+		"mark publish skipped",
+		"source-hash-gated backup",
+		"electron, slack",
+		"owner@example.com",
+		reason,
+	} {
+		if !strings.Contains(steps[0].query, want) {
+			t.Fatalf("no-run finalizer missing %q:\n%s", want, steps[0].query)
+		}
+	}
+	if strings.Contains(steps[0].query, "write builder/improve.html once") {
+		t.Fatal("no-run finalizer must not contain the normal dashboard mutation contract")
+	}
+
+	fallback := postRunMonitorNoRunSteps("pulse-run-2", "   ")[0].query
+	if !strings.Contains(fallback, "no workflow run was started or resumed") {
+		t.Fatal("empty scheduler error must still produce a truthful explanation")
+	}
+}
+
 func TestDueCronOccurrencesRetainsEveryRecentOccurrenceAndLatestCatchup(t *testing.T) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	schedule, err := parser.Parse("*/5 * * * *")
