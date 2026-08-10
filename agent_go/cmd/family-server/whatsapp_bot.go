@@ -839,6 +839,18 @@ func extractWhatsAppMessageText(m *waProto.Message) string {
 	if m == nil {
 		return ""
 	}
+	// Sent from a linked companion device (WhatsApp Web/Desktop) rather than
+	// the primary phone — whatsmeow unwraps Ephemeral/ViewOnce automatically
+	// but leaves this one wrapped, so a message typed from Web/Desktop landed
+	// here with every field empty and silently fell into the "no text" bucket
+	// below. EditedMessage (the user corrected a typo after sending) wraps the
+	// same way and was missing for the same reason.
+	if inner := m.GetDeviceSentMessage().GetMessage(); inner != nil {
+		return extractWhatsAppMessageText(inner)
+	}
+	if inner := m.GetEditedMessage().GetMessage(); inner != nil {
+		return extractWhatsAppMessageText(inner)
+	}
 	if m.Conversation != nil {
 		return strings.TrimSpace(*m.Conversation)
 	}

@@ -21,12 +21,15 @@ import (
 //   - Cursor CLI: its medium tier defaults to composer-2.5, but this app wants
 //     Cursor's high tier (grok-4.5) instead — composer-2.5 wasn't strong enough
 //     for family tutoring use, so we pin the stronger model for Cursor specifically.
-//   - Codex CLI: pinned to gpt-5.6-sol rather than the catalog's medium-tier
-//     default (gpt-5.6-terra) — a deliberate choice, not a tier lookup, so it's
-//     a literal here rather than routed through GetCodingAgentDefaultTierModels.
+//   - Codex CLI: pinned to gpt-5.6-terra — the catalog's own HIGH tier, not a
+//     tier lookup, so it can't silently drift if the catalog reassigns what
+//     "medium" means (confirmed live: the catalog's medium tier moved from
+//     gpt-5.6-terra to gpt-5.6-luna — the same model this app's own Fast Mode
+//     effort-reduction runs on — without this function's Codex CLI branch
+//     changing, since it was already a literal override rather than a lookup).
 func mediumTierModelID(provider llm.Provider) string {
 	if llmproviders.Provider(provider) == llmproviders.ProviderCodexCLI {
-		return "gpt-5.6-sol"
+		return "gpt-5.6-terra"
 	}
 	tiers, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider))
 	if !ok {
