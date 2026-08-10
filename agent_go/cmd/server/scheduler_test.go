@@ -3669,7 +3669,7 @@ func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 		"WORKFLOW DID NOT RUN",
 		"Gate, reviewers, Fixer, dashboard, and publish were intentionally skipped",
 		`notification_kind="run_summary"`,
-		"mark dashboard skipped",
+		"dashboard has no record_pulse_result command and needs no receipt",
 		"mark publish skipped",
 		"source-hash-gated backup",
 		"electron, slack",
@@ -3682,6 +3682,14 @@ func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 	}
 	if strings.Contains(steps[0].query, "write builder/improve.html once") {
 		t.Fatal("no-run finalizer must not contain the normal dashboard mutation contract")
+	}
+	// PLAT-083 regression: the numbered record_pulse_result instructions must
+	// never ask the agent to record "dashboard" — it was never a valid final
+	// command (only backup/publish/notify are), so the tool rejected every
+	// attempt and the agent had to recover from an error the prompt itself
+	// caused.
+	if strings.Contains(steps[0].query, "mark dashboard skipped") {
+		t.Fatal("no-run finalizer must not instruct the agent to record_pulse_result an invalid \"dashboard\" command")
 	}
 
 	fallback := postRunMonitorNoRunSteps("pulse-run-2", "   ")[0].query

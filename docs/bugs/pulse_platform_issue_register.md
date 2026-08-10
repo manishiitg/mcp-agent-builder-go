@@ -252,6 +252,7 @@ Rules:
 | [PLAT-080](pulse_platform/plat-080.md) | An old cron schedule with no durable fire-decision row restarted from “now” and silently lost earlier due occurrences | Codex | `implemented` (runtime reverify pending) | scheduler cron-cursor bootstrap |
 | [PLAT-081](pulse_platform/plat-081.md) | Workflow-builder chat cost writer merged cumulative usage repeatedly; first replacement fix could erase other chats | Codex | `implemented` (per-chat delta fix tested, 2 findings documented, 1 left design-only) | phase token-usage cost ledger |
 | [PLAT-082](pulse_platform/plat-082.md) | Failed async child agents were reported completed because the internal sync boundary erased their Go error | Codex | `implemented` (runtime reverify pending; 2 companion findings classified) | todo-task sub-agent execution boundary |
+| [PLAT-083](pulse_platform/plat-083.md) | No-run Pulse Finalizer instructed the agent to record an invalid "dashboard" command, surfaced live once PLAT-073-A made the rejection visible | unassigned | `implemented` (runtime reverify pending) | scheduler Pulse Finalizer prompt |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -602,7 +603,7 @@ priority and historical run context.
 | [PLAT-066](pulse_platform/plat-066.md) | [PLAT-067](pulse_platform/plat-067.md) | [PLAT-068](pulse_platform/plat-068.md) | [PLAT-069](pulse_platform/plat-069.md) |
 | [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-074](pulse_platform/plat-074.md) |
 | [PLAT-075](pulse_platform/plat-075.md) | [PLAT-076](pulse_platform/plat-076.md) | [PLAT-077](pulse_platform/plat-077.md) | [PLAT-078](pulse_platform/plat-078.md) |
-| [PLAT-080](pulse_platform/plat-080.md) | [PLAT-081](pulse_platform/plat-081.md) | [PLAT-082](pulse_platform/plat-082.md) |  |
+| [PLAT-080](pulse_platform/plat-080.md) | [PLAT-081](pulse_platform/plat-081.md) | [PLAT-082](pulse_platform/plat-082.md) | [PLAT-083](pulse_platform/plat-083.md) |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
