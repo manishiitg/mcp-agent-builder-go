@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — the defect this ticket originally described was already fixed; the reason it looked open is the real defect |
+| Ticket state | `implemented` — closure mechanism shipped and first sweep applied; lifecycle stamping still open |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P1 — stale findings actively mislead, and the count only grows
@@ -56,9 +56,22 @@ Every stale finding on that board is a live trap for the next reviewer, human or
 2. **Let it self-correct like every other state.** Adding `external_action_required` to the reopen list is a one-line change and makes closure safe: if the fix did not hold, the next observation reopens it. That safety net is exactly why closing these is low-risk, and it is the only reason bulk closure would be defensible at all.
 3. **Record what a finding was reported against.** These carry no platform-version or commit context, so nothing distinguishes "still true" from "was true in July". A stamp at filing time would let a sweep answer this mechanically instead of by reading.
 
-## Not doing
+## Shipped (2026-08-10)
 
-Closing the six cost-attribution findings by hand right now. They are stale and can be closed, but doing it one-off leaves the mechanism unbuilt and the other 75 untouched — and the sweep is the thing worth having.
+**`scripts/pulse_close_stale.py`** — the missing exit. `--list` shows the external-action board; `--close` requires a ticket, an evidence string and explicit fingerprints, dry-runs by default, and writes `resolved` with a stamped note naming the ticket and the fix.
+
+Three design choices worth stating:
+
+- **It does not decide what is stale.** A regex/theme mapping was tried first and matched 11 of 81 while misattributing several — a cost-attribution finding onto PLAT-070's run-outcome reconciliation, a retired-field finding onto the lock_learnings ticket. Closing on that basis would have produced resolution notes citing tickets that did not fix the finding. The judgement stays with the caller; the tool makes the closure safe, uniform and auditable.
+- **Evidence is mandatory.** `--close` refuses to run without `--ticket` and `--evidence`, because a closure with no stated cause is precisely the unfalsifiable record this ticket exists to stop creating.
+- **`resolved` is the safe direction and needs no Go change.** It is already in the concern upsert's reopen clause, so a wrongly closed finding flips back to `open` the next time it is observed. Closing wrongly self-corrects; leaving it stuck does not.
+
+**First sweep applied: 81 → 75.** Six cost-attribution findings closed against `0f6519640`, spanning build-in-public, hetznerssh, linkedin, rtslatency, social-media and upwork.
+
+Two were deliberately **left open** despite matching the same theme, which is the point of requiring judgement:
+
+- social-media `5e248d9ec6e7244f` — *"Re-using `runs/iteration-0/default` deletes the previous occupant's artifacts"*. `0f6519640` archives cost and evaluation-score paths on rotation; whether workflow **artifacts** are archived rather than deleted was not verified, so this stays open.
+- tectonicusadaytrading `d00ae7bdcb14a1ff` — learnings `_freshness.json` misattribution. Adjacent wording, different subsystem, untouched by that commit.
 
 ## Acceptance
 
