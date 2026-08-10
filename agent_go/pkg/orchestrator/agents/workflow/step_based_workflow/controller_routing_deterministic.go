@@ -115,7 +115,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) routingStepExecutionPathForStepPath(s
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) seedRouteSelectionsForRun(ctx context.Context, steps []PlanStepInterface) error {
-	if hcpo.executionOptions == nil || len(hcpo.executionOptions.RouteSelections) == 0 {
+	if hcpo.executionOptions == nil {
+		// PLAT-066: proven at least once that a caller-supplied route_selections
+		// payload can fail to reach this point even though it was parsed
+		// correctly at the run_full_workflow tool boundary. This log line is the
+		// only signal that distinguishes "caller genuinely passed nothing" from
+		// "something upstream dropped it" — the two look identical from here
+		// otherwise, and the router step then silently falls back to its
+		// default_route_id with no error anywhere in the chain.
+		hcpo.GetLogger().Info("🔀 seedRouteSelectionsForRun: executionOptions is nil at seed time (no route selection possible even if the caller supplied one)")
+		return nil
+	}
+	if len(hcpo.executionOptions.RouteSelections) == 0 {
+		hcpo.GetLogger().Info("🔀 seedRouteSelectionsForRun: executionOptions present but RouteSelections is empty at seed time")
 		return nil
 	}
 	if hcpo.selectedRunFolder == "" {

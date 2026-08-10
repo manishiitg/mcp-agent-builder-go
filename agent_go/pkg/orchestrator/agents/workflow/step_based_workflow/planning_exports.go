@@ -2111,6 +2111,12 @@ func RegisterRunFullWorkflowTool(
 					DisableEval:       disableEval,
 				}
 				workflowController.SetExecutionOptions(execOpts)
+				if len(routeSelections) > 0 {
+					// PLAT-066: pairs with the seed-time log in seedRouteSelectionsForRun.
+					// If that log never shows this run's ID/route pair, the value was
+					// lost somewhere inside CreateTodoList's call chain, not here.
+					logger.Info(fmt.Sprintf("🔀 run_full_workflow: SetExecutionOptions carries route_selections=%v before CreateTodoList", routeSelections))
+				}
 
 				result, execErr = workflowController.CreateTodoList(
 					execCtx,

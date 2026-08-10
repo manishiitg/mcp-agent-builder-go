@@ -2231,9 +2231,24 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		return true
 	}
 	abortIfTurnStillBusy := func(st postRunMonitorStep, result postRunMonitorStepRunResult) bool {
-		if !pulseStepFailureMustStopBeforeNextTurn(result, s.api.sessionIsBusy(sessionID)) {
+		busy := s.api.sessionIsBusy(sessionID)
+		if !pulseStepFailureMustStopBeforeNextTurn(result, busy) {
 			return false
 		}
+		// PLAT-065: this abort can fire even when the step's own durable state
+		// (e.g. Gate's worklist) already committed successfully — the recovery
+		// logic that would notice that only runs for the Gate step, after this
+		// check, so it never gets the chance. The original incident's log
+		// window rotated out before this could be captured; logging outcome/err
+		// and the completion-recovery result here (best-effort, may not apply
+		// to every step) is what the next occurrence needs to confirm or rule
+		// out the reorder fix described in PLAT-065.
+		completionRecovered := false
+		if completionErr := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); completionErr == nil {
+			completionRecovered = true
+		}
+		s.sessionLogf(sctx, sessionID, "[PULSE] abortIfTurnStillBusy diagnostic: step=%s outcome=%v err=%v sessionBusy=%v durableWorklistComplete=%v",
+			st.label, result.outcome, result.err, busy, completionRecovered)
 		reason := fmt.Sprintf("Pulse stopped after %s failed while its agent turn was still live; refusing to overlap another message in the same conversation", st.label)
 		s.sessionLogf(sctx, sessionID, "[PULSE] %s", reason)
 		_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", reason)
