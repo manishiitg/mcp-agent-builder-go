@@ -30,6 +30,34 @@ items are workflow eval-spec edits, not platform code). Use
 <fp>` to close a finding once its fix is live — never before, and never
 without a fingerprint-specific reason.
 
+## Regression check (2026-08-10)
+
+The remaining list is not a list of 25 newly broken code paths. Before any
+reopen or rollback, compare each finding's timestamp and full payload with the
+current implementation and its regression test:
+
+- `7b849cc6` (Upwork run input override) is the exact failure fixed by commit
+  `46bf02dff`: per-step `human_inputs` are now copied into the execution
+  context and scoped to the matching step. The focused tests cover decoded map
+  shapes, per-step scoping, and no cross-step leakage; the controller's
+  start-from-beginning path assigns the overrides before it builds that context.
+- `b0a88d49` is a historical instruction to load
+  `references/post-run-monitor.md`. That oversized reference was intentionally
+  removed from the skill bundle; current Pulse guidance points to focused
+  `pulse-bug-review`, `pulse-review-fixer`, and `fix-verification` references.
+  Re-adding the retired document would regress the result-size fix.
+- `0b679a3d` is not an empty-global-allowlist defect. A verifier may only
+  settle a `changed_unverified` attempt owned by its own module. The recorded
+  attempt belonged to Engineering, so Strategy Auditor correctly had no marker
+  it could write. A future finding needs evidence that the owning module was
+  denied its own eligible attempt.
+- Cluster G's metadata findings are covered by PLAT-076 / PLAT-061 and await
+  only a post-restart live run, not a second implementation.
+
+`dd9ede3c` is the exception: it exposed a second, independent output-boundary
+gap after the earlier folder-guard repair. PLAT-078 commit `6b688f51c` fixes
+that gap without changing or reverting the earlier grant.
+
 ## A. Telemetry lies about success/failure (3) — FIXED, not yet live
 
 `mcpagent` commit `8c07adf`. `HandleCustomExecute` — the HTTP layer serving
@@ -144,7 +172,7 @@ to `now-30s` and advanced directly to next Sunday. That bootstrap defect is
 projection claim, not supported by current schedule state; reverify through
 `list_schedules` and the ledger rather than the launch-only history file.
 
-## F. Tools unavailable / limits (8) — fully triaged; one real open bug remains
+## F. Tools unavailable / limits (8) — fully triaged; fixes await live verification
 
 - `ad5c92dd` (rtslatency, `get_api_spec` array-of-strings `tool_name`) —
   **already fixed** (`mcpagent` commit `ea60eb2`, predates the finding).
@@ -153,14 +181,15 @@ projection claim, not supported by current schedule state; reverify through
   then close.
 - `dd9ede3c` (upwork, `agent_browser` snapshot overflow) — **real bug, not
   PLAT-062-adjacent** (that ticket is an unrelated prompt-text defect). See
-  **PLAT-078**: two contributing mechanisms, one fixed. `setupExecutionFolderGuard`
+  **PLAT-078**: two independent mechanisms are now fixed. `setupExecutionFolderGuard`
   now grants read access to `<workflow-root>/tool_output_folder`
   (mcpagent's own spill target for any bridge tool result over its 128 KiB
   inline cap), closing the "spilled copy is structurally unreadable" half.
-  Still open: `agent_browser`'s `snapshot` command itself has no output-size
-  cap — a snapshot that overflows Claude Code's own (smaller) MCP result cap
-  can still spill to a location this fix doesn't cover. Do not close this
-  fingerprint on the folder-guard fix alone.
+  Commit `6b688f51c` additionally narrows default snapshots (`--compact
+  --depth 6`, preserving explicit selector/depth) and caps the final result at
+  24,000 runes with retry guidance. This is a distinct prevention fix, not a
+  regression of the folder grant. Reverify one genuinely large live snapshot
+  after restart before closing the finding.
 - `90348ad2`, `22fa5102` (tectonicusadaytrading, direct `sqlite3` blocked) —
   confirmed working-as-designed. `90348ad2` is already merged/resolved into
   `22fa5102` as the canonical survivor; close `22fa5102` via
