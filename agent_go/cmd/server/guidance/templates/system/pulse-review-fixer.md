@@ -94,18 +94,10 @@ share evidence.
 An unreliable evidence window is classified inside the affected review as an
 execution problem or insufficient evidence; it does not cancel another review.
 `context_usage_percent`/`context_window_usage`/`model_context_window` are
-absent from the persisted cost ledger by design (2026-08-10, operator
-decision): the computation there conflated a call's total token count with
-context-window occupancy, producing e.g. 4,469,416 against a 200,000 window —
-a permanent false-saturation reading, not real context pressure — and it drove
-no gate or summarization decision downstream, only display and review
-evidence. Never file the missing fields as a telemetry regression, and never
-use their absence — or a stale pre-2026-08-10 value still sitting in an old
-record — to support a context-pressure finding. The one place this concept
-remains genuinely load-bearing is the live in-session API transfer path
-(coding-CLI sessions additionally lack even that: the provider exposes only
-cumulative transcript usage, not a same-call snapshot). Preserve cumulative
-token and cost evidence regardless; it is unaffected.
+absent from the persisted cost ledger for every session, not only coding-CLI
+ones (PLAT-072). Never file the absence as a telemetry regression or use it —
+or a stale value in an old record — to support a context-pressure finding.
+Cumulative token and cost evidence is unaffected; use that instead.
 Goal Advisor is selected only for its own blank-sheet opportunity, answered
 decision, healthy-headroom, or experiment-checkpoint trigger—not as a handler
 for a Strategy Auditor result.
