@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, RefreshCw, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal } from 'lucide-react'
+import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
 import { isTodoTaskStep } from '../../utils/stepConfigMatching'
@@ -26,11 +26,16 @@ interface LearningMetadata {
   last_turn_count?: number
   total_iterations?: number
 
-  // Auto-lock lifecycle (description-hash scoped)
-  auto_locked_at?: string
-  auto_lock_reason?: string
-  auto_unlocked_at?: string
-  auto_unlock_reason?: string
+  // Adaptive execution tiering (description-hash scoped). These are written by
+  // controller_execution_tiering.go, NOT by any learnings mechanism: a step is
+  // promoted High -> Medium after executionTierPromotionThreshold (3) stable
+  // successful runs on an unchanged description, and a description change
+  // resets the counter. They live here because the popup surfaces them.
+  //
+  // The auto_locked_at / auto_lock_reason / auto_unlocked_at / auto_unlock_reason
+  // fields were removed: no Go code has ever set them. The only remaining
+  // reference (workflow.go:2638) CLEARS them on manual unlock, so every derived
+  // badge could render nothing but an empty state.
   last_description_hash?: string
   description_hash_runs?: number
 
@@ -48,10 +53,6 @@ function isStepLocked(metadata: LearningMetadata | null): boolean {
   return metadata?.lock_learnings === true
 }
 
-function isStepAutoLocked(metadata: LearningMetadata | null): boolean {
-  return isStepLocked(metadata) && !!metadata?.auto_locked_at
-}
-
 function getSuccessfulRuns(metadata: LearningMetadata | null): number {
   if (!metadata) return 0
   return metadata.successful_runs || 0
@@ -59,7 +60,7 @@ function getSuccessfulRuns(metadata: LearningMetadata | null): number {
 
 // Check if learnings folder exists
 // Returns true only if metadata contains actual learning data (not just step config fields)
-// Step config fields (use_code_execution_mode, learning_detail_level, lock_learnings) can exist
+// Step config fields (use_code_execution_mode, lock_learnings) can exist
 // even when the folder doesn't exist, so we need to check for actual learning data fields
 function hasLearningsFolder(
   metadata: LearningMetadata | null,
@@ -73,8 +74,7 @@ function hasLearningsFolder(
     metadata.step_id !== undefined ||
     metadata.successful_runs !== undefined ||
     metadata.last_turn_count !== undefined ||
-    metadata.auto_locked_at !== undefined ||
-    metadata.auto_lock_reason !== undefined ||
+    metadata.description_hash_runs !== undefined ||
     metadata.total_iterations !== undefined
   
   // If no learning data fields, folder doesn't exist (only step config fields present)
@@ -1064,14 +1064,14 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                 // Lock state comes only from step_config.json (merged by the backend
                 // into metadata.lock_learnings for this API response). Metadata is
                 // used only to explain whether a current lock was auto or manual.
+                // Every lock is a deliberate Workshop/user decision (PLAT-059 also
+                // requires a stated reason), so there is no auto/manual split to
+                // display — nothing has ever written auto_locked_at.
                 const isLocked = isStepLocked(metadata)
-                const isAutoLocked = isStepAutoLocked(metadata)
-                const isManuallyLocked = isLocked && !isAutoLocked
-                const wasRecentlyAutoUnlocked = !!metadata?.auto_unlocked_at &&
-                  (!metadata.auto_locked_at || (metadata.auto_unlocked_at > metadata.auto_locked_at))
 
-                // Hash-scoped run counter drives auto-lock. Falls back to legacy
-                // successful_runs while .learning_metadata.json hasn't been rewritten.
+                // Hash-scoped run counter. Drives adaptive execution-tier promotion,
+                // not learnings. Falls back to legacy successful_runs while
+                // .learning_metadata.json hasn't been rewritten.
                 const hashRuns = metadata?.description_hash_runs ?? 0
                 const successfulRuns = getSuccessfulRuns(metadata)
                 const progressRuns = hashRuns > 0 ? hashRuns : successfulRuns
@@ -1215,17 +1215,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                 })}
                               </div>
 
-                              {/* Auto-unlocked indicator */}
-                              {wasRecentlyAutoUnlocked && (
-                                <div
-                                  className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 shadow-sm"
-                                  title={metadata?.auto_unlock_reason || 'Description changed — previous auto-lock invalidated'}
-                                >
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>Auto-unlocked (description changed)</span>
-                                </div>
-                              )}
-
                               {metadata && (
                                 <div className="flex items-center gap-2 bg-muted/30 px-2 py-0.5 rounded-lg border border-border/40">
                                   <div className="flex items-center gap-1">
@@ -1233,9 +1222,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                       <>
                                         <Lock className="w-3.5 h-3.5 text-green-500" />
                                         <span className="text-green-600 dark:text-green-400 font-semibold text-xs">
-                                          {isAutoLocked ? 'Locked (Auto)' :
-                                           isManuallyLocked ? 'Locked (Manual)' :
-                                           'Locked'}
+                                          Locked
                                         </span>
                                       </>
                                     ) : (
@@ -1263,11 +1250,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                               {metadata && metadata.total_iterations !== undefined && (
                                 <span className="text-[10px] text-muted-foreground bg-muted/40 px-2 py-1 rounded-md border border-border/30 ml-auto flex items-center gap-1">
                                   Iter: <span className="font-mono font-semibold text-foreground">{metadata.total_iterations}</span>
-                                  {metadata.auto_lock_reason && (
-                                    <span className="text-amber-600 dark:text-amber-500 ml-1.5 truncate max-w-[120px] inline-block align-bottom font-medium" title={metadata.auto_lock_reason}>
-                                      · {metadata.auto_lock_reason.replace('threshold_reached_', '').replace(/_/g, ' ').slice(0, 30)}
-                                    </span>
-                                  )}
                                 </span>
                               )}
                             </div>
@@ -1276,8 +1258,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                             {metadata && (
                               <div className="mt-1 bg-muted/25 border border-border/40 rounded-xl p-2.5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-4">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0">
-                                    <Hash className="w-3 h-3" /> Runs on current description:
+                                  <span
+                                    className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0"
+                                    title="Stable successful runs on the current step description. At 3, adaptive execution tiering promotes this step from High to Medium; editing the description resets the count. This is an execution-tier signal, not a learnings lock."
+                                  >
+                                    <Hash className="w-3 h-3" /> Stable runs → tier promotion:
                                   </span>
                                   {/* 3 milestone circles with connecting line */}
                                   <div className="flex items-center gap-1.5 shrink-0">
