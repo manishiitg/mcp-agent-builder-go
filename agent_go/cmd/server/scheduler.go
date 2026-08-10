@@ -2783,8 +2783,15 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// used — the LLM's run_full_workflow tool call picks that via the normal
 	// iteration rotation). This snapshot lets the post-run check below tell a
 	// NEW run folder created by this invocation from a pre-existing one.
-	preRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
+	preRunFolders, preRunFoldersErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	preRunFolderNames := runFolderNameSet(preRunFolders)
+	// A failed snapshot is not an empty workspace. Without this distinction the
+	// reconciler below compares against an empty baseline, concludes every
+	// pre-existing folder is new, and attributes an old failed run to this
+	// invocation. The listing is most likely to fail right after a server
+	// restart, while the workspace API is still warming up — exactly when
+	// scheduled runs resume.
+	runFolderBaselineKnown := preRunFoldersErr == nil
 	invocationStartedAt := time.Now().UTC()
 	sctx.ProducedRunEvidence = false
 
@@ -2928,12 +2935,23 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// record the execution machinery writes independently of the scheduler
 	// (BUG-20260729-10, social-media 2026-07-29: the scheduler recorded
 	// "success" for a run that fully failed at its first posting step).
-	postRunFolders, _ := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
+	postRunFolders, postRunFoldersErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	sctx.ProducedRunEvidence = workshopRunProducedEvidence(preRunFolderNames, postRunFolders, invocationStartedAt)
 	if !sctx.ProducedRunEvidence {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] no run folder was created or restarted during this invocation for %s; Pulse evidence-dependent stages will be skipped", sctx.Schedule.ID)
 	}
-	if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
+	// Reconciliation is a set difference, so it is only meaningful when both
+	// sides are real. When either listing failed, skip it and say so rather than
+	// reconcile against a baseline we do not have: this check exists to catch a
+	// run that failed while its session looked healthy, and inventing a failure
+	// from a missing snapshot is a worse error than missing one. Failing open is
+	// safe here — the run's own metadata remains the durable record, and the
+	// next invocation reconciles normally once the listing recovers.
+	if !runFolderBaselineKnown || postRunFoldersErr != nil {
+		s.sessionLogf(sctx, sessionID,
+			"[SCHEDULER] skipping run-outcome reconciliation for %s: run-folder listing unavailable (pre-run err=%v, post-run err=%v); this invocation's outcome stands on its session result alone",
+			sctx.Schedule.ID, preRunFoldersErr, postRunFoldersErr)
+	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
 	}

@@ -3466,6 +3466,38 @@ func TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure(t *testing.T) {
 	}
 }
 
+// TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost pins the hazard
+// that makes the caller's guard necessary, rather than asserting a behaviour we
+// want. The function decides "new" purely by absence from the before-set, so an
+// EMPTY before-set means every folder looks new and any old failure is reported
+// as this invocation's.
+//
+// That is correct for a primitive that is handed a real baseline, and it is why
+// the baseline must never be a guess. loadRunFoldersInternal used to return an
+// empty slice with a nil error whenever the workspace listing failed, so the
+// scheduler could not tell "no run folders" from "could not look" and passed
+// exactly this empty set. On 2026-08-10 a hetznerssh production security audit
+// completed cleanly in iteration-0 and was recorded as an error, blamed on
+// iteration-25, which had failed the previous day — moments after workspace
+// folder calls were returning errors following a restart.
+//
+// The fix is at the call site: propagate the listing error and skip
+// reconciliation when either snapshot is unavailable. If this test ever starts
+// failing because the function itself learned to ignore an empty baseline, that
+// is fine — delete it and keep the caller guard.
+func TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost(t *testing.T) {
+	lostBaseline := map[string]bool{} // what a failed listing produced
+	after := []RunFolderInfo{
+		{Name: "iteration-0", Metadata: &RunMetadata{Status: "completed"}},
+		{Name: "iteration-25", Metadata: &RunMetadata{Status: "failed"}}, // yesterday's
+	}
+	failedFolder, found := reconcileWorkshopRunOutcome(lostBaseline, after)
+	if !found || failedFolder != "iteration-25" {
+		t.Fatalf("expected the documented misattribution (iteration-25), got found=%v folder=%q; "+
+			"if the primitive now tolerates an empty baseline this test is obsolete", found, failedFolder)
+	}
+}
+
 // TestReconcileWorkshopRunOutcomeIgnoresAmbiguousStates proves that anything
 // other than an explicit "failed" — no metadata, "running", "completed" — is
 // left alone rather than treated as a failure. A transient listing hiccup or

@@ -241,6 +241,7 @@ Rules:
 | [PLAT-067](pulse_platform/plat-067.md) | Do not dispatch a scheduled continuation to a missing/unready parent coding-agent transport | unassigned | `implemented` (root cause of the transport loss still open) | scheduler parent-session recovery and background completion delivery |
 | [PLAT-068](pulse_platform/plat-068.md) | The step-type checklist names an automated owner that never loads it | unassigned | `implemented` (verification blocked: `llm_ops_review` disabled at the Gate) | Pulse guidance (`review/ops-review.md`, `builder/design-plan.md`) |
 | [PLAT-069](pulse_platform/plat-069.md) | Nothing measures whether a workflow gets cheaper/faster/more accurate over time | unassigned | `open` (design written) | Pulse trend measurement + Pulse popup |
+| [PLAT-070](pulse_platform/plat-070.md) | A failed run-folder listing makes the scheduler blame an old failure on today's run | unassigned | `implemented` (runtime reverify pending) | scheduler run-outcome reconciliation, workspace state loading |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -589,6 +590,7 @@ priority and historical run context.
 | [PLAT-058](pulse_platform/plat-058.md) | [PLAT-059](pulse_platform/plat-059.md) | [PLAT-060](pulse_platform/plat-060.md) | [PLAT-061](pulse_platform/plat-061.md) |
 | [PLAT-062](pulse_platform/plat-062.md) | [PLAT-063](pulse_platform/plat-063.md) | [PLAT-064](pulse_platform/plat-064.md) | [PLAT-065](pulse_platform/plat-065.md) |
 | [PLAT-066](pulse_platform/plat-066.md) | [PLAT-067](pulse_platform/plat-067.md) | [PLAT-068](pulse_platform/plat-068.md) | [PLAT-069](pulse_platform/plat-069.md) |
+| [PLAT-070](pulse_platform/plat-070.md) |  |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
