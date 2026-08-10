@@ -2664,10 +2664,7 @@ export default function LearningApp() {
   // a client-generated id) — so there is exactly one child conversation per
   // activity, matching activity.json's own conversation.json.
   // modelExtra is appended to what the MODEL sees for this one message, but
-  // never shown to the child or persisted in their transcript — for the
-  // handoff kickoff, this is how the parent's actual guide_note instructions
-  // reach Quill directly on the first turn, rather than relying on it
-  // separately deciding to go read activity.json on its own initiative.
+  // never shown to the child or persisted in their transcript.
   const sendChildText = (raw: string, base?: ParentMsg[], modelExtra?: string) => {
     const text = raw.trim()
     if (!text) return
@@ -2757,7 +2754,7 @@ export default function LearningApp() {
   // respond to, but only Quill's own real reply is added to the visible
   // thread. base is the message list to keep showing beforehand (empty for a
   // fresh session, the resumed history when continuing).
-  const sendChildKickoff = (greeting: string, base: ParentMsg[], modelExtra?: string) => {
+  const sendChildKickoff = (greeting: string, base: ParentMsg[]) => {
     const text = greeting.trim()
     if (!text || childSending) return
     const convId = childActivity?.dir ?? ''
@@ -2780,9 +2777,6 @@ export default function LearningApp() {
     }
     statusSource.onerror = () => statusSource.close()
     const history = hidden.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
-    if (modelExtra && history.length > 0) {
-      history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
-    }
     fetch(`${FAMILY_API}/api/child/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2830,27 +2824,26 @@ export default function LearningApp() {
   // (if any) is opened automatically by the auto-open effect above once
   // childActivity reflects this handoff — no need to thread a file path
   // through the handoff call itself.
-  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, guideNote?: string, activityTitle?: string) => {
+  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string) => {
     persistHandoffSide('tutor')
     setScreen('tutor')
     setChildTreeRefreshKey((k) => k + 1)
-    // Hand the parent's real instructions to Quill directly on this first turn
-    // — never shown to the child as a separate message, just extra context for
-    // the model. On a brand-new session, also have Quill fold a short, plain
-    // statement of the actual plan into the START of its own opening reply
-    // (not a generic "let's begin!") — this is the one place the guide_note's
-    // real content becomes visible to the child, since sendChildKickoff never
-    // renders a synthetic message of its own.
-    const modelExtra = guideNote
-      ? `(For you, Quill — not from ${childName || 'the child'}: the parent's own instructions for${activityTitle ? ` "${activityTitle}"` : ' this'}: ${guideNote} Follow this pacing/order exactly.${newSession ? ` Open your very first reply with one short, plain sentence stating the actual plan in your own words (e.g. "Here's our plan: ...") before anything else — this is the only place ${childName || 'the child'} sees what this session is about, so state it concretely, not generically.` : ''})`
-      : undefined
     // Resume (newSession === false) only ever targets the activity already
     // open in this session — childMessages already holds its real
     // conversation, so there's nothing to send here: just the screen switch
     // above, and the child sees exactly where they left off.
+    //
+    // On a fresh session, Quill opens purely on her own initiative — reading
+    // activity.json (items, goal, guide_note, persona) herself, per
+    // childSystemPrompt, rather than being handed a plan-statement forced
+    // into modelExtra here. That used to lock a specific "here's our plan"
+    // framing in at the moment of handoff, which the parent could no longer
+    // meaningfully revise once the child was partway through the activity —
+    // guide_note stays live in the file for Quill to read at any point
+    // instead of being frozen into the opening turn.
     if (newSession) {
       setChildMessages([])
-      sendChildKickoff(greeting, [], modelExtra)
+      sendChildKickoff(greeting, [])
     }
   }
 
@@ -2872,14 +2865,14 @@ export default function LearningApp() {
       body: JSON.stringify({ dir, resume }),
     })
       .then((res) => res.json())
-      .then((data: { new_session?: boolean; dir?: string; title?: string; guide_note?: string }) => {
+      .then((data: { new_session?: boolean; dir?: string }) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
         // activity, clicked before this request finished) — its own response
         // will apply instead, so bail out here rather than starting a chat
         // for an activity the parent already navigated away from.
         if (myGeneration !== handoffGenerationRef.current) return
-        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.guide_note, data.title)
+        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText))
       })
       .catch(() => {})
   }
