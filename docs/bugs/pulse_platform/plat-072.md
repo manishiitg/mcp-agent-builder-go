@@ -1,74 +1,67 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-072 — reused `iteration-0` makes per-run cost unattributable and overwrites run provenance
+# PLAT-072 — `external_action_required` has no exit path, so solved problems keep being re-reported as open
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause identified from six independent workflow reports; storage layer already correct, readers and provenance are not |
+| Ticket state | `open` — the defect this ticket originally described was already fixed; the reason it looked open is the real defect |
 | Last synchronized | `2026-08-10` |
 
-- **Priority:** P1 — blocks per-run cost measurement, and destroys artifacts that other findings depend on
-- **Owner:** cost ledger readers (`get_cost_summary`, `cost_storage.go`), run-folder rotation
-- **Found on:** six workflows independently, over two weeks
+- **Priority:** P1 — stale findings actively mislead, and the count only grows
+- **Owner:** Pulse finding lifecycle (`external_action_required` disposition)
+- **Found on:** cross-workflow, while triaging the 81 open platform findings
 
-## Why this ticket exists
+## What this ticket was, and why it changed
 
-Six workflows filed the same defect in six different wordings, none of them referencing each other. All are `external_action_required`, so runs will never close them, and no platform ticket owned them:
+It was originally filed as *"reused `iteration-0` makes per-run cost unattributable and overwrites run provenance"*, on the strength of six workflows independently reporting it: social-media (07-29), build-in-public (08-03), upwork (08-04), hetznerssh and rtslatency (08-05), linkedin (08-06). Six independent reports of the same defect is normally strong evidence.
 
-| workflow | first seen | reported |
-|---|---|---|
-| social-media | 2026-07-29 | `costs/execution/default/*.json` attributes every scheduled run to `run_folders["iteration-0/default"]`, so per-run and per-slot LLM cost cannot be read from the ledger |
-| hetznerssh | 2026-08-05 | Reusable run-folder keys conflate separate executions |
-| rtslatency | 2026-08-05 | two daily files hold parts of the same `iteration-0/dev` run under an identical `run_folders` key; one charges $14.79 to a step id `10` that does not exist in `plan.json` |
-| linkedin | 2026-08-06 | `get_cost_summary(run_folder)` aggregates historical executions from a reused run folder instead of isolating the current execution, so its per-run costs and totals are false |
-| build-in-public | 2026-08-03 | `get_cost_summary` returns *"missing evidence: no run token usage data found at `runs/iteration-0/default/token_usage.json`"* while `costs/execution/default/2026-08-02.json` holds a fully priced $3.4158 per-step breakdown |
-| upwork | 2026-08-04 | every scheduled run writes to the same `run_folder iteration-0`, so `runs/` and `evaluation/runs/` are overwritten in place and eval rows carry no distinguishing run identity |
+**It was already fixed.** Commit `0f6519640`, *"Fix cost ledger run identity across rotation"*, **2026-08-06**, and comprehensively — not only the storage format but the readers and the rotation path:
 
-Six teams-of-one arriving at the same conclusion independently is strong evidence. That it went unowned for two weeks is a property of `external_action_required` having no exit path, tracked separately.
-
-## The storage layer is already right — do not "fix" it
-
-`orchestrator/cost_storage.go` carries **both** keys:
-
-```go
-Executions map[string]*ExecutionTokenUsage `json:"executions,omitempty"`   // keyed by immutable execution_id
-RunFolders map[string]*TokenUsageFile      `json:"run_folders,omitempty"`  // v1 projection
+```
+cost_storage.go (server + orchestrator)   execution_id as immutable record identity
+virtual-tools/tool_costs.go               the cost reader
+evaluation_score_storage.go               the same fix for eval scores
+controller_run_manager.go                 ArchiveRunCostPaths on rotation
+review/ops-review.md                      the reviewer contract
+execution_identity_cost_test.go           regression test
 ```
 
-and `cost_storage.go:337` already quarantines the legacy side deliberately:
+Rotation archives rather than deletes — social-media's `iteration-254` / `iteration-253` folders are those archives — and the code states the intent directly: *"Cost records keep the UUID as their immutable identity. Rotation only updates their human-readable archived path, so the next iteration-0 run cannot inherit historical spend."*
 
-> `run_folders` is the v1 projection. It may be historically merged, so keep it separate instead of letting it contaminate a UUID record.
+**Every one of the six findings is dated on or before that commit.** They are frozen descriptions of a solved problem.
 
-reading them into a `legacy:`-prefixed namespace. `ops-review.md` documents the same rule for reviewers: *"the immutable `execution_id` (or `evaluation_id`) is the record identity ... `run_folder` and `archived_run_folder` are display metadata only. Never merge or compare records merely because they share an `iteration-0/...` path: that path is reused after rotation."*
+## The real defect
 
-Verified on live data: upwork's `costs/execution/daily-bid/2026-08-10.json` keys its record by UUID (`1f0f36fb-c246-...`), with a correct `by_step_and_model` breakdown.
+`external_action_required` is a state with **no exit in either direction**:
 
-**So the format and the reviewer contract are correct.** Three things around them are not.
+- **It cannot close.** Nothing sweeps these findings when a platform fix ships. `resolve_run_concern` is limited by contract to *"acknowledgment or rejection"*, and Pulse is correctly read-only on platform matters.
+- **It cannot reopen or self-correct.** The concern upsert flips a stale row back to `open` only for `resolved`, `awaiting_verification` and `awaiting_run`:
+  ```sql
+  status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END
+  ```
+  `external_action_required` is deliberately absent, so re-observation leaves it untouched — the "suppresses unchanged rediscovery" property. But the same property means a finding whose problem was *fixed* is equally frozen.
 
-## The three real defects
+So the board only grows: 13 findings from July, 68 from August, and the two newest both duplicate platform issues already known.
 
-1. **A reader looks in a path the writer never uses.** build-in-public's report is exact: `get_cost_summary` reports *no data at `runs/iteration-0/default/token_usage.json`* while a fully priced breakdown sits in `costs/execution/default/*.json`. The tool reports "missing evidence" for data that exists, which is worse than an error — reviewers conclude the run was free.
+## Why this is worse than an untidy list
 
-2. **Readers still aggregate the legacy projection.** linkedin's report — `get_cost_summary(run_folder)` summing historical executions from a reused folder — is the failure the storage comment predicts. Keying a *query* on `run_folder` cannot isolate a run when the folder is reused by design.
+This ticket is its own evidence. Working with a full day of context on this codebase, six corroborating reports were enough to file a P1 for work completed four days earlier. The findings read as current because nothing about them says otherwise. The operator caught it — *"we already solved this before right, we had created a format for this, we maintain a uuid?"* — from memory, which is not a control that scales.
 
-3. **Provenance is destroyed, which is not a cost problem at all.** social-media and upwork report that re-using `runs/iteration-0/default` **deletes the previous occupant's artifacts** — social-media notes only one archived file survived a 2026-08-04 rotation, taking `propose_new` findings, eval provenance, learnings freshness and the run-mode router's input with it. This is the more damaging half: cost can be recomputed, deleted evidence cannot, and other findings' `next_check` evidence silently disappears.
-
-## Why it matters beyond the ledger
-
-- **PLAT-069 depends on this.** A per-run cost/duration/score trend cannot be built while runs are not separable. Fixing PLAT-069 without this produces a confidently wrong trend line.
-- **Today's tier retune is unmeasurable for the same reason**, and the baseline captured in `baseline-2026-08-10-pre-tier-retune.json` inherits the flaw — it aggregates `by_step_and_model` across records that may be legacy-merged.
-- It compounds a separate known issue: cost totals before 2026-07-28 price output tokens only and omit cache-read, so historical comparison is already restricted (`0a1afaf8767f89ac`, social-media, seen 3).
+Every stale finding on that board is a live trap for the next reviewer, human or agent. And the compounding cost is real: a triage sweep attempted here matched only 11 of 81 by theme, and misattributed several of those, so bulk closure by pattern is not available either — the stale ones have to be read.
 
 ## Suggested fix
 
-1. **Point `get_cost_summary` at the real store** and key it by `execution_id`, with `run_folder` accepted only as a lookup hint that may resolve to several executions — in which case return them separately rather than summing. Never report "missing evidence" without checking `costs/execution/<group>/<date>.json`.
-2. **Make the legacy projection visibly legacy at the read boundary**, so a caller cannot silently receive merged v1 data as if it were a single run. The `legacy:` prefix already exists internally; it should survive to the caller.
-3. **Stop destroying artifacts on rotation** — decide deliberately between archiving the previous occupant or allocating a fresh folder. `execution_defaults.always_use_same_run` already exists as the intended control; social-media has it `false` and was still overwritten, so the control is either not honoured or not the one that governs this.
+1. **Give the state an exit.** When a platform ticket reaches `implemented`, sweep findings whose `reason_code` / `external_owner` matches and dispose of them with the ticket id and commit as evidence. Not a bulk clear — an evidence-stamped closure, so the trail survives.
+2. **Let it self-correct like every other state.** Adding `external_action_required` to the reopen list is a one-line change and makes closure safe: if the fix did not hold, the next observation reopens it. That safety net is exactly why closing these is low-risk, and it is the only reason bulk closure would be defensible at all.
+3. **Record what a finding was reported against.** These carry no platform-version or commit context, so nothing distinguishes "still true" from "was true in July". A stamp at filing time would let a sweep answer this mechanically instead of by reading.
+
+## Not doing
+
+Closing the six cost-attribution findings by hand right now. They are stale and can be closed, but doing it one-off leaves the mechanism unbuilt and the other 75 untouched — and the sweep is the thing worth having.
 
 ## Acceptance
 
-- `get_cost_summary` returns per-execution costs for a workflow whose runs share `iteration-0`, and never reports missing data that exists in the ledger.
-- Legacy run-folder-keyed records are distinguishable from execution-keyed ones at the API boundary.
-- A rotation does not delete the prior run's artifacts, or does so only where explicitly configured.
-- The six source findings can then be closed against this ticket rather than aging on the external-action board.
+- A platform finding whose owning ticket is implemented can be closed with evidence, without a human remembering the fix happened.
+- A wrongly-closed finding reopens on next observation rather than staying closed.
+- The 81 currently on the board are triaged against the PLAT register, with stale ones closed and genuinely open ones left visible.

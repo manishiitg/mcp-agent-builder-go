@@ -243,7 +243,7 @@ Rules:
 | [PLAT-069](pulse_platform/plat-069.md) | Nothing measures whether a workflow gets cheaper/faster/more accurate over time | unassigned | `open` (design written) | Pulse trend measurement + Pulse popup |
 | [PLAT-070](pulse_platform/plat-070.md) | A failed run-folder listing makes the scheduler blame an old failure on today's run | unassigned | `implemented` (runtime reverify pending) | scheduler run-outcome reconciliation, workspace state loading |
 | [PLAT-071](pulse_platform/plat-071.md) | An idle-wait timeout is treated as proof the workflow never ran | unassigned | `implemented` (record corruption); session stall still open | scheduler workshop turn loop |
-| [PLAT-072](pulse_platform/plat-072.md) | Reused `iteration-0` makes per-run cost unattributable and overwrites run provenance | unassigned | `open` | cost ledger readers, run-folder rotation |
+| [PLAT-072](pulse_platform/plat-072.md) | `external_action_required` has no exit path, so solved problems keep being re-reported as open | unassigned | `open` | Pulse finding lifecycle |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
