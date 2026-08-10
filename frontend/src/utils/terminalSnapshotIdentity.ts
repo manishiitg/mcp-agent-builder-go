@@ -89,8 +89,33 @@ export function shouldStreamTerminal(terminal: TerminalSnapshot | null): boolean
 export function shouldLoadTerminalEvents(
   terminal: TerminalSnapshot | null,
   usesSessionEvents: boolean,
+  formattedViewRequested: boolean,
 ): boolean {
-  return Boolean(terminal && !usesSessionEvents && !terminal.execution_tree_placeholder)
+  return Boolean(
+    formattedViewRequested &&
+    terminal &&
+    !usesSessionEvents &&
+    !terminal.execution_tree_placeholder,
+  )
+}
+
+/** Main-agent transcripts live in the session event store rather than the
+ * per-terminal event endpoint. Hydrate that potentially large history only
+ * after the user explicitly asks for the formatted view.
+ */
+export function shouldHydrateMainTerminalEvents(
+  usesSessionEvents: boolean,
+  formattedViewRequested: boolean,
+  loadedEventCount: number,
+  restoredHistoryRequired = false,
+  restoredHistoryLoaded = false,
+): boolean {
+  return Boolean(
+    usesSessionEvents &&
+    formattedViewRequested &&
+    !restoredHistoryLoaded &&
+    (restoredHistoryRequired || loadedEventCount === 0),
+  )
 }
 
 /** Raw terminal is the primary coding-agent view. The formatted event transcript

@@ -4,6 +4,7 @@ import {
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
   resolveTerminalFormattedView,
+  shouldHydrateMainTerminalEvents,
   shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from './terminalSnapshotIdentity'
@@ -132,14 +133,43 @@ describe('shouldLoadTerminalEvents', () => {
       execution_tree_placeholder: true,
       state: 'running',
       active: true,
-    }), false)).toBe(false)
+    }), false, true)).toBe(false)
   })
 
-  it('loads events once the real child terminal is published', () => {
+  it('does not load a real child transcript while Raw is selected', () => {
     expect(shouldLoadTerminalEvents(terminal('child', {
       state: 'running',
       active: true,
-    }), false)).toBe(true)
+    }), false, false)).toBe(false)
+  })
+
+  it('loads events once Formatted is selected for a real child terminal', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      state: 'running',
+      active: true,
+    }), false, true)).toBe(true)
+  })
+})
+
+describe('shouldHydrateMainTerminalEvents', () => {
+  it('keeps restored Schedule main-agent history unloaded in Raw mode', () => {
+    expect(shouldHydrateMainTerminalEvents(true, false, 0)).toBe(false)
+  })
+
+  it('hydrates an empty restored Schedule main-agent history on Formatted', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 0, true, false)).toBe(true)
+  })
+
+  it('hydrates a restored Schedule history even if a newer live event has arrived', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 1, true, false)).toBe(true)
+  })
+
+  it('does not hydrate the same restored Schedule history twice', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12, true, true)).toBe(false)
+  })
+
+  it('does not reload main-agent history that is already present', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12)).toBe(false)
   })
 })
 

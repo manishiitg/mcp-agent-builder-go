@@ -8722,6 +8722,8 @@ For shell commands, use absolute workspace paths: `+"`{{.AbsWorkspacePath}}/...`
    - `+"`llm.total_duration_ms`"+` as total model time
    - `+"`tools.total_duration_ms`"+` as total tool time
    - `+"`tools.calls[]`"+` as per-tool breakdown
+   - `+"`phase`"+` to tell the files apart: the `+"`execution-attempt-*`"+` files are the step's own work, while `+"`reflection-timing.json`"+` is its post-completion reflection turn. A step's true elapsed cost is execution PLUS reflection — reporting execution alone understates it, and reflection has measured around a fifth of total LLM time on a real workflow. Attribute them separately: a slow execution phase is a step-instruction problem, a slow reflection phase is a learning/KB objective problem, and the two have different fixes.
+   - `+"`wrote_learnings`"+` / `+"`wrote_kb`"+` on a reflection file as the yield question — a reflection turn that cost real time while writing to neither store is pure overhead, and the fix is to sharpen the objective or drop the step to `+"`learnings_access: \"read\"`"+`, not to speed the turn up.
 4. Read conversation logs only after the timing files show where the time went.
 5. Read `+"`evaluation/evaluation_plan.json`"+` and the eval report if they help determine whether a proposed speedup would threaten success criteria.
 

@@ -2,11 +2,14 @@ package step_based_workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -19,6 +22,12 @@ import (
 // artifact-change log, and learning metadata. What changes is that they now
 // happen once, with every store the agent must route to reachable at the same
 // moment.
+
+// reflectionCostPhase is the cost-ledger phase the reflection turn attributes
+// to, producing `reflection:<step-id>` keys next to the step's own
+// `execution_only:<step-id>`. Kept as a constant because the cost UI, this
+// package, and any ledger analysis have to agree on the exact string.
+const reflectionCostPhase = "reflection"
 
 type stepReflectionTurnResult struct {
 	Summary  string
@@ -143,10 +152,54 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 		if ba == nil {
 			return
 		}
-		turnResult, updatedHistory, turnErr := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "reflection", executionAgent,
+		// Reflection was the one phase with no timing log, so its cost was
+		// invisible in runs/.../logs and every "why is this step slow" answer
+		// silently excluded it. It is not small — reflection has measured around
+		// a fifth of total LLM time on a real workflow — so an execution-only
+		// breakdown understates a step's true elapsed time. Capture it the same
+		// way execution does, through the same bridge, so the numbers are
+		// directly comparable rather than a second, differently-derived metric.
+		timingCaptureCtx := ctx
+		reflectionAgentName := ""
+		if ba != nil {
+			reflectionAgentName = ba.GetName()
+		}
+		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
+			timingCaptureCtx = cab.StartTimingCaptureFor(timingCaptureCtx)
+			// Cost attribution. The reflection turn reuses the step's own agent and
+			// session, so without pushing a phase its tokens land in the step's
+			// `execution_only:<step>` bucket — counted, but impossible to separate
+			// from the step's real work. That is why no `reflection` key has ever
+			// appeared in the cost ledger despite reflection running on nearly
+			// every step. Pushing here gives it `reflection:<step>` alongside the
+			// step's own bucket, so "what did reflection cost" becomes answerable
+			// without changing what is billed. The bridge already supports
+			// arbitrary phases, so this is a labelling change, not new plumbing.
+			cab.PushContext(reflectionCostPhase, stepIndex, step.GetID(), reflectionAgentName)
+			// Deferred rather than popped inline so an early return or panic in the
+			// turn can never leave the bridge's context stack unbalanced, which
+			// would misattribute every later step in the run.
+			defer cab.PopContext()
+		}
+		reflectionStartedAt := time.Now().UTC()
+		turnResult, updatedHistory, turnErr := hcpo.withWorkshopMessageTarget(timingCaptureCtx, step.GetID(), "reflection", executionAgent,
 			func() (string, []llmtypes.MessageContent, error) {
-				return ba.Execute(ctx, message, history, "", false)
+				return ba.Execute(timingCaptureCtx, message, history, "", false)
 			})
+		reflectionCompletedAt := time.Now().UTC()
+		var reflectionToolCalls []orchestrator.ToolCallEntry
+		var reflectionLLMCalls []orchestrator.LLMCallEntry
+		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
+			timingCapture := cab.DrainTimingCaptureFor(timingCaptureCtx)
+			reflectionToolCalls = timingCapture.ToolCalls
+			reflectionLLMCalls = timingCapture.LLMCalls
+		}
+		// Written before the turnErr check below: a reflection turn that failed
+		// still consumed real time, and excluding it would bias the totals in
+		// exactly the cases worth investigating.
+		hcpo.saveReflectionTimingLog(stepIndex, artifactStepID, artifactStepPath, executionLLM, executionAgent,
+			reflectionToolCalls, reflectionLLMCalls, reflectionStartedAt, reflectionCompletedAt,
+			effectiveLearnings, writesKB, turnErr)
 
 		afterRef := hcpo.snapshotCanonicalArtifactRef(context.Background(), globalLearningsPath)
 		if afterRef != beforeRef {
@@ -199,6 +252,91 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 	}()
 
 	return result
+}
+
+// saveReflectionTimingLog persists the reflection turn's cost next to the
+// execution attempts it belongs to, under a `reflection-timing.json` sibling.
+//
+// The schema deliberately matches the execution timing file (same
+// buildTimingTrace / normalize* helpers, same `agent`/`llm`/`tools`/`breakdown`
+// shape) so a reader can sum execution and reflection without reconciling two
+// formats. `phase` is what distinguishes them.
+//
+// Best-effort, like every other side effect of the reflection turn: a failure to
+// write timing never affects the step's outcome.
+func (hcpo *StepBasedWorkflowOrchestrator) saveReflectionTimingLog(
+	stepIndex int, stepID string, stepPath string, executionLLM string,
+	executionAgent agents.OrchestratorAgent,
+	toolCalls []orchestrator.ToolCallEntry,
+	llmCalls []orchestrator.LLMCallEntry,
+	startedAt time.Time, completedAt time.Time,
+	wroteLearnings bool, wroteKB bool, turnErr error,
+) {
+	saveCtx := context.Background()
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	duration := completedAt.Sub(startedAt)
+
+	toolTiming := normalizeToolTimingEntries(toolCalls, startedAt)
+	llmTiming := normalizeLLMTimingEntries(llmCalls, startedAt)
+	agentName := ""
+	if executionAgent != nil && executionAgent.GetBaseAgent() != nil {
+		agentName = executionAgent.GetBaseAgent().GetName()
+	}
+	traceSpans, breakdown := buildTimingTrace(stepID, agentName, executionLLM, startedAt, completedAt, duration, llmTiming, toolTiming)
+
+	timingData := map[string]interface{}{
+		"schema_version": 2,
+		"phase":          "reflection",
+		"step_index":     stepIndex + 1,
+		"step_id":        stepID,
+		"step_path":      stepPath,
+		"run_folder":     hcpo.selectedRunFolder,
+		// What the turn was actually asked to do. A reflection turn that wrote
+		// neither store is a different cost question from one that wrote both.
+		"wrote_learnings": wroteLearnings,
+		"wrote_kb":        wroteKB,
+		"failed":          turnErr != nil,
+		"agent": map[string]interface{}{
+			"name":                          agentName,
+			"model":                         executionLLM,
+			"started_at":                    formatRFC3339UTC(startedAt),
+			"completed_at":                  formatRFC3339UTC(completedAt),
+			"duration_ns":                   int64(duration),
+			"duration_ms":                   durationToMillis(duration),
+			"llm_call_count":                llmTiming.Count,
+			"llm_duration_ms":               llmTiming.TotalDurationMs,
+			"llm_time_to_first_response_ms": llmTiming.TimeToFirstResponseMs,
+		},
+		"llm":         llmTiming,
+		"tools":       toolTiming,
+		"trace_spans": traceSpans,
+		"breakdown":   breakdown,
+	}
+	if turnErr != nil {
+		timingData["error"] = turnErr.Error()
+	}
+
+	var validationWorkspacePath string
+	if hcpo.selectedRunFolder != "" {
+		validationWorkspacePath = fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
+	} else {
+		validationWorkspacePath = hcpo.GetWorkspacePath()
+	}
+	logDir := getExecutionFolderPathForLogs(validationWorkspacePath, stepID, stepPath)
+	timingPath := fmt.Sprintf("%s/reflection-timing.json", logDir)
+	timingJSON, err := json.MarshalIndent(timingData, "", "  ")
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to marshal reflection timing for step %s: %v", stepID, err))
+		return
+	}
+	if err := hcpo.WriteWorkspaceFile(saveCtx, timingPath, string(timingJSON)); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to write reflection timing to %s: %v", timingPath, err))
+		return
+	}
+	hcpo.GetLogger().Info(fmt.Sprintf("⏱️ Reflection turn for step %s took %dms (llm %dms, %d tool calls)",
+		stepID, durationToMillis(duration), llmTiming.TotalDurationMs, toolTiming.Count))
 }
 
 // reflectionDBTableNames lists the workflow's tables so the routing rule can

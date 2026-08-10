@@ -9,6 +9,7 @@ import {
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
   resolveTerminalFormattedView,
+  shouldHydrateMainTerminalEvents,
   shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from '../utils/terminalSnapshotIdentity'
@@ -47,6 +48,7 @@ import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
 import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from '../utils/terminalEventPage'
 import { projectExecutionTreeTerminals } from '../utils/terminalExecutionProjection'
+import { hydrateTabEvents } from '../utils/sessionRestore'
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -2640,6 +2642,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
     return normalizeEventViewMode(tab?.viewMode ?? state.eventViewModePreference)
   })
+  const selectedTabRequiresHistoryHydration = useChatStore(state => {
+    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
+    return Boolean(tab?.sessionId === currentSessionId && tab?.metadata?.isViewOnly)
+  })
   const terminalWorkflowPathFilter = isWorkflowTerminalContext ? activeWorkflowPath : null
   const { plan: terminalWorkflowPlan } = usePlanData(terminalWorkflowPathFilter)
 
@@ -3346,12 +3352,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // screen (history_size=0), so their durable transcript is the useful default
   // for both parent and child agents. An explicit user toggle wins.
   const [formattedViewPreferences, setFormattedViewPreferences] = useState<Record<string, boolean>>({})
-  const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
-    setFormattedViewPreferences(current => ({
-      ...current,
-      [terminalID]: !currentlyFormatted,
-    }))
-  }, [])
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
   const selectedTerminalIsTmux = Boolean(
     selectedTerminalView &&
@@ -3364,9 +3364,20 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalUsesSessionEvents = Boolean(
     selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
   )
+  // The toggle describes an available view, not already-loaded data. In
+  // particular, restored Schedule tabs intentionally start with no event
+  // history; hiding the toggle in that state made Formatted unreachable.
+  const canShowFormattedView = Boolean(
+    selectedTerminalIsTmux && selectedTerminalID,
+  )
+  const showFormattedView = resolveTerminalFormattedView(
+    canShowFormattedView,
+    selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
+  )
   const selectedTerminalCanLoadEvents = shouldLoadTerminalEvents(
     selectedTerminalView,
     selectedTerminalUsesSessionEvents,
+    selectedTerminalIsSynthetic || showFormattedView,
   )
 
   const loadSelectedTerminalEventPage = useCallback(async () => {
@@ -3411,11 +3422,68 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     terminalEventRequestGenerationRef.current++
     terminalEventRefreshInFlightRef.current = false
     if (!selectedTerminalID || !selectedTerminalCanLoadEvents) {
-      setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
+      // Switching back to Raw must not fetch or discard transcript data. Clear
+      // only when selection moved to another terminal.
+      if (selectedTerminalEventPageRef.current.terminalId !== selectedTerminalID) {
+        setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
+      }
       return
     }
+    const currentPage = selectedTerminalEventPageRef.current
+    if (currentPage.terminalId === selectedTerminalID && currentPage.loaded) return
     void loadSelectedTerminalEventPage()
   }, [loadSelectedTerminalEventPage, selectedTerminalCanLoadEvents, selectedTerminalID])
+
+  const [mainEventHydration, setMainEventHydration] = useState<{
+    sessionId: string | null
+    loading: boolean
+    loaded?: boolean
+    error?: string
+  }>({ sessionId: null, loading: false })
+
+  const loadMainSessionEvents = useCallback(async () => {
+    if (!currentSessionId) return
+    setMainEventHydration({ sessionId: currentSessionId, loading: true })
+    try {
+      await hydrateTabEvents(currentSessionId, {
+        workspacePath: activeWorkflowPath || undefined,
+        fallbackToChatHistory: true,
+        preferChatHistory: selectedTabRequiresHistoryHydration,
+      })
+      setMainEventHydration({ sessionId: currentSessionId, loading: false, loaded: true })
+    } catch (loadError) {
+      setMainEventHydration({
+        sessionId: currentSessionId,
+        loading: false,
+        error: loadError instanceof Error ? loadError.message : 'Failed to load conversation events.',
+      })
+    }
+  }, [activeWorkflowPath, currentSessionId, selectedTabRequiresHistoryHydration])
+
+  const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
+    const nextFormatted = !currentlyFormatted
+    setFormattedViewPreferences(current => ({
+      ...current,
+      [terminalID]: nextFormatted,
+    }))
+    if (shouldHydrateMainTerminalEvents(
+      selectedTerminalUsesSessionEvents,
+      nextFormatted,
+      sessionEvents?.length ?? 0,
+      selectedTabRequiresHistoryHydration,
+      mainEventHydration.sessionId === currentSessionId && !!mainEventHydration.loaded,
+    )) {
+      void loadMainSessionEvents()
+    }
+  }, [
+    currentSessionId,
+    loadMainSessionEvents,
+    mainEventHydration.loaded,
+    mainEventHydration.sessionId,
+    selectedTabRequiresHistoryHydration,
+    selectedTerminalUsesSessionEvents,
+    sessionEvents?.length,
+  ])
 
   const refreshSelectedTerminalEvents = useCallback(async () => {
     const page = selectedTerminalEventPageRef.current
@@ -3535,20 +3603,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalEvents = useMemo(
     () => selectTerminalEvents(selectedTerminalEventSource, selectedTerminalView, terminals),
     [selectedTerminalEventSource, selectedTerminalView, terminals],
-  )
-  const selectedTerminalHasEvents = useMemo(
-    () => selectedTerminalEvents.length > 0,
-    [selectedTerminalEvents],
-  )
-  // Offer the toggle only when there is something to switch TO. A tmux terminal
-  // with no captured events would render an empty transcript, which reads as a
-  // broken view rather than an empty one.
-  const canShowFormattedView = Boolean(
-    selectedTerminalIsTmux && selectedTerminalID && selectedTerminalHasEvents,
-  )
-  const showFormattedView = resolveTerminalFormattedView(
-    canShowFormattedView,
-    selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
   )
   const selectedTerminalHasPreValidationEvent = useMemo(
     () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
@@ -4783,12 +4837,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       events={selectedTerminalEventSource}
                       terminal={selectedTerminalView}
                       siblingTerminals={terminals}
-                      loading={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loading}
+                      loading={selectedTerminalUsesSessionEvents
+                        ? mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading
+                        : selectedTerminalEventPage.loading}
                       loadingOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loadingOlder}
                       hasOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.hasOlder}
-                      error={!selectedTerminalUsesSessionEvents ? selectedTerminalEventPage.error : undefined}
+                      error={selectedTerminalUsesSessionEvents
+                        ? mainEventHydration.sessionId === currentSessionId ? mainEventHydration.error : undefined
+                        : selectedTerminalEventPage.error}
                       onLoadOlder={!selectedTerminalUsesSessionEvents ? loadOlderSelectedTerminalEvents : undefined}
-                      onRetry={!selectedTerminalUsesSessionEvents ? loadSelectedTerminalEventPage : undefined}
+                      onRetry={selectedTerminalUsesSessionEvents ? loadMainSessionEvents : loadSelectedTerminalEventPage}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane
