@@ -416,6 +416,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 		hcpo.GetLogger().Info(fmt.Sprintf("✅ Batch execution: group %s completed successfully", group.Name))
 		result.CompletedGroups++
 		result.CompletedGroupNames = append(result.CompletedGroupNames, group.Name)
+		// The target execution is complete now. Finalize its authoritative time
+		// boundary before starting the separate evaluation run; otherwise every
+		// evaluator necessarily reads status=running with no completed_at and
+		// cannot bind its evidence to the run it is grading.
+		completionStatus := "completed"
+		if persistenceErr != nil {
+			completionStatus = "completed_with_persistence_error"
+		}
+		hcpo.finalizeRunMetadata(ctx, runFolder, completionStatus, groupStartTime, time.Now())
+
 		// Auto-evaluation: Run scoring for this group if evaluation_plan.json exists
 		disableEval := hcpo.executionOptions != nil && hcpo.executionOptions.DisableEval
 		if disableEval {
@@ -436,18 +446,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 			// opening the report panel.
 		}
 		// Evaluation emits its own token events, so drain again after it finishes.
+		// A failure here belongs to the evaluation run, not the already-completed
+		// target execution metadata.
 		if postEvalErr := hcpo.waitForTokenPersistence(); postEvalErr != nil {
-			if persistenceErr == nil {
-				persistenceErr = postEvalErr
-			} else {
-				persistenceErr = fmt.Errorf("%w; %w", persistenceErr, postEvalErr)
-			}
+			hcpo.GetLogger().Warn(fmt.Sprintf("Evaluation finished, but cost persistence did not: %v", postEvalErr))
 		}
-		completionStatus := "completed"
-		if persistenceErr != nil {
-			completionStatus = "completed_with_persistence_error"
-		}
-		hcpo.finalizeRunMetadata(ctx, runFolder, completionStatus, groupStartTime, time.Now())
 
 		// If single step mode was active, stop batch execution after this group
 		// Single step mode should only run one group, not continue to additional groups

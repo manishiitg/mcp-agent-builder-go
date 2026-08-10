@@ -229,7 +229,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 		// Freshness ledgers are code-owned and best-effort. Both stores were
 		// genuinely reviewed in this turn when the step writes to them, so both
 		// are confirmed here — previously each turn confirmed its own.
-		hasNewLearning, reasoning, confidence := inferHasNewLearningFromResult(turnResult)
+		hasNewLearning, reasoning, confidence := learningArtifactChange(beforeRef, afterRef)
 		if writesKB {
 			if err := hcpo.recordKnowledgebaseConfirmation(context.Background(), hcpo.selectedRunFolder, step.GetID()); err != nil {
 				hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record knowledgebase freshness for step %s: %v", step.GetID(), err))

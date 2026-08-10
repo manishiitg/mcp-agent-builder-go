@@ -75,24 +75,22 @@ once verified: `02bbf615` `cb2bf4b1` `b5c2bfa8` (build-in-public), `7607952e`
 which specific tool call produced it before closing with
 `pulse_close_stale.py`, since the fix is mechanism-level, not per-finding.
 
-## D. Eval scoring ambiguity (5) — one likely one-line bug, rest are workflow-level
+## D. Eval scoring ambiguity (5) — triaged; platform items implemented
 
-- `28e793fd852b3b43` (social-media) — `evaluation_report.json` omits the
-  `score` key entirely when a step scores 0. Check for a Go struct field with
-  `omitempty` on a numeric score — that silently drops legitimate zeros. High
-  confidence, cheap to verify.
-- `8e266151da4a0e25` (social-media) — route-gated skipped steps stored as
-  `score=0/max_score=0`, indistinguishable from a genuine zero without
-  filtering by a `skipped` column. Schema/design issue, needs a decision on
-  NULL vs. a status flag, not just a patch.
+- `28e793fd852b3b43` (social-media) — already fixed by PLAT-016. Current Go has
+  `json:"score"` without `omitempty`, its captured-zero regression test passes,
+  and the current report preserves `"score": 0`.
+- `8e266151da4a0e25` (social-media) — the design decision is already implemented
+  by PLAT-015: skipped rows and report entries carry `skipped=true`, while a
+  genuine zero has `skipped=false`, `score_captured=true`, and a real max score.
 - `c85dfe0208e94aef`, `53316f02fa209f61` (build-in-public) — these are
   `evaluation_plan.json` content issues (a weak CHECK, a stale rule
   superseded by the actual `main.py`), not platform code. Workflow-level
   fixes, arguably misfiled as `external_action_required` — flag for
   `workflow_review` rather than a code fix.
-- `9495aef3dab65c42` (linkedin) — evaluation runtime starts before
-  `run_metadata.json` is finalized, so evaluators bind evidence to an
-  unfinished run. Real sequencing bug, not yet traced to a code location.
+- `9495aef3dab65c42` (linkedin) — implemented as PLAT-075. The batch controller
+  finalized target metadata after auto-evaluation; it now finalizes the target
+  execution before evaluation starts. Runtime reverify pending.
 
 ## E. Schedules skipped / mis-reported (3) — not started
 
@@ -111,15 +109,15 @@ name). **Not bugs — the sandbox correctly denying access**: `90348ad2`,
 guard, working as designed). Reclassify those before this cluster is "8 bugs"
 — it's closer to 2–3.
 
-## G. Learnings/KB metadata wrong (6) — not started
+## G. Learnings/KB metadata wrong (6) — implemented / deduplicated
 
-`03f6ed72` (build-in-public) — `script_metadata.json` attributes a scripted
-fast-path run to the `agentic` bucket. `9d1c0fe4` — `.learning_metadata.json`
-misreports step identity on 7 of 9 steps. `10eb995c` —
-`has_new_learning` is derived from "the turn reported changed files" rather
-than actual content diffing. `dd2a4804` (social-media) —
-`global_skill_objective` retains dead shared-session mechanics (same shape as
-the PLAT-061 field-audit findings; check whether it's already covered).
+PLAT-076 fixes `03f6ed727fb67c9a`, `9d1c0fe414871e37`, and
+`10eb995c50fb52c0`: saved-script runs are attributed to `scripted`, current
+step identity is refreshed on every metadata write, learning changes use real
+artifact-tree hashes, and byte-identical scripts no longer increment version
+or relearn counters. `dd2a48047c4d7993` is already covered by PLAT-061 and the
+v1.0.22 migration; the dead field is absent from the current workflow. Runtime
+reverify remains before closing any workflow-local row.
 
 ## H. External sites blocking (3) — RECLASSIFY, not a platform bug
 

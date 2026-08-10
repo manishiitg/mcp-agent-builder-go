@@ -809,6 +809,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 		learningsGlobalFileMutex.Lock()
 		defer learningsGlobalFileMutex.Unlock()
 	}
+	learningRefBefore := ""
+	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings {
+		learningRefBefore = hcpo.snapshotCanonicalArtifactRef(ctx, filepath.Join(hcpo.GetWorkspacePath(), LearningsFolderName, GlobalLearningID))
+	}
 
 	message := strings.TrimSpace(item.Message)
 	if session.LastRuntimeContext != "" {
@@ -868,7 +872,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	// Freshness: message_sequence is the primary execution path, so its synthetic
 	// learnings/KB closing turns are where store confirmation is recorded (the
 	// regular-step hooks in controller_execution.go rarely fire now). Best-effort.
-	hcpo.recordMessageSequenceStoreFreshness(item, step.GetID(), trimmedResult)
+	learningChanged := false
+	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings {
+		learningRefAfter := hcpo.snapshotCanonicalArtifactRef(context.Background(), filepath.Join(hcpo.GetWorkspacePath(), LearningsFolderName, GlobalLearningID))
+		learningChanged = learningRefBefore != learningRefAfter
+	}
+	hcpo.recordMessageSequenceStoreFreshness(item, step.GetID(), trimmedResult, learningChanged)
 	return trimmedResult, nil
 }
 
@@ -876,7 +885,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 // a learnings/KB contribution closing turn completes: a run reviewed the store and
 // left it current this run. Learnings distinguishes updated vs reviewed-unchanged
 // from the turn result; KB records a review. Never fails the run.
-func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(item MessageSequenceItem, stepID, result string) {
+func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(item MessageSequenceItem, stepID, result string, learningChanged bool) {
 	// Do not record a confirmation for a turn that self-reported failure. The
 	// sequence driver treats STATUS: FAILED as a terminal item failure (see
 	// messageSequenceItemReportedFailure in the driver loop), and this hook runs
@@ -887,8 +896,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(i
 	}
 	switch strings.TrimSpace(item.Kind) {
 	case "learning":
-		updated, _, _ := inferHasNewLearningFromResult(result)
-		if err := hcpo.recordLearningsConfirmation(context.Background(), hcpo.selectedRunFolder, stepID, updated); err != nil {
+		if err := hcpo.recordLearningsConfirmation(context.Background(), hcpo.selectedRunFolder, stepID, learningChanged); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record learnings freshness for message_sequence step %s: %v", stepID, err))
 		}
 	case "knowledgebase":

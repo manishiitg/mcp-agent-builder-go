@@ -63,7 +63,7 @@ type ScriptedMetadata struct {
 	CreatedAt      string         `json:"created_at"`
 	LastRunAt      string         `json:"last_run_at"`
 	TotalRuns      int            `json:"total_runs"`
-	SuccessfulRuns map[string]int `json:"successful_runs"` // per-mode success counts; canonical scripted key is "agentic"
+	SuccessfulRuns map[string]int `json:"successful_runs"` // canonical key is "scripted"; legacy aliases are normalized on read
 	FailedRuns     int            `json:"failed_runs"`
 	RelearnCount   int            `json:"relearn_count"` // how many times the LLM had to rewrite
 
@@ -630,24 +630,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) readScriptedMetadataAPI(ctx context.C
 	}
 	var meta ScriptedMetadata
 	if err := json.Unmarshal([]byte(data), &meta); err == nil {
-		if meta.SuccessfulRuns == nil {
-			meta.SuccessfulRuns = map[string]int{}
-		}
-		// Legacy migration: older script_metadata.json files used the
-		// pre-rename map keys "agentic" / "scripted". Fold them into
-		// the canonical "agentic" / "scripted" keys so downstream code only
-		// has to look at the new names.
-		if v, ok := meta.SuccessfulRuns["code_exec"]; ok && v > 0 {
-			meta.SuccessfulRuns["agentic"] += v
-			delete(meta.SuccessfulRuns, "code_exec")
-		}
-		if v, ok := meta.SuccessfulRuns["learn_code"]; ok && v > 0 {
-			meta.SuccessfulRuns["scripted"] += v
-			delete(meta.SuccessfulRuns, "learn_code")
-		}
-		if meta.SuccessfulRuns["agentic"] == 0 && meta.SuccessfulRuns["scripted"] > 0 {
-			meta.SuccessfulRuns["agentic"] = meta.SuccessfulRuns["scripted"]
-		}
+		normalizeScriptedSuccessCounts(&meta)
 		return &meta
 	}
 	// Legacy format: successful_runs was a plain int, not a map.
@@ -670,10 +653,43 @@ func (hcpo *StepBasedWorkflowOrchestrator) readScriptedMetadataAPI(ctx context.C
 		CreatedAt:      legacy.CreatedAt,
 		LastRunAt:      legacy.LastRunAt,
 		TotalRuns:      legacy.TotalRuns,
-		SuccessfulRuns: map[string]int{"agentic": legacy.SuccessfulRuns},
+		SuccessfulRuns: map[string]int{"scripted": legacy.SuccessfulRuns},
 		FailedRuns:     legacy.FailedRuns,
 		RelearnCount:   legacy.RelearnCount,
 	}
+}
+
+func normalizeScriptedSuccessCounts(meta *ScriptedMetadata) {
+	if meta == nil {
+		return
+	}
+	// TotalRuns/FailedRuns are updated atomically with every saved-script
+	// attempt and therefore avoid double-counting files that contain both the
+	// old "agentic" mirror and an older "scripted" bucket.
+	successes := meta.TotalRuns - meta.FailedRuns
+	if successes < 0 {
+		successes = 0
+	}
+	if meta.TotalRuns == 0 {
+		for _, key := range []string{"scripted", "agentic", "learn_code", "code_exec"} {
+			if meta.SuccessfulRuns[key] > successes {
+				successes = meta.SuccessfulRuns[key]
+			}
+		}
+	}
+	meta.SuccessfulRuns = map[string]int{"scripted": successes}
+}
+
+func scriptArtifactsChanged(before, after map[string]string) bool {
+	if len(before) != len(after) {
+		return true
+	}
+	for name, oldContent := range before {
+		if newContent, ok := after[name]; !ok || newContent != oldContent {
+			return true
+		}
+	}
+	return false
 }
 
 // writeScriptedMetadataAPI writes script_metadata.json via the workspace API.
@@ -1224,6 +1240,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveScriptedScriptToLearnings(
 	}
 
 	// List files in code/ folder and copy each to learnings/{step-id}/
+	newFileContents := map[string]string{}
 	files, listErr := hcpo.BaseOrchestrator.ListWorkspaceFiles(ctx, codeRelPath)
 	if listErr != nil {
 		// ListWorkspaceFiles failed — try to copy just main.py
@@ -1237,6 +1254,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveScriptedScriptToLearnings(
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] Failed to write main.py to learnings: %v", writeErr))
 			return
 		}
+		newFileContents["main.py"] = content
 	} else {
 		for _, f := range files {
 			if f == "" {
@@ -1255,17 +1273,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveScriptedScriptToLearnings(
 			}
 			if writeErr := hcpo.WriteWorkspaceFile(ctx, learnDirRelPath+"/"+fileName, content); writeErr != nil {
 				hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] Failed to write %s to learnings: %v", fileName, writeErr))
+				continue
 			}
+			newFileContents[fileName] = content
 		}
 	}
 
 	oldMeta := hcpo.readScriptedMetadataAPI(ctx, stepID)
+	contentChanged := scriptArtifactsChanged(oldFileContents, newFileContents)
 	// Start from old metadata to preserve rich run history (RecentRuns, GroupStats, etc.)
 	var newMeta ScriptedMetadata
 	if oldMeta != nil {
 		newMeta = *oldMeta
-		newMeta.ScriptVersion = oldMeta.ScriptVersion + 1
-		newMeta.RelearnCount = oldMeta.RelearnCount + 1
+		if contentChanged {
+			newMeta.ScriptVersion = oldMeta.ScriptVersion + 1
+			newMeta.RelearnCount = oldMeta.RelearnCount + 1
+		}
 	} else {
 		newMeta.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 		newMeta.ScriptVersion = 1
@@ -1275,7 +1298,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveScriptedScriptToLearnings(
 	if err := hcpo.writeScriptedMetadataAPI(ctx, stepID, newMeta); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] Failed to write script_metadata.json: %v", err))
 	} else {
-		hcpo.GetLogger().Info(fmt.Sprintf("✅ [scripted] Saved main.py to learnings for step (%s) — version %d", stepID, newMeta.ScriptVersion))
+		if contentChanged || oldMeta == nil {
+			hcpo.GetLogger().Info(fmt.Sprintf("✅ [scripted] Saved changed main.py to learnings for step (%s) — version %d", stepID, newMeta.ScriptVersion))
+		} else {
+			hcpo.GetLogger().Info(fmt.Sprintf("✅ [scripted] main.py for step (%s) was byte-identical — keeping version %d", stepID, newMeta.ScriptVersion))
+		}
 	}
 
 	// Save diffs between old and new script files for debugging.
@@ -1370,7 +1397,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) updateScriptedRunStats(ctx context.Co
 		if meta.SuccessfulRuns == nil {
 			meta.SuccessfulRuns = map[string]int{}
 		}
-		meta.SuccessfulRuns["agentic"]++
+		meta.SuccessfulRuns["scripted"]++
 	} else {
 		meta.FailedRuns++
 	}
