@@ -96,7 +96,10 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 		want    []string
 	}{
 		{name: "wait command repeated with duration", command: "wait", args: []string{"wait", "6s"}, want: []string{"6000"}},
-		{name: "snapshot command repeated", command: "snapshot", args: []string{"snapshot", "-i"}, want: []string{"-i"}},
+		{name: "snapshot command repeated is bounded", command: "snapshot", args: []string{"snapshot", "-i"}, want: []string{"-i", "--compact", "--depth", "6"}},
+		{name: "unscoped snapshot is bounded", command: "snapshot", args: nil, want: []string{"--compact", "--depth", "6"}},
+		{name: "explicit snapshot depth is preserved", command: "snapshot", args: []string{"--depth", "9", "-i"}, want: []string{"--depth", "9", "-i"}},
+		{name: "selector scoped snapshot is preserved", command: "snapshot", args: []string{"--selector", "#results"}, want: []string{"--selector", "#results"}},
 		{name: "wait text option unchanged", command: "wait", args: []string{"--text", "Welcome"}, want: []string{"--text", "Welcome"}},
 		{name: "single wait token unchanged", command: "wait", args: []string{"wait"}, want: []string{"wait"}},
 	}
@@ -113,6 +116,22 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBoundSnapshotOutputKeepsSmallResultAndBoundsLargeResult(t *testing.T) {
+	short := "- button Submit"
+	if got := boundSnapshotOutput(short); got != short {
+		t.Fatalf("small snapshot = %q, want unchanged", got)
+	}
+
+	large := strings.Repeat("x", maxManagedSnapshotOutputRunes+100)
+	got := boundSnapshotOutput(large)
+	if len([]rune(got)) <= maxManagedSnapshotOutputRunes {
+		t.Fatalf("bounded snapshot lost truncation guidance: %d runes", len([]rune(got)))
+	}
+	if !strings.Contains(got, "Narrow the next snapshot with --selector") {
+		t.Fatalf("bounded snapshot missing recovery guidance: %q", got[len(got)-200:])
 	}
 }
 

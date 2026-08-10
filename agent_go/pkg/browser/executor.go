@@ -19,6 +19,12 @@ import (
 
 const cdpTabListTimeout = 15 * time.Second
 
+// Keep snapshots well below the smallest coding-CLI MCP result limit. The
+// browser CLI can produce a much larger tree even with depth/compact flags
+// when a page has many siblings (for example a social feed). Returning that
+// entire value makes the CLI spill it outside the workflow sandbox.
+const maxManagedSnapshotOutputRunes = 24000
+
 // execCmd is an alias so tests can swap it out; defaults to exec.Command.
 var execCmd = exec.Command
 
@@ -1112,8 +1118,21 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	if recordingContextNote != "" {
 		output = strings.TrimSpace(output) + "\n\n" + recordingContextNote
 	}
+	if command == "snapshot" {
+		output = boundSnapshotOutput(output)
+	}
 
 	return output, nil
+}
+
+func boundSnapshotOutput(output string) string {
+	runes := []rune(output)
+	if len(runes) <= maxManagedSnapshotOutputRunes {
+		return output
+	}
+	return string(runes[:maxManagedSnapshotOutputRunes]) +
+		"\n\n[Snapshot truncated by AgentWorks before the coding-CLI result limit. " +
+		"Narrow the next snapshot with --selector <css>, or use a smaller --depth.]"
 }
 
 func formatAgentBrowserSkillsOutput(output string) string {
