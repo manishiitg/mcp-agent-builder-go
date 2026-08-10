@@ -1586,6 +1586,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+	// record_run_concern is registered for every workflow-mode session, so the
+	// orchestrator is offered the tool whether or not it can use it. Without a
+	// trusted identity on this session the call fails with "no trusted step
+	// identity" — the orchestrator sees an advertised tool that always errors,
+	// and its own observations (a route that keeps failing, a sub-agent that
+	// never produced its artifact) have nowhere structured to go. It owns a
+	// dedicated session already, so this attributes to its own step ID and
+	// cannot file against another step.
+	hcpo.configureRunConcernSession(todoSessionID, stepID, ConcernPhaseExecution)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
