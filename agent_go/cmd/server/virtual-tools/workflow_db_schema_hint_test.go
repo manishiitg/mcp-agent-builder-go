@@ -97,6 +97,20 @@ func TestQueryWorkflowDBUnknownColumnReportsThatTablesColumns(t *testing.T) {
 	}
 }
 
+func TestQueryWorkflowDBBindsPositionalParams(t *testing.T) {
+	registry, _ := startWorkflowDBSchemaHintServer(t, 0)
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"sql":    "SELECT question FROM human_inputs WHERE workflow_id = ?",
+		"params": []any{"wf-1"},
+	})
+	if err != nil {
+		t.Fatalf("parameterized read: %v", err)
+	}
+	if !strings.Contains(result, "ready?") {
+		t.Fatalf("parameterized read returned unexpected result: %s", result)
+	}
+}
+
 func TestQueryWorkflowDBUnknownTableReportsAvailableTables(t *testing.T) {
 	registry, _ := startWorkflowDBSchemaHintServer(t, 0)
 

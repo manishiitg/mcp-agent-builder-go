@@ -541,26 +541,25 @@ const reportDataPromises = new Map<string, Promise<ReportDataSnapshot>>()
 
 // Workflow runs write the data reports read (db/db.sqlite + artifacts), so a
 // run reaching a terminal state makes this cache stale. Watch the running-
-// workflows store for transitions INTO completed/failed, drop the cached
-// snapshot for that workspace, and announce it so a mounted viewer for that
-// workspace reloads instead of showing pre-run data until a manual Refresh.
+// workflows store for a terminal run, drop the cached snapshot for that
+// workspace, and announce it so a mounted viewer reloads instead of showing
+// pre-run data until a manual Refresh. A terminal record can briefly disappear
+// from the running-workflow store while its status is reconciled, then return
+// with the same id. Keep the dedupe set for this renderer lifetime: otherwise
+// that bookkeeping churn repeatedly reloads an unchanged report.
 export const REPORT_DATA_STALE_EVENT = 'workflow-report-data-stale'
-let reportTerminalRunKeys = new Set<string>()
+const reportTerminalRunsRefreshed = new Set<string>()
 useRunningWorkflowsStore.subscribe((state) => {
-  const terminalNow = new Set<string>()
   for (const wf of state.runningWorkflows) {
     if ((wf.status === 'completed' || wf.status === 'failed') && wf.workspacePath) {
-      terminalNow.add(`${wf.id}::${wf.workspacePath}`)
+      const key = `${wf.id}::${wf.workspacePath}`
+      if (reportTerminalRunsRefreshed.has(key)) continue
+      reportTerminalRunsRefreshed.add(key)
+      reportDataCache.delete(wf.workspacePath)
+      reportDataPromises.delete(wf.workspacePath)
+      window.dispatchEvent(new CustomEvent(REPORT_DATA_STALE_EVENT, { detail: { workspacePath: wf.workspacePath } }))
     }
   }
-  for (const key of terminalNow) {
-    if (reportTerminalRunKeys.has(key)) continue
-    const workspacePath = key.slice(key.indexOf('::') + 2)
-    reportDataCache.delete(workspacePath)
-    reportDataPromises.delete(workspacePath)
-    window.dispatchEvent(new CustomEvent(REPORT_DATA_STALE_EVENT, { detail: { workspacePath } }))
-  }
-  reportTerminalRunKeys = terminalNow
 })
 
 // File-path sources for file/file-list widgets that point `source` at a file

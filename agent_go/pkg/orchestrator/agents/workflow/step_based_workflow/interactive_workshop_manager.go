@@ -1548,6 +1548,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	pulseState := []string{
 		"get_pulse_state",
 		"record_pulse_finding",
+		"merge_pulse_issues",
 		"record_pulse_verification",
 		"complete_pulse_review",
 		"record_pulse_worklist",
@@ -4079,7 +4080,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"clear_fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_tier, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, transport, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, db_access, review_notes, declared_execution_mode, declared_execution_mode_reason, global_skill_objective, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
+					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_llm_reason, execution_tier, execution_tier_reason, lock_learnings_reason, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, review_notes, declared_execution_mode, declared_execution_mode_reason, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
 				},
 				"servers": map[string]interface{}{
 					"type":        "array",
@@ -4097,7 +4098,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"lock_learnings": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Freeze SKILL.md writes for this step. Existing SKILL.md still flows into execution prompts. Runtime execution never auto-sets or auto-clears this field; set it only as an intentional builder/user decision, and include review_notes explaining why learning should stop. Does NOT affect saved main.py — use lock_code for that.",
+					"description": "Freeze this step's writes to the shared workflow skill. The skill still flows into its execution prompt — a locked step reads every other step's contributions and can never give anything back, so this is a real cost, not isolation. Runtime execution never auto-sets or auto-clears it. Setting true REQUIRES lock_learnings_reason; the call is rejected without one. Prefer learnings_access=\"read\" when the step simply has no reusable HOW to contribute — that is the ordinary way to say 'consumes but does not write', and it needs no reason. Does NOT affect saved main.py — use lock_code for that.",
+				},
+				"lock_learnings_reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Why this step's contribution is frozen. Required whenever lock_learnings is set true. State the evidence, not the intent: what was reviewed, and why further contribution from this step would make the shared skill worse rather than better. Example: 'Selectors verified stable across 12 runs since 2026-06; its last four contributions all restated existing entries in browser-session.md.' A later reviewer must be able to judge the freeze from this line without re-deriving it.",
 				},
 				"lock_code": map[string]interface{}{
 					"type":        "boolean",
@@ -4128,11 +4133,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"enum":        []string{"read", "read-write", "none"},
 					"description": "Access mode for this step against learnings/_global/ (SKILL.md + references/). Defaults to 'read' — every step sees the workflow's accumulated how-to knowledge in its prompt. 'read-write' — step contributes reusable execution HOW and requires a concrete learning_objective; use for browser/API/CLI/SDK/MCP/parsing/retry discoveries. Keep routing, validation, mechanical transform, aggregation/report-shaping, human approval, pure db/KB reader, and mature scripted steps read-only. 'none' — step neither reads global skill nor contributes; use rarely, only when shared HOW would mislead the step or token isolation is important. Omit to keep the default.",
 				},
-				"db_access": map[string]interface{}{
-					"type":        "string",
-					"enum":        []string{"read", "read-write"},
-					"description": "Compatibility field for this step's workflow database access. Runtime currently grants every workflow step managed read-write access: agentic steps receive query_workflow_db plus mutate_workflow_db, while saved scripted/application code retains absolute $DB_PATH compatibility. Existing 'read' values remain loadable but do not narrow runtime access; omit this field while uniform access is active.",
-				},
 				"knowledgebase_contribution": map[string]interface{}{
 					"type":        "string",
 					"description": "Natural-language contribution instruction. It becomes the step agent's contribution contract, injected into its post-completion self-review turn. KB writes only happen when this is non-empty AND knowledgebase_access grants write — an empty contribution means the step performs no KB writes regardless of access. Leave empty to skip KB updates for this step.",
@@ -4157,7 +4157,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"declared_execution_mode_reason": map[string]interface{}{
 					"type":        "string",
-					"description": "Audit trail: why the chosen execution mode is the best fit for this step. Not consumed by Go runtime, but preserved so future Pulse and plan-change reviewers reading step_config.json see the original rationale.",
+					"description": "Why the chosen execution mode fits this step. REQUIRED whenever declared_execution_mode is set. Not consumed by the Go runtime — it exists so future Pulse and plan-change reviewers reading step_config.json see the original rationale. State what makes the step deterministic (or not), citing the owning finding and evidence.",
 				},
 				"description_reviewed": map[string]interface{}{
 					"type":        "boolean",
@@ -4193,7 +4193,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"execution_tier": map[string]interface{}{
 					"type":        "string",
 					"enum":        []interface{}{"high", "medium", "low"},
-					"description": "Persistent execution tier override for this workflow step or evaluation step in tiered mode. Use high for subjective/ambiguous judgment, medium for normal checks, low for deterministic/file-shape checks. execution_llm still takes precedence, and execute_step(..., tier=...) can still override workflow/eval step tier for a single run.",
+					"description": "Persistent execution tier override for this workflow step or evaluation step in tiered mode. Use high for subjective/ambiguous judgment, medium for normal checks, low for deterministic/file-shape checks. execution_llm still takes precedence, and execute_step(..., tier=...) can still override workflow/eval step tier for a single run. REQUIRES execution_tier_reason. Note the hidden cost: pinning the tier DISABLES adaptive tiering for this step, so it stops promoting high->medium automatically after 3 stable runs. Prefer leaving it unset and letting adaptive tiering do the work.",
+				},
+				"execution_tier_reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Why this step's tier is pinned. Required whenever execution_tier is set. Cite the owning llm_ops_review finding id, the current state, and the evidence (and the human_input_id if the change was user-approved). If the evidence does not settle it, do not pin: raise a decision with create_human_input_request and park the finding awaiting_user.",
+				},
+				"execution_llm_reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Why this step is pinned to a specific model. Required whenever execution_llm is set. A pin outranks execution_tier entirely and will not follow provider-profile updates, so state the capability/cost comparison that justified it, citing the owning llm_ops_review finding id (and the human_input_id if approved).",
 				},
 				"validation_llm": map[string]interface{}{
 					"type":        "object",
@@ -4309,8 +4317,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.LearningObjective = strings.TrimSpace(s)
 				}
 			}
+			if val, ok := args["lock_learnings_reason"]; ok && val != nil {
+				if s, ok := val.(string); ok {
+					targetConfig.AgentConfigs.LockLearningsReason = strings.TrimSpace(s)
+				}
+			}
 			if val, ok := args["lock_learnings"]; ok && val != nil {
 				if b, ok := val.(bool); ok {
+					if err := validateLockLearningsChange(b, targetConfig.AgentConfigs.LockLearningsReason); err != nil {
+						return "", err
+					}
 					// Same protection: don't let accidental false overwrite a true value.
 					if b || targetConfig.AgentConfigs.LockLearnings == nil || !*targetConfig.AgentConfigs.LockLearnings {
 						targetConfig.AgentConfigs.LockLearnings = &b
@@ -4372,11 +4388,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.LearningsAccess = s
 				}
 			}
-			if val, ok := args["db_access"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.DBAccess = s
-				}
-			}
 			if val, ok := args["disable_parallel_tool_execution"]; ok && val != nil {
 				if b, ok := val.(bool); ok {
 					targetConfig.AgentConfigs.DisableParallelToolExecution = &b
@@ -4396,14 +4407,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.UseCodeExecutionMode = &b
 				}
 			}
-			if val, ok := args["declared_execution_mode"]; ok && val != nil {
-				if s, ok := val.(string); ok && s != "" {
-					targetConfig.AgentConfigs.DeclaredExecutionMode = s
-				}
-			}
+			// PLAT-060: reasons are read before their fields so a reason supplied in
+			// the same call satisfies its own validator.
 			if val, ok := args["declared_execution_mode_reason"]; ok && val != nil {
 				if s, ok := val.(string); ok {
 					targetConfig.AgentConfigs.DeclaredExecutionModeReason = strings.TrimSpace(s)
+				}
+			}
+			if val, ok := args["declared_execution_mode"]; ok && val != nil {
+				if s, ok := val.(string); ok && s != "" {
+					if err := validateDeclaredExecutionModeChange(s, targetConfig.AgentConfigs.DeclaredExecutionModeReason); err != nil {
+						return "", err
+					}
+					targetConfig.AgentConfigs.DeclaredExecutionMode = s
 				}
 			}
 			if val, ok := args["description_reviewed"]; ok && val != nil {
@@ -4416,9 +4432,23 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.ReviewNotes = strings.TrimSpace(s)
 				}
 			}
+			if val, ok := args["execution_tier_reason"]; ok && val != nil {
+				if s, ok := val.(string); ok {
+					targetConfig.AgentConfigs.ExecutionTierReason = strings.TrimSpace(s)
+				}
+			}
+			if val, ok := args["execution_llm_reason"]; ok && val != nil {
+				if s, ok := val.(string); ok {
+					targetConfig.AgentConfigs.ExecutionLLMReason = strings.TrimSpace(s)
+				}
+			}
 			if val, ok := args["execution_tier"]; ok && val != nil {
 				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.ExecutionTier = strings.ToLower(strings.TrimSpace(s))
+					tier := strings.ToLower(strings.TrimSpace(s))
+					if err := validateExecutionTierChange(tier, targetConfig.AgentConfigs.ExecutionTierReason); err != nil {
+						return "", err
+					}
+					targetConfig.AgentConfigs.ExecutionTier = tier
 				}
 			}
 
@@ -4465,6 +4495,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						provider, _ := llmMap["provider"].(string)
 						modelID, _ := llmMap["model_id"].(string)
 						if provider != "" && modelID != "" {
+							if err := validateExecutionLLMChange(true, targetConfig.AgentConfigs.ExecutionLLMReason); err != nil {
+								return "", err
+							}
 							publishedLLMID, _ := llmMap["published_llm_id"].(string)
 							options, _ := llmMap["options"].(map[string]interface{})
 							*f.target = &AgentLLMConfig{
@@ -4499,6 +4532,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// unrelated booleans); clear_fields is the explicit opt-in for removal.
 			var clearedFields []string
 			var unknownClearFields []string
+			var retiredClearFields []string
 			if rawClear, ok := args["clear_fields"]; ok && rawClear != nil {
 				if arr, ok := rawClear.([]interface{}); ok {
 					for _, v := range arr {
@@ -4508,6 +4542,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						}
 						if clearStepConfigField(targetConfig, name) {
 							clearedFields = append(clearedFields, name)
+						} else if why, retired := isRetiredStepConfigClearField(name); retired {
+							// PLAT-061: acknowledged no-op. Do not fail the call over a
+							// field that is already ignored, and do not claim a change.
+							retiredClearFields = append(retiredClearFields, fmt.Sprintf("%s (%s)", name, why))
 						} else {
 							unknownClearFields = append(unknownClearFields, name)
 						}
@@ -4522,6 +4560,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// Collect errors (block save) and warnings (save but inform).
 			var errors []string
 			warnings := make([]string, 0)
+			if len(retiredClearFields) > 0 {
+				warnings = append(warnings, fmt.Sprintf("clear_fields named retired fields, which was a no-op: %s. Any stored value is already ignored by the runtime; nothing needed clearing.", strings.Join(retiredClearFields, "; ")))
+			}
 
 			// 1. Validate step ID exists in the plan.
 			// Refresh from disk first so steps just added by other plan-mod tools in the
@@ -6253,6 +6294,20 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"maximum":     maxRunRetentionCount,
 					"description": "Number of backup run/eval iterations to keep, excluding active iteration-0. Defaults to 5 when omitted. Raise this for workflows whose Pulse or Goal Advisor reviews need a wider evidence window.",
 				},
+				"execution_max_turns": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "Workflow-level default max turns per step (stored in execution_defaults, applies to EVERY step unless a step sets its own execution_max_turns). Default when omitted: 500. Use for a workflow whose steps generally need a different ceiling than the platform default; prefer per-step tuning via update_step_config when only some steps need it. Pass null to clear the workflow-level default.",
+				},
+				"disable_parallel_tool_execution": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Workflow-level default (stored in execution_defaults, applies to EVERY step unless a step overrides it) forcing one tool call per turn. Use only when most steps in this workflow need strictly sequential tool calls (e.g. a workflow that is browser-driven throughout); prefer per-step tuning via update_step_config when only some steps need it. Pass null to clear the workflow-level default.",
+				},
+				"enabled_custom_tools": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Workflow-level default workspace/custom tools (stored in execution_defaults, applies to EVERY step unless a step sets its own enabled_custom_tools). Format: 'category:tool' or 'category:*', same categories as update_step_config's enabled_custom_tools. Use only when nearly every step in this workflow needs the same tools; prefer per-step tuning via update_step_config otherwise. Pass an empty array to clear the workflow-level default.",
+				},
 				"post_run_monitor": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed review/fix work, ordinary background agents perform the selected work, and the parent consolidates results before the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
@@ -7321,6 +7376,111 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				logger.Info(fmt.Sprintf("Updated workflow run_retention_count=%d", count))
 			}
 
+			// --- Execution Defaults (workflow-level overrides applied to every step) ---
+			_, hasExecMaxTurns := args["execution_max_turns"]
+			_, hasDisableParallel := args["disable_parallel_tool_execution"]
+			_, hasEnabledCustomTools := args["enabled_custom_tools"]
+			if hasExecMaxTurns || hasDisableParallel || hasEnabledCustomTools {
+				content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+				if err != nil {
+					return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
+				}
+				var manifest map[string]interface{}
+				if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+					return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
+				}
+				execDefaults, _ := manifest["execution_defaults"].(map[string]interface{})
+				if execDefaults == nil {
+					execDefaults = map[string]interface{}{}
+				}
+
+				var summary []string
+
+				if hasExecMaxTurns {
+					raw := args["execution_max_turns"]
+					if raw == nil {
+						delete(execDefaults, "execution_max_turns")
+						summary = append(summary, "execution_max_turns: cleared (steps use their own/default max turns)")
+					} else {
+						parseInt := func(raw interface{}) (int, bool) {
+							switch v := raw.(type) {
+							case int:
+								return v, true
+							case int64:
+								return int(v), true
+							case float64:
+								if v == float64(int(v)) {
+									return int(v), true
+								}
+							case json.Number:
+								if n, err := v.Int64(); err == nil {
+									return int(n), true
+								}
+							}
+							return 0, false
+						}
+						turns, ok := parseInt(raw)
+						if !ok || turns < 1 {
+							return "Error: execution_max_turns must be a positive integer (or null to clear).", nil
+						}
+						execDefaults["execution_max_turns"] = turns
+						summary = append(summary, fmt.Sprintf("execution_max_turns: %d (applies to every step)", turns))
+					}
+				}
+
+				if hasDisableParallel {
+					raw := args["disable_parallel_tool_execution"]
+					if raw == nil {
+						delete(execDefaults, "disable_parallel_tool_execution")
+						summary = append(summary, "disable_parallel_tool_execution: cleared")
+					} else {
+						disabled, isBool := raw.(bool)
+						if !isBool {
+							return "Error: disable_parallel_tool_execution must be a boolean (or null to clear).", nil
+						}
+						execDefaults["disable_parallel_tool_execution"] = disabled
+						state := "disabled — steps emit one tool call per turn"
+						if !disabled {
+							state = "explicitly enabled — parallel tool calls allowed"
+						}
+						summary = append(summary, fmt.Sprintf("disable_parallel_tool_execution: %t (%s, applies to every step)", disabled, state))
+					}
+				}
+
+				if hasEnabledCustomTools {
+					tools := extractStringArray("enabled_custom_tools")
+					if len(tools) == 0 {
+						delete(execDefaults, "enabled_custom_tools")
+						summary = append(summary, "enabled_custom_tools: cleared (steps use their own/preset tools)")
+					} else {
+						execDefaults["enabled_custom_tools"] = tools
+						summary = append(summary, fmt.Sprintf("enabled_custom_tools: %v (applies to every step)", tools))
+					}
+				}
+
+				if len(execDefaults) == 0 {
+					delete(manifest, "execution_defaults")
+				} else {
+					manifest["execution_defaults"] = execDefaults
+				}
+				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+
+				out, err := json.MarshalIndent(manifest, "", "  ")
+				if err != nil {
+					return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
+				}
+				if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(out)); err != nil {
+					return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
+				}
+
+				anyChanged = true
+				sb.WriteString("\n### Execution Defaults (updated)\n")
+				for _, line := range summary {
+					sb.WriteString(fmt.Sprintf("- %s\n", line))
+				}
+				logger.Info(fmt.Sprintf("Updated workflow execution_defaults: %v", summary))
+			}
+
 			// --- Per-run monitor ---
 			if raw, ok := args["post_run_monitor"]; ok && raw != nil {
 				enabled, isBool := raw.(bool)
@@ -8371,6 +8531,8 @@ var reviewPlanAgentSystemTemplate = MustRegisterTemplate("reviewPlanAgentSystem"
 
 You are a critical reviewer of the current workflow design. Your job is not to optimize or rewrite the plan. Your job is to challenge the decisions already made and identify where the current plan or its dependent artifacts are weak, unjustified, risky, overfit, stale, or internally inconsistent.
 
+{{.DBGuidance}}
+
 This is a **read-only review**:
 - do not modify files
 - do not invent missing evidence
@@ -8508,6 +8670,8 @@ You are a read-only reviewer of workflow runtime performance. Your job is to det
 2. which latency is necessary versus wasteful
 3. how to make the workflow faster without compromising the objective or success criteria
 
+{{.DBGuidance}}
+
 This is a **read-only review**:
 - do not modify files
 - do not recommend speedups that obviously sacrifice the real goal
@@ -8625,6 +8789,8 @@ You are a read-only reviewer of workflow cost efficiency. Your job is to determi
 1. where the workflow is spending tokens and money
 2. which spend is necessary versus wasteful
 3. how to reduce cost without compromising the objective or success criteria
+
+{{.DBGuidance}}
 
 This is a **read-only review**:
 - do not modify files
@@ -8746,6 +8912,8 @@ Your job is to compare each step's **current description** with its **saved main
 5. **Fabricated data** — script writes output data without actually fetching/computing it from real sources (MCP tools, APIs, input files)
 6. **MCP tool usage** — incorrect server/tool names in call_mcp(), missing API discovery, guessed parameter names instead of using get_api_spec
 7. **Persistent-store confusion** — script writes to the wrong store. Stores: `+"`"+`learnings/`+"`"+` (HOW to run, updated by direct step-learning turns), `+"`knowledgebase/context/`"+` (user-supplied runtime context, never step-written), `+"`"+`knowledgebase/notes/`+"`"+` (workflow-discovered durable narrative observations — written by the post-step KB update agent in agent mode, or by step agents in direct-write mode), `+"`"+`db/db.sqlite`+"`"+` (structured durable SQLite tables — step-owned; upsert via `+"`INSERT ... ON CONFLICT`"+`, never recreate a table), and `+"`db/assets/`"+` (durable media/file assets referenced by db rows/reports). Flag scripts that write directly under `+"`"+`knowledgebase/notes/`+"`"+` outside of direct-write mode, write under `+"`knowledgebase/context/`"+`, stash durable cross-run state in per-step output files when it belongs in `+"`"+`db/`+"`"+`, store large assets in the DB instead of `+"`db/assets/`"+`, or DROP/recreate `+"`"+`db/db.sqlite`+"`"+` tables instead of upserting.
+
+{{.DBGuidance}}
 
 This is a **read-only review** — do not modify any files.
 
@@ -8871,6 +9039,8 @@ You are a background agent spawned by the workflow builder to perform a specific
 
 For shell commands, use absolute workspace paths: `+"`{{.AbsWorkspacePath}}/...`"+`. For workspace file tools that expect workspace-relative paths, use `+"`{{.WorkspacePath}}/...`"+`. Do not use bare `+"`runs/...`"+`, `+"`evaluation/...`"+`, `+"`planning/...`"+`, `+"`db/...`"+`, or similar paths unless a tool explicitly requires a path relative to the workflow root. Do not use host paths outside workspace-docs.
 
+{{.DBGuidance}}
+
 ## Instructions
 Complete the task described in the user message below. Be thorough and specific in your output.
 When you finish, summarize what you did and any important findings.
@@ -8899,6 +9069,7 @@ func (agent *StepCodeReviewAgent) Execute(ctx context.Context, templateVars map[
 	if _, has := templateVars["MainPyAuthoringRules"]; !has {
 		templateVars["MainPyAuthoringRules"] = BuildMainPyAuthoringRules() + BrowserAuthoringRulesFromTemplateVars(templateVars)
 	}
+	templateVars["DBGuidance"] = BuildManagedWorkflowDBGuidance(DBAccessRead)
 	var systemPrompt, userMessage strings.Builder
 	if err := reviewStepCodeAgentSystemTemplate.Execute(&systemPrompt, templateVars); err != nil {
 		return "", nil, err
@@ -8928,6 +9099,7 @@ func (agent *WorkflowPlanReviewAgent) Execute(ctx context.Context, templateVars 
 	if agent.BaseOrchestratorAgent.BaseAgent() == nil || agent.BaseOrchestratorAgent.BaseAgent().Agent() == nil {
 		return "", nil, fmt.Errorf("agent not initialized")
 	}
+	templateVars["DBGuidance"] = BuildManagedWorkflowDBGuidance(DBAccessRead)
 	var systemPrompt, userMessage strings.Builder
 	if err := reviewPlanAgentSystemTemplate.Execute(&systemPrompt, templateVars); err != nil {
 		return "", nil, err
@@ -8957,6 +9129,7 @@ func (agent *WorkflowTimingReviewAgent) Execute(ctx context.Context, templateVar
 	if agent.BaseOrchestratorAgent.BaseAgent() == nil || agent.BaseOrchestratorAgent.BaseAgent().Agent() == nil {
 		return "", nil, fmt.Errorf("agent not initialized")
 	}
+	templateVars["DBGuidance"] = BuildManagedWorkflowDBGuidance(DBAccessRead)
 	var systemPrompt, userMessage strings.Builder
 	if err := reviewWorkflowTimingAgentSystemTemplate.Execute(&systemPrompt, templateVars); err != nil {
 		return "", nil, err
@@ -8986,6 +9159,7 @@ func (agent *WorkflowCostReviewAgent) Execute(ctx context.Context, templateVars 
 	if agent.BaseOrchestratorAgent.BaseAgent() == nil || agent.BaseOrchestratorAgent.BaseAgent().Agent() == nil {
 		return "", nil, fmt.Errorf("agent not initialized")
 	}
+	templateVars["DBGuidance"] = BuildManagedWorkflowDBGuidance(DBAccessRead)
 	var systemPrompt, userMessage strings.Builder
 	if err := reviewWorkflowCostsAgentSystemTemplate.Execute(&systemPrompt, templateVars); err != nil {
 		return "", nil, err
@@ -10004,6 +10178,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 		"WorkspacePath":    workspacePath,
 		"AbsWorkspacePath": absPromptWorkspacePath(workspacePath),
 		"Instruction":      instruction,
+		"DBGuidance":       BuildManagedWorkflowDBGuidance(DBAccessReadWrite),
 		"SkillPrompt":      skillPrompt,
 		"SecretPrompt":     secretPrompt,
 		"BrowserPrompt":    browserPrompt,

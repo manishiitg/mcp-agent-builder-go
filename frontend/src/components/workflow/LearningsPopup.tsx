@@ -162,7 +162,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   // Loading states for individual items
   const [loadingStepIds, setLoadingStepIds] = useState<Set<string>>(new Set())
 
-  const [updatingLockStepIds, setUpdatingLockStepIds] = useState<Set<string>>(new Set())
   
   // Delete state
   const [deletingStepIds, setDeletingStepIds] = useState<Set<string>>(new Set())
@@ -438,39 +437,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
         const next = new Set(prev)
         next.delete(stepId)
         return next
-      })
-    }
-  }
-
-  const toggleLock = async (stepId: string, isCurrentlyLocked: boolean) => {
-    if (!workspacePath || updatingLockStepIds.has(stepId)) return
-
-    setUpdatingLockStepIds(prev => new Set(prev).add(stepId))
-
-    try {
-      const step = plan?.steps?.find(s => s.id === stepId)
-      const metadata = learnings[stepId]
-      const currentConfigs = step?.agent_configs || (metadata ? { lock_learnings: metadata.lock_learnings } : {})
-
-      await agentApi.updateStepConfig(workspacePath, stepId, {
-        ...currentConfigs,
-        lock_learnings: !isCurrentlyLocked
-      })
-
-      // Refresh learnings
-      const response = await agentApi.getAllStepLearnings(workspacePath)
-      if (response.success) {
-        setLearnings(parseLearningsResponse(response.learnings || {}))
-      }
-    } catch (err: unknown) {
-      console.error('[LearningsPopup] Error toggling lock:', err)
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      setError('Failed to update lock status: ' + errorMessage)
-    } finally {
-      setUpdatingLockStepIds(prev => {
-        const newSet = new Set(prev)
-        newSet.delete(stepId)
-        return newSet
       })
     }
   }
@@ -1120,7 +1086,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                 const isExpanded = expandedStepIds.has(stepId)
                 const isLoadingContent = loadingStepIds.has(stepId)
                 const cachedContent = learningContentCache[stepId]
-                const isUpdatingLock = updatingLockStepIds.has(stepId)
 
                 // Determine step type label and badge color
                 const getStepTypeLabel = () => {
@@ -1280,37 +1245,12 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                       </>
                                     )}
                                   </div>
-                                  <div className="w-px h-3 bg-border/80 mx-1" />
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleLock(stepId, isLocked)
-                                    }}
-                                    disabled={isUpdatingLock}
-                                    className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                      isLocked
-                                        ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-400'
-                                        : 'bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground'
-                                    }`}
-                                    title={isLocked ? "Unlock learnings" : "Lock learnings manually"}
-                                  >
-                                    {isUpdatingLock ? (
-                                      <>
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        <span>Updating...</span>
-                                      </>
-                                    ) : isLocked ? (
-                                      <>
-                                        <Unlock className="w-3 h-3" />
-                                        <span>Unlock</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Lock className="w-3 h-3" />
-                                        <span>Lock</span>
-                                      </>
-                                    )}
-                                  </button>
+                                  {/* The lock toggle was removed deliberately (PLAT-059). Locking a
+                                      step is a considered decision, not a click: under the shared
+                                      topic-organised skill a locked step reads every other step's
+                                      contributions and can never give anything back, and it now
+                                      requires a written reason that only the agent path can carry.
+                                      State stays visible here; set it via chat or Pulse. */}
                                 </div>
                               )}
 

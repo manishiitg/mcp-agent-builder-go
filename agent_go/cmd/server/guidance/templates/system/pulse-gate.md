@@ -1,5 +1,24 @@
 ## Pulse Gate / Worklist
 
+**TEMPORARY — core-system verification phase.** Do not select `goal_advisor`,
+`llm_ops_review`, or `strategy_auditor` as due for any workflow, regardless of
+evidence, cadence, or how long they have been deferred. Record each as skipped
+with reason `"temporarily disabled for core-system verification"` and a
+`next_check_after_run_id` rather than a time boundary. **`workflow_review` is
+the only selectable module during this phase**, so the two-module cap is not
+reachable — select it when its own evidence justifies it and skip the other
+three every pass.
+
+This deliberately narrows Pulse to one loop: **steps raise concerns →
+Engineering Review repairs them**. The priority is confirming that basic
+workflow execution, the reflection turn (PLAT-055) and the scheduler watchdog
+(PLAT-054) work on real producing runs before layering ops, strategy, or goal
+review back on top. Note that this suppression also reduces new finding volume
+on its own — do not read a shrinking backlog during this phase as evidence that
+a platform fix worked.
+
+Remove this section to restore normal four-module selection.
+
 Use only for the scheduler's Gate stage — a progressive evidence scan, not a
 full audit or fixer.
 
@@ -22,7 +41,29 @@ Gate owns the durable worklist and the cheap per-run goal observation checkpoint
 Do not write HTML, a recovery ledger, or any workflow artifact. The Pulse popup
 projects the durable recorded state directly.
 
-Call `record_pulse_worklist` exactly once with one decision for every canonical
+## Choose the pass shape before selecting modules
+
+Choose one `mode` and give a concrete `mode_reason` in `record_pulse_worklist`.
+This is an agentic judgment from the complete backlog and new evidence; no
+numeric issue threshold chooses it for you.
+
+- `backlog_drain`: retained active issues already provide the next useful work.
+  Select only the owning Engineering/Ops work needed to verify prior changes and
+  repair those roots. Do not select broad discovery or Strategy/Goal merely
+  because they are normally due.
+- `discovery`: materially new run, plan, store, or operational evidence can
+  reveal a different root cause not explained by the retained backlog.
+- `strategy`: a product/goal question warrants Strategy Auditor and/or Goal
+  Advisor. Do not use it as a disguised bug-review pass.
+- `observe`: no repair, verification, discovery, or strategy work is justified;
+  wait for the named next evidence boundary.
+
+Return to `discovery` once the retained backlog is either verified, waiting on
+an explicit producing run/user/external boundary, or has no safe repair left.
+An old backlog must not suppress a new failed or suspicious production run.
+
+Call `record_pulse_worklist` exactly once with the selected `mode`, its
+`mode_reason`, and one decision for every canonical
 module: `workflow_review`, `llm_ops_review`, `strategy_auditor`,
 `goal_advisor`. These are perspectives, not artifact types. `workflow_review`
 is Engineering Review: execution bugs, report/eval implementation bugs,

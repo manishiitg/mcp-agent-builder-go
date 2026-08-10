@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.21"
+const WorkflowContractCurrentVersion = "1.0.22"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -39,6 +39,7 @@ const workflowContractCompactPulseReportVersion = "1.0.18"
 const workflowContractLightweightPulseReportVersion = "1.0.19"
 const workflowContractExecutivePulseJournalVersion = "1.0.20"
 const workflowContractArtifactPurityVersion = "1.0.21"
+const workflowContractLearningsLockAuditVersion = "1.0.22"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -263,7 +264,6 @@ type WorkflowExecutionDefaults struct {
 	AlwaysUseSameRun bool `json:"always_use_same_run"`
 	// Global step overrides (replaces step_override.json)
 	DisableLearning              *bool    `json:"disable_learning,omitempty"`
-	GlobalSkillObjective         string   `json:"global_skill_objective,omitempty"`
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`
 	ExecutionMaxTurns            *int     `json:"execution_max_turns,omitempty"`
 	EnabledCustomTools           []string `json:"enabled_custom_tools,omitempty"`
@@ -557,10 +557,23 @@ func ReadWorkflowManifest(ctx context.Context, workspacePath string) (*WorkflowM
 	applyManifestDefaults(&m)
 	llmConfigMigrated := workflowtypes.NormalizePresetLLMConfig(m.Capabilities.LLMConfig)
 
-	// Persist auto-assigned schedule IDs so subsequent lookups find the same UUID.
-	// Skip the write-back when we had to drop a malformed config block on read —
-	// rewriting now would silently erase the user's backup/publish config from disk.
-	if (hadMissingLabel || hadEmptyScheduleID || llmConfigMigrated) && len(m.MalformedConfig) == 0 {
+	// A field retired from the Go schema (e.g. a past execution_defaults knob
+	// that no longer does anything) otherwise lingers in workflow.json forever:
+	// json.Unmarshal above already silently dropped it from m, but nothing ever
+	// rewrites the file to match. Detect that drift on every open/run so stale
+	// prose can't sit there implying behavior it no longer has.
+	staleTopLevel, staleExecutionDefaults, staleCapabilities := staleManifestFields([]byte(content))
+	hasStaleFields := len(staleTopLevel) > 0 || len(staleExecutionDefaults) > 0 || len(staleCapabilities) > 0
+
+	// Persist auto-assigned schedule IDs (and any stale-field prune) so
+	// subsequent lookups see the cleaned-up manifest. Skip the write-back when
+	// we had to drop a malformed config block on read — rewriting now would
+	// silently erase the user's backup/publish config from disk.
+	if (hadMissingLabel || hadEmptyScheduleID || llmConfigMigrated || hasStaleFields) && len(m.MalformedConfig) == 0 {
+		if hasStaleFields {
+			log.Printf("[MANIFEST] %s: pruning retired field(s) no longer in schema — top-level=%v execution_defaults=%v capabilities=%v",
+				workspacePath, staleTopLevel, staleExecutionDefaults, staleCapabilities)
+		}
 		if err := WriteWorkflowManifest(ctx, workspacePath, &m); err != nil {
 			log.Printf("[WARN] ReadWorkflowManifest: failed to persist manifest migrations for %s: %v", workspacePath, err)
 		}
@@ -580,6 +593,66 @@ func workflowLabelFromWorkspacePath(workspacePath string) string {
 		return "Workflow"
 	}
 	return normalized
+}
+
+// staleManifestFields reports JSON object keys present in raw workflow.json
+// content but absent from the current Go schema, scoped to the top-level
+// manifest plus its two plain nested config objects, execution_defaults and
+// capabilities — the two places retired per-field knobs have historically
+// accumulated. backup, publish, pulse, and schedules are deliberately NOT
+// inspected here: those are agent-authored blocks that intentionally allow
+// shapes the Go structs don't fully model (see stripOptionalConfigBlocks),
+// so treating their contents as "stale" would risk deleting live data.
+func staleManifestFields(content []byte) (topLevel, executionDefaults, capabilities []string) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(content, &top); err != nil {
+		return nil, nil, nil
+	}
+	topLevel = unknownManifestKeys(top, knownJSONFieldNames(reflect.TypeOf(WorkflowManifest{})))
+	if raw, ok := top["execution_defaults"]; ok {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			executionDefaults = unknownManifestKeys(obj, knownJSONFieldNames(reflect.TypeOf(WorkflowExecutionDefaults{})))
+		}
+	}
+	if raw, ok := top["capabilities"]; ok {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			capabilities = unknownManifestKeys(obj, knownJSONFieldNames(reflect.TypeOf(WorkflowCapabilities{})))
+		}
+	}
+	return topLevel, executionDefaults, capabilities
+}
+
+// knownJSONFieldNames returns the set of JSON key names a struct type declares
+// via its `json` tags (ignoring "-" and any ",omitempty"/",string" options).
+func knownJSONFieldNames(t reflect.Type) map[string]bool {
+	names := make(map[string]bool, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" {
+			continue
+		}
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		names[name] = true
+	}
+	return names
+}
+
+// unknownManifestKeys returns the keys of obj that aren't in known, sorted for
+// stable log output.
+func unknownManifestKeys(obj map[string]json.RawMessage, known map[string]bool) []string {
+	var extra []string
+	for key := range obj {
+		if !known[key] {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	return extra
 }
 
 // stripOptionalConfigBlocks removes the agent-authored optional config blocks

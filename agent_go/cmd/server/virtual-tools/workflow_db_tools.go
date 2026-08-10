@@ -63,6 +63,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query", "integrity_check"}, "description": "Optional. Omit it and pass sql to run a statement. Use describe to list schemas or columns; integrity_check runs the fixed guarded SQLite integrity check."},
 				"table":    map[string]any{"type": "string", "description": "Optional table name for action=describe. Omit to list all table/view definitions."},
 				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or allowlisted read-only PRAGMA statement. Supported integrity checks include PRAGMA integrity_check, quick_check[(N)], and foreign_key_check[(table)]. This is the normal way to use the tool."},
+				"params":   map[string]any{"type": "array", "description": "Optional positional values for ? placeholders in sql."},
 				"query":    map[string]any{"type": "string", "description": "Compatibility alias for sql. Prefer sql. If both are supplied they must be identical."},
 				"max_rows": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum rows to return for action=query. Default 500."},
 			},
@@ -169,7 +170,7 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 				sortedArgumentKeys(args),
 			)
 		}
-		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, MaxRows: maxRows})
+		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, Params: workflowDBParams(args), MaxRows: maxRows})
 		if err != nil {
 			// A bare "no such column: input_id" tells the caller only that its guess
 			// was wrong, so it guesses again — one overnight run spent 18 tool calls
@@ -277,6 +278,11 @@ func workflowDBReadSQLArgument(args map[string]any) (string, error) {
 		return sqlText, nil
 	}
 	return queryText, nil
+}
+
+func workflowDBParams(args map[string]any) []interface{} {
+	params, _ := args["params"].([]interface{})
+	return params
 }
 
 func WorkflowDBToolNames() map[string]bool {

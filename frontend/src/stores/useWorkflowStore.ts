@@ -1462,7 +1462,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
         // Check if any events are completion events
         // For workflow mode: workflow_end, request_human_feedback
         // For chat mode: unified_completion, agent_end, conversation_end, etc.
+        // PLAT-064: 'workflow_end' is never emitted by any Go code — kept only so
+        // this doesn't silently regress if it's ever wired up. 'orchestrator_end'
+        // is the real signal (BaseOrchestrator.EmitOrchestratorEnd).
         const completionEventTypes = [
+          'orchestrator_end',
           'workflow_end',
           'request_human_feedback',
           'unified_completion',

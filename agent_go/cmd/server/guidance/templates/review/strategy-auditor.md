@@ -40,7 +40,7 @@ inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
    lag, perfect-execution counterfactual, competing explanations, and exact
    next checkpoint. Return a compact non-HTML packet with
    `module=strategy_auditor`, `verdict`, `next_check`, and every evidence-backed
-   ordered finding. Each finding includes stable `finding_id`, `target_key`, severity,
+   ordered finding. Each finding includes no invented identifier, severity,
    claim/mechanism, exact evidence, confidence, `recommended_fix` limited to an
    evidence or module handoff rather than a plan mutation, verification, and
    `user_judgment_required` with reason.

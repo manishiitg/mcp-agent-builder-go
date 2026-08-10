@@ -130,44 +130,43 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceClosingItems(ctx conte
 	stepID := seq.GetID()
 	desc := seq.GetDescription()
 
-	// Learnings: same gate the regular-step path uses (learnings_access write +
-	// a non-empty learning_objective; BuildLearningsContributionTurn returns ""
-	// when the objective is empty, so this is double-gated).
-	if shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode) && !hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex) {
-		if msg := hcpo.buildLearningsContributionTurn(stepID, desc, strings.TrimSpace(cfg.LearningObjective), false); msg != "" {
-			items = append(items, MessageSequenceItem{
-				ID:          fmt.Sprintf("%s-learnings-contribution", stepID),
-				Type:        "user_message",
-				Kind:        "learning",
-				Title:       "Learnings contribution",
-				Message:     msg,
-				WriteAccess: MessageSequenceWriteAccess{Learnings: true},
-			})
-		}
+	// PLAT-055. One reflection item, not a learnings item followed by a
+	// knowledgebase item. Appending them separately reproduced the same defect
+	// the regular-step path had: the agent chose a destination based on which
+	// turn it happened to be in rather than on which store owns the content.
+	learningsDue := shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode) &&
+		!hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex)
+	kbAccess := resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())
+	kbContribution := strings.TrimSpace(kbContributionForPrompt(cfg))
+	// Under write_method=agent the constraint layer strips KB from every item's
+	// guard, so a KB item here would be a guaranteed-denied write; agent-mode
+	// contributions are handled by maybeEnqueueKBUpdate after the sequence.
+	kbDue := kbContribution != "" && kbAccessAllowsWrite(kbAccess)
+
+	input := StepReflectionTurnInput{
+		StepID:              stepID,
+		StepDescription:     desc,
+		LearningsTargetPath: hcpo.directLearningsPromptTargetPath(),
+		HasBrowserAccess:    hcpo.HasBrowserCapability(),
+		DBTableNames:        hcpo.reflectionDBTableNames(ctx),
+	}
+	if learningsDue {
+		input.LearningObjective = strings.TrimSpace(cfg.LearningObjective)
+		input.SkillIndexLines = hcpo.reflectionSkillIndexLines(ctx)
+	}
+	if kbDue {
+		input.KBAccess = kbAccess
+		input.KBContribution = kbContribution
 	}
 
-	// Knowledgebase: resolved write-capable access + a non-empty contribution
-	// instruction + DIRECT write method. Under write_method=agent the constraint
-	// layer strips KB from every item's guard (notes/ is only writable by the
-	// post-step KB update agent), so appending this turn would create a
-	// guaranteed-denied write: the prompt promises access enforcement refuses.
-	// Agent-mode contributions are handled by maybeEnqueueKBUpdate after the
-	// sequence completes (see the message-sequence dispatch path).
-	if contribution := strings.TrimSpace(kbContributionForPrompt(cfg)); contribution != "" &&
-		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) {
-		var b strings.Builder
-		b.WriteString("## Knowledgebase Contribution (dedicated turn)\n\n")
-		b.WriteString("The sequence is complete. In this turn you have WRITE access to the knowledgebase. Fulfill this step's knowledgebase contribution, then stop.\n\n")
-		b.WriteString("**Contribution instruction:**\n")
-		b.WriteString(contribution)
-		b.WriteString("\n\nWrite durable, deduplicated notes under `knowledgebase/notes/`. If there is nothing new worth recording, say so explicitly and write nothing.")
+	if msg := BuildStepReflectionTurn(input); msg != "" {
 		items = append(items, MessageSequenceItem{
-			ID:          fmt.Sprintf("%s-kb-contribution", stepID),
+			ID:          fmt.Sprintf("%s-reflection", stepID),
 			Type:        "user_message",
-			Kind:        "knowledgebase",
-			Title:       "Knowledgebase contribution",
-			Message:     b.String(),
-			WriteAccess: MessageSequenceWriteAccess{Knowledgebase: true},
+			Kind:        "learning",
+			Title:       "Reflection",
+			Message:     msg,
+			WriteAccess: MessageSequenceWriteAccess{Learnings: learningsDue, Knowledgebase: kbDue},
 		})
 	}
 	return items

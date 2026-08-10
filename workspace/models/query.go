@@ -8,6 +8,8 @@ type QueryRequest struct {
 	// SQL is the read-only query to run. The server validates the statement and
 	// uses a WAL-capable connection with query_only enabled.
 	SQL string `json:"sql" binding:"required"`
+	// Params binds positional values for ? placeholders.
+	Params []interface{} `json:"params,omitempty"`
 	// MaxRows bounds rows returned to the caller. Zero uses the server default.
 	MaxRows int `json:"max_rows,omitempty"`
 }

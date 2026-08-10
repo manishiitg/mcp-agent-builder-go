@@ -2334,13 +2334,57 @@ finding before doing any discovery and calls the typed
 `PULSE_VERIFICATION_JSON` text transport; the lifecycle behavior is unchanged.
 The Fixer routes it: `passed` closes as `fixed_verified`,
 `failed` reopens, `inconclusive` leaves it awaiting the boundary it still names.
-Verification does not count against the finding cap, so a reviewer never has to
-choose between confirming past work and finding new problems.
+Verification happens before discovery, so a reviewer never chooses between
+confirming past work and describing fresh symptoms.
 
 This is what the 13 reopens were asking for. They were not evidence that
 verification is weak; they were fixes waiting on runs that then completed with
 nobody assigned to check them, so each pass repaired them again. rtslatency
 carried one finding at `seen_count` 4 for exactly this reason.
+
+### Decision: one public issue identity and semantic backlog consolidation (2026-08-08)
+
+**Status: implemented and covered by focused lifecycle, server-tool, and UI
+command tests.** Upwork exposed the prior design failure: reviews could create a
+new durable identity whenever their wording changed, so the queue grew while
+repairs did not keep pace. The internal fingerprint is still the database join
+key, but it is no longer an agent-facing contract.
+
+- Every Pulse tool now accepts the visible `PUL-…` `issue_id`; backlog and Gate
+  projections redact fingerprints and attempt IDs.
+- `record_pulse_finding(issue_id=…)` updates the existing root cause even when
+  the current wording or evidence path differs.
+- `merge_pulse_issues` lets the agent retire proven symptom duplicates into one
+  canonical root cause without deleting their events, attempts, or proof.
+- The Review+Fix contract is backlog-first: verify, repair, or classify active
+  issues before discovery. A new issue needs a distinct repair, owner, or proof
+  boundary. There is deliberately **no numeric finding cap**.
+- `get_pulse_state(view="backlog")` reports active, terminal, and merged counts,
+  and `/pulse-backlog` performs a one-time semantic cleanup without editing
+  workflow artifacts.
+
+This is not automated keyword merging. Causal sameness remains agentic; Go
+only preserves identity, history, and queue state after that judgment.
+
+### Decision: Gate-selected backlog-drain mode (2026-08-08)
+
+**Status: implemented and covered by server tests.** A large active queue is
+not itself a reason to buy another broad audit. The Gate now records one
+agent-selected mode alongside its complete module worklist:
+
+- `backlog_drain` — verify prior changes whose evidence has arrived, then repair
+  retained active root causes; do not launch broad discovery or product advisors.
+- `discovery` — investigate material new run, plan, store, or operational
+  evidence that the retained backlog does not explain.
+- `strategy` — run only selected Strategy Auditor/Goal Advisor product work.
+- `observe` — run no review/fix work and wait for an explicit evidence boundary.
+
+The mode and its reason are durable per Pulse run and are returned by
+`get_pulse_state(view="module", pulse_run_id=…)`. The following Review+Fix
+message sequence reads that stored mode before dispatching children. Go only
+validates and persists the finite mode vocabulary; it does not apply an issue
+count threshold or select reviewers. This keeps the system agentic while
+preventing a large unchanged backlog from repeatedly paying for rediscovery.
 
 ### Confirmed defect: text-encoded verification could discard a complete review (2026-08-03)
 

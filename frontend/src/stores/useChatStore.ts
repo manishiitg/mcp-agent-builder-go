@@ -2557,9 +2557,13 @@ export const useChatStore = create<ChatState>()(
         
         const mode = tab.metadata?.mode || 'multi-agent'
         
-        // Check if any events are completion events
+        // Check if any events are completion events.
+        // PLAT-064: 'workflow_end' is never emitted by any Go code — the real
+        // signal is 'orchestrator_end' (BaseOrchestrator.EmitOrchestratorEnd).
+        // Before this fix a workflow that completed without ever requesting
+        // human feedback would never satisfy this check.
         const completionEventTypes = mode === 'workflow'
-          ? ['workflow_end', 'request_human_feedback']
+          ? ['orchestrator_end', 'workflow_end', 'request_human_feedback']
           : ['unified_completion', 'agent_end', 'conversation_end', 'conversation_error', 'agent_error']
         
         return events.some(event => completionEventTypes.includes(event.type))

@@ -143,6 +143,19 @@ const (
 // The preset-level UseKnowledgebase flag is a prerequisite (when off, all steps are
 // forced to "none" regardless of explicit setting); it controls whether knowledgebase/
 // exists at all, not whether any given step can touch it.
+// resolveKnowledgebaseAccess returns the effective knowledgebase_access for a
+// step. Explicit value wins. Unset mirrors resolveLearningsAccess's already-safe
+// default pattern rather than introducing a new one: read by default (every
+// step sees KB context, same as learnings), auto-promoted to read-write only
+// when a contribution is already staged.
+//
+// PLAT-055 / K. Before this, unset silently meant KBAccessNone — no read, no
+// write — which is a genuine trap distinct from an operator's deliberate
+// KBAccessNone: rtslatency's two worst-offending steps had no other legitimate
+// destination for their infra-terrain and cost-baseline findings during
+// execution, because nothing was ever configured either way. This does not
+// touch that case (kb_access:"none" is an explicit value and always wins) — it
+// only removes the trap for steps nobody configured at all.
 func resolveKnowledgebaseAccess(stepConfig *AgentConfigs, presetEnabled bool) string {
 	if !presetEnabled {
 		return KBAccessNone
@@ -153,7 +166,10 @@ func resolveKnowledgebaseAccess(stepConfig *AgentConfigs, presetEnabled bool) st
 			return stepConfig.KnowledgebaseAccess
 		}
 	}
-	return KBAccessNone
+	if stepConfig != nil && strings.TrimSpace(stepConfig.KnowledgebaseContribution) != "" {
+		return KBAccessReadWrite
+	}
+	return KBAccessRead
 }
 
 // DB access modes. All workflow execution steps currently receive managed
@@ -1608,18 +1624,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 
 		// Inner loop: Automatic retry logic
 		var validationResponse *ValidationResponse
-		// KB contribution self-review is one-shot per step execution (direct mode with a
-		// non-empty contribution). Declared outside the retry loop so it survives
-		// validation retries without re-firing.
-		var kbReviewPerformed bool
-		// Direct-learnings turn is one-shot per step execution. Declared here so
-		// validation retries don't re-fire it, and so the post-step learning-agent
-		// trigger further down can see "already handled direct".
-		var learningsDirectPerformed bool
+		// PLAT-055. The merged reflection turn is one-shot per step execution.
+		// Declared outside the retry loop so validation retries don't re-fire it,
+		// and so the post-step learning-agent trigger further down can see that
+		// direct reflection already handled this step.
+		var reflectionPerformed bool
 		// Direct-mode UI should still emit one final step notification, but its
-		// summary must include the main execution plus any inline KB/learnings turns.
+		// summary must include the main execution plus the reflection turn.
 		var mainExecutionSummary string
-		var directKBReviewSummary string
 		var directLearningsSummary string
 
 		// Learn code mode: attempt fast path execution with saved script (before any LLM work).
@@ -2040,9 +2052,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					if isCodeLockedForFixLoop {
 						hcpo.GetLogger().Info(fmt.Sprintf("🔒 [scripted] Code locked for step %d — skipping fix loop, will fall back to agentic mode", stepIndex+1))
 						maxFixIter = -1
-					} else if agentCfgs := getAgentConfigs(step); agentCfgs != nil && agentCfgs.ScriptedMaxFixIter != nil {
-						maxFixIter = *agentCfgs.ScriptedMaxFixIter
 					}
+					// PLAT-061 removed learn_code_max_fix_iterations. Every stored value
+					// was a migration artifact, not a judgment: the migration defaulted
+					// retries to 0 and only raised it when a legacy message-sequence item
+					// declared repair_with_llm — so five hetznerssh steps carried 0 with no
+					// reasoning behind it, silently disabling script repair. lock_code
+					// remains the deliberate way to skip the fix loop.
 					codeDirAbsPath := filepath.Join(toAbsPath(stepExecutionPath), "code")
 					mainPyPath := filepath.Join(codeDirAbsPath, "main.py")
 					var lastLcResult *ScriptedFastPathResult
@@ -2406,172 +2422,39 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				} else {
 					hcpo.GetLogger().Info(fmt.Sprintf("Pre-validation passed for step %d - auto-approving", stepIndex+1))
 
-					// KB contribution self-review (direct-write mode only): one-shot nudge
-					// asking the step agent to verify it fulfilled its knowledgebase_contribution
-					// contract. Does NOT consume a retry slot, does NOT re-run pre-validation,
-					// and fires at most once per step execution. The agent's follow-up tool
-					// calls (if any) land via the normal notes-write pipeline.
-					if !kbReviewPerformed && executionAgent != nil {
-						stepCfgForReview := getAgentConfigs(step)
-						reviewMsg := BuildKBContributionReviewMessageWithTarget(
-							resolveKnowledgebaseAccess(stepCfgForReview, hcpo.UseKnowledgebase()),
-							kbContributionForPrompt(stepCfgForReview),
-							filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), KnowledgebaseFolderName, KBNotesFolderName),
+					// PLAT-055. One reflection turn replaces the KB self-review turn
+					// followed by the direct-learnings turn. The split was the defect:
+					// during the KB turn the agent has not yet worked out what it
+					// learned, and by the learnings turn the KB door has closed and the
+					// database was never reachable at all — so "which store owns this?"
+					// was decided by whichever door happened to be open rather than by
+					// the agent. See runStepReflectionTurn.
+					if !reflectionPerformed && executionAgent != nil {
+						reflectionPerformed = true
+						reflection := hcpo.runStepReflectionTurn(
+							ctx, step, stepIndex, stepPath, artifactStepID, artifactStepPath,
+							getAgentConfigs(step), executionAgent, executionConversationHistory,
+							isScriptedMode, turnCount, executionLLM,
 						)
-						if reviewMsg != "" {
-							kbReviewPerformed = true
-							hcpo.GetLogger().Info(fmt.Sprintf("🧠 KB contribution self-review: firing one-shot continuation for step %d", stepIndex+1))
-							hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseKBReview, workflowContinuationStatusRunning, "", executionAgent)
-							if ba := executionAgent.GetBaseAgent(); ba != nil {
-								reviewResult, updatedHistory, reviewErr := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "knowledgebase-review", executionAgent, func() (string, []llmtypes.MessageContent, error) {
-									return ba.Execute(ctx, reviewMsg, executionConversationHistory, "", false)
-								})
-								if reviewErr != nil {
-									hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ KB self-review continuation failed for step %d: %v (accepting step anyway)", stepIndex+1, reviewErr))
-									directKBReviewSummary = fmt.Sprintf("CONCERNS: knowledgebase contribution review failed for this run: %v\nSTATUS: COMPLETED", reviewErr)
-									hcpo.recordWorkflowContinuationPhase(context.Background(), artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseKBReview, workflowContinuationStatusFailed, reviewErr.Error(), executionAgent)
-								} else {
-									directKBReviewSummary = summarizeExecutionResultForNotification(reviewResult)
-									// Freshness: a KB-writing step reviewed the knowledgebase store this
-									// run, so Pulse can age out notes no run has re-confirmed. Code-owned
-									// ledger; best-effort. Use Background ctx (step ctx may be done).
-									if freshErr := hcpo.recordKnowledgebaseConfirmation(context.Background(), hcpo.selectedRunFolder, step.GetID()); freshErr != nil {
-										hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record knowledgebase freshness for step %s: %v", step.GetID(), freshErr))
-									}
-									executionConversationHistory = updatedHistory
-									hcpo.GetLogger().Info(fmt.Sprintf("🧠 KB self-review completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
-									hcpo.recordWorkflowContinuationPhase(context.Background(), artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseKBReview, workflowContinuationStatusCompleted, "", executionAgent)
-								}
-							}
+						directLearningsSummary = reflection.Summary
+						if reflection.Executed {
+							executionConversationHistory = reflection.History
+							hcpo.GetLogger().Info(fmt.Sprintf("🧠 Reflection completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
 						}
 					}
-
-					// Direct-learnings turn (fires after KB review, if any). Runs only when
-					// learnings_write_method is "direct" AND the access/objective gates
-					// agree (see shouldDirectWriteLearnings). lock_learnings is honored
-					// below. Writes target learnings/_global/
-					// (shared across steps), with learnings/<stepID>/ opened only in scripted
-					// mode for the main.py copy. Folder guard is widened here for the turn only —
-					// the main-step execution did NOT have write access to either path. The
-					// outer step defer that restores session shell config to pre-step state
-					// handles cleanup when the step exits. Parallel steps writing to _global/
-					// are serialized by learningsGlobalFileMutex.
-					if !learningsDirectPerformed && executionAgent != nil {
-						stepCfgForLearn := getAgentConfigs(step)
-						if shouldDirectWriteLearnings(stepCfgForLearn, step, hcpo.isEvaluationMode) {
-							// Lock + empty-folder override: lock_learnings is honored only when
-							// _global/ already has content to protect. An empty _global/ folder
-							// allows the first direct-mode write to bootstrap initial learnings.
-							skipDueToLock := hcpo.shouldSkipDirectLearningsDueToLock(ctx, stepCfgForLearn, stepIndex)
-
-							learnObjective := ""
-							if stepCfgForLearn != nil {
-								learnObjective = stepCfgForLearn.LearningObjective
-							}
-							learningsTurnMsg := ""
-							if !skipDueToLock {
-								learningsTurnMsg = hcpo.buildLearningsContributionTurn(step.GetID(), templateVars["StepDescription"], learnObjective, isScriptedMode)
-							} else {
-								hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusSkipped, "lock_learnings=true with existing _global content", executionAgent)
-							}
-							if learningsTurnMsg != "" {
-								learningsDirectPerformed = true
-								baseWorkspace := hcpo.GetWorkspacePath()
-								globalLearningsPath := fmt.Sprintf("%s/learnings/%s", baseWorkspace, GlobalLearningID)
-								// Only widen _global/. learnings/<stepID>/ is NOT added even in
-								// scripted mode — main.py copying is handled by Go code
-								// (saveScriptedScriptToLearnings, called after the execution block)
-								// independent of the direct-learnings turn. The step agent has no
-								// reason to write under learnings/<stepID>/ in direct mode, so we
-								// keep the guard tight.
-								addedPaths := []string{globalLearningsPath}
-
-								// Serialize against parallel direct-learnings turns. Each step has its
-								// own MCP session so folder guards don't collide, but _global/SKILL.md
-								// is a shared file — parallel diff_patches would race without this.
-								hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusWaitingForLock, "", executionAgent)
-								func() {
-									restoreDirectLearningTurn := hcpo.prepareDirectLearningTurn(executionAgent, addedPaths)
-									defer restoreDirectLearningTurn()
-
-									if cfg := executionAgent.GetConfig(); cfg != nil && strings.TrimSpace(cfg.MCPSessionID) != "" {
-										hcpo.GetLogger().Info(fmt.Sprintf("🔓 [LEARN_DIRECT] Widened sub-agent session %s for learnings turn on step %s: +%v", strings.TrimSpace(cfg.MCPSessionID), step.GetID(), addedPaths))
-									} else {
-										hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [LEARN_DIRECT] Execution agent has no MCPSessionID on config — learnings writes may fail for step %d", stepIndex+1))
-									}
-
-									learningsGlobalFileMutex.Lock()
-									defer learningsGlobalFileMutex.Unlock()
-									learningBeforeRef := hcpo.snapshotCanonicalArtifactRef(ctx, globalLearningsPath)
-									hcpo.GetLogger().Info(fmt.Sprintf("🧠 Direct-learnings: firing one-shot continuation for step %d (objective length=%d)", stepIndex+1, len(learnObjective)))
-									hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusRunning, "", executionAgent)
-									if ba := executionAgent.GetBaseAgent(); ba != nil {
-										learnResult, learnHistory, learnErr := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "learnings", executionAgent, func() (string, []llmtypes.MessageContent, error) {
-											return ba.Execute(ctx, learningsTurnMsg, executionConversationHistory, "", false)
-										})
-										learningAfterRef := hcpo.snapshotCanonicalArtifactRef(context.Background(), globalLearningsPath)
-										if learningAfterRef != learningBeforeRef {
-											LogCanonicalArtifactChange(context.Background(), hcpo.GetWorkspacePath(), "runtime_learning_update",
-												"Step post-completion turn changed reusable runtime guidance.",
-												[]PlanFieldChange{{StepID: step.GetID(), Field: "artifact_tree", OldValue: learningBeforeRef, NewValue: learningAfterRef}},
-												hcpo.ReadWorkspaceFile, hcpo.WriteWorkspaceFile, hcpo.GetLogger(),
-												"", nil, nil)
-										}
-										if learnErr != nil {
-											hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Direct-learnings continuation failed for step %d: %v (accepting step anyway)", stepIndex+1, learnErr))
-											directLearningsSummary = fmt.Sprintf("CONCERNS: learnings contribution failed for this run: %v\nSTATUS: COMPLETED", learnErr)
-											hcpo.recordWorkflowContinuationPhase(context.Background(), artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusFailed, learnErr.Error(), executionAgent)
-										} else {
-											directLearningsSummary = summarizeExecutionResultForNotification(learnResult)
-											executionConversationHistory = learnHistory
-											hcpo.GetLogger().Info(fmt.Sprintf("🧠 Direct-learnings completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
-											hcpo.recordWorkflowContinuationPhase(context.Background(), artifactStepID, artifactStepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusCompleted, "", executionAgent)
-
-											// Direct-mode learnings are the only runtime write path, so
-											// metadata bookkeeping happens here. Runtime execution never
-											// auto-locks learnings; builder/user decisions own lock_learnings.
-											directLearningPathIdentifier := getEffectiveLearningPathIdentifier(step.GetID(), stepPath, stepCfgForLearn)
-											hasNewLearning, directLearningReasoning, directLearningConfidence := inferHasNewLearningFromResult(learnResult)
-											// Freshness: record that this run re-confirmed the learnings store
-											// (updated vs reviewed-unchanged) so Pulse can age out HOW-knowledge
-											// no run has re-confirmed. Code-owned ledger; best-effort.
-											if freshErr := hcpo.recordLearningsConfirmation(context.Background(), hcpo.selectedRunFolder, step.GetID(), hasNewLearning); freshErr != nil {
-												hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record learnings freshness for step %s: %v", step.GetID(), freshErr))
-											}
-											directLearningLLM := executionLLM
-											if metadataErr := hcpo.updateLearningMetadataWithTurnCount(
-												ctx,
-												stepIndex,
-												stepPath,
-												directLearningPathIdentifier,
-												hasNewLearning,
-												directLearningReasoning,
-												directLearningConfidence,
-												turnCount,
-												step,
-												true, // pre-validation already passed
-												executionLLM,
-												directLearningLLM,
-											); metadataErr != nil {
-												hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to update direct-learnings metadata for step %s: %v", step.GetID(), metadataErr))
-											}
-										}
-									}
-								}()
-							}
-						}
-					}
-					// File any CONCERNS: lines durably BEFORE the three summaries are
-					// joined. Phase attribution is free here and nowhere else — once
-					// they are concatenated there is no way to tell a contradiction
-					// found by the learnings turn from one raised by the task itself.
+					// File any CONCERNS: lines durably BEFORE the summaries are joined.
+					// Phase attribution is free here and nowhere else — once they are
+					// concatenated there is no way to tell a contradiction found while
+					// reflecting from one raised by the task itself. Since PLAT-055
+					// merged the KB and learnings turns, reflection files under the
+					// learnings phase; kb-review remains a valid phase for historical
+					// rows and for concerns raised through record_run_concern.
 					hcpo.recordStepConcerns(ctx, step.GetID(), map[string]string{
 						ConcernPhaseExecution: mainExecutionSummary,
-						ConcernPhaseKBReview:  directKBReviewSummary,
 						ConcernPhaseLearnings: directLearningsSummary,
 					})
 
-					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, directKBReviewSummary, directLearningsSummary); combinedSummary != "" {
+					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, "", directLearningsSummary); combinedSummary != "" {
 						executionResult = combinedSummary
 					}
 

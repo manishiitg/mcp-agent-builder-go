@@ -173,11 +173,11 @@ func TestFindingDispositionRejectionsNameTheContractTheyEnforce(t *testing.T) {
 			want: []string{"passed=1, failed=0, inconclusive=0", `"failed"`},
 		},
 		{
-			name: "missing identity names both fields and what arrived",
+			name: "missing internal lifecycle identity names the public issue id",
 			disposition: PulseFindingDisposition{
 				FindingID: "PUL-1", Disposition: FindingDispositionBlocked, Summary: "Blocked.",
 			},
-			want: []string{"fingerprint", "finding_id", "fingerprint=missing", "finding_id=set"},
+			want: []string{"issue_id", "lifecycle identity was not resolved", "issue_id=set"},
 		},
 	}
 	for _, tt := range tests {

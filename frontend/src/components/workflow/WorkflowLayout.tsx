@@ -1228,9 +1228,25 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
+  //
+  // The preview views are exempt. WorkflowCanvasWithProvider returns a
+  // *different component type* per view — WorkflowFilesCanvasInner vs
+  // WorkflowReportCanvasInner vs the ReactFlow tree — so switching
+  // workflowWorkspaceView does not re-render the pane, it unmounts and rebuilds
+  // it. Forcing 'files' while the user is on Report therefore tears the report
+  // down, and the branch below immediately restores it, producing a visible
+  // flash. It reads as a data refresh but nothing is refetched: the remounted
+  // viewer repopulates synchronously from the module-level reportDataCache,
+  // which is exactly why it is fast and why no report event fires.
+  //
+  // Cost of the exemption: un-minimizing the workspace while a preview view is
+  // open no longer auto-switches to Files — click Files to get there.
   useEffect(() => {
     if (selectedModeCategory !== 'workflow') return
-    if (!workspaceMinimized && (workflowWorkspaceView !== 'files' || !showWorkspacePane)) {
+    const onPreviewView = workflowWorkspaceView === 'report'
+      || workflowWorkspaceView === 'log'
+      || workflowWorkspaceView === 'soul'
+    if (!workspaceMinimized && !onPreviewView && (workflowWorkspaceView !== 'files' || !showWorkspacePane)) {
       setShowWorkspacePane(true)
       setWorkflowWorkspaceView('files')
       return

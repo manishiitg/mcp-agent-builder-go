@@ -75,18 +75,29 @@ func TestMessageSequenceClosingItems(t *testing.T) {
 			KnowledgebaseContribution: "Record portal-specific selectors and quirks",
 		},
 	}
+	// PLAT-055: one reflection item, not a learnings item followed by a KB item.
+	// Appending them separately meant the agent chose a destination based on
+	// which turn it was in rather than on which store owns the content, so both
+	// write grants now belong to a single turn.
 	items := hcpo.messageSequenceClosingItems(context.Background(), both, 0)
-	if len(items) != 2 {
-		t.Fatalf("expected 2 closing items (learning + kb), got %d", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 merged reflection item, got %d", len(items))
 	}
-	if items[0].Type != "user_message" || items[0].Kind != "learning" || !items[0].WriteAccess.Learnings {
-		t.Errorf("item[0] should be a learning user_message with learnings write access: %+v", items[0])
+	if items[0].Type != "user_message" || items[0].Kind != "learning" {
+		t.Errorf("reflection item should be a learning-kind user_message: %+v", items[0])
+	}
+	if !items[0].WriteAccess.Learnings || !items[0].WriteAccess.Knowledgebase {
+		t.Errorf("reflection item must carry BOTH write grants so routing is a real choice: %+v", items[0].WriteAccess)
 	}
 	if items[0].Message == "" {
-		t.Errorf("learning item should carry a contribution message")
+		t.Errorf("reflection item should carry a message")
 	}
-	if items[1].Type != "user_message" || items[1].Kind != "knowledgebase" || !items[1].WriteAccess.Knowledgebase {
-		t.Errorf("item[1] should be a knowledgebase user_message with kb write access: %+v", items[1])
+	// The routing rule is the whole point of merging; without it the turn is
+	// just the old learnings turn with extra access.
+	for _, want := range []string{"Route each thing to the store that owns it", "record_run_concern", "not a learning"} {
+		if !strings.Contains(items[0].Message, want) {
+			t.Errorf("reflection message missing %q", want)
+		}
 	}
 
 	// No agent configs -> no synthetic items.

@@ -427,6 +427,14 @@ export interface PulseFinalCommandState {
   updated_at?: string
 }
 
+export interface PulseRunMode {
+  workspace_path: string
+  pulse_run_id: string
+  mode: 'backlog_drain' | 'discovery' | 'strategy' | 'observe' | string
+  reason: string
+  recorded_at: string
+}
+
 export interface PulseLoopClosureFinding {
   kind: 'answer_not_applied' | 'decision_waiting_on_user' | 'concern_keeps_recurring' | string
   severity: 'high' | 'medium' | string
@@ -453,6 +461,7 @@ export interface PulseModuleStateResponse {
   success: boolean
   modules: PulseModuleState[]
   commands: PulseFinalCommandState[]
+  gate_mode?: PulseRunMode | null
   shadow_signal_observations?: PulseShadowSignalObservation[]
   shadow_signal_coverage?: {
     status: string
@@ -2901,7 +2910,6 @@ export interface WorkflowExecutionDefaults {
   always_use_same_run: boolean
   // Global step overrides (replaces step_override.json)
   disable_learning?: boolean
-  global_skill_objective?: string
   disable_parallel_tool_execution?: boolean
   execution_max_turns?: number
   enabled_custom_tools?: string[]

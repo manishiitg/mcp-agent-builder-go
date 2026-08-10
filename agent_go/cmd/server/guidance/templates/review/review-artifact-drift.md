@@ -84,8 +84,8 @@ Return one compact review package containing:
 - cursor before and proposed cursor after
 - changelog files and zero-based entry indexes fully inspected
 - affected steps inspected
-- findings ordered by severity; each includes stable `finding_id`, `target_key`,
-  plain-language summary, exact evidence, bounded `recommended_fix`,
+- findings ordered by severity; each includes no invented identifier, a plain-
+  language root-cause summary, exact evidence, bounded `recommended_fix`,
   verification, recommended owner, and `user_judgment_required` with reason
 - clean checks
 - exact proposed marks grouped as `clean`, `findings`, or `cursor-backfill`

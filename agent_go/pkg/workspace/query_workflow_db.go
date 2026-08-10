@@ -13,6 +13,8 @@ type QueryWorkflowDBParams struct {
 	DBPath string `json:"db_path"`
 	// SQL is the read-only query to run.
 	SQL string `json:"sql"`
+	// Params binds positional values for ? placeholders, exactly like mutations.
+	Params []interface{} `json:"params,omitempty"`
 	// MaxRows bounds returned rows. Zero uses the workspace service default.
 	MaxRows int `json:"max_rows,omitempty"`
 }

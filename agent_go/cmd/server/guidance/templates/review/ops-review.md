@@ -78,8 +78,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    model, affected roles/steps, capability/cost/reasoning comparison, expected
    benefit, and risk. A newer model is not automatically better.
    Return a non-HTML packet with `module=llm_ops_review`, `verdict`, `next_check`,
-   and ordered findings. Every finding includes a stable `finding_id`,
-   `target_key`, severity, plain-language summary, exact evidence, bounded
+   and ordered findings. Every finding includes no invented identifier,
+   severity, plain-language summary, exact evidence, bounded
    `recommended_fix`, verification, and `user_judgment_required` with reason.
    A shared harness/runtime/bridge/tool-API defect must be classified as
    `issue_kind=harness_issue` and be persisted with `record_pulse_finding`
@@ -92,7 +92,26 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    artifacts. Do not write Pulse lifecycle state, apply recommendations, or
    create approval requests in this read-only command.
 
+Include reflection-turn cost as a first-class cost line. Each contributing step
+runs one post-completion reflection turn, and it is not free: a measured Social
+Media run spent **20.1% of all LLM time** there, with short steps at 30–55% of
+their own runtime. Judge yield, not just spend — `learnings/<step-id>/.learning_metadata.json`
+records `has_new_learning` per run in `detection_history`. A step whose recent
+turns produce nothing is paying for an objective that no longer earns it;
+recommend sharpening the objective or dropping the step to
+`learnings_access="read"`. A step producing real technique is working as
+intended however long it takes.
+
 Finish with a short executive summary followed by every evidence-backed
 recommendation in severity order. Identify which exact changes require user
 approval before `/engineering-review` can apply them. Do not truncate the result to a
 Top 3.
+
+Write every `execution_tier`, `execution_llm`, and `declared_execution_mode`
+recommendation so that it can be **stored verbatim as the change's reason**. The
+Fixer that applies it must supply `execution_tier_reason` /
+`execution_llm_reason` / `declared_execution_mode_reason`, and the tool rejects
+the change without one. Your recommendation text is that reason — state current
+state, the exact suggestion, the measured evidence, and the risk in a form that
+survives the handoff into `planning/step_config.json`, which is what the next
+reviewer reads. A recommendation too vague to store is too vague to apply.

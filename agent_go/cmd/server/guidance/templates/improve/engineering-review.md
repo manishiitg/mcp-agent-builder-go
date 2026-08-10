@@ -11,7 +11,8 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
 
 1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`.
 2. Use `pulse_run_id="current"`, which resolves to this current Workflow Builder
-   chat. Call `record_pulse_worklist` exactly once: Engineering and Operations are due;
+   chat. Call `record_pulse_worklist` exactly once with `mode="backlog_drain"`
+   and a concrete `mode_reason`: Engineering and Operations are due;
    Strategy Auditor and Goal Advisor are deferred with explicit next-check
    boundaries. Then read the complete retained backlog, pending verification,
    latest meaningful run evidence, plan/store state, and cost/runtime evidence.

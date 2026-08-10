@@ -66,19 +66,23 @@ type PulseFindingReproduction struct {
 // would otherwise be trapped in forensic Markdown. issue_kind=harness_issue is
 // rendered as a dedicated platform-owned card in Pulse.
 type PulseFindingDetails struct {
-	FindingID        string                     `json:"finding_id,omitempty"`
-	TargetKey        string                     `json:"target_key,omitempty"`
-	IssueKind        string                     `json:"issue_kind,omitempty"`
-	RecommendedRoute string                     `json:"recommended_route,omitempty"`
-	NextCheck        string                     `json:"next_check,omitempty"`
-	Classification   string                     `json:"classification,omitempty"`
-	Severity         string                     `json:"severity,omitempty"`
-	Summary          string                     `json:"summary,omitempty"`
-	Impact           string                     `json:"impact,omitempty"`
-	Workaround       string                     `json:"workaround,omitempty"`
-	Evidence         []string                   `json:"evidence,omitempty"`
-	Reproduction     PulseFindingReproduction   `json:"reproduction"`
-	Platform         *PulseHarnessPlatformIssue `json:"platform,omitempty"`
+	FindingID string `json:"finding_id,omitempty"`
+	// MergedIntoIssueID is the user-facing canonical PUL issue that supersedes
+	// this historical record. The duplicate remains durable for audit, but no
+	// longer consumes the active backlog.
+	MergedIntoIssueID string                     `json:"merged_into_issue_id,omitempty"`
+	TargetKey         string                     `json:"target_key,omitempty"`
+	IssueKind         string                     `json:"issue_kind,omitempty"`
+	RecommendedRoute  string                     `json:"recommended_route,omitempty"`
+	NextCheck         string                     `json:"next_check,omitempty"`
+	Classification    string                     `json:"classification,omitempty"`
+	Severity          string                     `json:"severity,omitempty"`
+	Summary           string                     `json:"summary,omitempty"`
+	Impact            string                     `json:"impact,omitempty"`
+	Workaround        string                     `json:"workaround,omitempty"`
+	Evidence          []string                   `json:"evidence,omitempty"`
+	Reproduction      PulseFindingReproduction   `json:"reproduction"`
+	Platform          *PulseHarnessPlatformIssue `json:"platform,omitempty"`
 }
 
 type PulseHarnessPlatformIssue struct {
@@ -98,6 +102,9 @@ type pulseFindingDetailMarker struct {
 // PulseReviewFindingInput is the typed reviewer write contract. Reviewers send
 // this through record_pulse_finding; no final-response text is parsed.
 type PulseReviewFindingInput struct {
+	// IssueID is the sole agent-facing identity. When present, this observation
+	// updates that existing PUL issue even when the wording has changed.
+	IssueID string `json:"issue_id,omitempty"`
 	Concern string `json:"concern"`
 	Module  string `json:"module"`
 	PulseFindingDetails
@@ -106,8 +113,8 @@ type PulseReviewFindingInput struct {
 // PulseReviewFindingRecord identifies the durable lifecycle row written by a
 // record_pulse_finding call.
 type PulseReviewFindingRecord struct {
-	FindingID   string `json:"finding_id"`
-	Fingerprint string `json:"fingerprint"`
+	IssueID     string `json:"issue_id"`
+	Fingerprint string `json:"-"`
 	Status      string `json:"status"`
 }
 
@@ -120,14 +127,14 @@ func validateTypedPulseReviewFinding(input PulseReviewFindingInput) (pulseFindin
 	if marker.Concern == "" || marker.Module == "" {
 		return marker, fmt.Errorf("concern and a valid module are required")
 	}
-	if marker.IssueKind != "workflow_issue" && marker.IssueKind != "harness_issue" {
-		return marker, fmt.Errorf("issue_kind must be workflow_issue or harness_issue")
+	if marker.IssueKind != IssueKindWorkflow && marker.IssueKind != IssueKindHarness {
+		return marker, fmt.Errorf("issue_kind must be %s or %s", IssueKindWorkflow, IssueKindHarness)
 	}
 	if marker.Classification == "" || marker.Severity == "" || marker.Summary == "" || marker.Impact == "" || len(marker.Evidence) == 0 {
 		return marker, fmt.Errorf("classification, severity, summary, impact, and evidence are required")
 	}
-	if marker.IssueKind == "harness_issue" && (marker.TargetKey == "" || marker.Reproduction.Expected == "" || marker.Reproduction.Observed == "") {
-		return marker, fmt.Errorf("harness_issue requires target_key and reproduction.expected/reproduction.observed")
+	if marker.IssueKind == IssueKindHarness && (marker.TargetKey == "" || marker.Reproduction.Expected == "" || marker.Reproduction.Observed == "") {
+		return marker, fmt.Errorf("%s requires target_key and reproduction.expected/reproduction.observed", IssueKindHarness)
 	}
 	if isPulseAdvisorModule(marker.Module) {
 		switch marker.RecommendedRoute {
@@ -163,9 +170,25 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 		return PulseReviewFindingRecord{}, err
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	fingerprint := pulseFindingCanonicalFingerprint(marker.Module, marker)
-	if historical := existingCanonicalReviewFingerprint(ctx, db, marker.Module, marker.Concern); historical != "" {
-		fingerprint = historical
+	fingerprint := ""
+	stepID := marker.Module
+	if issueID := strings.TrimSpace(input.IssueID); issueID != "" {
+		existing, lookupErr := ResolvePulseFindingIssueID(ctx, workspacePath, issueID)
+		if lookupErr != nil {
+			return PulseReviewFindingRecord{}, lookupErr
+		}
+		fingerprint = existing.Fingerprint
+		stepID = existing.StepID
+		// A PUL id is a reference to the existing lifecycle row, never a new
+		// semantic key. Preserve the established stable detail ID when present.
+		if marker.FindingID == "" {
+			marker.FindingID = existing.FindingID
+		}
+	} else {
+		fingerprint = pulseFindingCanonicalFingerprint(marker.Module, marker)
+		if historical := existingCanonicalReviewFingerprint(ctx, db, marker.Module, marker.Concern); historical != "" {
+			fingerprint = historical
+		}
 	}
 	normalizedConcern := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
 	fingerprints := map[string]string{normalizedConcern: fingerprint}
@@ -177,31 +200,28 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	// Completion retries can replay tool calls. The same review identity must be
 	// idempotent rather than manufacturing recurrence evidence.
 	if strings.TrimSpace(lastSeenRun) != strings.TrimSpace(reviewRunID) {
-		if _, err := recordRunConcernLinesAtWithFingerprints(ctx, db, reviewRunID, "", marker.Module, ConcernPhaseReview, []string{marker.Concern}, observedAt, fingerprints); err != nil {
+		if _, err := recordRunConcernLinesAtWithFingerprints(ctx, db, reviewRunID, "", stepID, ConcernPhaseReview, []string{marker.Concern}, observedAt, fingerprints); err != nil {
 			return PulseReviewFindingRecord{}, err
 		}
 	}
 	if err := recordPulseFindingDetailAt(ctx, db, workspacePath, reviewRunID, marker.Module, marker, fingerprint, observedAt); err != nil {
 		return PulseReviewFindingRecord{}, err
 	}
-	findingID := marker.FindingID
-	if findingID == "" {
-		findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, marker.Module, -1)
-		if loadErr != nil {
-			return PulseReviewFindingRecord{}, loadErr
-		}
-		for _, finding := range findings {
-			if finding.Fingerprint == fingerprint {
-				findingID = finding.FindingID
-				break
-			}
+	findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, marker.Module, -1)
+	if loadErr != nil {
+		return PulseReviewFindingRecord{}, loadErr
+	}
+	for _, finding := range findings {
+		if finding.Fingerprint == fingerprint {
+			return PulseReviewFindingRecord{IssueID: NewPulseIssue(finding).ID, Fingerprint: fingerprint, Status: finding.Status}, nil
 		}
 	}
-	return PulseReviewFindingRecord{FindingID: findingID, Fingerprint: fingerprint, Status: ConcernStatusOpen}, nil
+	return PulseReviewFindingRecord{}, fmt.Errorf("recorded Pulse finding could not be reloaded by its internal lifecycle identity")
 }
 
 func normalizePulseFindingDetails(details PulseFindingDetails) PulseFindingDetails {
 	details.FindingID = strings.TrimSpace(details.FindingID)
+	details.MergedIntoIssueID = strings.TrimSpace(details.MergedIntoIssueID)
 	details.TargetKey = strings.TrimSpace(details.TargetKey)
 	details.IssueKind = strings.TrimSpace(details.IssueKind)
 	details.RecommendedRoute = strings.TrimSpace(details.RecommendedRoute)
@@ -225,6 +245,20 @@ const (
 	pulseFindingRouteEvidenceWait     = "evidence_wait"
 	pulseFindingRouteFixerHandoff     = "fixer_handoff"
 	pulseFindingRouteNone             = "none"
+)
+
+// Who owns the failed boundary a finding describes. Set once when the finding
+// is filed and never rewritten, unlike status. These were three copies of the
+// same two string literals across two validators plus the disposition-time
+// coherence check; naming them keeps that one source of truth.
+const (
+	// IssueKindWorkflow: the workflow's own plan, config, code, or data. A
+	// workflow-level Engineering Review pass can repair it.
+	IssueKindWorkflow = "workflow_issue"
+	// IssueKindHarness: the shared runtime, scheduler, bridge, tool contract,
+	// persistence, or UI. No workflow-level repair can fix it — it belongs to
+	// docs/bugs/pulse_platform_issue_register.md.
+	IssueKindHarness = "harness_issue"
 )
 
 func isPulseAdvisorModule(module string) bool {

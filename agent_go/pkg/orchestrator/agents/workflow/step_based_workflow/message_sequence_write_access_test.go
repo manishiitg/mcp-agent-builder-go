@@ -124,7 +124,6 @@ func TestMessageSequenceItemInheritsStepWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
-		DBAccess:            DBAccessReadWrite,
 		KnowledgebaseAccess: KBAccessReadWrite,
 		LearningsAccess:     LearningsAccessReadWrite,
 	}
@@ -142,7 +141,6 @@ func TestMessageSequenceItemOverrideNarrowsStepWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
-		DBAccess:            DBAccessReadWrite,
 		KnowledgebaseAccess: KBAccessReadWrite,
 		LearningsAccess:     LearningsAccessReadWrite,
 	}
@@ -161,7 +159,6 @@ func TestMessageSequenceItemAlwaysKeepsUniformDBWriteAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	hcpo.useKnowledgebase = true
 	config := &AgentConfigs{
-		DBAccess:            DBAccessRead,
 		KnowledgebaseAccess: KBAccessRead,
 		LearningsAccess:     LearningsAccessRead,
 	}
@@ -318,7 +315,6 @@ func TestMessageSequenceItemReportedFailure(t *testing.T) {
 func TestMessageSequenceItemGetsDBWriteButCannotEscalateOtherStores(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	config := &AgentConfigs{
-		DBAccess:            DBAccessRead,
 		KnowledgebaseAccess: KBAccessRead,
 		LearningsAccess:     LearningsAccessRead,
 	}

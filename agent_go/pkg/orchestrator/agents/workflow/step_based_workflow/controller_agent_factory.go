@@ -446,10 +446,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 		writePaths = []string{stepFolderPath, downloadsPath}
 	}
 
-	// db/ is always READABLE. It's also writable by default (read-write), the back-compat
-	// behavior for execution steps. An explicit dbAccess="read" downgrades the step to
-	// read-only db (least privilege) by omitting db/ from writePaths. (Evaluation DBWrite
-	// enforcement is a separate post-process applied by callers that know it's an eval step.)
+	// db/ is always readable. Ordinary workflow execution currently resolves dbAccess
+	// to read-write uniformly, so db/ is also writable for those steps. The read branch
+	// remains only for callers that explicitly construct a reader profile while the
+	// canonical reader/writer refactor is incomplete.
 	dbPath := getDBPath(baseWorkspacePath)
 	readPaths = append(readPaths, dbPath)
 	if dbAccess != DBAccessRead {
@@ -653,15 +653,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectExecutionLLM(
 			}
 			return llmConfig
 		}
-		// If disable_tier_optimization is set, always use Tier 1 regardless of learning maturity
-		if stepConfig != nil && stepConfig.DisableTierOptimization != nil && *stepConfig.DisableTierOptimization {
-			llmConfig := hcpo.tierResolver.ResolveTier(TierHigh)
-			if llmConfig != nil {
-				hcpo.GetLogger().Info(fmt.Sprintf("🏷️ [TIERED] Execution agent for step %s using Tier 1 (High) — tier optimization disabled: %s/%s",
-					stepPath, llmConfig.Primary.Provider, llmConfig.Primary.ModelID))
-			}
-			return llmConfig
-		}
+		// PLAT-061 removed disable_tier_optimization, which pinned this to Tier 1.
+		// It was a second, un-settable and un-reasoned path to the same outcome as
+		// pinning execution_tier — which PLAT-060 made an Ops-owned decision that
+		// must state its justification. Use execution_tier="high" (with its
+		// required reason) to hold a step on high reasoning.
+
 		// Evaluation mode defaults to medium tier — eval steps are verification checks
 		// that don't need the most powerful model. Step config can still override via ExecutionLLM (step 3).
 		if hcpo.isEvaluationMode {
@@ -767,11 +764,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "workflow step")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 
-	// Set EnableContextOffloading if specified
-	if stepConfig != nil && stepConfig.EnableContextOffloading != nil {
-		config.EnableContextOffloading = stepConfig.EnableContextOffloading
-		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific context offloading setting: %v", *stepConfig.EnableContextOffloading))
-	}
 }
 
 // Long-running workflow execution agents should inherit cancellation from the
@@ -819,6 +811,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
 		}
+		// PLAT-055. Every step can raise a structured concern. This is
+		// capability-derived like the DB tools above: a step that observed a
+		// defect must always be able to report it, and a custom allowlist must
+		// not be able to silence that channel.
+		enabledTools = append(enabledTools, "workflow_db:record_run_concern")
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -1263,6 +1260,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	config.MCPSessionID = execSessionID
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+	// PLAT-055. record_run_concern attributes from this trusted identity rather
+	// than from tool arguments, so a step cannot file against another step.
+	hcpo.configureRunConcernSession(execSessionID, stepID, ConcernPhaseExecution)
 	// Keep browser-sharing behavior unchanged: bind the per-step execution session to the
 	// same shared browser session the group session uses. If a caller later requests
 	// share_browser=false, the isolated browser session override below still wins.
@@ -1614,11 +1614,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	config.EnableParallelToolExecution = true
 	hcpo.GetLogger().Info("⚡ Parallel tool execution enabled for todo task orchestrator agent")
 
-	// Set EnableContextOffloading if specified
-	if stepConfig != nil && stepConfig.EnableContextOffloading != nil {
-		config.EnableContextOffloading = stepConfig.EnableContextOffloading
-		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific context offloading setting: %v", *stepConfig.EnableContextOffloading))
-	}
 
 	// Setup Downloads folder for agent-browser.
 	hcpo.setupBrowserDownloadsPathOverride(ctx, config, stepConfig)

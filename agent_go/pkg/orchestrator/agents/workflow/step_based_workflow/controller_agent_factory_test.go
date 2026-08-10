@@ -44,16 +44,18 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 }
 
 func TestResolveEffectiveDBAccessIsReadWriteForEveryWorkflowStep(t *testing.T) {
-	configuredReadWrite := &AgentConfigs{DBAccess: DBAccessReadWrite}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, true, false); got != DBAccessReadWrite {
-		t.Fatalf("evaluation without db_write must still be read-write, got %q", got)
-	}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, true, true); got != DBAccessReadWrite {
-		t.Fatalf("evaluation with legacy db_write must be read-write, got %q", got)
-	}
-	configuredRead := &AgentConfigs{DBAccess: DBAccessRead}
-	if got := resolveEffectiveDBAccess(configuredRead, false, false); got != DBAccessReadWrite {
-		t.Fatalf("legacy db_access=read must not downgrade normal execution, got %q", got)
+	// PLAT-061 removed the db_access field; the invariant it never actually
+	// enforced is what matters and must hold for every shape of config.
+	for name, cfg := range map[string]*AgentConfigs{"configured": {}, "nil": nil} {
+		if got := resolveEffectiveDBAccess(cfg, true, false); got != DBAccessReadWrite {
+			t.Fatalf("%s: evaluation without db_write must still be read-write, got %q", name, got)
+		}
+		if got := resolveEffectiveDBAccess(cfg, true, true); got != DBAccessReadWrite {
+			t.Fatalf("%s: evaluation with legacy db_write must be read-write, got %q", name, got)
+		}
+		if got := resolveEffectiveDBAccess(cfg, false, false); got != DBAccessReadWrite {
+			t.Fatalf("%s: normal execution must be read-write, got %q", name, got)
+		}
 	}
 }
 
@@ -171,19 +173,17 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	}
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
 
+	// PLAT-061 removed db_access; what this pins is that a deliberately narrow
+	// explicit tool list still cannot strip the capability-derived DB tools.
 	tests := []struct {
 		name   string
 		access string
 	}{
-		{name: "legacy read value", access: DBAccessRead},
-		{name: "read write", access: DBAccessReadWrite},
+		{name: "narrow explicit tool list", access: DBAccessReadWrite},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// A deliberately narrow explicit list must not remove capability-
-			// derived DB tools.
 			tools, executors := hcpo.prepareCustomTools(&AgentConfigs{
-				DBAccess:           tt.access,
 				EnabledCustomTools: []string{"workspace_advanced:execute_shell_command"},
 			})
 			names := make([]string, 0, len(tools))

@@ -33,8 +33,11 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 		t.Fatalf("record_pulse_finding: %v", err)
 	}
 	var recorded step_based_workflow.PulseReviewFindingRecord
-	if err := json.Unmarshal([]byte(raw), &recorded); err != nil || recorded.Fingerprint == "" || recorded.FindingID == "" {
+	if err := json.Unmarshal([]byte(raw), &recorded); err != nil || recorded.IssueID == "" || !strings.HasPrefix(recorded.IssueID, "PUL-") {
 		t.Fatalf("recorded finding=%#v decode_err=%v raw=%s", recorded, err, raw)
+	}
+	if strings.Contains(raw, "fingerprint") || strings.Contains(raw, "finding_id") {
+		t.Fatalf("public record_pulse_finding response leaked an internal lifecycle identity: %s", raw)
 	}
 	// A completion retry may replay the tool call. It must not manufacture a
 	// second recurrence in the same review identity.

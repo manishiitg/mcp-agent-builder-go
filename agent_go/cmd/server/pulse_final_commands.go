@@ -456,3 +456,49 @@ func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath,
 	}
 	return result.RowsAffected()
 }
+
+// finalizeAllRunningPulseReviewLogs closes reviewer rows that were left mid-flight.
+//
+// PLAT-054 / PLAT-017. pulse_review_log is only ever written by an agent through
+// recordPulseReviewOnDB, so a pass that dies between "review started" and
+// "review recorded" strands its row at status='running' permanently. The
+// startup sweep already reconciles pulse_final_command_state the same way;
+// without this, Upwork accumulated three stranded workflow_review rows from
+// three different runs on a single day, which then read as live reviewer work
+// that no longer exists.
+//
+// Deliberately narrow: only rows already marked running are touched, and only
+// the status/verdict fields are rewritten. Findings and verification counts the
+// dead pass genuinely recorded stay exactly as they were — the row is being
+// closed, not erased.
+func finalizeAllRunningPulseReviewLogs(ctx context.Context, workspacePath, reason string) (int64, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return 0, fmt.Errorf("reason is required")
+	}
+	_, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	// The table is created by the workflow-side reviewer path, so a workspace
+	// that has never run a Pulse review legitimately has no such table.
+	var exists string
+	if err := db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='pulse_review_log'`).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	result, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET
+			status = 'failed',
+			verdict = CASE WHEN TRIM(verdict) = '' THEN ? ELSE verdict END
+		WHERE status = 'running'`, reason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

@@ -181,6 +181,36 @@ consumer contract.
 - Never perform a speculative migration. When row meaning is ambiguous, retain
   the evidence and request the missing decision.
 
+## Applying an Ops config recommendation
+
+Use this whenever a finding asks you to change `execution_tier`,
+`execution_llm`, or `declared_execution_mode`. These are cost decisions
+`llm_ops_review` owns; it is read-only, so you are the writer.
+
+1. **Never apply one without an owning Ops finding.** These fields are not
+   yours to tune opportunistically. If no finding recommends the change, the
+   change is not justified — file the finding first, or leave it alone.
+2. **Carry the evidence into the config, not just the fix.** Each field requires
+   a paired reason (`execution_tier_reason`, `execution_llm_reason`,
+   `declared_execution_mode_reason`) and the tool rejects the change without it.
+   Write it so a reviewer six weeks from now can judge the decision without
+   re-deriving it: cite the finding id, the current state, and the measured
+   evidence. `planning/step_config.json` is what the next reviewer actually
+   reads; a rationale that stays only in the finding is lost to them.
+3. **Cite the decision when there was one.** If the recommendation was labelled
+   `user_judgment_required` or applied after approval, include the
+   `human_input_id` in the reason. A reason pointing at a recorded human call is
+   the strongest form available.
+4. **Know what you are switching off.** Pinning `execution_tier` also disables
+   adaptive tiering for that step — it will no longer promote high→medium after
+   3 stable runs. Pinning `execution_llm` overrides tier entirely. Say so in the
+   reason, so the next reviewer knows it was deliberate.
+5. **If the evidence does not settle it, do not change it.** Raise the question
+   with `create_human_input_request` and park the finding `awaiting_user`
+   against that pending decision. Never invent a reason to satisfy the field —
+   a fabricated justification is harder to challenge later than a missing one,
+   and uncertainty is a legitimate terminal state.
+
 ## Learning and skill purity repair
 
 Apply this playbook whenever a finding concerns `learnings/_global/`, a
@@ -215,6 +245,26 @@ Apply this playbook whenever a finding concerns `learnings/_global/`, a
    only for reusable HOW. Clear a misplaced/legacy objective and set access to
    `read` when the step should consume but not contribute. Preserve
    `read-write` only when the objective and actual skill coverage agree.
+5b. **Judge whether each objective is still yielding, and refine it.** An
+   objective is an instruction, and instructions are expected to improve as
+   evidence accumulates — treat them as tunable, not as set-once configuration.
+   The evidence is already recorded per step in
+   `learnings/<step-id>/.learning_metadata.json`: each reflection turn appends a
+   `detection_history` entry with `has_new_learning`, plus
+   `last_detection_reasoning` and `last_detection_confidence`. Read it and act:
+   - **Repeated `has_new_learning: false`** — the objective is not yielding.
+     Either sharpen it to name what this step uniquely observes, or drop the
+     step to `learnings_access="read"`. A reflection turn that never produces
+     anything is pure cost.
+   - **Yields, but the content is misrouted** (facts, run results, or incident
+     narrative reaching the skill) — the objective is asking for the wrong
+     thing. Rewrite it to ask only for reusable HOW.
+   - **Yields good technique** — leave it alone.
+
+   Refining an objective needs **no** paired reason field and is not gated:
+   these are meant to be iterated. Record the why in `review_notes`. Apply the
+   same judgment to `knowledgebase_contribution`, whose yield signal is the KB
+   self-review outcome rather than `detection_history`.
 6. **Keep the root as an index.** `SKILL.md` contains valid frontmatter, a short
    scope, core cross-cutting instructions, and links to focused references.
    Detailed HOW belongs in references without duplication.

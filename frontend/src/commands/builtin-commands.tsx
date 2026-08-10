@@ -157,6 +157,25 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
+    command: 'pulse-backlog',
+    description: 'Semantically consolidate the Pulse issue backlog without changing workflow artifacts',
+    icon: <Layers className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: 'workshop',
+    source: 'builtin',
+    execute: (ctx) => {
+      const focus = ctx.beforeSlash.trim()
+      ctx.onSubmit(
+        `Consolidate the durable Pulse backlog${focus ? ` with this focus: ${focus}` : ''}. ` +
+        `Load get_pulse_state(view="backlog") first. Work only in the typed Pulse lifecycle: do not edit workflow artifacts, run steps, or create a Markdown report. ` +
+        `Group issues by semantic root cause, repair owner, and verification boundary—not wording, module, evidence path, or repeated symptom. ` +
+        `For each proven duplicate group, call merge_pulse_issues with one canonical PUL issue ID and the duplicate PUL IDs. Do not merge uncertain cases. ` +
+        `Then give a compact receipt: active count before and after, duplicates merged, distinct root causes retained, and any ambiguous groups left for a later review.`
+      )
+    }
+  },
+  {
     command: 'pulse-setup',
     description: 'Enable Pulse and configure the recurring workflow run schedule',
     icon: <RefreshCw className="w-4 h-4" />,

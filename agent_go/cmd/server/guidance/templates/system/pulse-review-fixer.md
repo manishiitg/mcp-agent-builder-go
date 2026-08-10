@@ -2,6 +2,21 @@
 
 Use only after Gate. This is the Review+Fix turn in the same main-agent
 conversation that received Gate and will later receive Finalize.
+
+Read `get_pulse_state(view="module", pulse_run_id=<current Pulse run>)` before
+dispatching any child. Its `gate_mode` is the contract for this pass:
+
+- In `backlog_drain`, first verify every due `changed_unverified` issue against
+  newly available producing-run evidence, then repair retained active roots.
+  Do not run a broad discovery review or Strategy/Goal child. A new finding is
+  allowed only when the repair/verification work uncovers a genuinely different
+  root cause.
+- In `discovery`, perform the selected evidence-driven reviews, still updating
+  existing roots before filing a distinct new one.
+- In `strategy`, run only the selected Strategy Auditor/Goal Advisor work; do
+  not turn it into an Engineering discovery pass.
+- In `observe`, do not launch a reviewer or fixer; record the required skipped
+  receipts and wait for the named evidence boundary.
 Gate decides separately whether `workflow_review` (Engineering Review),
 `llm_ops_review`, `strategy_auditor`, and `goal_advisor` are due. Read that
 durable worklist yourself. Go does not choose reviewers or automatically
@@ -45,13 +60,19 @@ one `record_pulse_result` receipt for every due module.
 Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
 reapply partial work. Preserve `changed_unverified` until its evidence boundary.
-For the due module, load and revalidate the complete active retained backlog;
-do not merely emit fresh findings. Also load `suppressed_concerns`: an unchanged
-externally owned issue is not a new finding, while materially changed
-evidence/target identity is a reopen candidate. Record every evidence-backed
-new finding. Attempt every safe bounded fix in the selected module. Leave a
-finding active only for a concrete blocker, decision, failed check, or future
-evidence checkpoint.
+For the due module, work the complete active retained backlog **before** new
+discovery. For each relevant issue, verify the next-check boundary if it has
+arrived, repair it when a safe bounded repair exists, or record its concrete
+blocker/decision/evidence boundary. Also load `suppressed_concerns`: an
+unchanged externally owned issue is not a new finding, while materially changed
+evidence/target identity is a reopen candidate. A new finding is justified only
+by a genuinely distinct root cause with a different repair, owner, or
+verification boundary—not different wording, a second symptom, or another
+evidence path. When new evidence belongs to an existing root cause, call
+`record_pulse_finding` with that visible `issue_id`. After a semantic backlog
+review, call `merge_pulse_issues` to retire symptom-level duplicates into their
+one canonical root cause while preserving their history. There is no numeric
+finding limit: causal distinctness is the limit.
 
 ### Cross-run evidence rule
 
@@ -110,9 +131,13 @@ prior lane. Use exact paths, query names, IDs, and short observed values as
 evidence pointers instead.
 
 Return only a compact executive verdict and short change/verification/blocker
-outcome. Every valid finding, check, attempt, and evidence pointer belongs in
-the typed SQLite lifecycle tools, not in a Markdown report or a large final
-response. Merge the same root cause but retain every distinct valid finding.
+outcome. Include counts for existing issues updated, genuinely new root causes,
+duplicates merged, repairs attempted, verified closures, and the resulting
+active backlog. Every valid finding, check, attempt, and evidence pointer
+belongs in the typed SQLite lifecycle tools, not in a Markdown report or a
+large final response. Merge the same root cause and retain every duplicate's
+history. Use only the visible `PUL-…` `issue_id` from the backlog in Pulse
+tools; fingerprints and attempt IDs are internal plumbing.
 If a typed write is rejected, correct that write or record the exact module
 failure; never replace missing structured state with prose.
 
@@ -180,19 +205,19 @@ from prose. Return those verdicts as a verification
 list, separate from new findings. The Engineering/Ops executor records them — passed closes the finding as `fixed_verified`,
 failed reopens it, inconclusive leaves it awaiting the boundary it still names.
 
-Verification does not count against the finding cap. It is not discovery, and
-charging it to the same budget makes a reviewer choose between confirming past
-work and finding new problems.
+Verification is not discovery. It must be done before new discovery so a
+reviewer never chooses between confirming past repairs and describing fresh
+symptoms.
 
 Without this, only failure is detectable. A fix that worked is never confirmed,
 so it is re-attempted every pass: rtslatency carried a finding at seen_count 4,
 still awaiting_verification, repaired again on each cycle because nothing ever
 checked the run that had since produced its evidence.
 
-Require a verdict, next check, and every evidence-backed ordered finding with
-stable ID, target, claim, evidence, bounded fix, verification, and judgment
+Require a verdict, next check, and every evidence-backed root cause with its
+visible issue ID, claim, evidence, bounded fix, verification, and judgment
 reason. Classify retained findings rather than omitting them. Clean means an
-empty finding-ID manifest.
+empty active issue manifest.
 An Auditor `measurement_gap` names the missing target/source/action/outcome
 linkage and blocked decision. Goal Advisor uses its own separate read-only critic.
 

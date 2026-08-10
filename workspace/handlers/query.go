@@ -535,7 +535,7 @@ func QueryWorkflowDB(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), queryTimeout)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx, req.SQL)
+	rows, err := db.QueryContext(ctx, req.SQL, req.Params...)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse[any]{
 			Success: false, Message: "Query failed", Error: err.Error(),

@@ -73,7 +73,7 @@ export const secretsApi = {
     return response.data;
   },
 
-  getWorkflowClaudeCodeCredentialStatus: async (workspacePath: string): Promise<{ configured: boolean; updated_at?: string }> => {
+  getWorkflowClaudeCodeCredentialStatus: async (workspacePath: string): Promise<{ configured: boolean; updated_at?: string; preview?: string }> => {
     const response = await api.get('/api/workflow-provider-credentials/claude-code', {
       params: { workspace_path: workspacePath },
     });

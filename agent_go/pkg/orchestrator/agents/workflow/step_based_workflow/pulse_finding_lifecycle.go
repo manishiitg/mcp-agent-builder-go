@@ -256,7 +256,7 @@ func ResolvePulseFindingDispositionIssueIDs(
 		}
 		fingerprint := ""
 		for _, finding := range findings {
-			if strings.EqualFold(finding.Issue.ID, disposition.FindingID) || strings.EqualFold(finding.FindingID, disposition.FindingID) {
+			if strings.EqualFold(finding.Issue.ID, disposition.FindingID) {
 				fingerprint = finding.Fingerprint
 				break
 			}
@@ -303,6 +303,136 @@ type PulseFindingLifecycle struct {
 	Attempts        []PulseFixAttempt          `json:"fix_attempts"`
 	Verification    []PulseFindingVerification `json:"verifications"`
 	Events          []PulseFindingEvent        `json:"events"`
+}
+
+// ResolvePulseFindingIssueID translates the one public Pulse identity into the
+// internal lifecycle row. Fingerprints remain database implementation details:
+// callers and agents must never copy them out of a backlog response.
+func ResolvePulseFindingIssueID(ctx context.Context, workspacePath, issueID string) (PulseFindingLifecycle, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return PulseFindingLifecycle{}, fmt.Errorf("issue_id is required: use the visible issue.id from get_pulse_state(view=\"backlog\")")
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return PulseFindingLifecycle{}, err
+	}
+	matches := make([]PulseFindingLifecycle, 0, 1)
+	for _, finding := range findings {
+		if strings.EqualFold(NewPulseIssue(finding).ID, issueID) {
+			matches = append(matches, finding)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		if matches[0].Details != nil && strings.TrimSpace(matches[0].Details.MergedIntoIssueID) != "" {
+			return PulseFindingLifecycle{}, fmt.Errorf("Pulse issue %q was merged into %s; update the canonical issue instead", issueID, matches[0].Details.MergedIntoIssueID)
+		}
+		return matches[0], nil
+	case 0:
+		return PulseFindingLifecycle{}, fmt.Errorf("no Pulse issue with issue_id %q; refresh get_pulse_state(view=\"backlog\") and use issue.id exactly", issueID)
+	default:
+		return PulseFindingLifecycle{}, fmt.Errorf("issue_id %q resolves to %d lifecycle rows; run the Pulse backlog consolidation before updating it", issueID, len(matches))
+	}
+}
+
+// MergePulseFindingIssues retires symptom-level duplicates without deleting
+// their evidence. The semantic decision is agent-owned; this function only
+// validates PUL identities, preserves the old history, and links each retired
+// record to its canonical root cause.
+func MergePulseFindingIssues(ctx context.Context, workspacePath, canonicalIssueID string, duplicateIssueIDs []string, reason string) (int, error) {
+	canonical, err := ResolvePulseFindingIssueID(ctx, workspacePath, canonicalIssueID)
+	if err != nil {
+		return 0, err
+	}
+	canonicalIssueID = NewPulseIssue(canonical).ID
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return 0, fmt.Errorf("merge reason is required: state the shared root cause")
+	}
+	if len(duplicateIssueIDs) == 0 {
+		return 0, fmt.Errorf("duplicate_issue_ids must contain at least one PUL issue to merge")
+	}
+	seen := map[string]bool{}
+	duplicates := make([]PulseFindingLifecycle, 0, len(duplicateIssueIDs))
+	for _, duplicateIssueID := range duplicateIssueIDs {
+		duplicateIssueID = strings.TrimSpace(duplicateIssueID)
+		if duplicateIssueID == "" || seen[strings.ToUpper(duplicateIssueID)] {
+			continue
+		}
+		seen[strings.ToUpper(duplicateIssueID)] = true
+		if strings.EqualFold(duplicateIssueID, canonicalIssueID) {
+			return 0, fmt.Errorf("canonical issue %q cannot also be a duplicate", canonicalIssueID)
+		}
+		duplicate, lookupErr := ResolvePulseFindingIssueID(ctx, workspacePath, duplicateIssueID)
+		if lookupErr != nil {
+			return 0, lookupErr
+		}
+		duplicates = append(duplicates, duplicate)
+	}
+	if len(duplicates) == 0 {
+		return 0, fmt.Errorf("no distinct duplicate issue ids were supplied")
+	}
+
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		return 0, err
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		return 0, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, duplicate := range duplicates {
+		details := PulseFindingDetails{}
+		if duplicate.Details != nil {
+			details = *duplicate.Details
+		}
+		details.MergedIntoIssueID = canonicalIssueID
+		detailJSON, marshalErr := json.Marshal(normalizePulseFindingDetails(details))
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		note := fmt.Sprintf("Merged into %s: %s", canonicalIssueID, reason)
+		if _, err := tx.ExecContext(ctx, `UPDATE run_concerns
+			SET status=?, resolved_at=?, resolved_by=?, resolution_note=? WHERE fingerprint=?`,
+			ConcernStatusResolved, now, "pulse_backlog_consolidation", note, duplicate.Fingerprint); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_finding_details
+			(fingerprint, finding_id, issue_kind, target_key, detail_json, source_run_id, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(fingerprint) DO UPDATE SET detail_json=excluded.detail_json, updated_at=excluded.updated_at`,
+			duplicate.Fingerprint, details.FindingID, details.IssueKind, details.TargetKey, string(detailJSON), duplicate.LastSeenRun, now); err != nil {
+			return 0, err
+		}
+		metadata, _ := json.Marshal(map[string]string{"canonical_issue_id": canonicalIssueID, "reason": reason})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, '', 'merged_duplicate', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			duplicate.Fingerprint, NewPulseIssue(duplicate).ID, note, string(metadata), now); err != nil {
+			return 0, err
+		}
+	}
+	metadata, _ := json.Marshal(map[string]interface{}{"merged_count": len(duplicates), "reason": reason})
+	_, err = tx.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+		VALUES (?, ?, '', 'duplicates_merged', ?, ?, ?)
+		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+		canonical.Fingerprint, canonicalIssueID, fmt.Sprintf("Merged %d duplicate issue(s)", len(duplicates)), string(metadata), now)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(duplicates), nil
 }
 
 // PulseReviewVerificationCandidate is the backend-owned allowlist entry for a
@@ -502,27 +632,25 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 		return err
 	}
 
-	for _, field := range []string{"finding_id"} {
-		groups := map[string][]pulseIdentityRow{}
-		for _, row := range identities {
-			value := row.FindingID
-			if field == "target_key" {
-				value = row.TargetKey
-			}
-			value = strings.TrimSpace(value)
-			if value != "" {
-				groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
-			}
+	groups := map[string][]pulseIdentityRow{}
+	for _, row := range identities {
+		value := strings.TrimSpace(row.FindingID)
+		if value != "" {
+			groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
 		}
-		for _, group := range groups {
-			marker := pulseFindingDetailMarker{PulseFindingDetails: PulseFindingDetails{FindingID: group[0].FindingID, TargetKey: group[0].TargetKey}}
-			target := pulseFindingCanonicalFingerprint(group[0].StepID, marker)
-			if len(group) == 1 && group[0].Fingerprint == target {
-				continue
-			}
-			if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
-				return err
-			}
+	}
+	for _, group := range groups {
+		// A visible issue id is an alias for a durable identity, never source
+		// material for a new fingerprint. The old migration derived `target`
+		// from finding_id even for a singleton, so every PUL-* ID it generated
+		// was re-hashed on the next read. Only genuine duplicate legacy rows
+		// need collapsing; retain the first stored fingerprint as canonical.
+		if len(group) < 2 {
+			continue
+		}
+		target := group[0].Fingerprint
+		if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -869,8 +997,8 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	add := func(format string, args ...interface{}) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
 	if disposition.Fingerprint == "" || disposition.FindingID == "" {
-		add("requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_state(view=\"backlog\") item, where finding_id is issue.id",
-			pulseArrivalReport(pulseStringArrival("fingerprint", disposition.Fingerprint), pulseStringArrival("finding_id", disposition.FindingID)))
+		add("requires issue_id from get_pulse_state(view=\"backlog\"); lifecycle identity was not resolved (got %s)",
+			pulseArrivalReport(pulseStringArrival("issue_id", disposition.FindingID)))
 	}
 	if disposition.Summary == "" {
 		add("requires summary: one sentence stating what was done and what it means for this finding")
@@ -1084,6 +1212,32 @@ func RecordPulseFindingDispositionsTx(
 		}
 		if concernExists != 1 {
 			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_state(view=\"backlog\") item's fingerprint field, not from its issue.id", fingerprint, findingID)
+		}
+		// issue_kind is decided once at filing; status is decided here, later and
+		// repeatedly, by a different tool. Nothing used to compare them, so a
+		// finding could be filed as harness_issue ("no workflow-level repair can
+		// fix this") and then parked as queued_for_engineering ("a workflow-level
+		// Engineering Review pass will fix this"). That pair is self-contradictory
+		// and self-perpetuating: every later pass re-reads it as actionable, spends
+		// a reviewer slot rediscovering that it is not, and re-defers it.
+		//
+		// Only this one pairing is rejected. A harness finding that is resolved,
+		// acknowledged, or awaiting_verification is legitimate — the behaviour can
+		// stop, be disproven, or be worked around from inside the workflow.
+		if disposition.Disposition == FindingDispositionQueuedForEngineering {
+			var issueKind string
+			err := db.QueryRowContext(ctx,
+				`SELECT COALESCE(issue_kind, '') FROM pulse_finding_details WHERE fingerprint=?`, fingerprint,
+			).Scan(&issueKind)
+			// Plain CONCERNS: findings carry no details row at all, so no issue_kind
+			// was ever claimed and there is nothing to contradict.
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil && strings.TrimSpace(issueKind) == IssueKindHarness {
+				return fmt.Errorf("finding %q was filed as %s and cannot be queued_for_engineering: no workflow-level Engineering Review pass can repair a boundary the workflow does not own, so queueing it here means it is rediscovered and re-deferred every pass. Either use external_action_required with external_owner=\"platform\", a reason_code, and a reopen_condition so it reaches docs/bugs/pulse_platform_issue_register.md, or re-file it as %s if this workflow's own plan, config, code, or data does own the failure",
+					findingID, IssueKindHarness, IssueKindWorkflow)
+			}
 		}
 		if isPulseAdvisorModule(module) {
 			var detailJSON string

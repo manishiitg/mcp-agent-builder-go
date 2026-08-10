@@ -15,13 +15,27 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
+    for (const command of ['pulse', 'pulse-backlog', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
     for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
+  })
+
+  it('runs backlog consolidation through typed Pulse lifecycle tools only', () => {
+    const command = findCommand('pulse-backlog', 'workflow')
+    let submitted = ''
+    command?.execute({
+      beforeSlash: 'focus on repeated database tool symptoms',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+    } as CommandContext)
+
+    expect(submitted).toContain('get_pulse_state(view="backlog")')
+    expect(submitted).toContain('merge_pulse_issues')
+    expect(submitted).toContain('do not edit workflow artifacts')
   })
 
   it('routes advisor specialization through canonical approval guidance', () => {

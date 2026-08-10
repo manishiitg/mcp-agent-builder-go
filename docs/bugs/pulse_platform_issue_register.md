@@ -54,6 +54,37 @@ and resumed the native Claude session.
 The next Upwork Pulse run exposed PLAT-053: `run_in_background` gave Pulse
 review/fix children a workflow-step subset rather than the full workshop tool
 surface, so they could diagnose but not persist or repair findings.
+A cross-workflow scheduler audit then added PLAT-054, which gates this register
+itself: the idle watchdog terminates scheduled runs whose child work is
+demonstrably still running, so the producing runs that ~40 `runtime_reverify`
+entries are waiting on keep being destroyed before they can supply evidence.
+That audit also supplied the fresh reproduction PLAT-017 has been blocked on.
+A cross-workflow learnings-store audit then added PLAT-055: a step's reflection
+turn can only write `learnings/`, so facts, run results and harness bug reports
+that belong to the database, knowledgebase or Pulse are filed there instead —
+producing 110 KB and 89 KB "skill" files whose own contents warn readers not to
+trust them.
+A new `scripts/pulse_health.py` sweep of every workflow's
+`external_action_required` findings (nothing had done this systematically
+before) found 78 candidates across all 11 Pulse-enabled workflows. Triaging
+Instagram's 11 collapsed to one root cause and added PLAT-056: the
+`__automatic_final_validation__` repair loop's concern recorder files a durable
+finding for a prevalidation failure even when a later iteration in the same
+attempt already fixed it and the attempt's terminal result passed. The
+remaining candidates (build-in-public, tectonicusadaytrading, linkedin,
+rtslatency, social-media) are not yet triaged. That script's coherence check
+also added PLAT-057.
+
+**The measured shape of the backlog, 2026-08-09 (baseline snapshot committed
+alongside this register).** Across 8 workflows: 406 active findings, overall
+closure 54.7%, and **verification debt 69.7% — 354 of 508 repair attempts could
+not be proven.** That ratio is the loop: a fix reaches `awaiting_verification`,
+only a producing run can settle it, the run dies (PLAT-054), and the next pass
+re-examines the same finding. Of the 406 active, **115 are run-gated** (a
+producing run closes them — PLAT-054's direct signal), 213 sit in the
+capacity-limited engineering queue, and 78 need platform tickets and will never
+close from runs. Reverification of this register's ~40 `runtime_reverify`
+entries and the drainage of those 115 are the same event.
 
 This document records platform ownership and deduplication. The authoritative
 per-workflow lifecycle remains `db/db.sqlite`; detailed single-defect incident
@@ -70,6 +101,47 @@ has a first-class platform issue and linkage table.
 A finding belongs here only when the failed boundary is owned by the workflow
 runtime, scheduler, bridge, tool contract, shared persistence, or shared UI—not
 by the workflow plan or its data.
+
+## Finding new candidates — `scripts/pulse_health.py`
+
+Nothing sweeps workflow Pulse state into this register automatically — every
+entry above was added by someone manually querying a workflow's `db.sqlite`
+after noticing `external_action_required` findings. `scripts/pulse_health.py`
+(repo root, read-only, all workflows at once) automates the discovery half and
+three related diagnostics:
+
+| Section | Answers |
+|---|---|
+| `--section loop` | Is Pulse converging or looping? Closure rate, **verification debt** (share of repair work that could not be proven), recurrence, and the run-gated / engineering-queue / platform split |
+| `--section category` | Which classification+step clusters look like one shared root cause — this is what made **PLAT-056** (Instagram's 11 findings, one cause) obvious |
+| `--section coverage` | **Whether a finding can be verified at all.** Routes nest and compose, so end-to-end paths are not enumerable (LinkedIn: 6 routers, 16 branches, 256 combinations — and its runs executed 2, 6, and 1 of 24 steps). Coverage therefore models *step execution*, not paths: a finding whose step has not run is **untested**, not failed. It also reports findings frozen by a reviewer lens disabled at the Gate, which likewise cannot close |
+| `--section coherence` | Contradictory states the Go invariant cannot retroactively repair (today: `harness_issue` + `queued_for_engineering`) |
+| `--section untriaged` | `external_action_required` findings citing no `PLAT-NNN` — the candidate feed for this register |
+
+An `UNTRIAGED` row is not automatically a new ticket; it may be a fresh instance
+of an existing one in different words. Read it against the tickets below before
+filing. The script never files tickets — matching a finding to an existing
+PLAT-NNN, or deciding it is genuinely new, stays a judgment call.
+
+**Before/after measurement.** `--json <path>` writes a snapshot;
+`--baseline <path>` diffs against one and reports how many of the *specific
+findings open at baseline* actually closed. Use that rather than total counts:
+disabling a reviewer lens at the Gate lowers the finding count on its own, which
+is suppression, not improvement. The pre-restart baseline for the
+PLAT-054/PLAT-055 verification lives at
+`docs/bugs/pulse_platform/baseline-2026-08-09-pre-restart.json`.
+
+The cohort diff separates **`stuck`** (same status, and its step did run — the
+fix genuinely did not work) from **`untested`** (same status, but its step never
+ran — no verdict is available). Those two look identical in a raw status count,
+and conflating them is how a working fix gets blamed for a route that was never
+taken. There are consequently three reasons an open finding cannot close, and
+only the first is a real failure:
+
+1. its step ran and the fix did not work — `stuck`
+2. its step never ran — `untested` (see `--section coverage`)
+3. its owning reviewer lens is disabled at the Gate, so nothing re-reviews it —
+   **90 of 406 active findings** at the 2026-08-09 baseline
 
 ## Two-agent repair board
 
@@ -150,12 +222,27 @@ Rules:
 | [PLAT-051-A](pulse_platform/plat-051.md) | Stamp contract upgrades through a real registered agent tool | Codex | `runtime_reverify` | version-upgrade guidance and Workshop tool surface |
 | [PLAT-052-A](pulse_platform/plat-052.md) | Keep one native CLI alive across known scheduler turns | Codex | `runtime_reverify` | scheduler request lifecycle and coding-agent mode |
 | [PLAT-053-A](pulse_platform/plat-053.md) | Give background workshop children the complete parent tool surface | Codex | `runtime_reverify` | background-agent construction and direct tool definitions |
+| [PLAT-054-A](pulse_platform/plat-054.md) | Never expire a scheduler turn whose child work is still running | Claude Code | `runtime_reverify` | scheduler idle/turn-completion waits |
+| [PLAT-055-A](pulse_platform/plat-055.md) | Give the reflection turn every store it must route to | Claude Code | `runtime_reverify` | step post-completion turns, learnings/KB contribution contract |
+| [PLAT-056](pulse_platform/plat-056.md) | Stop the repair-loop recorder from filing durable concerns for same-attempt superseded iterations | unassigned | `open` | prevalidation / `__automatic_final_validation__` repair loop |
+| [PLAT-057](pulse_platform/plat-057.md) | A harness_issue must not be parked in the workflow's own engineering queue | Claude Code | `runtime_reverify` | finding disposition/status coherence |
+| [PLAT-058](pulse_platform/plat-058.md) | Keep learnings one topic-organised workflow skill, not per-step files | Claude Code | `runtime_reverify` | step reflection turn learnings target |
+| [PLAT-059](pulse_platform/plat-059.md) | A learnings lock must state why | Claude Code | `implemented` | update_step_config lock path |
+| [PLAT-060](pulse_platform/plat-060.md) | Ops-owned config decisions must carry their reason into step_config.json | Claude Code | `runtime_reverify` (deferred: llm_ops_review disabled) | update_step_config tier/model/mode path |
+| [PLAT-061](pulse_platform/plat-061.md) | step_config field audit: dead field, orphans, phantom clears, incomplete merge | Claude Code | `implemented` | AgentConfigs surface |
+| [PLAT-062](pulse_platform/plat-062.md) | Scripted prompt named a write target the folder guard forbids | Claude Code | `runtime_reverify` | scripted execution prompt |
+| [PLAT-063](pulse_platform/plat-063.md) | Report pane flashed mid-run: a view flip remounts it | Claude Code | `done` (user-confirmed) | workflow canvas mounting |
+| [PLAT-064](pulse_platform/plat-064.md) | An entire workflow_* event family is dead; one completion check had no live fallback | Claude Code | `implemented` | frontend event-type consumers |
+| [PLAT-065](pulse_platform/plat-065.md) | Gate recorded a due module and nothing ever resolved it | unassigned | `open` (detection shipped, proximate cause isolated) | scheduler Pulse orchestration (`abortIfTurnStillBusy`, `runPostRunMonitor`) |
+| [PLAT-066](pulse_platform/plat-066.md) | route_selections correctly supplied, never seeded; router defaulted to the live-action route | unassigned | `open` (interim mitigation shipped) | step-based workflow orchestrator (`seedRouteSelectionsForRun`) |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
 and PLAT-013 remain unassigned because they are already runtime verified.
-PLAT-017 remains unassigned because it needs a fresh reproduction before a
-correct implementation boundary can be chosen.
+PLAT-017 remains unassigned, but is no longer blocked on reproduction: the
+2026-08-09 Upwork evidence in its fragment reproduces the leak on the current
+binary. Its `pulse_review_log` half shipped with PLAT-054; the `run_metadata`
+implementation boundary is still the open decision.
 
 For new work, create the smallest independent fragment and add one link here.
 Claude Code should claim its currently active tickets in their fragment rather
@@ -207,7 +294,7 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-014 Reviewer reference loading | P1 | RTS Latency, Tectonicus | **RTS runtime verified; Tectonicus reverify remains** |
 | PLAT-015 Evaluation skipped-sentinel handling | P1 | Social Media | **implementation fixed; runtime reverify** |
 | PLAT-016 Evaluation report drops real zero scores | P1 | Social Media | **implementation fixed; runtime reverify** |
-| PLAT-017 Scheduler success leaves workflow metadata running | P1 | Social Media | **open; distinct from PLAT-004** |
+| PLAT-017 Scheduler success leaves workflow metadata running | P1 | Social Media, Upwork | **reproduced 2026-08-09: a second projection (`pulse_review_log`) leaked 3 stranded `running` rows across 3 Upwork runs in one day; startup sweep extended under PLAT-054. The `run_metadata` half remains open** |
 | PLAT-018 Pulse finalizer cannot record dashboard completion | P1 | RTS Latency | **implementation fixed; runtime reverify** |
 | PLAT-019 Pulse agent metrics remain unpriced | P1 | RTS Latency | **implementation fixed; runtime reverify** |
 | PLAT-020 Converted scheduled chat must retain its session/tmux | P0 | RTS Latency | **implementation corrected; UI/runtime reverify** |
@@ -242,6 +329,19 @@ directory, tool-registration, or media-tool failure but predates
 | PLAT-050 Pulse reasoning split between agent and Go | P1 | Upwork recovery-Fixer investigation | **implemented; one continuing main-agent conversation and event-driven ordering need runtime reverify** |
 | PLAT-051 Upgrade prompt names an unregistered tool | P0 | Upwork | **implemented 2026-08-07: `set_workflow_contract_version` replaces the internal-helper instruction; restart and one v1.0.20 upgrade reverify remain** |
 | PLAT-052 Scheduled turns visibly close/reopen Claude Code | P1 | Upwork | **implemented 2026-08-07: known consecutive scheduler turns retain their native CLI; restart and schedule lifecycle reverify remain** |
+| PLAT-054 Idle watchdog kills live child work | P0 | Social Media, Tectonicus, Upwork, LinkedIn, Instagram, RTS Latency, Substack, Build-in-public | **implemented 2026-08-09: both wait paths consult a shared liveness predicate before expiring a turn, bounded by a 3 h ceiling; `pulse_review_log` added to the startup sweep. Runtime reverify is the gate for the ~40 other reverify entries** |
+| PLAT-055 Reflection turn can only write learnings | P1 | Social Media, RTS Latency, Upwork, LinkedIn | **implemented 2026-08-09: KB and learnings merged into one reflection turn (regular and message_sequence paths) with `knowledgebase/notes` write, `db/` read and a structured `record_run_concern`; prompt now carries a routing rule, the workflow's real table names, per-step file ownership, a measured size signal and a compaction rule. Behavioural reverify required** |
+| PLAT-056 Repair-loop recorder files durable concerns for self-healed iterations | P2 | Instagram (11 findings, one root cause) | **open — found via `scripts/pulse_health.py`; Pulse already correctly dispositioned all 11 as not-a-defect on 2026-08-04, only the recorder fix and closure remain** |
+| PLAT-059 A learnings lock could be set with no stated reason | P2 | LinkedIn (6 of 6 steps locked, none justified) | **implemented 2026-08-09: `lock_learnings=true` requires `lock_learnings_reason`; unlocking never does; clearing the lock clears the reason. UI lock toggle removed. Steers no-contribution steps to `learnings_access="read"` instead** |
+| PLAT-060 Ops config changes carried no reason into the config | P2 | cross-workflow | **implemented 2026-08-09: `execution_tier` / `execution_llm` / `declared_execution_mode` each require a paired reason at write time, each rejection naming its hidden consequence AND `create_human_input_request` as the escape hatch so the field cannot induce confabulation. UI tier setter removed. Objectives deliberately NOT gated — they get a yield loop instead. Reverify deferred: llm_ops_review is disabled at the Gate** |
+| PLAT-062 Scripted prompt named a forbidden write target | P2 | hetznerssh | **implemented 2026-08-09: the MODE NOTE told the agent to save to `learnings/{step-id}/main.py`, which `setupExecutionFolderGuard` never opens for writes, while the same prompt's Code Execution section correctly said `code/main.py`. The step obeyed the wrong one, was denied, and filed a concern that persistence had failed — it had not, the platform saved it back 42 s later byte-identical. Surfaced only because PLAT-061 removed the `learn_code_max_fix_iterations: 0` artifact that had stopped these steps ever attempting a repair** |
+| PLAT-065 Gate recorded a due module, session ended, nothing resolved it | P1 | social-media (new P0 dropped 6+h); 4 more found back to July 25 | **open 2026-08-10 — a Gate pass correctly found a real P0 (two graders disagree on public content) and recorded workflow_review=due; 42s later `abortIfTurnStillBusy` fired because the step's outcome wasn't `completed` and the session still read busy, so it stamped backup/publish/notify all `failed` with the same reason and returned — before the existing durable-worklist recovery logic (built for exactly this case) ever ran, since the busy-check is ordered ahead of it. Confirmed proximate cause via `pulse_final_command_state` rows, all three timestamped identically. Same-night cron run on upwork completed normally, so not universal. Still open: why `sessionIsBusy` read true 42s after Gate's tool call had already succeeded — needs a diagnostic log at the call site, not yet added; log window for this incident has rotated out. Fix designed (recover-before-abort reorder) but not shipped — needs a safety call on whether sending the next turn immediately once busy clears risks a real overlap, vs. needing a bounded wait. Detection shipped: `scripts/pulse_health.py --section stranded` found this instance plus 4 pre-existing ones, oldest 374h** |
+| PLAT-064 Dead workflow_* event family; one completion check had no fallback | P3 | frontend-wide | **implemented 2026-08-09: tracing PLAT-063's dead entries found workflow_start/workflow_progress/workflow_end/batch_execution_end are ALL dead — orchestrator_end is the only real completion signal. checkTabCompletion (useChatStore + useWorkflowStore) had no orchestrator_end fallback for workflow mode, so a workflow completing without human feedback could not satisfy it — currently dead code itself, fixed as a landmine. EVENT_TYPES.COMPLETION trimmed to the one real signal. Display components and generated types deliberately left inert rather than deleted** |
+| PLAT-066 route_selections correctly supplied, never seeded; router silently defaulted to the live-action route | P1 | social-media (Weekly Strategy Discovery run) | **open 2026-08-10 — proven with hard evidence: the schedule's `run_full_workflow` payload correctly carried `route_selections={"step-run-mode-router":"propose_new"}` (confirmed from the raw HTTP payload in the server log), yet `step-run-mode-router`'s own routing-evaluation.json says `"No route_selection.json found; using default_route_id \"execution\""`. `seedRouteSelectionsForRun`'s own success log line never fired for this session — the write path did not complete, exact reason not yet isolated (not called vs. early-return vs. write error vs. a path mismatch between the seed and read call sites). Consequence: `execute-allocate`/`step-execution-pipeline` (the live-action route) ran and failed prevalidation on an unrelated pre-existing bug, while the agent separately drove `propose-new-strategies-direct` by hand to still satisfy the schedule — leaving the wrongly-triggered execution job orphaned (`list_executions` still shows it `running` under a `cancelled` parent; `stop_step` and a full-cancel both gave contradictory answers about it, a related but separately unresolved bookkeeping defect). Interim mitigation shipped this session (commit `eaa089b`): removed `default_route_id` from `step-run-mode-router` in plan.json, so a future seeding gap fails loudly instead of silently running the live-action route — the seeding bug itself is still open** |
+| PLAT-063 Report pane flashed during runs | P3 | reported on the live UI | **fixed 2026-08-09 and user-confirmed: `WorkflowCanvasWithProvider` returns a different component *type* per view, so a `workflowWorkspaceView` flip unmounts and rebuilds the report instead of re-rendering it. Read as a data refresh but nothing was refetched — the rebuilt viewer repopulates from the module-level cache, which is why no report event ever fired. Also records that `workflow_end` and `batch_execution_end` are dead entries in the frontend COMPLETION list** |
+| PLAT-061 step_config carried a dead field and an incomplete merge | P2 | 10 of 12 workflows carried `db_access` | **implemented 2026-08-09: `db_access` removed (ignored by `resolveDBAccess`, yet documented and agent-settable — the `global_skill_objective` shape); `MergeAgentConfigFields` completed from 19/28 fields, three of the nine dropped ones gated writes; reflection-based guard added. 4 orphan fields deleted (incl. `disable_tier_optimization`, a loophole around PLAT-060, and `learn_code_max_fix_iterations`, whose every stored value was a migration artifact that silently disabled script repair); phantom clear-names now acknowledged no-ops rather than silent successes. `execution_max_turns` was misclassified — it carries the workflow-wide setting — and stays** |
+| PLAT-058 Per-step learnings files fragmented one workflow skill | P1 | Social Media (5 forked files, first live PLAT-055 run) | **implemented 2026-08-09: supersedes PLAT-055 item D. Learnings are one topic-organised skill every step improves; step-named orphans are folded and deleted; frontmatter description kept accurate. Found by the steps themselves via `record_run_concern`, one classifying it `harness_issue`** |
+| PLAT-057 harness_issue parkable in the workflow engineering queue | P2 | Upwork (2 of 48 harness findings) | **implemented 2026-08-09: `queued_for_engineering` is rejected for a `harness_issue` at disposition time, naming both exits; `issue_kind` promoted to shared constants; 4 regression tests incl. the untouched normal path. The 2 pre-existing rows are reported by the coherence check, not migrated** |
 
 ### Social Media classification correction — 2026-08-05
 
@@ -477,7 +577,11 @@ priority and historical run context.
 | [PLAT-040](pulse_platform/plat-040.md) | [PLAT-041](pulse_platform/plat-041.md) | [PLAT-042](pulse_platform/plat-042.md) | [PLAT-043](pulse_platform/plat-043.md) |
 | [PLAT-044](pulse_platform/plat-044.md) | [PLAT-045](pulse_platform/plat-045.md) | [PLAT-046](pulse_platform/plat-046.md) | [PLAT-047](pulse_platform/plat-047.md) |
 | [PLAT-048](pulse_platform/plat-048.md) | [PLAT-049](pulse_platform/plat-049.md) |  |  |
-| [PLAT-050](pulse_platform/plat-050.md) | [PLAT-051](pulse_platform/plat-051.md) | [PLAT-052](pulse_platform/plat-052.md) |  |
+| [PLAT-050](pulse_platform/plat-050.md) | [PLAT-051](pulse_platform/plat-051.md) | [PLAT-052](pulse_platform/plat-052.md) | [PLAT-053](pulse_platform/plat-053.md) |
+| [PLAT-054](pulse_platform/plat-054.md) | [PLAT-055](pulse_platform/plat-055.md) | [PLAT-056](pulse_platform/plat-056.md) | [PLAT-057](pulse_platform/plat-057.md) |
+| [PLAT-058](pulse_platform/plat-058.md) | [PLAT-059](pulse_platform/plat-059.md) | [PLAT-060](pulse_platform/plat-060.md) | [PLAT-061](pulse_platform/plat-061.md) |
+| [PLAT-062](pulse_platform/plat-062.md) | [PLAT-063](pulse_platform/plat-063.md) | [PLAT-064](pulse_platform/plat-064.md) | [PLAT-065](pulse_platform/plat-065.md) |
+| [PLAT-066](pulse_platform/plat-066.md) |  |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

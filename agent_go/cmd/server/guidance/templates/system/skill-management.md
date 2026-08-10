@@ -36,7 +36,7 @@ There is **no cascade** from workflow-selected skills to runtime step execution.
 
 So workflow selection is discovery/context for workshop agents, not runtime inheritance. To remove runtime skills from a step, use `update_step_config(step_id, clear_fields=["enabled_skills"])` or set the desired replacement list explicitly.
 
-**Shared know-how that every step should see** does not belong in a skill attached to all steps — it belongs in `learnings/_global/SKILL.md`, which is auto-attached at every step launch. The step's `global_skill_objective` tunes how that global skill is applied. Use real installed skills for *reusable domain capabilities*; use `learnings/_global` for *this workflow's accumulated knowledge*.
+**Shared know-how that every step should see** does not belong in a skill attached to all steps — it belongs in `learnings/_global/SKILL.md`, which is auto-attached at every step launch. Use real installed skills for *reusable domain capabilities*; use `learnings/_global` for *this workflow's accumulated knowledge*.
 
 ### When to use workflow-level vs per-step
 

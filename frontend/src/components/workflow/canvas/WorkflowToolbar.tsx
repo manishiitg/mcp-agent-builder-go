@@ -27,6 +27,7 @@ import { useAuthStore } from '../../../stores/useAuthStore'
 import type {
   PulseFinalCommandState,
   PulseModuleState,
+  PulseRunMode,
   PulseShadowSignalObservation,
   ScheduledJob,
   VariablesManifest,
@@ -223,6 +224,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [showMonitorHelp, setShowMonitorHelp] = useState(false)
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
+  const [pulseGateMode, setPulseGateMode] = useState<PulseRunMode | null>(null)
   const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
   const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
   const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
@@ -271,6 +273,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     if (!workspacePath) {
       setPulseModuleStates([])
       setPulseFinalCommandStates([])
+      setPulseGateMode(null)
       setPulseLoopClosureObservation(null)
       setPulseStatusError(null)
       return
@@ -284,6 +287,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       }
       setPulseModuleStates(resp.modules || [])
       setPulseFinalCommandStates(resp.commands || [])
+      setPulseGateMode(resp.gate_mode || null)
       setPulseLoopClosureObservation(
         (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
       )
@@ -922,6 +926,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     monitorOn={monitorOn}
                     moduleStates={pulseModuleStates}
                     finalCommandStates={pulseFinalCommandStates}
+                    gateMode={pulseGateMode}
                     statusLoading={pulseStatusLoading}
                     statusError={pulseStatusError}
                     onRefresh={() => {

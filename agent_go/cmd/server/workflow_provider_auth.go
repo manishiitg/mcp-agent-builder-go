@@ -25,6 +25,23 @@ type workflowProviderCredentialRequest struct {
 type workflowProviderCredentialStatus struct {
 	Configured bool       `json:"configured"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	// Preview is a masked "first4...last4" rendering of the stored token, e.g.
+	// "sk-a...DQAA" — never the full value. It exists purely so a user can
+	// visually confirm which token is saved (distinguish it from another one,
+	// notice a stale/expired one) without the full secret ever leaving the
+	// server. Omitted whenever decryption fails or the token is too short to
+	// mask meaningfully.
+	Preview string `json:"preview,omitempty"`
+}
+
+// maskCredentialPreview renders "first4...last4" for a token, or "" when the
+// token is too short to mask without revealing most of it.
+func maskCredentialPreview(token string) string {
+	const affixLen = 4
+	if len(token) < affixLen*2+4 {
+		return ""
+	}
+	return token[:affixLen] + "..." + token[len(token)-affixLen:]
 }
 
 func (api *StreamingAPI) handleGetWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +60,11 @@ func (api *StreamingAPI) handleGetWorkflowClaudeCodeCredential(w http.ResponseWr
 	if credential != nil {
 		updatedAt := credential.UpdatedAt
 		status.UpdatedAt = &updatedAt
+		// Decrypted only to build the masked preview; the plaintext is never
+		// stored, logged, or returned — only the two short affixes below.
+		if token, decErr := decryptSecretValue(credential.EncryptedValue, userID); decErr == nil {
+			status.Preview = maskCredentialPreview(token)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(status)

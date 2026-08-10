@@ -51,7 +51,6 @@ export interface AgentConfigs {
   sub_agent_llm?: AgentLLMConfig;             // Direct LLM override for ALL sub-agents spawned by this step (works in both tiered and manual modes)
   disable_parallel_tool_execution?: boolean;  // Disable parallel tool execution (default: enabled)
   disable_tier_optimization?: boolean;        // If true, execution agents always use Tier 1 (high reasoning)
-  global_skill_objective?: string;            // Objective for the global skill — what domain knowledge should it capture
   knowledgebase_access?: 'read' | 'write' | 'read-write' | 'none';
   knowledgebase_contribution?: string;
   db_access?: 'read' | 'write' | 'read-write' | 'none';

@@ -385,6 +385,8 @@ func TestCurrentPulseRunUsesActiveSessionWithoutLease(t *testing.T) {
 	if _, err := record(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   "current",
+		"mode":           pulseRunModeBacklogDrain,
+		"mode_reason":    "A retained repair queue is ready to verify and drain.",
 		"decisions":      decisionArgs,
 	}); err != nil {
 		t.Fatalf("record current-session worklist: %v", err)
@@ -400,6 +402,51 @@ func TestCurrentPulseRunUsesActiveSessionWithoutLease(t *testing.T) {
 		if state.LastPulseRunID != sessionID {
 			t.Fatalf("current identity persisted as %q for module %s, want session %q", state.LastPulseRunID, state.Module, sessionID)
 		}
+	}
+}
+
+func TestPulseWorklistPersistsAgentSelectedModeAndKeepsFirstGateDecision(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--backlog-drain"
+	ctx := mcpexecutor.WithSessionID(context.Background(), pulseRunID)
+	_, executors, _ := createPulseWorklistTools()
+	record := executors["record_pulse_worklist"].(func(context.Context, map[string]interface{}) (string, error))
+	decisions := pulseWorklistDecisionToolArgs(completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleWorkflowReview: {Due: true, Reason: "Prior repairs now have run evidence."},
+	}))
+	args := map[string]interface{}{
+		"workspace_path": workspacePath,
+		"pulse_run_id":   pulseRunID,
+		"mode":           pulseRunModeBacklogDrain,
+		"mode_reason":    "Existing issues provide verification and repair work; broad discovery would be redundant.",
+		"decisions":      decisions,
+	}
+	if _, err := record(ctx, args); err != nil {
+		t.Fatalf("record backlog-drain worklist: %v", err)
+	}
+	mode, err := getPulseRunMode(context.Background(), workspacePath, pulseRunID)
+	if err != nil || mode == nil {
+		t.Fatalf("get persisted mode = %#v, %v", mode, err)
+	}
+	if mode.Mode != pulseRunModeBacklogDrain {
+		t.Fatalf("mode = %q, want %q", mode.Mode, pulseRunModeBacklogDrain)
+	}
+	// A retry must preserve Gate's first decision rather than rewriting the
+	// scheduled sequence after children may already have read it.
+	args["mode"] = pulseRunModeDiscovery
+	args["mode_reason"] = "A later retry should not replace the original Gate decision."
+	if _, err := record(ctx, args); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	mode, err = getPulseRunMode(context.Background(), workspacePath, pulseRunID)
+	if err != nil || mode == nil || mode.Mode != pulseRunModeBacklogDrain {
+		t.Fatalf("retry rewrote persisted mode: %#v, %v", mode, err)
+	}
+	state, err := readPulseModuleStateView(context.Background(), workspacePath, pulseRunID)
+	if err != nil || !strings.Contains(state, `"mode":"backlog_drain"`) {
+		t.Fatalf("module state must expose persisted mode, state=%s err=%v", state, err)
 	}
 }
 
@@ -856,6 +903,7 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 		Success        bool                     `json:"success"`
 		Modules        []PulseModuleState       `json:"modules"`
 		Commands       []PulseFinalCommandState `json:"commands"`
+		GateMode       *PulseRunMode            `json:"gate_mode"`
 		ShadowCoverage map[string]string        `json:"shadow_signal_coverage"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
@@ -869,6 +917,9 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	}
 	if len(payload.Commands) != len(pulseFinalCommandOrder) {
 		t.Fatalf("commands = %d, want %d", len(payload.Commands), len(pulseFinalCommandOrder))
+	}
+	if payload.GateMode == nil || payload.GateMode.Mode != pulseRunModeDiscovery {
+		t.Fatalf("gate mode = %#v, want persisted default discovery", payload.GateMode)
 	}
 	if payload.Commands[0].Command != pulseFinalCommandBackup || payload.Commands[0].Status != "done" {
 		t.Fatalf("backup command mismatch: %+v", payload.Commands[0])
@@ -1175,6 +1226,8 @@ func TestRecordPulseWorklistPersistsShadowObservationAfterDecision(t *testing.T)
 	args := map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
+		"mode":           pulseRunModeDiscovery,
+		"mode_reason":    "The Gate is recording a normal review pass for this test.",
 		"decisions":      pulseWorklistDecisionToolArgs(decisions),
 	}
 	if _, err := execute(ctx, args); err != nil {

@@ -40,6 +40,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractLightweightPulseReportVersion,
 		workflowContractExecutivePulseJournalVersion,
 		workflowContractArtifactPurityVersion,
+		workflowContractLearningsLockAuditVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -65,6 +66,36 @@ This workflow predates inline knowledgebase writes. Do only this migration. Insp
 const upgradeEvalVerdictSchema = `WORKFLOW CONTRACT UPGRADE: EVALUATION VERDICTS.
 
 This workflow predates the current evaluation output contract. Do only this migration. If evaluation/evaluation_plan.json is absent, this is a no-op. Otherwise load the evaluation-plan reference, inspect every evaluation step, and make each step emit numeric output_content.score on the current 0-10 scale without changing what it measures. Update validation schemas to require the emitted score and use validate_evaluation_plan. Do not run a normal workflow execution. If a representative evaluation can safely be run, use it to verify changed steps produce scores; otherwise record the exact evidence boundary. Do not stamp on a validation failure. When the plan is compliant, call set_workflow_contract_version(version="1.0.16") and stop.`
+
+const upgradeLearningsLockAudit = `WORKFLOW CONTRACT UPGRADE: LEARNINGS LOCK AUDIT (PLAT-055 / J).
+
+This is a read-mostly audit, not a rewrite. Note first: the routing rule that used
+to have to live inside each step's learning_objective (which store owns what,
+which file to write, the size budget) is now injected by the platform itself into
+every reflection turn — see reflection_turn.go. Do not add or judge routing
+language in objectives; that check is obsolete as of this contract version.
+
+What remains genuinely worth auditing: inspect planning/step_config.json for every
+step with lock_learnings=true. A lock freezes that step's contribution to
+learnings/_global/ — existing content still flows into every step's prompt, but
+this step never updates it. That is sometimes exactly right (a step whose
+learnings are stable and reviewed) and sometimes just inertia nobody explained.
+
+For each locked step, read its review_notes. If review_notes gives a concrete,
+learnings-specific reason the freeze is intentional, leave it alone — a
+documented lock must survive this audit untouched. If review_notes is empty, or
+present but does not mention learnings/lock/why the freeze is there (e.g. it only
+explains a KB or tool decision), call record_pulse_finding with issue_kind=
+"workflow_issue", classification="maintainability_bug", severity="low",
+target_key naming the step id, a summary stating the step is locked without a
+learnings-specific rationale, evidence citing the step's own review_notes text (or
+its absence), and recommended_route="decision_required" — unlocking or
+documenting the lock is the workflow owner's call, not something this turn makes
+for them. Do not call update_step_config to clear lock_learnings on any step. Do
+not invent a rationale on the owner's behalf.
+
+Do not run the workflow. When every locked step has been checked, call
+set_workflow_contract_version(version="1.0.22") and stop.`
 
 const upgradeCurrentArtifactContract = `WORKFLOW CONTRACT UPGRADE: CURRENT ARTIFACT CONTRACT.
 
@@ -96,7 +127,13 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 16 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractEvalVerdictSchemaVersion, label: "upgrade-eval-verdict-schema", query: upgradeEvalVerdictSchema})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-current-artifact-contract", query: upgradeCurrentArtifactContract})
+	// workflowContractArtifactPurityVersion ("1.0.21") sits at rank 20 in the
+	// known-version list above — a workflow whose rank is already >= 20 passed
+	// this step in an earlier preflight and must not repeat it.
+	if rank < 20 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractArtifactPurityVersion, label: "upgrade-current-artifact-contract", query: upgradeCurrentArtifactContract})
+	}
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-learnings-lock-audit", query: upgradeLearningsLockAudit})
 	return steps
 }
 

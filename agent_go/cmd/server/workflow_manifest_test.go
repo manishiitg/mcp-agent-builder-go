@@ -206,3 +206,48 @@ func TestReadWorkflowManifestMigratesMissingLabelFromWorkspacePath(t *testing.T)
 		t.Fatalf("persisted Label = %q, want instagram", persisted.Label)
 	}
 }
+
+func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
+	const workspacePath = "Workflow/linkedin"
+	manifestJSON, err := json.Marshal(map[string]interface{}{
+		"schema_version": 1,
+		"id":             "wf_linkedin",
+		"version":        "1.0.20",
+		"label":          "linkedin",
+		"capabilities":   map[string]interface{}{},
+		"execution_defaults": map[string]interface{}{
+			"always_use_same_run":   true,
+			"global_skill_objective": "retired field text",
+			"workshop_mode":         "optimizer",
+		},
+		"schedules": []interface{}{},
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	workspace := &mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/workflow.json": string(manifestJSON),
+	}}
+	server := httptest.NewServer(workspace)
+	defer server.Close()
+	t.Setenv("WORKSPACE_API_URL", server.URL)
+
+	manifest, found, err := ReadWorkflowManifest(context.Background(), workspacePath)
+	if err != nil || !found {
+		t.Fatalf("ReadWorkflowManifest() found=%v err=%v", found, err)
+	}
+	if manifest.ExecutionDefs.WorkshopMode != "optimizer" || !manifest.ExecutionDefs.AlwaysUseSameRun {
+		t.Fatalf("known execution_defaults fields not preserved: %+v", manifest.ExecutionDefs)
+	}
+
+	workspace.mu.Lock()
+	persistedJSON := workspace.files[workspacePath+"/workflow.json"]
+	workspace.mu.Unlock()
+	if strings.Contains(persistedJSON, "global_skill_objective") {
+		t.Fatalf("persisted manifest still contains retired field global_skill_objective: %s", persistedJSON)
+	}
+	if !strings.Contains(persistedJSON, "\"workshop_mode\": \"optimizer\"") {
+		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)
+	}
+}

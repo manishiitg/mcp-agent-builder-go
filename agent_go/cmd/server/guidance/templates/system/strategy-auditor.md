@@ -174,8 +174,8 @@ recommended_route: decision_required|evidence_wait|fixer_handoff|none
 next_check: exact run/exposure/time/evidence boundary
 ```
 
-Then list every evidence-backed ordered finding. Each finding has a stable `finding_id`,
-one primary classification, severity, claim, causal mechanism, exact evidence
+Then list every evidence-backed ordered finding. Each finding has no
+agent-invented identifier, one primary classification, severity, claim, causal mechanism, exact evidence
 paths/queries and values, confidence, competing explanation, impact on a named
 success criterion, bounded in-plan recommendation, and `recommended_route`.
 `decision_required` includes the exact proposed choice, alternatives, expected

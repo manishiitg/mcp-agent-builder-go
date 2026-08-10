@@ -1,6 +1,8 @@
 # Canonical agent-definition construction
 
-**Status:** Design approved for reader/writer authority; implementation not started
+**Status:** Target design retained; canonical construction not implemented. Current
+runtime only partially matches it (uniform workflow-step DB writes, separate KB and
+learnings gates, consolidated Engineering Review+Fix).
 
 **Temporary runtime policy (2026-08-04):** Until the canonical-definition
 refactor replaces the fragmented capability derivation, every ordinary workflow
@@ -9,11 +11,19 @@ a message sequence—receives managed workflow-DB read/write access through
 `query_workflow_db` and `mutate_workflow_db`. Persisted `db_access: read` values
 remain loadable but do not downgrade runtime access. Direct SQLite access stays
 blocked for agentic steps. Specialized reviewers and maintenance agents are not
-reclassified by this temporary step policy.
+reclassified by this temporary step policy. This temporary policy applies only to
+the workflow DB: it does **not** grant every step KB or learnings writes.
+
 **Date:** 2026-08-04
+
+**Last audited against code:** 2026-08-08
+
 **Repositories:** `mcpagent`, `mcp-agent-builder-go`
+
 **Primary motivation:** repeated DB-tool availability failures across workflow
-steps, scheduled Pulse, standalone Pulse, background agents, and converted chats
+steps, scheduled Pulse, the former standalone Pulse paths, background agents,
+and converted chats
+
 **Related:**
 [mcpagent_public_api_simplification.md](mcpagent_public_api_simplification.md),
 [custom_tool_category_as_agent_addressing.md](../bugs/custom_tool_category_as_agent_addressing.md),
@@ -82,8 +92,9 @@ The authority contract has exactly two values:
   permitted workspace, DB, knowledgebase, and learnings surfaces.
 
 There is no third profile and no independent DB/KB/learnings permission
-matrix. Reviewer, Fixer, workflow-step, Goal Advisor, Builder, and maintenance
-roles select Reader or Writer as part of their one construction request.
+matrix. Review+Fix executor, specialist reviewer, workflow-step, Goal Advisor,
+Builder, and maintenance roles select Reader or Writer as part of their one
+construction request.
 Runtime authorization, session claims, and folder guards enforce that selected
 profile; they do not infer or create another permission model.
 
@@ -131,7 +142,7 @@ This allows internally contradictory states such as:
 
 ### Confirmed background-child incident (2026-08-08)
 
-A standalone `/bug-review` was launched through the Workflow Builder's
+A now-retired standalone `/bug-review` was launched through the Workflow Builder's
 `run_in_background` path. The parent Builder assembled plan, schedule, Pulse
 recording, human-input, and guidance tools through its workshop registration
 path. The child instead called `prepareCustomTools(nil)`, the ordinary
@@ -155,10 +166,40 @@ two assembly paths, then diverged.
 Tests have consequently accumulated around individual seams. Passing those
 tests proves the pieces, not that a real agent receives a coherent definition.
 
-## Current evidence
+## Current runtime reality (audited 2026-08-08)
 
-The 2026-08-04 logs demonstrate that this is path-specific rather than an
-SQLite implementation failure:
+The reader/writer table below is a **target**, not a description of current
+workflow-step authorization:
+
+- **DB:** every ordinary workflow execution step resolves to managed
+  `read-write` and receives `query_workflow_db` plus `mutate_workflow_db`.
+  Persisted `db_access` is compatibility data and does not narrow execution.
+- **Knowledgebase:** still opt-in per step. Empty
+  `knowledgebase_access` resolves to `none`; reads require `read` or
+  `read-write`, and notes writes require write-capable access through the
+  configured contribution path. `knowledgebase/context/` remains user-owned
+  and is not step-writable.
+- **Learnings:** still separately gated. Empty access normally resolves to
+  `read`; writes require `read-write` plus a non-empty `learning_objective`.
+  Routing/evaluation paths may suppress learning access.
+- **Message-sequence turns:** still support item-level narrowing through
+  `kind`/`write_access`; one sequence-wide reader/writer claim has not replaced
+  that contract.
+- **Pulse:** the user-facing standalone `/bug-review` command is retired.
+  Engineering and Operations use a consolidated Review+Fix contract in the
+  continuing Workflow Builder conversation. Optional specialist children can
+  remain Reader analysts, while the parent Review+Fix executor is a Writer.
+
+Consequently, the present code still has the independent DB/KB/learnings and
+item-level permission dimensions this refactor proposes to remove. Uniform DB
+access fixed an urgent availability problem; it did not complete canonical
+agent construction or reader/writer migration.
+
+## Historical evidence for the construction split
+
+The 2026-08-04 logs demonstrate that this was path-specific rather than an
+SQLite implementation failure. “Fixer” below is the historical stage name;
+today the parent owns a consolidated Review+Fix contract:
 
 - A normally scheduled Upwork Pulse Fixer registered both
   `query_workflow_db` and `mutate_workflow_db` and completed.
@@ -172,8 +213,10 @@ SQLite implementation failure:
   create the missing capability and therefore did not solve the construction
   split.
 
-The DB implementation document already lists a standalone Pulse Fixer E2E as
-an open P0. PLAT-003 is correctly marked `runtime_reverify`, not closed.
+PLAT-003 records the uniform workflow-step DB implementation and remains
+`runtime_reverify` until producing runs prove ordinary, evaluation,
+message-sequence, and child entry points. Its older standalone-Fixer wording is
+historical and must not be used to restore that retired launch path.
 
 ## Existing foundation that should be reused
 
@@ -222,8 +265,8 @@ not a new architecture.
 - How `step_config.json` maps into instructions, skills, tools, and workspace
   paths.
 - Which workflow/database instance an executor is bound to.
-- Business authorization such as "reviewer is read-only" and "the one Pulse
-  Fixer is a bounded writer for this run".
+- Business authorization such as "specialist reviewer is read-only" and "the
+  parent Review+Fix executor is a bounded writer for this run".
 - Pulse lifecycle, finding, approval, and workflow semantics.
 
 The builder computes policy; `mcpagent` materializes it. Neither side should
@@ -263,8 +306,8 @@ all delegate to this boundary:
 
 ```go
 buildWorkflowStepAgent(...)
-buildPulseReviewerAgent(...)
-buildPulseFixerAgent(...)
+buildPulseReviewFixAgent(...)
+buildPulseSpecialistAgent(...)
 buildGoalAdvisorAgent(...)
 buildKnowledgebaseAgent(...)
 buildGenericBackgroundAgent(...)
@@ -326,10 +369,9 @@ Typical assignments:
 |---|---|
 | Workflow execution step | Writer |
 | Message-sequence worker | Writer |
-| Pulse/workflow reviewer | Reader |
-| Artifact/ops/strategy reviewer | Reader |
-| Pulse Fixer | Writer |
-| Goal Advisor analyst/critic | Reader |
+| Engineering/Operations Review+Fix executor | Writer |
+| Optional specialist review child | Reader |
+| Strategy Auditor or Goal Advisor analyst | Reader |
 | Approved Goal Advisor finalizer | Writer |
 | Workflow Builder | Writer |
 | KB/learning maintenance agent | Writer |
@@ -341,8 +383,10 @@ prompt text, or which registry happened to contain an executor.
 This simplification intentionally accepts a broader store surface for writers.
 Prompts and skills still define what a writer should change, but the runtime no
 longer recomputes separate DB, KB, and learnings grants for every agent and
-turn. Reviewers remain readers because changing evidence during review would
-invalidate the reviewer/Fixer separation.
+turn. Independent specialist children remain readers because changing evidence
+during analysis would invalidate their review. The consolidated parent
+Engineering/Operations Review+Fix executor is a writer because it owns the
+bounded repair after recording its evidence.
 
 ## Workflow-step impact
 
@@ -417,17 +461,19 @@ workflow while the intended behavior remains unchanged.
 
 ### Phase 1 — Pulse stages
 
-- Move scheduled and standalone Pulse reviewers and the single consolidated
-  Fixer to direct `AgentDefinition` construction.
-- Make scheduled, slash-command, background, and converted-chat launches call
-  the same role builder.
+- Move the scheduled Pulse main conversation, consolidated Engineering/
+  Operations Review+Fix executor, and optional specialist review children to
+  direct `AgentDefinition` construction.
+- Make scheduled, manual `/engineering-review`, background, and converted-chat
+  launches call the same role builder. Do not restore the retired standalone
+  `/bug-review` command or a separate automatic Fixer.
 - Include a Builder-launched background Engineering/QA child: it must receive
   the exact role-approved direct tool surface, not the ordinary workflow-step
   default bundle.
 - Bind query/mutation executors before construction.
 - Retain the current preflight temporarily as a diagnostic assertion.
 - Prove a real read and mutation/read-back through both scheduled and
-  converted-chat Fixers.
+  converted-chat Review+Fix executions.
 
 This phase closes the immediate PLAT-003 gap without waiting for every
 workflow-step constructor to migrate.
@@ -485,8 +531,9 @@ Only after every production constructor has moved:
   and denial path;
 - delete message-item `write_access` and kind-derived authorization after the
   workflow-version migration;
-- remove the Pulse Fixer preflight once impossible states cannot be
-  constructed. Until then, keep it as a diagnostic and do not call it the fix.
+- remove any remaining path-specific capability preflight once impossible
+  states cannot be constructed. Until then, keep it as a diagnostic and do not
+  call it the fix.
 
 ## Test strategy after simplification
 
@@ -530,9 +577,9 @@ Use real WAL-mode SQLite and the production MCP bridge to prove:
 Only adapter behavior differs, so test the entry points that previously
 diverged:
 
-- scheduled Pulse Fixer;
+- scheduled Pulse Review+Fix;
 - manual `/engineering-review` review-and-fix sequence;
-- converted schedule-to-chat Pulse Fixer;
+- converted schedule-to-chat Pulse Review+Fix;
 - one reader and one writer ordinary workflow agent.
 - a Builder-launched background Engineering/QA child that calls
   `get_workflow_command_guidance`, records a typed finding, creates a human
@@ -556,9 +603,9 @@ The refactor is complete only when all of the following are true:
    registered-but-not-allowed because definition and executor are one binding.
 5. Tool categories are not addresses or authorization facts.
 6. Prompt text does not promise a tool absent from the completed definition.
-7. Pulse reviewers cannot mutate the workflow DB.
-8. Pulse Fixers can query and mutate through the managed bridge and can record
-   lifecycle results.
+7. Optional specialist review children cannot mutate the workflow DB.
+8. The parent Engineering/Operations Review+Fix executor can query and mutate
+   through the managed bridge and can record lifecycle results.
 9. Every workflow agent has exactly one reader or writer profile; no independent
    DB, KB, or learnings permission matrix remains.
 10. Writers can read/write DB, KB, and learnings through their managed surface;
@@ -595,8 +642,9 @@ belongs after Pulse and workflow steps.
 Removing duplicated authorization must not remove defence in depth. Definition
 membership answers "should this agent have the tool?"; executor authorization
 answers "is this exact call from the authorized active session/run?" Both
-remain, but they derive from the same reader/writer decision. Reviewers remain
-readers so they cannot modify the evidence the Fixer is expected to reconcile.
+remain, but they derive from the same reader/writer decision. Independent
+specialist children remain readers; the consolidated parent Review+Fix executor
+is the writer that reconciles their evidence.
 
 ### Partial migration
 
@@ -616,7 +664,7 @@ regressions impossible to attribute.
 - Replacing `mcpagent.AgentDefinition` with another public type.
 - Removing runtime authorization or folder isolation.
 - Making scripted workflow steps into agents.
-- Changing reviewer/fixer scheduling, Pulse selection, or lifecycle semantics.
+- Changing Review+Fix scheduling, Pulse selection, or lifecycle semantics.
 - Keeping categories as hidden capability addresses.
 - Reintroducing independent DB, KB, learnings, or message-item permission
   dimensions after the reader/writer migration.
@@ -643,6 +691,6 @@ regressions impossible to attribute.
 
 Proceed, but treat this as finishing an existing refactor rather than starting
 a new one. Implement Phase 1 first and require the scheduled plus
-converted-chat Pulse Fixer E2Es before expanding scope. If Phase 1 cannot be
+converted-chat Pulse Review+Fix E2Es before expanding scope. If Phase 1 cannot be
 expressed cleanly using the current `AgentDefinition` and `RuntimeConfig`, stop
 and review the boundary instead of adding another compatibility layer.

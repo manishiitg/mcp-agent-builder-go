@@ -17,6 +17,7 @@ describe('PulseWorkspace information hierarchy', () => {
         monitorOn
         moduleStates={[]}
         finalCommandStates={[]}
+        gateMode={null}
         statusLoading={false}
         statusError={null}
         onRefresh={() => undefined}

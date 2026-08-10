@@ -20,6 +20,7 @@ import type {
   PulseContextRecord,
   PulseAgentMetricRecord,
   PulseModuleState,
+  PulseRunMode,
   PulseReviewRecord,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
@@ -134,6 +135,7 @@ export function PulseWorkspace({
   monitorOn,
   moduleStates,
   finalCommandStates,
+  gateMode,
   statusLoading,
   statusError,
   onRefresh,
@@ -142,6 +144,7 @@ export function PulseWorkspace({
   monitorOn: boolean
   moduleStates: PulseModuleState[]
   finalCommandStates: PulseFinalCommandState[]
+  gateMode: PulseRunMode | null
   statusLoading: boolean
   statusError: string | null
   onRefresh: () => void
@@ -162,6 +165,7 @@ export function PulseWorkspace({
   // click, and cleared means cleared.
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [expandedFinding, setExpandedFinding] = useState<string | null>(null)
+  const [showCompleteBacklog, setShowCompleteBacklog] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -288,7 +292,7 @@ export function PulseWorkspace({
     () => new Map(finalCommandStates.map((state) => [state.command, state])),
     [finalCommandStates],
   )
-  const attentionFindings = useMemo(
+  const matchingFindings = useMemo(
     () => {
       const matchesFocus = (finding: PulseFindingLifecycle) => {
         const queue = pulseFindingPresentation(finding).queue
@@ -321,12 +325,18 @@ export function PulseWorkspace({
           const priority = rank[pulseFindingPresentation(b).queue] - rank[pulseFindingPresentation(a).queue]
           return priority || (b.last_seen_at || '').localeCompare(a.last_seen_at || '')
         })
-      // Unfiltered shows enough to scan a real backlog rather than a
-      // six-item teaser; a chosen slice shows all of it, because the point of
-      // clicking a count is to see everything it counted.
-      return focus === 'all' ? matched.slice(0, 25) : matched
+      return matched
     },
     [findings, focus, moduleFilter],
+  )
+  // Keep the initial dashboard scannable, but never hide the complete backlog
+  // behind an unexplained cap. Queue and module filters always show every match;
+  // the unfiltered backlog exposes an explicit one-click expansion.
+  const attentionFindings = useMemo(
+    () => focus === 'all' && !moduleFilter && !showCompleteBacklog
+      ? matchingFindings.slice(0, 25)
+      : matchingFindings,
+    [focus, matchingFindings, moduleFilter, showCompleteBacklog],
   )
   const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
   const impactSummary = useMemo(() => {
@@ -454,6 +464,12 @@ export function PulseWorkspace({
                   {' · '}{formatDate(latestRun.completed_at || latestRun.created_at)}
                 </span>
               )}
+              {gateMode && (
+                <span title={gateMode.reason}>
+                  <span className="font-medium text-foreground">Pulse mode:</span>{' '}
+                  {readable(gateMode.mode)}
+                </span>
+              )}
               <span><span className="font-medium text-foreground">Pulse owns:</span> {queueCounts.needs_action}</span>
               <span><span className="font-medium text-foreground">Queued for Pulse:</span> {queueCounts.queued_repair}</span>
               <span><span className="font-medium text-foreground">You own:</span> {queueCounts.decisions}</span>
@@ -538,9 +554,11 @@ export function PulseWorkspace({
                   if (moduleID) {
                     setSelectedModule(moduleID)
                     setModuleFilter(moduleID)
+                    setShowCompleteBacklog(false)
                   } else {
                     setFocus(decisions > 0 ? 'decisions' : 'proposals')
                     setModuleFilter('product')
+                    setShowCompleteBacklog(false)
                   }
                 }}
                 className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
@@ -614,14 +632,25 @@ export function PulseWorkspace({
                 {(focus !== 'all' || moduleFilter) && (
                   <button
                     type="button"
-                    onClick={() => { setFocus('all'); setModuleFilter(null) }}
+                    onClick={() => { setFocus('all'); setModuleFilter(null); setShowCompleteBacklog(false) }}
                     className="rounded-full border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:bg-muted"
                   >
                     Clear filter
                   </button>
                 )}
+                {focus === 'all' && !moduleFilter && matchingFindings.length > 25 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCompleteBacklog((shown) => !shown)}
+                    className="rounded-full border px-2 py-1 text-[10px] font-semibold text-primary hover:bg-primary/10"
+                  >
+                    {showCompleteBacklog ? 'Show first 25' : `Show all ${matchingFindings.length}`}
+                  </button>
+                )}
                 <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground">
-                  {attentionFindings.length} shown
+                  {attentionFindings.length === matchingFindings.length
+                    ? `${attentionFindings.length} shown`
+                    : `${attentionFindings.length} of ${matchingFindings.length} shown`}
                 </span>
               </div>
             </div>
@@ -641,7 +670,7 @@ export function PulseWorkspace({
                   key={value}
                   type="button"
                   aria-pressed={focus === value}
-                  onClick={() => setFocus(value)}
+                  onClick={() => { setFocus(value); setShowCompleteBacklog(false) }}
                   className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
                     focus === value
                       ? 'border-primary/35 bg-primary/10 text-primary'
@@ -769,7 +798,7 @@ export function PulseWorkspace({
               <button
                 key={module.id}
                 type="button"
-                onClick={() => { setSelectedModule(module.id); setModuleFilter(module.id) }}
+                onClick={() => { setSelectedModule(module.id); setModuleFilter(module.id); setShowCompleteBacklog(false) }}
                 aria-pressed={active}
                 className={`min-w-0 bg-background p-3 text-left transition-colors hover:bg-muted/40 ${active ? 'ring-2 ring-inset ring-primary/50' : ''}`}
               >

@@ -185,6 +185,72 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 	}
 }
 
+func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := pulsemodules.WorkflowReviewID
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "collector silently drops failed rows", Module: module,
+		PulseFindingDetails: PulseFindingDetails{
+			// Existing databases can carry a historical finding_id. It must not
+			// escape as the public identity after this migration.
+			FindingID: "LEGACY-COLLECTOR-ROWS",
+			IssueKind: "workflow_issue", Classification: "correctness_bug", Severity: "high",
+			Summary: "Failed rows disappear.", Impact: "The workflow can report complete data when it is incomplete.",
+			Evidence: []string{"runs/iteration-0/result.json"},
+		},
+	})
+	if err != nil || first.IssueID == "" {
+		t.Fatalf("record first finding: record=%+v err=%v", first, err)
+	}
+	if !strings.HasPrefix(first.IssueID, "PUL-") {
+		t.Fatalf("public issue identity=%q, want PUL id", first.IssueID)
+	}
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		IssueID: first.IssueID, Concern: "row-level failures vanish before the summary is calculated", Module: module,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: "workflow_issue", Classification: "correctness_bug", Severity: "high",
+			Summary: "The same row-loss defect has new evidence.", Impact: "Completeness reporting remains misleading.",
+			Evidence: []string{"runs/iteration-1/result.json"},
+		},
+	}); err != nil {
+		t.Fatalf("update existing root cause by PUL issue id: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+	if err != nil || len(findings) != 1 || findings[0].SeenCount != 2 {
+		t.Fatalf("PUL update created a second identity: findings=%+v err=%v", findings, err)
+	}
+
+	second, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-3", "review-3", PulseReviewFindingInput{
+		Concern: "summary hides the same failed collector rows", Module: module,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: "workflow_issue", Classification: "correctness_bug", Severity: "high",
+			Summary: "A symptom was recorded separately for consolidation.", Impact: "It would otherwise duplicate repair work.",
+			Evidence: []string{"runs/iteration-2/summary.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record duplicate candidate: %v", err)
+	}
+	if _, err := MergePulseFindingIssues(ctx, workspacePath, first.IssueID, []string{second.IssueID}, "Both records describe failed-row loss before summary calculation."); err != nil {
+		t.Fatalf("merge semantic duplicate: %v", err)
+	}
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("load merged lifecycle: findings=%+v err=%v", findings, err)
+	}
+	for _, finding := range findings {
+		if NewPulseIssue(finding).ID != second.IssueID {
+			continue
+		}
+		if finding.Status != ConcernStatusResolved || finding.Details == nil || finding.Details.MergedIntoIssueID != first.IssueID {
+			t.Fatalf("duplicate was not retired with its history linked: %+v", finding)
+		}
+		return
+	}
+	t.Fatalf("merged duplicate %s not found", second.IssueID)
+}
+
 func TestPulseFindingLifecycleLoadsStructuredHarnessReproduction(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)

@@ -32,6 +32,7 @@ var pulseReviewerWriteToolNames = []string{
 	"record_pulse_finding",
 	"record_pulse_verification",
 	"complete_pulse_review",
+	"merge_pulse_issues",
 }
 
 // pulseRemovedToolNames must never reappear. Each was folded into one of the
@@ -90,8 +91,10 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 		}
 	}
 
-	// The surface is the four plus the two tools that were never part of the
-	// consolidation. Anything else is a tool nobody accounted for.
+	// The surface is the four consolidated lifecycle tools, typed reviewer
+	// writes, and resolve_run_concern. merge_pulse_issues is intentionally the
+	// one semantic maintenance verb: calling it record_* would conceal that it
+	// retires duplicate queue entries while preserving their history.
 	expected := map[string]bool{"resolve_run_concern": true}
 	for _, name := range pulseConsolidatedToolNames {
 		expected[name] = true
@@ -109,10 +112,11 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 		t.Errorf("registered %d Pulse tools, want %d", len(registered), len(expected))
 	}
 
-	// Every Pulse tool name follows the one rule, so the agent can derive a name
-	// instead of guessing one.
+	// Every ordinary Pulse tool follows the one naming rule, so the agent can
+	// derive a name instead of guessing one. The two explicit semantic actions
+	// are documented by name in the returned tool index.
 	for name := range registered {
-		if name == "resolve_run_concern" || name == "complete_pulse_review" {
+		if name == "resolve_run_concern" || name == "complete_pulse_review" || name == "merge_pulse_issues" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
@@ -173,16 +177,20 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	var backlogView struct {
 		Findings []step_based_workflow.PulseFindingLifecycle `json:"findings"`
 		Total    int                                         `json:"total"`
+		Summary  map[string]interface{}                      `json:"summary"`
 		Note     string                                      `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(raw), &backlogView); err != nil {
 		t.Fatalf("decode backlog view: %v", err)
 	}
-	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" {
+	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" || backlogView.Summary["active_count"] != float64(1) {
 		t.Fatalf(`view="backlog" did not return the durable issue backlog: %s`, raw)
 	}
-	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint == "" {
-		t.Fatalf(`view="backlog" lost its visible issue id or backend lifecycle key: %+v`, backlogView.Findings[0])
+	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint != "" {
+		t.Fatalf(`view="backlog" must expose PUL issue id but not lifecycle fingerprint: %+v`, backlogView.Findings[0])
+	}
+	if strings.Contains(raw, `"fingerprint"`) || strings.Contains(raw, `"finding_id"`) || strings.Contains(raw, `"attempt_id"`) {
+		t.Fatalf(`view="backlog" leaked an internal lifecycle identity: %s`, raw)
 	}
 	// The optional module filter still filters, and still names the closed set.
 	if _, err := execute(ctx, map[string]interface{}{
