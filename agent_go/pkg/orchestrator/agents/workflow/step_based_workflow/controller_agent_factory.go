@@ -1647,7 +1647,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	config.EnableParallelToolExecution = true
 	hcpo.GetLogger().Info("⚡ Parallel tool execution enabled for todo task orchestrator agent")
 
-
 	// Setup Downloads folder for agent-browser.
 	hcpo.setupBrowserDownloadsPathOverride(ctx, config, stepConfig)
 
@@ -2081,10 +2080,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [TOOL] Predefined sub-agent execution failed: %v", err))
-			if strings.Contains(err.Error(), "route ") && strings.Contains(err.Error(), " not found in predefined routes") {
-				return "", err
-			}
-			return fmt.Sprintf("ERROR: %v", err), nil // Return error as result, not as error (agent can handle)
+			// Preserve the typed failure here. The virtual-tool boundary turns it
+			// into a success:false payload for a synchronous caller, while the
+			// async owner records a failed completion. Converting it to ERROR text
+			// plus nil made failed children look completed (PLAT-082).
+			return result, err
 		}
 
 		hcpo.GetLogger().Info(fmt.Sprintf("✅ [TOOL] Predefined sub-agent completed successfully: route=%s, todo=%s", routeID, todoID))
@@ -2182,7 +2182,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [TOOL] Generic agent execution failed: %v", err))
-			return fmt.Sprintf("ERROR: %v", err), nil // Return error as result, not as error (agent can handle)
+			return result, err
 		}
 
 		hcpo.GetLogger().Info(fmt.Sprintf("✅ [TOOL] Generic agent completed successfully: todo=%s", todoID))

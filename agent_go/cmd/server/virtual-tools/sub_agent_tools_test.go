@@ -3,10 +3,60 @@ package virtualtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestHandleCallSubAgentReturnsTypedFailedEnvelope(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ExecutePredefinedSubAgentKey, ExecutePredefinedSubAgentFunc(
+		func(context.Context, string, string, string) (string, error) {
+			return "partial child evidence", errors.New("failed to create execution-only agent")
+		},
+	))
+
+	result, err := handleCallSubAgent(ctx, map[string]interface{}{
+		"route_id":       "review",
+		"todo_id":        "todo-1",
+		"instructions":   "review the output",
+		"preferred_tier": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("tool boundary should return a readable failure envelope, got error: %v", err)
+	}
+	var payload SubAgentResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("decode result: %v\n%s", err, result)
+	}
+	if payload.Success || payload.Error != "failed to create execution-only agent" || payload.Result != "partial child evidence" {
+		t.Fatalf("failure envelope = %#v", payload)
+	}
+}
+
+func TestHandleCallGenericAgentReturnsTypedFailedEnvelope(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ExecuteGenericAgentKey, ExecuteGenericAgentFunc(
+		func(context.Context, string, string) (string, error) {
+			return "partial generic evidence", errors.New("generic child failed")
+		},
+	))
+
+	result, err := handleCallGenericAgent(ctx, map[string]interface{}{
+		"todo_id":        "todo-1",
+		"instructions":   "inspect",
+		"preferred_tier": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("tool boundary should return a readable failure envelope, got error: %v", err)
+	}
+	var payload SubAgentResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("decode result: %v\n%s", err, result)
+	}
+	if payload.Success || payload.Error != "generic child failed" || payload.Result != "partial generic evidence" {
+		t.Fatalf("failure envelope = %#v", payload)
+	}
+}
 
 func TestHandleCallGenericAgentPropagatesMessageSequence(t *testing.T) {
 	var captured []GenericAgentMessage

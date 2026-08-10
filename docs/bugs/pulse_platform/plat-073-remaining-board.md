@@ -54,7 +54,9 @@ documentation gaps:
   overwriting it (the call site's own comment already said "overwrites... with
   the full cumulative history" — the implementation just didn't match), so the
   persisted total compounded turn over turn and got mispriced whenever the
-  session's active model changed mid-session. Now replaces rather than merges.
+  session's active model changed mid-session. PLAT-081 now persists one
+  cumulative checkpoint per chat and adds only each turn's delta, preserving
+  totals from other chats using the same model.
   The finding's second claim ("`input_cost_usd` zeroed for 2.8M tokens") is
   **not a bug** — those tokens are cache-served and correctly priced under
   `cache_cost_usd` instead; documented in `file-layout.md`.
@@ -217,15 +219,22 @@ own `db/README.md` records the approved 2026-08-05 decision to change
 that readers and writers must move atomically. Route it to a migration-capable
 workflow/version upgrade; it is not a scheduler or shared persistence defect.
 
-## K. Unclustered (3)
+## K. Unclustered (3) — triaged; one real bug fixed
 
-`ff9832cc` (build-in-public) — `execution_low` resolves to a higher-reasoning
-model than the tier name implies. `0b7d9d4a` (social-media) — sub-agent
-dispatch envelopes report `status: "completed"` for workers that returned
-`success:false`, likely the same shape as A, worth checking against the
-`HandleCustomExecute` fix once it's live. `5e248d9e` (social-media) — the
-PLAT-072 artifact-deletion claim left open pending verification that rotation
-archives workflow artifacts, not just cost/eval paths.
+See **PLAT-082**.
+
+- `ff9832cc` (build-in-public) — already fixed in
+  `multi-llm-provider-go` `233f3c6`: Claude `execution_low` is Haiku 4.5 at
+  medium effort. Runtime reverify remains.
+- `0b7d9d4a` (social-media) — real and distinct from cluster A. Sync child
+  execution swallowed its Go error into an `ERROR:` string before the async
+  owner saw it, so the owner truthfully classified the false nil-error signal
+  as completed. Fixed by preserving the typed error through the internal
+  boundary; synchronous tool callers still receive a readable
+  `success:false` envelope.
+- `5e248d9e` (social-media) — not a defect. Full-run rotation moves the entire
+  prior `iteration-0` to a retained `iteration-N`; the finding inspected only
+  the fresh active folder and missed the backup tree.
 
 ## Suggested split for parallel work
 

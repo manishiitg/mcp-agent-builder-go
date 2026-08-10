@@ -165,6 +165,25 @@ func TestRunAsyncCallTurnsPanicIntoTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestRunAsyncCallPreservesChildExecutionFailure(t *testing.T) {
+	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
+	_, call := execCtx.registerAsyncCall(context.Background(), "child-failed", "failed", "route", "predefined")
+	execCtx.runAsyncCall(call, func() (string, error) {
+		return "partial child evidence", errors.New("failed to create execution-only agent")
+	})
+	completions, err := execCtx.waitForUnreconciled(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completions) != 1 {
+		t.Fatalf("got %d completions, want 1", len(completions))
+	}
+	got := completions[0]
+	if got.Status != "failed" || got.Error != "failed to create execution-only agent" || got.Result != "partial child evidence" {
+		t.Fatalf("failed child completion = %#v", got)
+	}
+}
+
 func TestQueryAndStopAsyncSubAgent(t *testing.T) {
 	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
 	childCtx, call := execCtx.registerAsyncCall(context.Background(), "child-stop", "stop", "review", "predefined")
