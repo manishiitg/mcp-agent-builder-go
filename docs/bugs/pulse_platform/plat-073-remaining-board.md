@@ -55,8 +55,10 @@ current implementation and its regression test:
   only a post-restart live run, not a second implementation.
 
 `dd9ede3c` is the exception: it exposed a second, independent output-boundary
-gap after the earlier folder-guard repair. PLAT-078 commit `6b688f51c` fixes
-that gap without changing or reverting the earlier grant.
+gap after the earlier folder-guard repair. The initial PLAT-078 cap was
+superseded because it silently changed snapshot arguments; the replacement
+returns an explicit oversized-result error without transforming the agent's
+request. Neither version changes or reverts the earlier folder grant.
 
 ## A. Telemetry lies about success/failure (3) — FIXED, not yet live
 
@@ -185,11 +187,11 @@ projection claim, not supported by current schedule state; reverify through
   now grants read access to `<workflow-root>/tool_output_folder`
   (mcpagent's own spill target for any bridge tool result over its 128 KiB
   inline cap), closing the "spilled copy is structurally unreadable" half.
-  Commit `6b688f51c` additionally narrows default snapshots (`--compact
-  --depth 6`, preserving explicit selector/depth) and caps the final result at
-  24,000 runes with retry guidance. This is a distinct prevention fix, not a
-  regression of the folder grant. Reverify one genuinely large live snapshot
-  after restart before closing the finding.
+  The replacement PLAT-078 fix returns a typed `SNAPSHOT_RESULT_TOO_LARGE`
+  error at 24,000 runes with retry guidance, while preserving the exact
+  snapshot arguments. This is a distinct prevention fix, not a regression of
+  the folder grant. Reverify one genuinely large live snapshot after restart
+  before closing the finding.
 - `90348ad2`, `22fa5102` (tectonicusadaytrading, direct `sqlite3` blocked) —
   confirmed working-as-designed. `90348ad2` is already merged/resolved into
   `22fa5102` as the canonical survivor; close `22fa5102` via

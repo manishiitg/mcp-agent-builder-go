@@ -871,42 +871,7 @@ func normalizeAgentBrowserCommandArgs(command string, args []string) []string {
 	if command == "wait" {
 		cleaned = normalizeWaitDurationArgs(cleaned)
 	}
-	if command == "snapshot" {
-		cleaned = normalizeSnapshotArgs(cleaned)
-	}
 	return cleaned
-}
-
-const maxManagedSnapshotDepth = 6
-
-// normalizeSnapshotArgs keeps an unscoped accessibility-tree snapshot inside
-// the result budget of the coding CLIs. A full tree from a feed/search page can
-// be hundreds of kilobytes; the CLI then spills it outside the workflow's
-// readable sandbox before AgentWorks gets a chance to manage the output.
-//
-// A caller may still supply a selector for a precise region or an explicit
-// depth when it genuinely needs a different tree shape. The safe compact/depth
-// defaults apply only when neither was requested, so existing targeted browser
-// workflows keep their intended evidence surface.
-func normalizeSnapshotArgs(args []string) []string {
-	if snapshotHasOption(args, "-d", "--depth") || snapshotHasOption(args, "-s", "--selector") {
-		return args
-	}
-	bounded := append([]string(nil), args...)
-	if !snapshotHasOption(args, "-c", "--compact") {
-		bounded = append(bounded, "--compact")
-	}
-	return append(bounded, "--depth", strconv.Itoa(maxManagedSnapshotDepth))
-}
-
-func snapshotHasOption(args []string, short, long string) bool {
-	for _, arg := range args {
-		arg = strings.TrimSpace(arg)
-		if arg == short || arg == long || strings.HasPrefix(arg, long+"=") {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeOpenCommandArgs(command string, args []string) (tab string, cleaned []string, ok bool, err error) {

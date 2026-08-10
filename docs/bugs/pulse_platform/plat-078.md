@@ -63,20 +63,21 @@ widen access to the bare workflow root.
 
 ## Mechanism 1 fixed (2026-08-10)
 
-Commit `6b688f51c` adds a second, independent boundary in AgentWorks itself:
+The initial `6b688f51c` implementation narrowed default arguments and
+truncated the returned snapshot. That prevented an overflow, but it silently
+changed the agent's requested evidence surface; it was immediately superseded.
 
-- An ordinary `agent_browser snapshot` now receives `--compact --depth 6`.
-  An explicit caller-supplied `--depth` or `--selector` is preserved, so a
-  focused workflow probe is never silently rewritten.
-- The final snapshot result has a 24,000-rune output ceiling before it reaches
-  the coding CLI. When truncation is necessary it says so and tells the agent
-  to retry with a CSS selector or a narrower depth.
+The replacement runs the exact `snapshot` command the agent supplied. If the
+raw result exceeds 24,000 runes, it returns a typed
+`SNAPSHOT_RESULT_TOO_LARGE` error containing the raw rune/byte count and clear
+retry options (`--selector <css>` or `--depth <n>`). It returns no partial
+snapshot, does not inject `--compact`, and does not alter any explicit option.
+The agent therefore makes the next evidence-scope decision itself.
 
 This is not a regression of the folder-guard fix: the earlier change made an
 already-spilled mcpagent result readable; this change prevents an independent,
 smaller coding-CLI result limit from receiving an unbounded page tree at all.
-Tests cover default narrowing, explicit selector/depth preservation, and the
-hard output ceiling.
+Tests cover exact argument preservation and the typed oversized-result error.
 
 ## Verification
 
@@ -91,7 +92,6 @@ hard output ceiling.
 
 - A step that triggers mcpagent's 128 KiB bridge-result spill can read the
   spilled file back from `tool_output_folder/` without a folder-guard denial.
-- A large default snapshot is compact, shallow, and bounded before it reaches
-  the coding CLI.
-- A deliberately focused snapshot preserves its caller-supplied scope but is
-  still hard-capped at the final result boundary.
+- A large snapshot returns `SNAPSHOT_RESULT_TOO_LARGE` with no transformed or
+  partial evidence.
+- The retry is agent-chosen and explicit: a targeted selector or smaller depth.

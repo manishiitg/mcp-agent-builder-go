@@ -19,11 +19,11 @@ import (
 
 const cdpTabListTimeout = 15 * time.Second
 
-// Keep snapshots well below the smallest coding-CLI MCP result limit. The
-// browser CLI can produce a much larger tree even with depth/compact flags
-// when a page has many siblings (for example a social feed). Returning that
-// entire value makes the CLI spill it outside the workflow sandbox.
-const maxManagedSnapshotOutputRunes = 24000
+// A coding CLI can accept much less than mcpagent's own bridge result limit.
+// Snapshot output above this threshold must fail explicitly rather than being
+// silently narrowed or truncated: the agent, not the runtime, chooses which
+// evidence surface to inspect next.
+const maxInlineSnapshotOutputRunes = 24000
 
 // execCmd is an alias so tests can swap it out; defaults to exec.Command.
 var execCmd = exec.Command
@@ -1022,12 +1022,6 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		recordingContextNote = fmt.Sprintf("AGENTWORKS_RECORDING_CONTEXT: recording is active in fresh tab %q (original tab %q). Discard every old element ref and call snapshot now. Until record stop, AgentWorks automatically routes this workflow's page actions to %q; do not select or create another tab.", recordingTab, recordingOriginalTab, recordingTab)
 		log.Printf("[BROWSER] CDP recording handoff: owner=%q original=%q recording=%q", cdpOwner, recordingOriginalTab, recordingTab)
 	}
-	if isCdpMode && command == "snapshot" {
-		if handoff, recording := getCDPRecordingHandoff(cdpPort, cdpOwner); recording && handoff.NeedsSnapshot {
-			markCDPRecordingSnapshotReady(cdpPort, cdpOwner)
-			recordingContextNote = fmt.Sprintf("AGENTWORKS_RECORDING_CONTEXT: fresh snapshot accepted for recording tab %q. Subsequent page actions are now automatically routed to this recorded context.", handoff.RecordingTab)
-		}
-	}
 	if isCdpMode && command == "record" && exclusiveAction == "stop" {
 		if handoff, recording := clearCDPRecordingHandoff(cdpPort, cdpOwner); recording {
 			closeOutput, closeErr := e.Client.ExecuteCommand(ctx, []string{"--session", session, "tab", "close", handoff.RecordingTab, "--cdp", cdpURL, "--json"}, opts)
@@ -1115,24 +1109,30 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	if isBrowserDocumentationCommand(command) {
 		return formatAgentBrowserSkillsOutput(output), nil
 	}
+	if command == "snapshot" {
+		if err := snapshotResultTooLargeError(output); err != nil {
+			return "", err
+		}
+		if isCdpMode {
+			if handoff, recording := getCDPRecordingHandoff(cdpPort, cdpOwner); recording && handoff.NeedsSnapshot {
+				markCDPRecordingSnapshotReady(cdpPort, cdpOwner)
+				recordingContextNote = fmt.Sprintf("AGENTWORKS_RECORDING_CONTEXT: fresh snapshot accepted for recording tab %q. Subsequent page actions are now automatically routed to this recorded context.", handoff.RecordingTab)
+			}
+		}
+	}
 	if recordingContextNote != "" {
 		output = strings.TrimSpace(output) + "\n\n" + recordingContextNote
-	}
-	if command == "snapshot" {
-		output = boundSnapshotOutput(output)
 	}
 
 	return output, nil
 }
 
-func boundSnapshotOutput(output string) string {
-	runes := []rune(output)
-	if len(runes) <= maxManagedSnapshotOutputRunes {
-		return output
+func snapshotResultTooLargeError(output string) error {
+	runeCount := len([]rune(output))
+	if runeCount <= maxInlineSnapshotOutputRunes {
+		return nil
 	}
-	return string(runes[:maxManagedSnapshotOutputRunes]) +
-		"\n\n[Snapshot truncated by AgentWorks before the coding-CLI result limit. " +
-		"Narrow the next snapshot with --selector <css>, or use a smaller --depth.]"
+	return fmt.Errorf("SNAPSHOT_RESULT_TOO_LARGE: agent-browser returned %d runes (%d bytes), exceeding the %d-rune inline safety limit. The snapshot ran exactly as requested; AgentWorks did not add --compact, alter --depth, select a subtree, or truncate its evidence. No snapshot content was returned inline because the coding CLI could spill it outside the readable workflow sandbox. Retry deliberately with --selector <css> for the needed region or --depth <n> for a smaller tree", runeCount, len(output), maxInlineSnapshotOutputRunes)
 }
 
 func formatAgentBrowserSkillsOutput(output string) string {
