@@ -99,15 +99,36 @@ one date. `3565d07c`, `3e42ae71` (linkedin) — `list_schedules` reports a
 completed run as still running with `next_run` in the past, and a weekly
 schedule skipped a fire with no record of why.
 
-## F. Tools unavailable / limits (8) — triage before fixing, not started
+## F. Tools unavailable / limits (8) — triaged, closer to 1 real open bug
 
-Real: `dd9ede3c` (upwork, `agent_browser` snapshot overflows the tool-result
-size limit — recurring, `PLAT-062`-adjacent), `ad5c92dd` (rtslatency,
-`get_api_spec` silently treats an array-of-strings `tool_name` as one literal
-name). **Not bugs — the sandbox correctly denying access**: `90348ad2`,
-`22fa5102` (tectonicusadaytrading, direct `sqlite3` blocked by the folder
-guard, working as designed). Reclassify those before this cluster is "8 bugs"
-— it's closer to 2–3.
+- `ad5c92dd` (rtslatency, `get_api_spec` array-of-strings `tool_name`) —
+  **already fixed** (`mcpagent` commit `ea60eb2`, predates the finding).
+  `handleGetAPISpec` (`mcpagent/agent/code_execution_tools.go:24-55`) already
+  handles both a JSON-array string and a real `[]interface{}`. Reverify live,
+  then close.
+- `dd9ede3c` (upwork, `agent_browser` snapshot overflow) — **real bug, not
+  PLAT-062-adjacent** (that ticket is an unrelated prompt-text defect). Root
+  cause: `agent_browser`'s `snapshot` command has no output-size cap (unlike
+  `read_skill`'s `maxReadSkillBatchSize=1`, added for the identical failure
+  shape per `mcpagent/agent/skill.go:21-33`), so a large snapshot exceeds
+  Claude Code's own MCP result cap and gets spilled to
+  `MCP_TOOL_OUTPUT_DIR`. That dir resolves to `<workflow-root>/tool_output_folder`
+  (`pkg/orchestrator/base_orchestrator_agent_factory.go:142`,
+  `mcpagent/agent/coding_agents_bridge.go:198-200`) — a sibling of `runs/`
+  that `setupExecutionFolderGuard` (`controller_agent_factory.go:427`) never
+  grants read access to, so the spilled copy is structurally unreadable.
+  Confirmed against the live filesystem: `workspace-docs/Workflow/upwork/tool_output_folder/`
+  exists with spilled files up to 16 MB. Two independent fix points, neither
+  implemented yet: (1) cap/paginate `agent_browser` snapshot output
+  (`pkg/browser/executor.go`/`tools.go`), (2) resolve
+  `MCP_TOOL_OUTPUT_DIR` inside the guard's granted read tree, or add
+  `tool_output_folder` to `setupExecutionFolderGuard`'s read paths.
+- `90348ad2`, `22fa5102` (tectonicusadaytrading, direct `sqlite3` blocked) —
+  confirmed working-as-designed. `90348ad2` is already merged/resolved into
+  `22fa5102` as the canonical survivor; close `22fa5102` via
+  `resolve_run_concern(status="rejected")` (see cluster H).
+- The remaining ~4 members of this 8-count cluster have no per-fingerprint
+  detail recorded on this board — not triaged, not invented.
 
 ## G. Learnings/KB metadata wrong (6) — implemented / deduplicated
 
@@ -119,22 +140,51 @@ or relearn counters. `dd2a48047c4d7993` is already covered by PLAT-061 and the
 v1.0.22 migration; the dead field is absent from the current workflow. Runtime
 reverify remains before closing any workflow-local row.
 
-## H. External sites blocking (3) — RECLASSIFY, not a platform bug
+## H. External sites blocking (3) — RECLASSIFY, not a platform bug — mechanism documented
 
 `23cfc840`, `0d39debd`, `659fd419` (tectonicusadaytrading) — Reddit 403s,
 LunarCrush failures. The outside world, correctly reported. Close as
 not-a-defect rather than leaving them to age; they will never resolve as
 platform work.
 
-## I. Human-input / backlog lifecycle (5) — not started
+**`pulse_close_stale.py` is the wrong tool for this** — it only ever writes
+`status='resolved'` ("a platform fix shipped"), which is deliberately outside
+its scope for "this was never a platform defect" (see its updated docstring).
+The correct mechanism is `resolve_run_concern(status="rejected", note=...)`,
+called from within a live Pulse/workshop session — confirmed live in the DB:
+`0d39debd`/`659fd419` are already `resolved` via a dedup/consolidation merge
+into `23cfc840`, and `23cfc840` itself carries a `resolution_note` explaining
+the Reddit 403 is the outside world, not a platform bug, but is still sitting
+at `status='external_action_required'` pending the actual `rejected` call.
 
-`bed0388b` (upwork) — `complete_pulse_review` persists `status=completed`
-with an empty verdict string. `cf457bdd` — answered human inputs never
-transition out of `answered` even once applied/superseded. `f2cbf9a1`
-(rtslatency) — one harness finding exists as two rows under the same
-`finding_id` with different fingerprints, so closing one leaves the other
-open. `7602e2ac` (social-media) — `loop_closure` reports `answer_not_applied`
-findings that don't check out against `report_human_inputs` directly.
+## I. Human-input / backlog lifecycle (5) — FIXED (2 of 3 code items), not yet live
+
+See **PLAT-077**.
+
+- `bed0388b` (upwork, `complete_pulse_review` empty verdict) — already fixed
+  (commit `b541b520d`, predates the finding). Reverify live, then close.
+- `cf457bdd` + `7602e2ac` (upwork / social-media) — same root cause, fixed
+  together: `answerReportHumanInput`/`dismissReportHumanInput`
+  (`cmd/server/report_human_inputs.go`) wrote their `UPDATE` with no status
+  guard, so a concurrent writer (the documented chat/schedule concurrency
+  contract, not just an in-process race — the package mutex only serializes
+  goroutines in this one process) could silently revert an already-consumed
+  row back to `answered` while leaving its `consumed_at`/`outcome_summary` in
+  place. That's exactly the impossible state `7602e2ac` observed live
+  through `loop_closure`. Added a `NOT IN (...)` status guard plus a
+  `RowsAffected` check (erroring instead of silently no-op'ing) to all three
+  transition functions (`answer`/`dismiss`/`consume`). Tests added.
+- `f2cbf9a1` (rtslatency, two fingerprints under one harness finding) —
+  fixed: `migrateDuplicatePulseFindingIdentities`
+  (`pulse_finding_lifecycle.go`) only ever grouped duplicates by a
+  human-assigned `finding_id`; a harness finding split before either row
+  acquired one (this exact case) was invisible to it. Now also groups by
+  `target_key` when `finding_id` is empty, scoped to `IssueKindHarness` rows
+  only. Tests added (including a negative-scope guard so a coincidental
+  target_key match on non-harness findings is never merged).
+- Not yet reverified live — needs a restart, then exercising
+  answer/dismiss/consume and a harness-finding split before closing
+  fingerprints.
 
 ## J. Routing / run identity (3) — not started
 

@@ -502,13 +502,27 @@ func answerReportHumanInput(ctx context.Context, workspacePath, inputID string, 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
+	// The WHERE clause re-checks status inside the same statement that writes
+	// it (PLAT-073 cluster I, cf457bdd/7602e2ac): the in-process mutex above
+	// only serializes goroutines in this server — a concurrent writer in
+	// another process (the documented chat/schedule concurrency contract) can
+	// still consume or dismiss this row between the read above and this
+	// write. Without this guard that write silently reverts status back to
+	// 'answered' while leaving the prior consumed_at/outcome_summary in
+	// place, producing a row that is simultaneously "answered" and
+	// "consumed" — exactly the state loop_closure observed live.
+	result, err := tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='answered', selected_option_id=?, note=?, answered_by=?, answered_by_kind=?, answered_via=?, answered_session_id=?, answered_at=?, updated_at=?
-		WHERE id=? AND workspace_path=?`,
+		WHERE id=? AND workspace_path=? AND status NOT IN ('consumed', 'dismissed', 'claimed')`,
 		selected, note, strings.TrimSpace(req.AnsweredBy), normalizeReportHumanInputActorKind(req.AnsweredByKind),
 		strings.TrimSpace(req.AnsweredVia), strings.TrimSpace(req.SessionID), now, now, input.ID, normalized)
 	if err != nil {
 		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected == 0 {
+		return nil, fmt.Errorf("input_id %q was consumed, dismissed, or claimed by another writer before this answer could be saved", inputID)
 	}
 	// The current row already owns the answer. The append-only audit trail keeps
 	// provenance, not a second permanent copy of potentially sensitive free text.
@@ -558,13 +572,19 @@ func dismissReportHumanInput(ctx context.Context, workspacePath, inputID string,
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
+	// Same concurrent-writer guard as answerReportHumanInput (PLAT-073 cluster I).
+	result, err := tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='dismissed', answered_by=?, answered_by_kind=?, answered_via=?, answered_session_id=?, dismissed_at=?, updated_at=?
-		WHERE id=? AND workspace_path=?`,
+		WHERE id=? AND workspace_path=? AND status NOT IN ('consumed', 'claimed')`,
 		strings.TrimSpace(req.AnsweredBy), normalizeReportHumanInputActorKind(req.AnsweredByKind),
 		strings.TrimSpace(req.AnsweredVia), strings.TrimSpace(req.SessionID), now, now, input.ID, normalized)
 	if err != nil {
 		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected == 0 {
+		return nil, fmt.Errorf("input_id %q was consumed or claimed by another writer before it could be dismissed", inputID)
 	}
 	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
 		InputID: input.ID, EventType: "dismissed", Status: "dismissed", ActorID: req.AnsweredBy,
@@ -611,13 +631,23 @@ func consumeReportHumanInput(ctx context.Context, workspacePath, inputID string,
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
+	result, err := tx.ExecContext(ctx, `UPDATE report_human_inputs
 		SET status='consumed', consumed_by=?, outcome_summary=?, consumed_at=?, updated_at=?,
 		    claim_token='', claimed_at='', claim_expires_at=''
 		WHERE id=? AND workspace_path=? AND status IN ('answered', 'claimed')`,
 		strings.TrimSpace(req.ConsumedBy), outcome, now, now, input.ID, normalized)
 	if err != nil {
 		return nil, err
+	}
+	// The WHERE guard above already existed but its zero-row case was never
+	// checked, so a concurrent writer racing this one could make the guard
+	// silently no-op while this call still reported success and wrote a
+	// "consumed" audit event for a row it never actually changed (PLAT-073
+	// cluster I).
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected == 0 {
+		return nil, fmt.Errorf("input_id %q was not in 'answered' or 'claimed' state when this consumption was applied (concurrent writer): current status=%q", inputID, input.Status)
 	}
 	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
 		InputID: input.ID, EventType: "consumed", Status: "consumed", ActorID: req.ConsumedBy,

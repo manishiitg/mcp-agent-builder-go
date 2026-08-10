@@ -24,6 +24,16 @@ matched 11 of 81 while misattributing several, so the judgement stays with the
 caller: name the ticket, the evidence, and the exact fingerprints. The tool's
 job is to make that closure safe, uniform, and auditable.
 
+This tool is for exactly one case: "a platform fix shipped, so this finding is
+now stale." It cannot and must not be used for "this was never a platform
+defect" (the outside world correctly blocking a request, a folder guard
+correctly denying an unsanctioned access path, etc.) — that closure needs
+`status='rejected'`, which is outside this tool's scope by design, since
+`rejected` is NOT in the concern upsert's reopen clause and a wrong rejection
+would stay wrongly closed forever. Use the `resolve_run_concern` tool
+(`status="rejected"`, with a note) from within a live Pulse/workshop session
+for that case instead (PLAT-073 cluster H).
+
 Usage:
   # see what is on the board (the version column is the revision a finding was
   # FIRST observed against; "?" means unknown, which is not the same as old)

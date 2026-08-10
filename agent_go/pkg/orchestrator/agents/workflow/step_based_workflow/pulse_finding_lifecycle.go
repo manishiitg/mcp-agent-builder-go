@@ -651,12 +651,13 @@ func migratePreValidationConcernGranularity(ctx context.Context, db pulseFinding
 type pulseIdentityRow struct {
 	Fingerprint string
 	FindingID   string
+	IssueKind   string
 	TargetKey   string
 	StepID      string
 }
 
 func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFindingLifecycleDB) error {
-	rows, err := db.QueryContext(ctx, `SELECT d.fingerprint, d.finding_id, d.target_key, COALESCE(c.step_id, '')
+	rows, err := db.QueryContext(ctx, `SELECT d.fingerprint, d.finding_id, COALESCE(d.issue_kind, ''), d.target_key, COALESCE(c.step_id, '')
 		FROM pulse_finding_details d LEFT JOIN run_concerns c USING (fingerprint)
 		ORDER BY d.fingerprint`)
 	if err != nil {
@@ -665,7 +666,7 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 	var identities []pulseIdentityRow
 	for rows.Next() {
 		var row pulseIdentityRow
-		if err := rows.Scan(&row.Fingerprint, &row.FindingID, &row.TargetKey, &row.StepID); err != nil {
+		if err := rows.Scan(&row.Fingerprint, &row.FindingID, &row.IssueKind, &row.TargetKey, &row.StepID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -682,12 +683,32 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 			groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
 		}
 	}
+	// A harness finding can be split across the fingerprint boundary without
+	// ever acquiring a human-assigned finding_id (PLAT-073 cluster I,
+	// f2cbf9a1: HARNESS-REFDOC-REVIEW-ARTIFACT-DRIFT existed as two rows,
+	// neither with finding_id set, so the pass above could not see them as
+	// duplicates). target_key is the identity harness findings actually
+	// share in that case — fall back to it, scoped to IssueKindHarness only
+	// so a coincidental target_key match between unrelated workflow findings
+	// is never merged.
+	for _, row := range identities {
+		if strings.TrimSpace(row.FindingID) != "" || row.IssueKind != IssueKindHarness {
+			continue
+		}
+		key := strings.TrimSpace(row.TargetKey)
+		if key == "" {
+			continue
+		}
+		groupKey := "target_key:" + strings.ToLower(key)
+		groups[groupKey] = append(groups[groupKey], row)
+	}
 	for _, group := range groups {
-		// A visible issue id is an alias for a durable identity, never source
-		// material for a new fingerprint. The old migration derived `target`
-		// from finding_id even for a singleton, so every PUL-* ID it generated
-		// was re-hashed on the next read. Only genuine duplicate legacy rows
-		// need collapsing; retain the first stored fingerprint as canonical.
+		// A visible issue id (or, for harness findings, a shared target_key)
+		// is an alias for a durable identity, never source material for a new
+		// fingerprint. The old migration derived `target` from finding_id
+		// even for a singleton, so every PUL-* ID it generated was re-hashed
+		// on the next read. Only genuine duplicate legacy rows need
+		// collapsing; retain the first stored fingerprint as canonical.
 		if len(group) < 2 {
 			continue
 		}
