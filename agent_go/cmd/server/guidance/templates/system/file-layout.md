@@ -24,7 +24,8 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 | runs/{iter}/{group}/execution/Downloads/ | Downloaded files (bank statements, etc.) |
 | costs/execution/{group}/{YYYY-MM-DD}.json | Execution token-usage ledger shard. Current records live under `executions[execution_id]`; `run_folder` is display metadata and `run_folders` is legacy compatibility only. |
 | costs/evaluation/{group}/{YYYY-MM-DD}.json | Evaluation cost ledger shard. Current records live under `evaluations[evaluation_id]`; do not use a reusable run-folder path as identity. |
-| costs/phase/token_usage.json | Aggregated phase-only token usage |
+| costs/phase/token_usage.json | Token usage for the `planning` phase plus workflow-builder chat interactions ONLY — not a workflow-wide total. Step-execution cost (the bulk of a real run) lives in `costs/execution/`, not here. `input_cost_usd` excludes cache-served tokens by design (`cache_cost_usd` carries their real charge) — a near-zero `input_cost_usd` next to a large `input_tokens` count is expected for a cache-heavy workload, not a pricing defect. |
+| costs/phase/daily/{YYYY-MM-DD}.json | Same narrow phase/model-key scope as `costs/phase/token_usage.json`, rolled up by date. Do not compare its total against `costs/execution/` and infer under/over-counting — the two ledgers cover different, non-overlapping call sets by design. |
 
 ### Execution Logs (per run, per group, per step)
 | Path | Contents |

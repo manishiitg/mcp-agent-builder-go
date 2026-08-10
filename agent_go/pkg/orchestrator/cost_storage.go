@@ -722,6 +722,27 @@ func ApplyModelTokenDataToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, ph
 	tokenFile.ByPhaseAndModel[phaseKey][modelID] = ApplyModelTokenData(tokenFile.ByPhaseAndModel[phaseKey][modelID], modelTokenData)
 }
 
+// ApplyModelUsageToPhaseTokenUsageFile has exactly one caller (the
+// workflow-builder chat cost writer in cmd/server/server.go), which passes
+// the coding agent's session-CUMULATIVE usage snapshot on every turn, not a
+// per-turn delta. This must REPLACE the stored bucket, matching that call
+// site's own comment ("overwrites on each follow-up with the full cumulative
+// history"). Merging here — the prior behavior — added the same growing
+// cumulative total on top of what earlier turns already wrote, so a bucket's
+// persisted totals inflated every single turn and compounded across turns
+// (PLAT-073 cluster B, e6be98dfd6f4d639): confirmed live as an opus-tagged
+// bucket priced at sonnet's rate after a mid-session model change, but the
+// overcounting itself applied even with no model change at all.
+//
+// Known residual limitation: usage is a single blended cumulative total
+// across every model used in the session (mcpagent's diagnostics carry no
+// per-model breakdown), so if the model changes mid-session, the new
+// modelID's bucket is overwritten with a total that already includes the
+// prior model's tokens, while that prior model's own bucket is left stale
+// rather than cleared. That is a data-source gap in mcpagent's usage
+// tracking, not something this function can correct — call sites that need
+// genuine per-model attribution should use ApplyModelTokenData instead,
+// which is fed real per-call deltas.
 func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseKey, modelID string, usage *ModelTokenUsage, now time.Time) {
 	if tokenFile == nil || usage == nil || strings.TrimSpace(phaseKey) == "" || strings.TrimSpace(modelID) == "" {
 		return
@@ -733,9 +754,9 @@ func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseK
 	}
 	tokenFile.UpdatedAt = now
 
-	tokenFile.ByModel[modelID] = MergeModelTokenUsage(tokenFile.ByModel[modelID], usage)
+	tokenFile.ByModel[modelID] = CloneModelTokenUsage(usage)
 	if tokenFile.ByPhaseAndModel[phaseKey] == nil {
 		tokenFile.ByPhaseAndModel[phaseKey] = make(map[string]*ModelTokenUsage)
 	}
-	tokenFile.ByPhaseAndModel[phaseKey][modelID] = MergeModelTokenUsage(tokenFile.ByPhaseAndModel[phaseKey][modelID], usage)
+	tokenFile.ByPhaseAndModel[phaseKey][modelID] = CloneModelTokenUsage(usage)
 }
