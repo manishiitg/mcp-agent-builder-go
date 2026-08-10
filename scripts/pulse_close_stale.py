@@ -14,36 +14,53 @@ from a live one. On 2026-08-10 six findings describing a cost-attribution defect
 fixed four days earlier (commit 0f6519640) were convincing enough to get a fresh
 P1 filed for the same work.
 
-Closing to `resolved` is deliberately the safe direction: `resolved` IS in the
+Close on IMPLEMENTATION, not on live reverification (policy, 2026-08-10). A
+platform fix that builds, passes its focused test, and holds the full baseline
+is enough evidence to close with `--status resolved` — waiting for a restart
+plus a real reproducing run before every closure was pure friction with no
+categorical safety gain, since the reopen clause is the actual safety net
+either way: if the fix did not hold, or was never deployed, the identical
+symptom recurs on the next observation and flips the finding straight back to
+`open`. State what was actually verified in `--evidence` (tests passing vs.
+live reproduction) so the record is honest about which kind of confidence it
+represents — do not claim "reverified live" for something that has not been.
+
+`--status resolved` is deliberately the safe direction: `resolved` IS in the
 reopen clause, so if the fix did not actually hold, the next observation flips
 the finding back to `open` on its own. Closing wrongly is self-correcting;
 leaving it stuck is not.
 
 This tool does NOT decide what is stale. A theme/regex mapping was tried and
 matched 11 of 81 while misattributing several, so the judgement stays with the
-caller: name the ticket, the evidence, and the exact fingerprints. The tool's
-job is to make that closure safe, uniform, and auditable.
+caller: name the ticket, the evidence, and the exact fingerprints, after
+reading each finding's full text (not a truncated list line) to confirm it is
+actually the same defect. The tool's job is to make that closure safe,
+uniform, and auditable — not to decide what closes.
 
-This tool is for exactly one case: "a platform fix shipped, so this finding is
-now stale." It cannot and must not be used for "this was never a platform
-defect" (the outside world correctly blocking a request, a folder guard
-correctly denying an unsanctioned access path, etc.) — that closure needs
-`status='rejected'`, which is outside this tool's scope by design, since
-`rejected` is NOT in the concern upsert's reopen clause and a wrong rejection
-would stay wrongly closed forever. Use the `resolve_run_concern` tool
-(`status="rejected"`, with a note) from within a live Pulse/workshop session
-for that case instead (PLAT-073 cluster H).
+`--status rejected` is the other, riskier direction: "this was never a
+platform defect" (the outside world correctly blocking a request, a folder
+guard correctly denying an unsanctioned access path, etc.). Unlike `resolved`,
+`rejected` is NOT in the concern upsert's reopen clause — a wrong rejection
+stays wrongly closed forever, with no automatic self-correction. Use it only
+when the finding describes objectively correct behavior, not a defect whose
+fix you are merely confident in.
 
 Usage:
   # see what is on the board (the version column is the revision a finding was
   # FIRST observed against; "?" means unknown, which is not the same as old)
   python3 scripts/pulse_close_stale.py --list
   python3 scripts/pulse_close_stale.py --list --workflow social-media
+  python3 scripts/pulse_close_stale.py --list --full   # untruncated finding text
 
   # dry run (default) then apply
   python3 scripts/pulse_close_stale.py --close --ticket PLAT-072 \
       --evidence "fixed by 0f6519640 (2026-08-06)" --fingerprint abc123 --fingerprint def456
   python3 scripts/pulse_close_stale.py --close ... --apply
+
+  # not-a-bug closure (self-correction does NOT apply — see above)
+  python3 scripts/pulse_close_stale.py --close --status rejected --ticket PLAT-073-H \
+      --evidence "Reddit 403s are the outside world, not a platform defect" \
+      --fingerprint abc123 --apply
 """
 
 import argparse
@@ -54,6 +71,8 @@ import sys
 
 EXTERNAL = "external_action_required"
 RESOLVED = "resolved"
+REJECTED = "rejected"
+VALID_CLOSE_STATUSES = (RESOLVED, REJECTED)
 RESOLVED_BY = "platform-triage-sweep"
 
 
@@ -66,7 +85,7 @@ def workflow_dbs(root):
             yield name, db
 
 
-def list_findings(root, workflow_filter):
+def list_findings(root, workflow_filter, full_text=False):
     total = 0
     for wf, db in workflow_dbs(root):
         if workflow_filter and wf != workflow_filter:
@@ -106,15 +125,20 @@ def list_findings(root, workflow_filter):
             # rather than blank so it reads as unknown, never as old — an unknown
             # revision must always fall back to reading the finding.
             ver = version or "?"
-            print(f"  {fp}  {(first or '')[:10]}  {ver:<14} seen={seen:<3} {oneline[:96]}")
+            shown = oneline if full_text else oneline[:96]
+            print(f"  {fp}  {(first or '')[:10]}  {ver:<14} seen={seen:<3} {shown}")
     print(f"\ntotal external_action_required: {total}")
 
 
-def close_findings(root, ticket, evidence, fingerprints, apply_changes):
+def close_findings(root, ticket, evidence, fingerprints, apply_changes, status=RESOLVED):
     wanted = set(fingerprints)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    note = (f"Closed by platform triage sweep {stamp[:10]}: covered by {ticket} ({evidence}). "
-            f"Reopens automatically if observed again.")
+    if status == REJECTED:
+        note = (f"Rejected by platform triage sweep {stamp[:10]}: not a platform defect — "
+                f"{ticket} ({evidence}). Does NOT reopen automatically if observed again.")
+    else:
+        note = (f"Closed by platform triage sweep {stamp[:10]}: covered by {ticket} ({evidence}). "
+                f"Reopens automatically if observed again.")
     found, closed = set(), 0
     for wf, db in workflow_dbs(root):
         try:
@@ -128,12 +152,13 @@ def close_findings(root, ticket, evidence, fingerprints, apply_changes):
                 continue
             found.add(fp)
             oneline = " ".join((text or "").split())[:90]
-            print(f"  {'CLOSE' if apply_changes else 'would close'}  {wf:<22} {fp}  {oneline}")
+            verb = status.upper() if apply_changes else f"would {status}"
+            print(f"  {verb}  {wf:<22} {fp}  {oneline}")
             if apply_changes:
                 conn.execute(
                     "update run_concerns set status=?, resolved_at=?, resolved_by=?, resolution_note=? "
                     "where fingerprint=? and status=?",
-                    (RESOLVED, stamp, RESOLVED_BY, note, fp, EXTERNAL))
+                    (status, stamp, RESOLVED_BY, note, fp, EXTERNAL))
                 conn.commit()
                 closed += 1
 
@@ -161,7 +186,11 @@ def main():
     p.add_argument("--workflow-root", default=default_root)
     p.add_argument("--list", action="store_true", help="list findings on the external-action board")
     p.add_argument("--workflow", help="restrict --list to one workflow")
+    p.add_argument("--full", action="store_true", help="with --list, print untruncated finding text")
     p.add_argument("--close", action="store_true", help="close the named fingerprints")
+    p.add_argument("--status", default=RESOLVED, choices=VALID_CLOSE_STATUSES,
+                    help="resolved (fix shipped, self-corrects on reopen) or "
+                         "rejected (never a defect, does NOT self-correct) — default resolved")
     p.add_argument("--ticket", help="owning PLAT ticket, e.g. PLAT-072")
     p.add_argument("--evidence", help="what fixed it, e.g. 'fixed by 0f6519640 (2026-08-06)'")
     p.add_argument("--fingerprint", action="append", default=[], help="repeatable")
@@ -172,7 +201,7 @@ def main():
         print(f"workflow root not found: {args.workflow_root}", file=sys.stderr)
         return 2
     if args.list:
-        list_findings(args.workflow_root, args.workflow)
+        list_findings(args.workflow_root, args.workflow, args.full)
         return 0
     if args.close:
         # Evidence is mandatory. A closure with no stated cause is exactly the
@@ -181,7 +210,7 @@ def main():
             print("--close requires --ticket, --evidence and at least one --fingerprint", file=sys.stderr)
             return 2
         return close_findings(args.workflow_root, args.ticket, args.evidence,
-                              args.fingerprint, args.apply)
+                              args.fingerprint, args.apply, args.status)
     p.print_help()
     return 0
 

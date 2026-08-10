@@ -82,13 +82,36 @@ fixed via one fallback in the writer plus one caller change. The other 2
 (`add_todo_task_route`, `update_todo_task_route`) needed new before/after
 route capture — also fixed. Tests added, 22-failure baseline unchanged.
 
-**Not yet reverified live** — needs a restart, then a run that exercises one
-of the five fixed tools before closing fingerprints. Fingerprints to close
-once verified: `02bbf615` `cb2bf4b1` `b5c2bfa8` (build-in-public), `7607952e`
-`17e6f19a` (linkedin), `db76bb3a` (rtslatency), `ae0b8a1b` (social-media),
-`69f4a8a7` (tectonicusadaytrading), `f4468936` (upwork) — verify each against
-which specific tool call produced it before closing with
-`pulse_close_stale.py`, since the fix is mechanism-level, not per-finding.
+**Correction (2026-08-10, close pass):** the fingerprint list originally here
+was wrong — assembled from the board's grouping pass, not from reading each
+finding's full text. Read in full, most of Cluster C's 9 findings name
+`update_step_config`/`write_workflow_manifest` (already fixed under PLAT-033,
+a different call site than PLAT-074 touched) or an unrelated
+`builder/improve.html` Artifact Sync Cursor issue, not any of PLAT-074's 6
+call sites:
+
+- `02bbf615` (build-in-public), `f4468936` (upwork) — explicitly name
+  `update_step_config`/`write_workflow_manifest`. PLAT-033 scope, not
+  PLAT-074. Needs its own check against PLAT-033's landing date before
+  closing either way — not touched by this pass.
+- `cb2bf4b1` (build-in-public) — `planning/workflow_layout.json` stale node
+  positions. Unrelated subsystem entirely (UI layout cache, not the
+  changelog). Untriaged.
+- `7607952e`, `17e6f19a` (linkedin), `db76bb3a` (rtslatency) — the
+  `builder/improve.html` Artifact Sync Cursor / artifact-review-coverage
+  issue. Different mechanism than the changelog writer. Untriaged.
+- `ae0b8a1b` (social-media) — names "managed tools" without specifying which;
+  ambiguous between PLAT-033 and PLAT-074 scope. Not safely attributable
+  either way without more digging. Untriaged.
+- `69f4a8a7` (tectonicusadaytrading) — the headline aggregate finding ("159 of
+  231 plan-mutation entries"), spanning many tools including PLAT-074's 6.
+  **This is the one fingerprint from Cluster C closed in this pass**, citing
+  PLAT-074 + PLAT-033 together as comprehensive coverage across all 16 call
+  sites (10 already fixed pre-session, 6 fixed today).
+
+The other 8 need per-fingerprint investigation before any of them can be
+closed under any ticket — do not assume they are PLAT-074's remaining
+scope just because they were grouped into "Cluster C" by keyword.
 
 ## D. Eval scoring ambiguity (5) — triaged; platform items implemented
 
