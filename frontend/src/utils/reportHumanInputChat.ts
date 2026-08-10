@@ -97,6 +97,45 @@ export function buildReportHumanInputChatMessage(
   return lines.join('\n')
 }
 
+/**
+ * The user can explicitly delegate one pending decision to the workflow chat.
+ * This is intentionally a distinct instruction from "Ask in chat": the latter
+ * is advisory and must never answer the decision, while this one authorizes the
+ * agent to choose a listed option and carry out the resulting safe workflow
+ * work after it has considered the durable evidence.
+ */
+export function buildReportHumanInputDelegatedActionMessage(
+  input: ReportHumanInput,
+  workspacePath: string,
+): string {
+  const lines = [
+    `I delegate this pending ${sourceName(input.source)} decision to you. Analyze the current evidence, workflow goal, constraints, and the available options; choose the best supported option and take the resulting safe workflow action.`,
+    'Do not ask me to choose between the listed options. Use current evidence and tools to resolve uncertainty where practical. If no option is defensible, do not invent one or take an unsafe action: explain the blocker and leave the decision pending.',
+    'After choosing, call answer_human_input_request with the exact decision and option IDs below. Then implement only the authorized workflow action, verify it proportionately, and report the decision, evidence, action, and remaining risk concisely. Do not mark the decision consumed yourself.',
+    '',
+    `Automation: ${workspacePath}`,
+    `Decision ID: ${input.id}`,
+    '',
+    'Decision:',
+    input.question.trim(),
+  ]
+
+  if (input.context?.trim()) {
+    lines.push('', 'Context:', input.context.trim())
+  }
+  if (input.options.length > 0) {
+    lines.push('', 'Available options:')
+    input.options.forEach((option, index) => {
+      lines.push(`${index + 1}. ${option.title} [option_id=${option.id}]${option.description ? ` — ${option.description}` : ''}`)
+    })
+  }
+  if (input.evidence?.trim()) {
+    lines.push('', `Evidence: ${input.evidence.trim()}`)
+  }
+
+  return lines.join('\n')
+}
+
 export type ReportHumanInputChatResult = {
   tabId: string
   reused: boolean
@@ -124,18 +163,15 @@ async function findWorkflowPreset(workspacePath: string) {
  * send immediately when ChatArea mounts, while a running chat keeps the message
  * queued for its next turn. Scheduled runs remain independent and untouched.
  */
-export async function sendReportHumanInputQuestionToChat({
+async function sendReportHumanInputMessageToChat({
   input,
   workspacePath,
-  userQuestion,
+  message,
 }: {
   input: ReportHumanInput
   workspacePath: string
-  userQuestion: string
+  message: string
 }): Promise<ReportHumanInputChatResult> {
-  const question = userQuestion.trim()
-  if (!question) throw new Error('Write a question before opening chat.')
-
   const chatStore = useChatStore.getState()
   let targetTab: ChatTab | undefined
   let tabId: string
@@ -182,7 +218,6 @@ export async function sendReportHumanInputQuestionToChat({
   // Background agents do not block a new foreground turn; ChatArea only holds
   // the queue while the foreground tab itself is streaming.
   const queuedBehindRunningTurn = targetTab.isStreaming
-  const message = buildReportHumanInputChatMessage(input, workspacePath, question)
   const latestChatStore = useChatStore.getState()
   const existingQueue = latestChatStore.getTabConfig(tabId)?.queuedMessages || []
   latestChatStore.setTabConfig(tabId, {
@@ -205,4 +240,36 @@ export async function sendReportHumanInputQuestionToChat({
   }, 50)
 
   return { tabId, reused, queuedBehindRunningTurn }
+}
+
+export async function sendReportHumanInputQuestionToChat({
+  input,
+  workspacePath,
+  userQuestion,
+}: {
+  input: ReportHumanInput
+  workspacePath: string
+  userQuestion: string
+}): Promise<ReportHumanInputChatResult> {
+  const question = userQuestion.trim()
+  if (!question) throw new Error('Write a question before opening chat.')
+  return sendReportHumanInputMessageToChat({
+    input,
+    workspacePath,
+    message: buildReportHumanInputChatMessage(input, workspacePath, question),
+  })
+}
+
+export async function delegateReportHumanInputActionToChat({
+  input,
+  workspacePath,
+}: {
+  input: ReportHumanInput
+  workspacePath: string
+}): Promise<ReportHumanInputChatResult> {
+  return sendReportHumanInputMessageToChat({
+    input,
+    workspacePath,
+    message: buildReportHumanInputDelegatedActionMessage(input, workspacePath),
+  })
 }

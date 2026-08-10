@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, MessageSquareText, RefreshCw, Send, X } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, MessageSquareText, RefreshCw, Send, Sparkles, X } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { ReportHumanInput } from '../../services/api-types'
 import { useChatStore } from '../../stores/useChatStore'
@@ -8,7 +8,7 @@ import {
   reportHumanInputHistory,
   reportHumanInputStatusLabel,
 } from '../../utils/reportHumanInputFormatting'
-import { sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
+import { delegateReportHumanInputActionToChat, sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
 import { useContainerSizeTier } from './reportWidgets/tableHelpers'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
@@ -19,6 +19,7 @@ type ReportHumanInputDraft = {
   chatQuestion?: string
   chatOpen?: boolean
   askingInChat?: boolean
+  delegating?: boolean
 }
 
 function sourceLabel(source?: string): string {
@@ -257,6 +258,25 @@ export function ReportHumanInputPanel({
     }
   }
 
+  const delegateActionToChat = async (input: ReportHumanInput) => {
+    updateDraft(input.id, { delegating: true })
+    try {
+      const result = await delegateReportHumanInputActionToChat({ input, workspacePath })
+      useChatStore.getState().addToast(
+        result.queuedBehindRunningTurn
+          ? 'Delegated decision queued behind the current chat turn.'
+          : result.reused
+            ? 'Decision delegated to the existing chat.'
+            : 'New chat opened to analyze and act on this decision.',
+        'success',
+      )
+    } catch (err) {
+      useChatStore.getState().addToast(err instanceof Error ? err.message : 'Failed to delegate the decision to chat.', 'error')
+    } finally {
+      updateDraft(input.id, { delegating: false })
+    }
+  }
+
   const renderHistoryRows = () => (
     <div className="grid gap-1.5">
       {history.map(input => {
@@ -401,7 +421,8 @@ export function ReportHumanInputPanel({
           const draft = drafts[input.id] || { selectedOptionId: '', note: '' }
           const submitting = Boolean(draft.submitting)
           const askingInChat = Boolean(draft.askingInChat)
-          const busy = submitting || askingInChat
+          const delegating = Boolean(draft.delegating)
+          const busy = submitting || askingInChat || delegating
           return (
             <article key={input.id} className="rounded-md border border-border/70 bg-background/75 p-3">
               <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -523,6 +544,16 @@ export function ReportHumanInputPanel({
                 >
                   <MessageSquareText className="h-3.5 w-3.5" />
                   Ask in chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void delegateActionToChat(input)}
+                  disabled={busy}
+                  title="Let the agent analyze the evidence, choose the best option, and take the resulting safe workflow action."
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-violet-400/40 bg-violet-400/15 px-3 text-xs font-semibold text-violet-100 hover:bg-violet-400/25 disabled:opacity-50"
+                >
+                  {delegating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  Take best action
                 </button>
                 <button
                   type="button"
