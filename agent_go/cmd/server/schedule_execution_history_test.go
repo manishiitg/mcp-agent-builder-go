@@ -116,6 +116,48 @@ func TestEnsureWorkflowScheduleExecutionTrackerResetsWindowOnEnabledChange(t *te
 	}
 }
 
+func TestWorkflowScheduleTrackingWindowStartSurvivesEmptySchedulerState(t *testing.T) {
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
+	defer workspace.Close()
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+	workspacePath := "Workflow/demo"
+	sched := WorkflowSchedule{
+		ID:             "weekly",
+		CronExpression: "0 8 * * 0",
+		Timezone:       "UTC",
+		Enabled:        true,
+	}
+	want := mustParseTime(t, "2026-08-05T10:00:00Z")
+	if err := EnsureWorkflowScheduleExecutionTracker(context.Background(), workspacePath, sched, want); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := WorkflowScheduleTrackingWindowStart(context.Background(), workspacePath, sched.ID)
+	if !ok {
+		t.Fatal("tracking window was not recovered")
+	}
+	if !got.Equal(want) {
+		t.Fatalf("tracking window = %s, want %s", got, want)
+	}
+
+	service := NewSchedulerService(nil)
+	sctx := &ScheduleContext{
+		WorkspacePath: workspacePath,
+		SourceType:    "workflow",
+		Schedule:      sched,
+	}
+	if err := service.LoadSchedule(sctx); err != nil {
+		t.Fatal(err)
+	}
+	job := service.jobs[scheduleRuntimeKey(sctx)]
+	if job == nil {
+		t.Fatal("workflow cron job was not registered")
+	}
+	if !job.lastFired.Equal(want) {
+		t.Fatalf("registered cron cursor = %s, want persisted tracking window %s", job.lastFired, want)
+	}
+}
+
 func mustParseTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)

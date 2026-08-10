@@ -42,6 +42,15 @@ This ticket started as a live "Needs your decision" note the agent typed mid-run
 
 **Diagnostic logging shipped (2026-08-10):** two log points now bracket the gap. `planning_exports.go`, right after `SetExecutionOptions` and before `CreateTodoList`, logs the parsed `route_selections` map whenever it's non-empty — confirming the value that actually reached the orchestrator's execution options at the top of the call. `seedRouteSelectionsForRun` (`controller_routing_deterministic.go:117`) now logs distinctly whether `executionOptions` was `nil` or `RouteSelections` was empty at seed time, instead of silently returning `nil` either way. Traced the parsing at `planning_exports.go:1854-1873` and confirmed it's structurally sound — malformed input returns an explicit tool error, which never fired for the incident run — and `SetExecutionOptions`/`CreateTodoList` are called synchronously on the same orchestrator instance, so the value is not obviously lost at either end I could directly verify. The gap is somewhere inside `CreateTodoList`'s internal call chain between that point and `runExecutionPhase`, which is too large to trace blind without risking a wrong guess in scheduler-critical code. The next occurrence's logs will show which of the two new log lines fired (or didn't), narrowing the search to a specific segment of that chain. Build and the existing 22-failure baseline both verified unaffected.
 
+**Later same-day evidence (not closure):** a LinkedIn Engage run on the current
+binary logged `SetExecutionOptions carries route_selections=map[step-workflow-router:route-engage]`, then wrote
+`runs/iteration-0/engage/execution/step-workflow-router/route_selection.json`
+and logged `Seeded deterministic route selection`. This proves the ordinary
+`run_full_workflow` → batch execution path can carry and consume the value on
+the current binary. It does not explain why the Hetzner run archived an older
+preseed file and then consumed its safe default with no current preseed, so the
+ticket remains open pending a like-for-like Hetzner reproduction after restart.
+
 ## UI note (unrelated defect, worth its own line)
 
 The "Needs your decision" text that surfaced this had **no backing record** — `report_human_inputs` had zero pending/recent rows for this workspace at the time. The agent typed decision-card-styled prose without calling `create_human_input_request`, so nothing persisted for the UI to show and nothing was trackable/re-openable. Not filing a separate ticket for this alone since it's a single occurrence so far, but noting it because it's the same shape as PLAT-065's Gate→Finalize handoff gap: a described intention with no durable state behind it.

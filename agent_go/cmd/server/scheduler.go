@@ -721,9 +721,19 @@ func (s *SchedulerService) LoadSchedule(sctx *ScheduleContext) error {
 		}
 		// Wrap with timezone-aware location
 		cronSched = &tzSchedule{inner: cronSched, loc: loc}
-		lastFired := time.Now().Add(-30 * time.Second) // a newly created schedule starts with its next future occurrence
+		now := time.Now().UTC()
+		lastFired := now.Add(-30 * time.Second) // a genuinely new schedule starts with its next future occurrence
 		if latest, ok := s.latestCronOccurrence(sctx); ok {
 			lastFired = latest
+		} else if sctx.SourceType == "workflow" {
+			// The scheduler-state DB can legitimately be empty after an upgrade,
+			// replacement, or first deployment of durable fire decisions. Resume
+			// from the schedule's persisted tracking window instead of treating an
+			// old schedule as newly created and silently skipping every occurrence
+			// before this process started.
+			if windowStart, ok := WorkflowScheduleTrackingWindowStart(context.Background(), sctx.WorkspacePath, sched.ID); ok && windowStart.Before(now) {
+				lastFired = windowStart
+			}
 		}
 
 		s.jobs[runtimeKey] = &registeredJob{
@@ -3756,6 +3766,7 @@ func (s *SchedulerService) sessionHasLiveChildWork(sessionID string) bool {
 	}
 	return s.api.bgAgentRegistry != nil && s.api.bgAgentRegistry.HasRunningAgents(sessionID)
 }
+
 var errWorkshopIdleWaitTimeout = errors.New("workshop idle wait timed out")
 var errWorkshopSequenceInterrupted = errors.New("workshop sequence interrupted by user")
 var errWorkshopSessionFailed = errors.New("workshop session failed")

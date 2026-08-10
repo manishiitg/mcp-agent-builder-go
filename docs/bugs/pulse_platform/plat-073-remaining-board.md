@@ -39,22 +39,35 @@ regardless of payload content. Close these three once the fix is live:
 `e3dcf327c98828be` (build-in-public), `1cbf04498d1fa813` (social-media),
 `431b0ce8eaf41d34` (upwork).
 
-## B. Cost/context telemetry (6) — 3 closed, 3 remain
+## B. Cost/context telemetry (6) — 4 closed/fixed, 2 remain open by design
 
 Closed by removal (`agent_go` `e0e0494bf`): `context_usage_percent` findings —
 the field drove no behavior, was actively misleading, removed rather than
-fixed. Remaining, genuine pricing/attribution bugs, not yet investigated:
+fixed.
 
-- `e6be98dfd6f4d639` (build-in-public) — one daily cost file priced
-  claude-opus-5 at sonnet-5 rates; every phase ledger zeroes/omits
-  `input_cost_usd` (charging $0.000003 for 2.8M tokens).
-- `43b988fe2ef952f3` (tectonicusadaytrading) — `costs/phase/daily` reports
-  $7.08/6 calls for a date where `costs/execution` records $21.98/22 calls, a
-  3.1x understatement, with no file declaring whether the two ledgers overlap.
-- `a8ab091308579946`, `e717a5e1a962a81f` (upwork) — date-wide overhead ledgers
-  can't isolate current orchestrator/builder/Pulse cost or diagnose the
-  cached-input workload item-by-item. Worth re-checking after `af0345a0` closes
-  whether these were partly downstream of the same removed field.
+See **PLAT-081** for the remaining three, triaged as one real bug plus two
+documentation gaps:
+
+- `e6be98dfd6f4d639` (build-in-public) — **real bug, fixed**:
+  `ApplyModelUsageToPhaseTokenUsageFile` merged the coding agent's
+  session-*cumulative* usage onto the ledger every chat turn instead of
+  overwriting it (the call site's own comment already said "overwrites... with
+  the full cumulative history" — the implementation just didn't match), so the
+  persisted total compounded turn over turn and got mispriced whenever the
+  session's active model changed mid-session. Now replaces rather than merges.
+  The finding's second claim ("`input_cost_usd` zeroed for 2.8M tokens") is
+  **not a bug** — those tokens are cache-served and correctly priced under
+  `cache_cost_usd` instead; documented in `file-layout.md`.
+- `43b988fe2ef952f3` (tectonicusadaytrading) — **not a math bug**.
+  `costs/phase/daily` and `costs/execution` cover different, non-overlapping
+  call sets by design (`costs/phase` = planning phase + workflow-builder chat
+  only); there was simply no documentation saying so. Now documented in
+  `file-layout.md` rather than left to look like a 3.1x undercount.
+- `a8ab091308579946`, `e717a5e1a962a81f` (upwork) — **real gap, left open,
+  design-only**. Not explained by `e0e0494bf` (checked; unrelated). The data
+  model to fix this already exists (`pkg/costledger`'s per-call
+  `SummarizeExecution`) but isn't exposed via any tool/endpoint — needs a
+  design decision on the right surface, not a mechanical patch.
 
 ## C. Changelog / provenance not recorded (9) — FIXED (4/6 sites), not yet live
 
@@ -92,12 +105,19 @@ which specific tool call produced it before closing with
   finalized target metadata after auto-evaluation; it now finalizes the target
   execution before evaluation starts. Runtime reverify pending.
 
-## E. Schedules skipped / mis-reported (3) — not started
+## E. Schedules skipped / mis-reported (3) — triaged; one platform bug fixed
 
-`7c4ac152` (build-in-public) — *"the host demonstrably ran two schedules"* on
-one date. `3565d07c`, `3e42ae71` (linkedin) — `list_schedules` reports a
-completed run as still running with `next_run` in the past, and a weekly
-schedule skipped a fire with no record of why.
+`7c4ac152` (build-in-public) mixed explained daily skips with two genuinely
+silent Sunday omissions. The daily occurrences have durable `skipped_paused`
+or `skipped_busy` decisions. The Sunday schedules had older persisted tracking
+windows but no fire-decision rows; on restart `LoadSchedule` reset their cursor
+to `now-30s` and advanced directly to next Sunday. That bootstrap defect is
+[PLAT-080](plat-080.md), implemented with runtime reverify pending.
+
+`3e42ae71` (linkedin) is explained by the durable ledger (`skipped_paused` on
+2026-08-04), which the reviewer did not consult. `3565d07c` is a stale
+projection claim, not supported by current schedule state; reverify through
+`list_schedules` and the ledger rather than the launch-only history file.
 
 ## F. Tools unavailable / limits (8) — triaged, closer to 1 real open bug
 
@@ -179,14 +199,23 @@ See **PLAT-077**.
   answer/dismiss/consume and a harness-finding split before closing
   fingerprints.
 
-## J. Routing / run identity (3) — not started
+## J. Routing / run identity (3) — triaged; no new shared-code patch
 
-`05a81ca02...` (hetznerssh) — the live PLAT-066 recurrence found earlier
-today; still open, root cause not yet isolated (see PLAT-066). `b3ac1ae3`
-(build-in-public) — `CLAUDE.md`, tracked at HEAD, is missing from the working
-tree. `5bf5513f` (rtslatency) — `latency_baselines` uses `PRIMARY KEY (env)`
-with no day/version dimension, so each collector run irreversibly destroys the
-previous day's baseline.
+`05a81ca02...` (hetznerssh) remains linked to PLAT-066. The incident is real,
+but a later 2026-08-10 LinkedIn run on the current binary logged the supplied
+route map, seeded `route_selection.json`, and consumed that exact route. This
+is runtime-reverify evidence, not proof of the Hetzner incident's root cause;
+keep PLAT-066 open until the same Hetzner route is reproduced after restart.
+
+`b3ac1ae3` (build-in-public) is workflow/worktree state: `git status` reports
+`D CLAUDE.md` while the tracked HEAD blob exists. Restoring or accepting that
+user-owned deletion belongs to workflow review, not the platform runtime.
+
+`5bf5513f` (rtslatency) is a settled workflow schema migration. The workflow's
+own `db/README.md` records the approved 2026-08-05 decision to change
+`latency_baselines` from `PRIMARY KEY(env)` to a history-bearing key and notes
+that readers and writers must move atomically. Route it to a migration-capable
+workflow/version upgrade; it is not a scheduler or shared persistence defect.
 
 ## K. Unclustered (3)
 

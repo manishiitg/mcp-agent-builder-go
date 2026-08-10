@@ -122,6 +122,28 @@ func EnsureWorkflowScheduleExecutionTracker(ctx context.Context, workspacePath s
 	return WriteWorkflowScheduleExecutionHistory(ctx, workspacePath, history)
 }
 
+// WorkflowScheduleTrackingWindowStart returns the earliest occurrence cursor
+// that the scheduler promised to account for in the current configuration
+// window. The durable scheduler-state database is normally authoritative, but
+// a newly-created/replaced state database has no fire decision to resume from.
+// In that case this tracker prevents a restart from silently forgetting cron
+// occurrences between the schedule's creation (or last config change) and the
+// server coming back up.
+func WorkflowScheduleTrackingWindowStart(ctx context.Context, workspacePath, scheduleID string) (time.Time, bool) {
+	workflowScheduleExecutionHistoryMu.Lock()
+	defer workflowScheduleExecutionHistoryMu.Unlock()
+
+	history, err := ReadWorkflowScheduleExecutionHistory(ctx, workspacePath)
+	if err != nil || history == nil {
+		return time.Time{}, false
+	}
+	tracker, ok := history.Schedules[scheduleID]
+	if !ok || tracker.WindowStartAt.IsZero() {
+		return time.Time{}, false
+	}
+	return tracker.WindowStartAt.UTC(), true
+}
+
 func RecordWorkflowScheduleExecution(ctx context.Context, workspacePath string, sched WorkflowSchedule, startedAt time.Time) error {
 	workflowScheduleExecutionHistoryMu.Lock()
 	defer workflowScheduleExecutionHistoryMu.Unlock()
