@@ -121,7 +121,7 @@ to `now-30s` and advanced directly to next Sunday. That bootstrap defect is
 projection claim, not supported by current schedule state; reverify through
 `list_schedules` and the ledger rather than the launch-only history file.
 
-## F. Tools unavailable / limits (8) — triaged, closer to 1 real open bug
+## F. Tools unavailable / limits (8) — fully triaged; one real open bug remains
 
 - `ad5c92dd` (rtslatency, `get_api_spec` array-of-strings `tool_name`) —
   **already fixed** (`mcpagent` commit `ea60eb2`, predates the finding).
@@ -142,8 +142,27 @@ projection claim, not supported by current schedule state; reverify through
   confirmed working-as-designed. `90348ad2` is already merged/resolved into
   `22fa5102` as the canonical survivor; close `22fa5102` via
   `resolve_run_concern(status="rejected")` (see cluster H).
-- The remaining ~4 members of this 8-count cluster have no per-fingerprint
-  detail recorded on this board — not triaged, not invented.
+- `946c9d536b3baaf2` (build-in-public) and `2f5c13063f809dc1`
+  (tectonicusadaytrading) — **same historical managed-DB tool-surface defect,
+  already fixed; runtime reverify pending.** Their 2026-08-03 sessions either
+  searched the now-retired deferred ToolSearch surface or tried the old
+  `$MCP_MCP/workflow_db/...` route, then concluded that `workflow_db` was
+  absent. The current execution-agent factory derives the DB tool capability
+  from the trusted step context: it always appends
+  `workflow_db:query_workflow_db` and, for normal workflow steps,
+  `workflow_db:mutate_workflow_db`, even if the workflow has a narrow custom
+  tool allow-list. The current prompt tells the agent to invoke the direct
+  tools with `sql`/`params`, not to connect to an MCP server by name. Two
+  regression layers pass: the factory allow-list test and the real
+  workflow-step MCP-bridge test, which reads a WAL-resident row and performs
+  an authorized mutation. Restart and re-run one execution plus one evaluation
+  step before closing the two findings; do not classify a stale shell route as
+  a new registration failure.
+- `6cbf1d93a7adc917` (linkedin) and `10af08cca1ff8fdc` (upwork) — both were
+  the formerly blocked `PRAGMA integrity_check` route. **Already resolved by
+  PLAT-043-A** (`query_workflow_db action="integrity_check"`), as their own
+  records now state. They were simply omitted from the original board detail;
+  no further code work is required.
 
 ## G. Learnings/KB metadata wrong (6) — implemented / deduplicated
 
