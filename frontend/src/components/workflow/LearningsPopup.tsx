@@ -13,6 +13,7 @@ interface LearningsPopupProps {
   onClose: () => void
   workspacePath: string | null
   plan: PlanningResponse | null
+  embedded?: boolean
 }
 
 // LearningMetadata — fields read from learnings/{stepId}/.learning_metadata.json,
@@ -148,7 +149,7 @@ function getStepTitle(plan: PlanningResponse | null, stepId: string): string {
   return step?.title || stepId
 }
 
-export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }: LearningsPopupProps) {
+export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, embedded = false }: LearningsPopupProps) {
   const [learnings, setLearnings] = useState<Record<string, LearningMetadata | null>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -224,7 +225,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
 
   // Fetch learnings when popup opens (API now includes step config data merged in)
   useEffect(() => {
-    if (!isOpen || !workspacePath) return
+    if ((!isOpen && !embedded) || !workspacePath) return
 
     setIsLoading(true)
     setError(null)
@@ -248,13 +249,13 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
       .finally(() => {
         setIsLoading(false)
       })
-  }, [isOpen, workspacePath])
+  }, [isOpen, embedded, workspacePath])
 
   // Fetch everything under _global/ on open: SKILL.md content + the full file
   // tree (references/, scripts/, assets/, any other artifacts the learning agent
   // decided to write). Per-file content is lazy-loaded on click.
   useEffect(() => {
-    if (!isOpen || !workspacePath) return
+    if ((!isOpen && !embedded) || !workspacePath) return
     let cancelled = false
     setGlobalLoading(true)
     setGlobalError(null)
@@ -376,7 +377,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
       }
     })()
     return () => { cancelled = true }
-  }, [isOpen, workspacePath])
+  }, [isOpen, embedded, workspacePath])
 
   // Lazy-load a single file under _global/ when its row is expanded.
   const toggleGlobalFile = async (relPath: string, absPath: string) => {
@@ -508,19 +509,19 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   // Handle Escape key to close modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isOpen) {
+      if (event.key === 'Escape' && isOpen && !embedded) {
         onClose()
       }
     }
 
-    if (isOpen) {
+    if (isOpen && !embedded) {
       document.addEventListener('keydown', handleKeyDown)
     }
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isOpen, onClose])
+  }, [isOpen, embedded, onClose])
 
   // Fetch learning content when an item is expanded
   const fetchLearningContent = async (stepId: string) => {
@@ -753,7 +754,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
     return stepsWithMetadata
   }, [plan])
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
   // Steps in execution order. _global is rendered separately as a featured card
   // above — no longer prepended into this list.
@@ -803,10 +804,10 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
     setExpandedStepIds(new Set())
   }
 
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4">
-      <div className="bg-background text-foreground border border-border rounded-lg shadow-2xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col">
+  const shell = (
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-background text-foreground'
+        : 'bg-background text-foreground border border-border rounded-lg shadow-2xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col'}>
         {/* Header — title + close only. Step search / filter / expand controls
             moved to sit above the step list so they're visually adjacent to what
             they operate on (the per-step section, not the global skill). */}
@@ -815,13 +816,13 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
             <BookOpen className="w-5 h-5 text-primary" />
             <h2 className="truncate text-lg font-semibold">Automation Learnings</h2>
           </div>
-          <button
+          {!embedded && <button
             onClick={onClose}
             className="p-1 rounded-md hover:bg-muted transition-colors"
             title="Close (Esc)"
           >
             <X className="w-5 h-5" />
-          </button>
+          </button>}
         </div>
 
         {/* Content */}
@@ -1544,7 +1545,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
             </div>
           )}
         </div>
-      </div>
 
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
@@ -1568,6 +1568,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
         cancelText="Cancel"
         type="danger"
       />
+    </div>
+  )
+
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4">
+      {shell}
     </div>
     </ModalPortal>
   )

@@ -980,22 +980,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   }, [workspacePath])
 
   const workspacePaneVisible = !showChatArea || showWorkspacePane
-  const isFilesWorkspace = workflowWorkspaceView === 'files'
-  // Each preview tier controls the OUTER report pane width when both chat and
-  // canvas are visible — not just the inner shell. Otherwise switching to
-  // laptop mode would only change the inner max-width while the surrounding
-  // pane stayed pinned at 50% of the screen.
+  // The device tier controls the OUTER workspace pane for every workspace view,
+  // not only Plan and Report. Cost, Logs, Learnings, KB, DB, and Files are peer
+  // destinations in the same workspace and must retain the same layout choice.
   //
   //   mobile  → preview/files 480px column, chat takes the rest (review-style)
   //   tablet  → equal 50/50 split between chat and preview
   //   laptop  → chat is hidden, report fills the full width
   //   default → 50/50 split (no preview pref, or running in non-preview views)
-  const isPreviewableWorkspaceCanvas =
-    !isFilesWorkspace &&
-    showChatArea &&
-    workspacePaneVisible &&
-    (canvasViewMode === 'report' || canvasViewMode === 'flow' || canvasViewMode === 'log' || canvasViewMode === 'soul')
-  const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isPreviewableWorkspaceCanvas
+  const isResponsiveWorkspaceCanvas = showChatArea && workspacePaneVisible
+  const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isResponsiveWorkspaceCanvas
     ? reportPreviewPreference === 'mobile'
       ? 'mobile'
       : reportPreviewPreference === 'tablet'
@@ -1011,7 +1005,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowWorkspaceView === 'flow' ||
     workflowWorkspaceView === 'report' ||
     workflowWorkspaceView === 'log' ||
-    workflowWorkspaceView === 'soul'
+    workflowWorkspaceView === 'soul' ||
+    workflowWorkspaceView === 'costs' ||
+    workflowWorkspaceView === 'execution-logs' ||
+    workflowWorkspaceView === 'learnings' ||
+    workflowWorkspaceView === 'knowledgebase' ||
+    workflowWorkspaceView === 'database'
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
@@ -1022,9 +1021,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   //   laptop → chat is hidden, report/flow fills the full width
   //   default → normal split pane
   const laptopHidesChat = previewPaneTier === 'laptop'
-  const splitGridCols = isFilesWorkspace
-    ? 'md:grid-cols-[minmax(0,1fr)_480px]'
-    : previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
+  const splitGridCols = previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
     : previewPaneTier === 'tablet' ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
     : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(0,1fr)]'
     : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
@@ -1039,7 +1036,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     ? 'flex-1 min-h-0 min-w-0'
     : !workspacePaneVisible
       ? 'hidden'
-      : `min-h-0 min-w-0 w-full md:w-auto md:col-start-2 md:row-start-2 ${isFilesWorkspace ? 'border-l border-border' : ''}`
+      : `min-h-0 min-w-0 w-full md:w-auto md:col-start-2 md:row-start-2 ${isWorkspaceViewActive ? 'border-l border-border' : ''}`
 
   // Load execution_defaults from workflow.json when workspace changes
   useEffect(() => {

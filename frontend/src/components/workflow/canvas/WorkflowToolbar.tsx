@@ -5,6 +5,10 @@ import {
   Settings,
   FileText,
   DollarSign,
+  Download,
+  FolderOpen,
+  LayoutDashboard,
+  Route,
   Cloud,
   Globe,
   LoaderCircle,
@@ -16,7 +20,12 @@ import {
   BellRing,
   CalendarClock,
   RefreshCw,
-  Search,
+  Smartphone,
+  Tablet,
+  Laptop,
+  MoreHorizontal,
+  PanelRightClose,
+  SlidersHorizontal,
   X,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
@@ -38,11 +47,6 @@ import type { ExecutionOptions } from '../../../services/api-types'
 import { useCommandDialogStore } from '../../../stores/useCommandDialogStore'
 import { agentApi } from '../../../services/api'
 import { schedulerApi } from '../../../api/scheduler'
-import LearningsPopup from '../LearningsPopup'
-import KBPopup from '../KBPopup'
-import DatabasePopup from '../DatabasePopup'
-import ExecutionLogsPopup from '../ExecutionLogsPopup'
-import CostsPopup from '../CostsPopup'
 import WorkflowBackupPopup from '../WorkflowBackupPopup'
 import { getBackupDotClass, formatBackupStateLabel } from '../backupStatus'
 import WorkflowPublishPopup from '../WorkflowPublishPopup'
@@ -55,10 +59,14 @@ import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
-import {
-  resolveGroupFolderPath
-} from '../../../utils/workflowUtils'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
+import { useAppStore } from '../../../stores/useAppStore'
+import {
+  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
+  readReportPreviewPreference,
+  writeReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../../utils/reportPreviewPreference'
 import {
   PULSE_FIXED_COMMANDS,
   PULSE_MODULE_COMMANDS,
@@ -95,6 +103,92 @@ function formatWorkflowNameFromPath(path?: string | null): string {
   return name || 'Workflow'
 }
 
+interface CompactToolbarMenuProps {
+  label: string
+  icon: React.ReactNode
+  active?: boolean
+  children: (close: () => void) => React.ReactNode
+}
+
+function CompactToolbarMenu({ label, icon, active = false, children }: CompactToolbarMenuProps) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setOpen(current => !current)}
+            className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${open || active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+            aria-label={label}
+            aria-haspopup="menu"
+            aria-expanded={open}
+          >
+            {icon}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
+      </Tooltip>
+      {open && (
+        <div
+          role="menu"
+          aria-label={label}
+          className="absolute right-0 top-full z-[70] mt-2 min-w-52 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface CompactToolbarMenuItemProps {
+  icon: React.ReactNode
+  label: string
+  detail?: string
+  active?: boolean
+  'data-testid'?: string
+  onClick: () => void
+}
+
+function CompactToolbarMenuItem({ icon, label, detail, active = false, onClick, 'data-testid': dataTestId }: CompactToolbarMenuItemProps) {
+  return (
+    <button
+      type="button"
+      data-testid={dataTestId}
+      role="menuitem"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-xs transition-colors ${active ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+    >
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium">{label}</span>
+        {detail && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{detail}</span>}
+      </span>
+    </button>
+  )
+}
+
 function formatPulseTimestamp(value?: string): string {
   if (!value) return ''
   const date = new Date(value)
@@ -123,6 +217,7 @@ interface WorkflowToolbarProps {
   showChatArea?: boolean
   onToggleChatArea?: () => void
   onRefresh?: () => Promise<void>  // Refresh plan and variables
+  onExport?: () => void
   // Chat tab strip (WorkflowChatTabs) rendered inline on the left of this bar so the
   // workflow chat tabs + new-chat share one row with the status/tools instead of
   // sitting in a separate bar below.
@@ -136,18 +231,18 @@ interface WorkflowToolbarProps {
 
 export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   status,
-  plan,
+  hasPlan,
   workspacePath,
   presetQueryId,
-  runFolders,
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
+  onRefresh,
+  onExport,
+  showChatArea = false,
   openPulseOnMount = false,
   className = ''
 }) => {
-  // Normalize runFolders to avoid repeated null checks throughout the component
-  const folders = useMemo(() => runFolders ?? [], [runFolders])
   const canWriteWorkflow = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))
   const canManageAccess = useAuthStore(state => state.isMultiUserMode && hasWorkflowOwnerAccess(state.user, state.isMultiUserMode))
 
@@ -171,35 +266,44 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     restoreSelectionFromLocalStorage: state.restoreSelectionFromLocalStorage,
   })))
 
-  // Reset start point when switching away from plan mode
-  // Calculate the best run folder to use for popups (context-aware)
-  // Priority: currentRunningGroupId > selectedRunFolder (if group path) > first selectedGroupIds
-  const contextRunFolder = useMemo(() => {
-    const resolved = resolveGroupFolderPath({
-      currentRunningGroupId,
-      selectedRunFolder,
-      selectedGroupIds,
-      manifest: variablesManifest
-    })
-    return resolved || selectedRunFolder
-  }, [currentRunningGroupId, selectedRunFolder, selectedGroupIds, variablesManifest])
-  
-  // Memoize runFolders array to prevent unnecessary re-renders in popups
-  const runFoldersNames = useMemo(() => {
-    return folders.map(rf => rf.name)
-  }, [folders])
-  
-  
-  // Learnings popup state
-  const [showLearningsPopup, setShowLearningsPopup] = useState(false)
-  const [showKBPopup, setShowKBPopup] = useState(false)
-  const [showDatabasePopup, setShowDatabasePopup] = useState(false)
+  const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
+  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  const showWorkspacePane = useWorkflowStore(state => state.showWorkspacePane)
+  const setWorkflowWorkspaceView = useWorkflowStore(state => state.setWorkflowWorkspaceView)
+  const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
+  const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
+  const [previewDevice, setPreviewDeviceState] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
 
-  // Execution logs popup state
-  const [showExecutionLogsPopup, setShowExecutionLogsPopup] = useState(false)
+  useEffect(() => {
+    const sync = () => setPreviewDeviceState(readReportPreviewPreference(workspacePath))
+    sync()
+    window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync as EventListener)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync as EventListener)
+      window.removeEventListener('storage', sync)
+    }
+  }, [workspacePath])
 
-  // Costs popup state
-  const [showCostsPopup, setShowCostsPopup] = useState(false)
+  const openWorkspaceView = useCallback((view: 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database') => {
+    if (view === 'flow' || view === 'report') setCanvasViewMode(view)
+    setWorkflowWorkspaceView(view)
+    setShowWorkspacePane(true)
+    useAppStore.getState().setWorkspaceMinimized(view !== 'files')
+  }, [setCanvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
+
+  const collapseWorkspace = useCallback(() => {
+    setShowWorkspacePane(false)
+    useAppStore.getState().setWorkspaceMinimized(true)
+  }, [setShowWorkspacePane])
+
+  const isInspectorView = workflowWorkspaceView === 'costs'
+    || workflowWorkspaceView === 'execution-logs'
+    || workflowWorkspaceView === 'learnings'
+    || workflowWorkspaceView === 'knowledgebase'
+    || workflowWorkspaceView === 'database'
+  const isPreviewView = workflowWorkspaceView !== 'files' && !isInspectorView
+    && (canvasViewMode === 'flow' || canvasViewMode === 'report')
 
   // Post-run monitor opt-in (workflow.json::post_run_monitor). When on, Pulse
   // Gate runs after each scheduled run, records Bug + Goal verdicts, and selects
@@ -437,11 +541,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   }, [refreshNotificationState])
 
   const closeAllPopups = useCallback(() => {
-    setShowLearningsPopup(false)
-    setShowKBPopup(false)
-    setShowDatabasePopup(false)
-    setShowExecutionLogsPopup(false)
-    setShowCostsPopup(false)
     setShowBackupPopup(false)
     setShowPublishPopup(false)
     setShowNotifications(false)
@@ -605,7 +704,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   return (
     <>
     <div className={`
-      flex min-h-10 min-w-0 flex-nowrap items-center gap-3 overflow-hidden px-3 py-1.5
+      flex min-h-10 min-w-0 flex-nowrap items-center gap-3 overflow-visible px-3 py-1.5
       bg-background border-b border-border
       relative z-10
       ${className}
@@ -635,10 +734,145 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       {/* Right side - View controls */}
       <div data-tour="workflow-tools" data-testid="tour-workflow-tools" className="ml-auto flex shrink-0 items-center gap-1">
         <TooltipProvider delayDuration={150}>
+          {workspacePath && (
+            <>
+              <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+                {([
+                  ['report', LayoutDashboard, 'Report', true],
+                  ['flow', Route, 'Plan', hasPlan],
+                  ['files', FolderOpen, 'Files', true],
+                ] as const).filter(([, , , visible]) => visible).map(([view, Icon, label]) => {
+                  const active = view === 'report'
+                    ? workflowWorkspaceView !== 'files' && !isInspectorView && canvasViewMode === 'report'
+                    : view === 'flow'
+                      ? workflowWorkspaceView !== 'files' && !isInspectorView && canvasViewMode === 'flow'
+                      : workflowWorkspaceView === view
+                  return (
+                  <Tooltip key={view}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => openWorkspaceView(view)}
+                        className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+                        aria-label={label}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
+                  </Tooltip>
+                  )
+                })}
+                <CompactToolbarMenu
+                  label="More workspace views"
+                  active={isInspectorView}
+                  icon={<MoreHorizontal className="h-3.5 w-3.5" />}
+                >
+                  {(close) => (
+                    <>
+                      {([
+                        ['costs', DollarSign, 'Costs'],
+                        ['execution-logs', FileText, 'Execution logs'],
+                        ['learnings', BookOpen, 'Learnings'],
+                        ['knowledgebase', Database, 'Knowledgebase'],
+                        ['database', Table2, 'Database'],
+                      ] as const).map(([view, Icon, label]) => (
+                        <CompactToolbarMenuItem
+                          key={view}
+                          icon={<Icon className="h-3.5 w-3.5" />}
+                          label={label}
+                          active={workflowWorkspaceView === view}
+                          onClick={() => {
+                            openWorkspaceView(view)
+                            close()
+                          }}
+                        />
+                      ))}
+                    </>
+                  )}
+                </CompactToolbarMenu>
+              </div>
+
+              {showWorkspacePane && (
+                <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+                  <CompactToolbarMenu
+                    label={`${previewDevice === 'mobile' ? 'Mobile' : previewDevice === 'tablet' ? 'Tablet' : 'Laptop'} workspace`}
+                    icon={previewDevice === 'mobile'
+                      ? <Smartphone className="h-3.5 w-3.5" />
+                      : previewDevice === 'tablet'
+                        ? <Tablet className="h-3.5 w-3.5" />
+                        : <Laptop className="h-3.5 w-3.5" />}
+                  >
+                    {(close) => (
+                      <>
+                        <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Preview size</div>
+                        {([
+                          ['mobile', Smartphone, 'Mobile'],
+                          ['tablet', Tablet, 'Tablet'],
+                          ['desktop', Laptop, 'Laptop'],
+                        ] as const).map(([mode, Icon, label]) => (
+                          <CompactToolbarMenuItem
+                            key={mode}
+                            icon={<Icon className="h-3.5 w-3.5" />}
+                            label={label}
+                            active={previewDevice === mode}
+                            onClick={() => {
+                              writeReportPreviewPreference(workspacePath, mode)
+                              close()
+                            }}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </CompactToolbarMenu>
+                  <CompactToolbarMenu
+                    label="Workspace actions"
+                    icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
+                  >
+                    {(close) => (
+                      <>
+                        {isPreviewView && onRefresh && (
+                          <CompactToolbarMenuItem
+                            icon={<RefreshCw className="h-3.5 w-3.5" />}
+                            label="Refresh"
+                            onClick={() => {
+                              void onRefresh()
+                              close()
+                            }}
+                          />
+                        )}
+                        {isPreviewView && onExport && (
+                          <CompactToolbarMenuItem
+                            icon={<Download className="h-3.5 w-3.5" />}
+                            label={`Download ${canvasViewMode === 'report' ? 'report' : 'plan'}`}
+                            onClick={() => {
+                              onExport()
+                              close()
+                            }}
+                          />
+                        )}
+                        {showChatArea && (
+                          <CompactToolbarMenuItem
+                            icon={<PanelRightClose className="h-3.5 w-3.5" />}
+                            label="Collapse workspace"
+                            onClick={() => {
+                              collapseWorkspace()
+                              close()
+                            }}
+                          />
+                        )}
+                      </>
+                    )}
+                  </CompactToolbarMenu>
+                </div>
+              )}
+            </>
+          )}
+
           {/* Pulse is the operational hub for monitoring, schedules, backup,
               publishing, and notifications. */}
           {workspacePath && (
-            <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
+            <div className="inline-flex h-8 items-center rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -670,118 +904,72 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Run Pulse on the latest retained run</p></TooltipContent>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowWorkflowSchedulesPanel(true)}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    aria-label={scheduleTooltip}
-                  >
-                    <CalendarClock className="h-3.5 w-3.5" />
-                    <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>{scheduleTooltip}</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowBackupPopup(true)}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    aria-label={`Backup · ${formatBackupStateLabel(backupState)}`}
-                  >
-                    <Cloud className="h-3.5 w-3.5" />
-                    <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full border border-background ${getBackupDotClass(backupState)}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Backup &middot; {formatBackupStateLabel(backupState)}</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowPublishPopup(true)}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    aria-label={`Publish · ${formatPublishStateLabel(publishState)}`}
-                  >
-                    <Globe className="h-3.5 w-3.5" />
-                    <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full border border-background ${getPublishDotClass(publishState)}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Publish &middot; {formatPublishStateLabel(publishState)}</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowNotifications(true)}
-                    data-testid="workflow-notification-settings-button"
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    aria-label={`Notify · ${formatNotificationStateLabel(notificationState)}`}
-                  >
-                    <BellRing className="h-3.5 w-3.5" />
-                    <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full border border-background ${getNotificationDotClass(notificationState)}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Notify &middot; {formatNotificationStateLabel(notificationState)}</p></TooltipContent>
-              </Tooltip>
-            </div>
-          )}
-
-          {workspacePath && (
-            <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex h-full items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground">
-                    <Search className="h-3.5 w-3.5" />
-                    <span>Inspect</span>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Workflow evidence and history</p></TooltipContent>
-              </Tooltip>
-              <span className="h-4 w-px bg-border" aria-hidden="true" />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" onClick={() => setShowCostsPopup(true)} className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Costs">
-                    <DollarSign className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Costs</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" onClick={() => setShowExecutionLogsPopup(true)} className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Execution logs">
-                    <FileText className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Execution logs</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" onClick={() => setShowLearningsPopup(true)} className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Learnings">
-                    <BookOpen className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Learnings</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" onClick={() => setShowKBPopup(true)} className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Knowledge base">
-                    <Database className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Knowledge base</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" onClick={() => setShowDatabasePopup(true)} className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Database">
-                    <Table2 className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Database</p></TooltipContent>
-              </Tooltip>
+              <CompactToolbarMenu
+                label="Automation operations"
+                icon={<MoreHorizontal className="h-3.5 w-3.5" />}
+              >
+                {(close) => (
+                  <>
+                    <CompactToolbarMenuItem
+                      icon={(
+                        <span className="relative">
+                          <CalendarClock className="h-3.5 w-3.5" />
+                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
+                        </span>
+                      )}
+                      label="Schedules"
+                      detail={scheduleTooltip.replace(/^Schedules · /, '')}
+                      onClick={() => {
+                        setShowWorkflowSchedulesPanel(true)
+                        close()
+                      }}
+                    />
+                    <CompactToolbarMenuItem
+                      icon={(
+                        <span className="relative">
+                          <Cloud className="h-3.5 w-3.5" />
+                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getBackupDotClass(backupState)}`} />
+                        </span>
+                      )}
+                      label="Backup"
+                      detail={formatBackupStateLabel(backupState)}
+                      onClick={() => {
+                        setShowBackupPopup(true)
+                        close()
+                      }}
+                    />
+                    <CompactToolbarMenuItem
+                      icon={(
+                        <span className="relative">
+                          <Globe className="h-3.5 w-3.5" />
+                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getPublishDotClass(publishState)}`} />
+                        </span>
+                      )}
+                      label="Publish"
+                      detail={formatPublishStateLabel(publishState)}
+                      onClick={() => {
+                        setShowPublishPopup(true)
+                        close()
+                      }}
+                    />
+                    <CompactToolbarMenuItem
+                      icon={(
+                        <span className="relative">
+                          <BellRing className="h-3.5 w-3.5" />
+                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getNotificationDotClass(notificationState)}`} />
+                        </span>
+                      )}
+                      label="Notifications"
+                      data-testid="workflow-notification-settings-button"
+                      detail={formatNotificationStateLabel(notificationState)}
+                      onClick={() => {
+                        setShowNotifications(true)
+                        close()
+                      }}
+                    />
+                  </>
+                )}
+              </CompactToolbarMenu>
             </div>
           )}
 
@@ -818,46 +1006,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         </TooltipProvider>
       </div>
     </div>
-    {/* Learnings Popup */}
-    <LearningsPopup
-      isOpen={showLearningsPopup}
-      onClose={() => setShowLearningsPopup(false)}
-      workspacePath={workspacePath || null}
-      plan={plan || null}
-    />
-
-    {/* Knowledgebase Popup */}
-    <KBPopup
-      isOpen={showKBPopup}
-      onClose={() => setShowKBPopup(false)}
-      workspacePath={workspacePath || null}
-    />
-
-    {/* Database Popup */}
-    <DatabasePopup
-      isOpen={showDatabasePopup}
-      onClose={() => setShowDatabasePopup(false)}
-      workspacePath={workspacePath || null}
-    />
-
-    {/* Costs Popup */}
-    <CostsPopup
-      isOpen={showCostsPopup}
-      onClose={() => setShowCostsPopup(false)}
-      workspacePath={workspacePath || null}
-      runFolders={runFoldersNames}
-      selectedRunFolder={contextRunFolder}
-    />
-
-    {/* Execution Logs Popup */}
-    <ExecutionLogsPopup
-      isOpen={showExecutionLogsPopup}
-      onClose={() => setShowExecutionLogsPopup(false)}
-      workspacePath={workspacePath || null}
-      runFolder={contextRunFolder}
-      runFolders={runFoldersNames}
-    />
-
     {showWorkflowSchedulesPanel && (
       <WorkflowScheduleRunsPanel
         workflowScope={{

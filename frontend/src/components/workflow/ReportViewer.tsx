@@ -537,13 +537,15 @@ const reportDataCache = createBoundedCache<string, ReportDataSnapshot>(8)
 const reportDataPromises = new Map<string, Promise<ReportDataSnapshot>>()
 
 // Workflow runs write the data reports read (db/db.sqlite + artifacts), so a
-// run reaching a terminal state makes this cache stale. Watch the running-
-// workflows store for a terminal run, drop the cached snapshot for that
-// workspace, and announce it so a mounted viewer reloads instead of showing
-// pre-run data until a manual Refresh. A terminal record can briefly disappear
-// from the running-workflow store while its status is reconciled, then return
-// with the same id. Keep the dedupe set for this renderer lifetime: otherwise
-// that bookkeeping churn repeatedly reloads an unchanged report.
+// run reaching a terminal state makes this cache stale. Drop the cached snapshot
+// for the next open/manual refresh, but do not replace an already-visible report:
+// workflows with overlapping schedules and background agents can emit several
+// terminal records close together, and eagerly reloading for each one visibly
+// resets the HTML iframe and the user's reading position. The stale event remains
+// available to small interactive widgets that can update without rebuilding the
+// report document. A terminal record can briefly disappear from the running-
+// workflow store while its status is reconciled, then return with the same id.
+// Keep the dedupe set for this renderer lifetime to ignore that bookkeeping churn.
 export const REPORT_DATA_STALE_EVENT = 'workflow-report-data-stale'
 const reportTerminalRunsRefreshed = new Set<string>()
 useRunningWorkflowsStore.subscribe((state) => {
@@ -877,21 +879,13 @@ function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusT
       const p = detail?.preference
       if (isReportPreviewDevice(p)) setPreviewPreference(p)
     }
-    const onDataStale = (e: Event) => {
-      const stalePath = (e as CustomEvent).detail?.workspacePath
-      // The module-level subscriber already dropped the cache entry; this
-      // refresh only fires for the workspace currently on screen.
-      if (stalePath && stalePath === workspacePath) void refreshReportRef.current()
-    }
     window.addEventListener('workflow-report-export-requested', onExport)
     window.addEventListener('workflow-report-refresh-requested', onRefresh)
     window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, onPref)
-    window.addEventListener(REPORT_DATA_STALE_EVENT, onDataStale)
     return () => {
       window.removeEventListener('workflow-report-export-requested', onExport)
       window.removeEventListener('workflow-report-refresh-requested', onRefresh)
       window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, onPref)
-      window.removeEventListener(REPORT_DATA_STALE_EVENT, onDataStale)
     }
   }, [workspacePath])
 

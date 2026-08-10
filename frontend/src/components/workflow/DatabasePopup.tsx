@@ -22,6 +22,7 @@ interface DatabasePopupProps {
   isOpen: boolean
   onClose: () => void
   workspacePath: string | null
+  embedded?: boolean
 }
 
 type FileSummary = {
@@ -352,7 +353,7 @@ async function readText(filepath: string): Promise<string | null> {
   }
 }
 
-export default function DatabasePopup({ isOpen, onClose, workspacePath }: DatabasePopupProps) {
+export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded = false }: DatabasePopupProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<PlannerFile[]>([])
@@ -422,21 +423,21 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
   }, [dbFile])
 
   useEffect(() => {
-    if (isOpen) load()
-  }, [isOpen, load])
+    if (isOpen || embedded) load()
+  }, [isOpen, embedded, load])
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || !isOpen) return
+      if (e.key !== 'Escape' || !isOpen || embedded) return
       if (maximizedCell) {
         setMaximizedCell(null)
         return
       }
       onClose()
     }
-    if (isOpen) window.addEventListener('keydown', handleKey)
+    if (isOpen && !embedded) window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [isOpen, maximizedCell, onClose])
+  }, [isOpen, embedded, maximizedCell, onClose])
 
   const selectFile = useCallback(async (path: string) => {
     setSelectedPath(path)
@@ -482,12 +483,12 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
     return relationships.filter(rel => rel.fromTable === selectedRel || rel.toTable === selectedRel || rel.fromTable.startsWith(`${selectedRel}.`) || rel.toTable.startsWith(`${selectedRel}.`))
   }, [relationships, selectedRel])
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4">
-        <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[90vh]">
+  const shell = (
+        <div className={embedded
+          ? 'flex h-full min-h-0 w-full flex-col bg-background'
+          : 'flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[90vh]'}>
           <div className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-border p-3 sm:p-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Table2 className="h-5 w-5 text-primary" />
@@ -503,13 +504,13 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               </button>
-              <button
+              {!embedded && <button
                 onClick={onClose}
                 className="ml-2 rounded-md p-1 transition-colors hover:bg-muted"
                 title="Close (Esc)"
               >
                 <X className="h-5 w-5" />
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -831,7 +832,6 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
               </>
             )}
           </div>
-        </div>
 
         {maximizedCell && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 p-3 sm:p-6" onMouseDown={() => setMaximizedCell(null)}>
@@ -862,6 +862,15 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
             </div>
           </div>
         )}
+      </div>
+  )
+
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4">
+        {shell}
       </div>
     </ModalPortal>
   )

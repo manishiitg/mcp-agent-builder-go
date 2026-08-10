@@ -39,6 +39,7 @@ interface CostsPopupProps {
   runFolders: string[] // Available run folders
   selectedRunFolder: string | null // Currently selected run folder
   startedAt?: string | null
+  embedded?: boolean
 }
 
 // Format cost in USD
@@ -275,7 +276,8 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   workspacePath,
   runFolders,
   selectedRunFolder,
-  startedAt
+  startedAt,
+  embedded = false,
 }) => {
   const [loading, setLoading] = useState(false)
   const [runCosts, setRunCosts] = useState<RunCosts[]>([])
@@ -672,7 +674,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
 
   // Load costs for all workflow runs
   useEffect(() => {
-    if (isOpen && workspacePath) {
+    if ((isOpen || embedded) && workspacePath) {
       loadAllCosts()
     } else {
       setRunCosts([])
@@ -686,11 +688,11 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       setCostViewMode({})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, workspacePath, runFolders])
+  }, [isOpen, embedded, workspacePath, runFolders])
 
   // Auto-expand selected run folder when it changes
   useEffect(() => {
-    if (isOpen && selectedRunFolder && runCosts.some(c => c.runFolder === selectedRunFolder)) {
+    if ((isOpen || embedded) && selectedRunFolder && runCosts.some(c => c.runFolder === selectedRunFolder)) {
       setExpandedRunFolders(prev => {
         if (prev.has(selectedRunFolder!)) return prev
         const next = new Set(prev)
@@ -698,7 +700,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         return next
       })
     }
-  }, [isOpen, selectedRunFolder, runCosts])
+  }, [isOpen, embedded, selectedRunFolder, runCosts])
 
   const loadAllCosts = async () => {
     if (!workspacePath) return
@@ -1010,12 +1012,12 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     [runCosts, runDailyCostSummaries, phaseDailyCostSummaries]
   )
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4">
-      <div className="bg-background rounded-lg shadow-xl w-full max-w-6xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] flex flex-col border border-border relative">
+  const shell = (
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-background'
+        : 'bg-background rounded-lg shadow-xl w-full max-w-6xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] flex flex-col border border-border relative'}>
         {/* Header */}
         <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-border sm:px-6 sm:py-4">
           <div className="flex-1 min-w-0">
@@ -1064,12 +1066,12 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
               </button>
             </div>
           </div>
-          <button
+          {!embedded && <button
             onClick={onClose}
             className="p-2 rounded-full hover:bg-accent hover:text-accent-foreground transition-colors ml-4"
           >
             <X className="w-5 h-5 text-muted-foreground" />
-          </button>
+          </button>}
         </div>
 
         {/* Content */}
@@ -1963,15 +1965,23 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-border flex justify-end bg-background rounded-b-lg">
+        {!embedded && <div className="px-6 py-4 border-t border-border flex justify-end bg-background rounded-b-lg">
           <button
             onClick={onClose}
             className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors text-sm font-medium"
           >
             Close
           </button>
-        </div>
+        </div>}
       </div>
+  )
+
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4">
+      {shell}
     </div>
     </ModalPortal>
   )

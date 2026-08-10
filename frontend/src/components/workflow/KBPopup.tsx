@@ -22,6 +22,7 @@ interface KBPopupProps {
   isOpen: boolean
   onClose: () => void
   workspacePath: string | null
+  embedded?: boolean
 }
 
 interface KBNotesTopic {
@@ -159,7 +160,7 @@ function normalizeKBIndex(raw: unknown): KBNotesIndex | null {
   return { topics }
 }
 
-export default function KBPopup({ isOpen, onClose, workspacePath }: KBPopupProps) {
+export default function KBPopup({ isOpen, onClose, workspacePath, embedded = false }: KBPopupProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notesIndex, setNotesIndex] = useState<KBNotesIndex | null>(null)
@@ -189,16 +190,16 @@ export default function KBPopup({ isOpen, onClose, workspacePath }: KBPopupProps
   }, [notesIndexPath])
 
   useEffect(() => {
-    if (isOpen) load()
-  }, [isOpen, load])
+    if (isOpen || embedded) load()
+  }, [isOpen, embedded, load])
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && isOpen) onClose()
+      if (e.key === 'Escape' && isOpen && !embedded) onClose()
     }
-    if (isOpen) window.addEventListener('keydown', handleKey)
+    if (isOpen && !embedded) window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [isOpen, onClose])
+  }, [isOpen, embedded, onClose])
 
   const toggleNoteExpanded = useCallback(
     async (topic: KBNotesTopic) => {
@@ -220,15 +221,15 @@ export default function KBPopup({ isOpen, onClose, workspacePath }: KBPopupProps
     [expandedNotes, notesBodies, workspacePath],
   )
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
   const topics = notesIndex?.topics ?? []
   const hasNotesContent = topics.length > 0
 
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-2 sm:p-4">
-      <div className="bg-background border border-border rounded-lg shadow-xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col">
+  const shell = (
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-background'
+        : 'bg-background border border-border rounded-lg shadow-xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col'}>
         {/* Header */}
         <div className="flex items-start justify-between gap-3 p-3 border-b border-border flex-shrink-0 sm:p-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -247,13 +248,13 @@ export default function KBPopup({ isOpen, onClose, workspacePath }: KBPopupProps
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
-            <button
+            {!embedded && <button
               onClick={onClose}
               className="p-1 rounded-md hover:bg-muted transition-colors ml-2"
               title="Close (Esc)"
             >
               <X className="w-5 h-5" />
-            </button>
+            </button>}
           </div>
         </div>
 
@@ -385,8 +386,15 @@ export default function KBPopup({ isOpen, onClose, workspacePath }: KBPopupProps
           )}
         </div>
       </div>
+  )
 
-    </div>
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-2 sm:p-4">
+        {shell}
+      </div>
     </ModalPortal>
   )
 }
