@@ -5849,6 +5849,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if restoredRuntimeUsesLaunchableTerminalTransport(restoredRuntime) {
 					if handle, err := mcpagent.StartAgentTransportSession(agentCtx, underlyingAgent); err != nil {
 						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Failed to prelaunch restored coding-agent transport session: %v", err)
+						// PLAT-067. This turn needs a launchable terminal transport and its
+						// pane is already gone; StartAgentTransportSession IS the verify +
+						// single-replacement attempt (it relaunches with --resume and waits
+						// for a ready prompt). Its failure means there is no transport to
+						// talk to, so this error must stop the turn rather than be logged
+						// and stepped over. Streaming anyway sends the turn into a dead
+						// pane where it produces nothing and sits until cancellation:
+						// observed on an RTS Latency cron run as two consecutive ~32-minute
+						// turns, which consumed the run's budget and killed every producing
+						// step scheduled after them. Failing here also preserves any queued
+						// background-child completion, so recovery retries only the parent
+						// continuation and never re-runs a child that already succeeded.
+						sendError(fmt.Sprintf("parent_transport_unavailable: could not restore the coding-agent terminal for this session: %v", err), true)
+						return
 					} else if handle != nil && strings.TrimSpace(handle.TmuxSession) != "" {
 						// FIX B: After a server restart the original tmux is dead, so the
 						// restore path published a STATIC snapshot (Active:false, empty
