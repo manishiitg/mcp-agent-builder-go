@@ -1102,3 +1102,39 @@ func TestExecutionFolderGuardGrantsTheRunFolderNotOnlyItsExecutionChild(t *testi
 		t.Fatalf("read scope widened to the workflow root, got %v", readPaths)
 	}
 }
+
+// TestExecutionFolderGuardGrantsToolOutputFolderRead pins the PLAT-073
+// cluster F fix (dd9ede3c): mcpagent spills any bridge tool result over its
+// inline size cap (a large agent_browser snapshot, chief among them) to
+// MCP_TOOL_OUTPUT_DIR, which resolves to <workspace-root>/tool_output_folder
+// — a sibling of runs/ that was previously outside every granted read path.
+// A step told to read its own spilled output back had no legal way to
+// comply. This must be readable without widening to the bare workflow root.
+func TestExecutionFolderGuardGrantsToolOutputFolderRead(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/testing")
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "iteration-0/default",
+	}
+
+	readPaths, _ := hcpo.setupExecutionFolderGuard(
+		"step-1", "some-step", KBAccessNone, LearningsAccessNone,
+		resolveEffectiveDBAccess(nil, false, false),
+		nil,
+	)
+
+	toolOutputPath := "Workflow/testing/tool_output_folder"
+	if !slices.Contains(readPaths, toolOutputPath) {
+		t.Fatalf("step must be able to read its own spilled tool output at %q, got %v", toolOutputPath, readPaths)
+	}
+	if slices.Contains(readPaths, "Workflow/testing") {
+		t.Fatalf("granting tool_output_folder read must not widen to the bare workflow root, got %v", readPaths)
+	}
+}

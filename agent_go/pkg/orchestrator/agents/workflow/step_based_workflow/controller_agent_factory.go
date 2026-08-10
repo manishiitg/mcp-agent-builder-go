@@ -424,7 +424,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// The run folder also holds logs/ and run_metadata.json, which are ordinary
 	// evidence for a step reasoning about its own run. Read-only, and scoped to
 	// this run — it grants nothing outside what execution/ already exposes.
-	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath}
+	// MCP_TOOL_OUTPUT_DIR (mcpagent's spill target for any bridge tool result
+	// past its inline size cap — e.g. a large agent_browser snapshot) resolves
+	// to <workspace-root>/tool_output_folder, a sibling of runs/ that nothing
+	// below granted read access to. Without it, a step told to read its own
+	// spilled tool output back hits "outside every workspace root" and has no
+	// legal way to comply (PLAT-073 cluster F, dd9ede3c).
+	toolOutputPath := fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath)
+	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath, toolOutputPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write

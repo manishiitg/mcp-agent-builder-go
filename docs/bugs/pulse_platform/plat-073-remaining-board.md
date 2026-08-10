@@ -107,22 +107,15 @@ schedule skipped a fire with no record of why.
   handles both a JSON-array string and a real `[]interface{}`. Reverify live,
   then close.
 - `dd9ede3c` (upwork, `agent_browser` snapshot overflow) — **real bug, not
-  PLAT-062-adjacent** (that ticket is an unrelated prompt-text defect). Root
-  cause: `agent_browser`'s `snapshot` command has no output-size cap (unlike
-  `read_skill`'s `maxReadSkillBatchSize=1`, added for the identical failure
-  shape per `mcpagent/agent/skill.go:21-33`), so a large snapshot exceeds
-  Claude Code's own MCP result cap and gets spilled to
-  `MCP_TOOL_OUTPUT_DIR`. That dir resolves to `<workflow-root>/tool_output_folder`
-  (`pkg/orchestrator/base_orchestrator_agent_factory.go:142`,
-  `mcpagent/agent/coding_agents_bridge.go:198-200`) — a sibling of `runs/`
-  that `setupExecutionFolderGuard` (`controller_agent_factory.go:427`) never
-  grants read access to, so the spilled copy is structurally unreadable.
-  Confirmed against the live filesystem: `workspace-docs/Workflow/upwork/tool_output_folder/`
-  exists with spilled files up to 16 MB. Two independent fix points, neither
-  implemented yet: (1) cap/paginate `agent_browser` snapshot output
-  (`pkg/browser/executor.go`/`tools.go`), (2) resolve
-  `MCP_TOOL_OUTPUT_DIR` inside the guard's granted read tree, or add
-  `tool_output_folder` to `setupExecutionFolderGuard`'s read paths.
+  PLAT-062-adjacent** (that ticket is an unrelated prompt-text defect). See
+  **PLAT-078**: two contributing mechanisms, one fixed. `setupExecutionFolderGuard`
+  now grants read access to `<workflow-root>/tool_output_folder`
+  (mcpagent's own spill target for any bridge tool result over its 128 KiB
+  inline cap), closing the "spilled copy is structurally unreadable" half.
+  Still open: `agent_browser`'s `snapshot` command itself has no output-size
+  cap — a snapshot that overflows Claude Code's own (smaller) MCP result cap
+  can still spill to a location this fix doesn't cover. Do not close this
+  fingerprint on the folder-guard fix alone.
 - `90348ad2`, `22fa5102` (tectonicusadaytrading, direct `sqlite3` blocked) —
   confirmed working-as-designed. `90348ad2` is already merged/resolved into
   `22fa5102` as the canonical survivor; close `22fa5102` via

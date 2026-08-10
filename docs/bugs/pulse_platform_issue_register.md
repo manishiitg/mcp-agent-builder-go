@@ -248,6 +248,7 @@ Rules:
 | [PLAT-075](pulse_platform/plat-075.md) | Auto-evaluation starts before its target execution is finalized | Codex | `runtime_reverify` | batch execution / auto-evaluation boundary |
 | [PLAT-076](pulse_platform/plat-076.md) | Learning and scripted metadata record claims instead of runtime facts | Codex | `runtime_reverify` | learning detection and scripted metadata persistence |
 | [PLAT-077](pulse_platform/plat-077.md) | Human-input answer/dismiss had no concurrent-writer guard; harness findings could split invisibly across two fingerprints | unassigned | `implemented` (runtime reverify pending) | report-human-input lifecycle, pulse finding identity migration |
+| [PLAT-078](pulse_platform/plat-078.md) | Spilled bridge tool output (large agent_browser snapshots) landed outside every granted read path | unassigned | `implemented` (folder-guard fix only; snapshot size cap still open) | step execution folder guard |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -597,7 +598,7 @@ priority and historical run context.
 | [PLAT-062](pulse_platform/plat-062.md) | [PLAT-063](pulse_platform/plat-063.md) | [PLAT-064](pulse_platform/plat-064.md) | [PLAT-065](pulse_platform/plat-065.md) |
 | [PLAT-066](pulse_platform/plat-066.md) | [PLAT-067](pulse_platform/plat-067.md) | [PLAT-068](pulse_platform/plat-068.md) | [PLAT-069](pulse_platform/plat-069.md) |
 | [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-074](pulse_platform/plat-074.md) |
-| [PLAT-075](pulse_platform/plat-075.md) | [PLAT-076](pulse_platform/plat-076.md) | [PLAT-077](pulse_platform/plat-077.md) |  |
+| [PLAT-075](pulse_platform/plat-075.md) | [PLAT-076](pulse_platform/plat-076.md) | [PLAT-077](pulse_platform/plat-077.md) | [PLAT-078](pulse_platform/plat-078.md) |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are
