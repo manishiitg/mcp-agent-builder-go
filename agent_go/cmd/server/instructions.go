@@ -141,7 +141,7 @@ Keep workflow-related files under the active workflow folder so they stay with t
 
 ` + "```" + `
 ` + absWorkflowFolder + `/
-  reports/                ← report plan and report assets
+  db/reports/*.html       ← standalone live report pages
   db/                     ← structured workflow state and results
   knowledgebase/          ← durable narrative knowledge
   runs/                   ← execution outputs
@@ -251,8 +251,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - ` + "`runs/iteration-{N}/{group-name}/logs/{step-id}/`" + ` — per-step logs (see Log Layout below). Generated nested routes may use composite folders; inspect the actual directory for those executions.
 
 **Reports & evaluation:**
-- ` + "`reports/report_plan.json`" + ` — registers the workflow's live report HTML document(s)
-- ` + "`db/reports/*.html`" + ` — live report documents rendered by the Report tab; they read ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `
+- ` + "`db/reports/*.html`" + ` — standalone live report pages rendered one at a time by the Report tab; each reads ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `. Its ` + "`<title>`" + ` supplies the page label; optional ` + "`<meta name=\"report-order\" content=\"10\">`" + ` controls ordering.
 - ` + "`reports/{group-name}/{timestamp}.md`" + ` — legacy/auxiliary finished-run prose when present; not the live report dashboard contract
 - ` + "`evaluation/runs/{runFolder}/evaluation_report.json`" + ` — evaluation step outputs and evidence (eval pipeline only, separate from normal runs)
 - ` + "`evaluation/runs/iteration-0/`" + ` — ephemeral eval sandbox used during evaluation execution
@@ -285,7 +284,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - **Global workflow learnings:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/learnings/_global/SKILL.md\")`" + `
 - **Saved step code (scripted steps only):** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/learnings/<step-id>/main.py\")`" + `
 - **Run logs:** start with ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/<name>/runs/iteration-0/\")`" + ` for the latest active run, then inspect older retained ` + "`iteration-{N}`" + ` folders when Pulse decision timestamps indicate a relevant before-after window.
-- **Live report plan/docs:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/reports/report_plan.json && find " + absWorkflow + "/<name>/db/reports -maxdepth 1 -type f -name '*.html' -print\")`" + `
+- **Live report pages:** ` + "`execute_shell_command(command: \"find " + absWorkflow + "/<name>/db/reports -maxdepth 1 -type f -name '*.html' -print\")`" + `
 - **Full config (when needed):** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/workflow.json\")`" + `
 
 ### When the user asks about a workflow by name
@@ -300,7 +299,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
    - "What does the workflow know about X?" → ` + "`knowledgebase/context/context.md`" + ` for user-supplied runtime context, then ` + "`knowledgebase/notes/_index.json`" + ` plus selected ` + "`knowledgebase/notes/*.md`" + ` for narratives.
    - "How does the workflow do X?" → ` + "`learnings/_global/SKILL.md`" + `.
    - "Why does the workflow exist / what's its goal?" → ` + "`soul/soul.md`" + ` (objective, success criteria).
-   - "Latest results / most recent report?" → ` + "`reports/report_plan.json`" + ` + ` + "`db/reports/*.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
+   - "Latest results / most recent report?" → ` + "`db/reports/*.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
 3. **Synthesize a direct answer** grounded in what you read. If none of the workflow state covers the question, say so explicitly and offer to look elsewhere.
 
 **Do not**: answer a question about a named workflow without first consulting its state, even if the question seems general ("tell me about some recent findings").
@@ -866,7 +865,7 @@ func buildSingleWorkflowContext(client *skills.WorkspaceAPIClient, wsPath string
 - Per-step saved scripts: `+"`%s/learnings/{step_id}/main.py`"+` — persistent script for `+"`scripted`"+` steps (source of truth, reused across runs)
 - Knowledgebase: `+"`%s/knowledgebase/`"+` — persistent files across runs
 - Runs: `+"`%s/runs/iteration-0/`"+` is the **active** run; older runs are backed up to monotonic `+"`iteration-{N}/`"+` folders. `+"`workflow.json::run_retention_count`"+` controls how many backups are kept; default 5. Per-run layout: `+"`runs/iteration-{N}/{group}/execution/{step-id}/code/main.py`"+` for working main.py copies.
-- Live report dashboard: `+"`%s/reports/report_plan.json`"+` plus `+"`%s/db/reports/*.html`"+` — HTML documents that read `+"`db/db.sqlite`"+` through `+"`window.report`"+`
+- Live report dashboard: `+"`%s/db/reports/*.html`"+` — standalone HTML pages that read `+"`db/db.sqlite`"+` through `+"`window.report`"+`; the page `+"`<title>`"+` is its navigation label and report assets live under `+"`%s/db/assets/`"+`
 - Legacy finished-run prose: `+"`%s/reports/{group-name}/{timestamp}.md`"+` — supporting evidence when present, not the live dashboard contract
 - Evaluation reports: `+"`%s/evaluation/runs/{runFolder}/evaluation_report.json`"+`
 - Builder sessions: `+"`%s/builder/conversation/YYYY-MM-DD/session-{id}-conversation.json`"+` — workshop chat histories

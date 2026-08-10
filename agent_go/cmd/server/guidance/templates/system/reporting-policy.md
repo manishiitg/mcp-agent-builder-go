@@ -1,99 +1,28 @@
-## Reporting Policy
+## HTML-only reporting policy
 
-The workflow has a **live frontend report viewer** at the top toolbar's
-"Report" tab. It reads `reports/report_plan.json` and renders HTML documents
-plus explicitly user-configured native `interaction` widgets. HTML documents
-read `db/db.sqlite` via `window.report`; interaction answers are stored in the
-framework-owned `report_widget_responses` table for later workflow runs. The
-viewer is always available — there is **NO separate "generate report" phase**.
+The Report tab discovers each immediate `db/reports/*.html` file as one
+top-level page. It renders only the selected page in one iframe; the outer
+Report pane owns scrolling. There is no report plan, widget registry, JSON
+layout, report-native decision control, or report generation step.
 
-HTML remains the authored report format. The only native control is an
-`interaction` widget that the user explicitly asks Workshop to configure; do
-not create these automatically from Pulse or agent findings. The canonical report model, the full
-`window.report` API, and the content + formatting + design guide all live in
-`read_skill(skills=[{"name":"builder-reference","path":"references/report-plan.md"}])` — load it before authoring or editing a
-report. This policy only covers when/where reports apply and the mode boundary.
+### Page contract
 
-## Workshop mode: own the report plan
+- Write a complete, self-contained HTML document directly under `db/reports/`.
+- A non-empty `<title>` is the page label. Use
+  `<meta name="report-order" content="10">` only to override filename order.
+- Keep CSS and JavaScript inline. Do not pin body height or create a nested
+  scroll container.
+- Read durable live data with `window.report.query`, `get`, `getText`,
+  `getHtml`, `renderMarkdown`, `fileUrl`, and `openFile`. Do not bake changing
+  run results into the document or add a step that regenerates it each run.
+- After editing, call `validate_report_html(path="db/reports/<page>.html")`.
+  Open the Report tab to verify visual layout only when requested or needed.
 
-Workshop mode can author and maintain the report when it needs to reflect
-optimization/evaluation/run evidence: authoring the HTML document(s), themes,
-tabs, and `reports/report_plan.json` edits. Keep report edits presentation-only
-unless the user also asked for workflow behavior or eval changes.
+### Workshop and Run boundaries
 
-### When the user asks "create a report" / "build a reporting UI" / "show me X in a dashboard"
+Workshop owns report authoring and may create or edit `db/reports/*.html`.
+Keep report-only changes presentational unless the user also asked to change
+workflow behavior or evaluation. Run mode never authors report pages; it only
+produces the durable data those pages read.
 
-- The answer is: **author an HTML document** (live data via `window.report`,
-  renders its own charts/tables/branded layout) and register it in
-  `reports/report_plan.json` with a `file` widget (`renderFormat: "html"`).
-  Start from the shipped HTML skeleton — `read_skill(skills=[{"name":"builder-reference","path":"references/html-output.md"}])`
-  — so even a simple narrative report is quick to author and looks consistent.
-- **Author the document once; wire it to read data LIVE.** Do NOT add a
-  workflow step that (re)generates the report each run — the workflow's normal
-  steps already write the data to `db/db.sqlite`, and the HTML report reads it
-  live via `window.report`, so there is nothing to "generate." (Writing the
-  `.html` file once is correct and expected — the staleness anti-pattern is
-  *re-emitting* the report each run, or baking live data into the file as static
-  text.)
-- If the workflow has routing routes, predefined task routes, or other
-  per-entity outputs (per-PAN, per-account), use a **tabbed** section: one
-  HTML document per entity, `set_section_layout(mode="tabs")`, and give each
-  document `tab: "<entity/route name>"`. One tab per user-meaningful entity so
-  the report doesn't mix unrelated outputs in one long page.
-- When creating or improving a report for a routed workflow, first inspect the
-  route list and decide the report structure (which tabs, what each shows) from
-  that route map.
-- When the user explicitly asks to configure a persistent question, choice, or
-  decision in the Report page, add `upsert_report_widget(kind="interaction")`.
-  Give it a stable widget id, `question`, `responseKind`, optional `options`, and
-  optional `instanceKey` / subject version/hash. The current run never blocks.
-  If the response should affect execution, also edit the intended consumer step
-  so it reads the matching `report_widget_responses` row through `query_workflow_db` (or `$DB_PATH` in saved scripted code) on a
-  later run. This is not the dynamic Pulse `report_human_inputs` flow.
-
-### Live data + how to author
-
-HTML reports read `db/db.sqlite` live via `window.report` and draw their own
-charts/tables/CSS. The full `window.report` API, **what to put in the report
-(content/insight), the formatting + design-quality bar, theming, and responsive
-rules** are all in `read_skill(skills=[{"name":"builder-reference","path":"references/report-plan.md"}])`; the HTML skeleton is
-in `read_skill(skills=[{"name":"builder-reference","path":"references/html-output.md"}])`. Load those before authoring — don't
-restate them here.
-
-A report dashboard should answer the workflow's business question, not just list
-files. Prefer a first-screen goal-tracking structure that tells the user the
-goal status, tracked success signals, current plan/strategy or active
-improvement, important issues/blockers, latest movement since the prior run, and
-the evidence behind the claim.
-
-### Diagnosis
-
-- **When the report shows "No report yet":** `reports/report_plan.json`
-  is missing or registers no usable document. Fix by authoring the
-  document and registering it.
-- **When an HTML report renders but is empty/missing data the user
-  expects:** the document loaded but its `window.report.query` returns no
-  rows yet (the table is empty), or it points at the wrong table/column.
-  Either a step hasn't run, or the query is off. Inspect the report HTML and
-  query `db/db.sqlite` with sqlite3 to diagnose.
-
-### Refresh discipline
-
-**Report viewer auto-updates** when the user opens or switches to the
-Report tab — no rebuild step needed. After the agent updates the document
-or `report_plan.json`, the user just clicks Report (or refreshes if they're
-already on it) to see the new content.
-
-## Run mode: do not edit reports
-
-Run mode does not own report authoring. If the user asks to create or edit
-the report, themes, tabs, or `reports/report_plan.json`, tell them to switch
-to Workshop mode. Do not offer to draft or edit `reports/report_plan.json`
-via shell/direct file writes from Run mode.
-
-## See also
-
-For the report-plan toolchain (registering documents, tabs, per-report
-themes, the `window.report` API, the good-document + design-quality guide,
-missing-data triage, full workflow), call
-`read_skill(skills=[{"name":"builder-reference","path":"references/report-plan.md"}])`.
+Human decisions belong in the Pulse panel and chat, not inside reports.

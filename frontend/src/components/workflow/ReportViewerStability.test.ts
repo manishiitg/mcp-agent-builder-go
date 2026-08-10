@@ -2,12 +2,13 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('open report stability', () => {
-  it('invalidates terminal-run data without auto-refreshing the mounted report', () => {
+  it('uses HTML pages directly rather than a report-plan registry', () => {
     const source = readFileSync('src/components/workflow/ReportViewer.tsx', 'utf8')
 
-    expect(source).toContain('reportDataCache.delete(wf.workspacePath)')
-    expect(source).toContain('new CustomEvent(REPORT_DATA_STALE_EVENT')
-    expect(source).not.toContain('addEventListener(REPORT_DATA_STALE_EVENT')
+    expect(source).toContain('db/reports')
+    expect(source).toContain('parsePageMetadata')
+    expect(source).not.toContain('report_plan.json')
+    expect(source).not.toContain('reportPlanParser')
   })
 
   it('keeps report reload behind the explicit toolbar refresh action', () => {

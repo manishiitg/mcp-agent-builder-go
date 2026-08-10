@@ -1925,11 +1925,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/answer", api.handleAnswerReportHumanInput).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/dismiss", api.handleDismissReportHumanInput).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/consume", api.handleConsumeReportHumanInput).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses", api.handleListReportWidgetResponses).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/answer", api.handleAnswerReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/claim", api.handleClaimReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/consume", api.handleConsumeReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/fail", api.handleFailReportWidgetResponse).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-module-state", api.handleGetPulseModuleState).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-findings", api.handleGetPulseFindings).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
@@ -2163,10 +2158,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/plan/batch-update-steps", requireWorkflowWriteAccess(api.handleBatchUpdateSteps)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan/delete-step", requireWorkflowWriteAccess(api.handleDeleteStep)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan/add-step", requireWorkflowWriteAccess(api.handleAddStep)).Methods("POST", "OPTIONS")
-	// Dynamic report system (docs/workflow/persistent_stores_design.md section 2).
-	// No backend wrappers — the frontend ReportViewer reads reports/report_plan.json
-	// and db/db.sqlite (via the query endpoint) / knowledgebase files via the workspace service's
-	// /api/documents/{path} endpoint (agentApi.getPlannerFileContent).
+	// Dynamic report system. The frontend ReportViewer discovers db/reports/*.html
+	// directly; HTML pages read durable data through window.report.
 
 	apiRouter.HandleFunc("/workflow/backup", api.handleGetWorkflowBackup).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/publish", api.handleGetWorkflowPublish).Methods("GET", "OPTIONS")

@@ -2177,42 +2177,16 @@ func RegisterEvaluationValidationTools(
 	return registerEvaluationValidationTools(mcpAgent, workspacePath, logger, readFile)
 }
 
-// RegisterReportPlanValidationTools is the exported wrapper for registering the
-// validate_report_plan tool on an MCP agent. Used by server.go for workflow-builder
-// chat sessions. Validates reports/report_plan.json.
-func RegisterReportPlanValidationTools(
+// RegisterHTMLReportTools registers the HTML-only report contract for a
+// workflow-builder session. A report page is a db/reports/*.html file; the
+// frontend discovers those files directly rather than reading a JSON layout.
+func RegisterHTMLReportTools(
 	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
 ) error {
-	return registerReportPlanValidationTools(mcpAgent, workspacePath, logger, readFile)
-}
-
-// RegisterReportPlanManagementTools is the exported wrapper for registering the
-// JSON report plan read/write tools on an MCP agent. Used by server.go for
-// workflow-builder and optimizer chat sessions.
-func RegisterReportPlanManagementTools(
-	mcpAgent DefinitionToolRegistrar,
-	workspacePath string,
-	logger loggerv2.Logger,
-	readFile func(context.Context, string) (string, error),
-	writeFile func(context.Context, string, string) error,
-) error {
-	return registerReportPlanManagementTools(mcpAgent, workspacePath, logger, readFile, writeFile)
-}
-
-// RegisterReportRenderPreviewTool is the exported wrapper for registering the
-// preview_report_render tool on an MCP agent. Used by server.go for workflow-builder
-// and optimizer chat sessions so the agent can inspect the final report structure
-// and resolved data without relying on the frontend UI.
-func RegisterReportRenderPreviewTool(
-	mcpAgent DefinitionToolRegistrar,
-	workspacePath string,
-	logger loggerv2.Logger,
-	readFile func(context.Context, string) (string, error),
-) error {
-	return registerReportRenderPreviewTool(mcpAgent, workspacePath, logger, readFile)
+	return registerHTMLReportTools(mcpAgent, workspacePath, logger, readFile)
 }
 
 // RegisterPlanModificationTools is the exported wrapper for registering plan modification tools

@@ -59,11 +59,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"list_skills", "import_skill", "uninstall_skill", "search_skills", "install_skill",
 		"list_published_llms", "list_provider_models", "test_llm", "set_workflow_llm_config",
 	)
-	add("workshop report tools",
-		"get_report_plan", "upsert_report_widget", "remove_report_widget",
-		"move_report_widget", "toggle_report_widget", "set_report_theme",
-		"set_section_layout", "validate_report_plan", "preview_report_render",
-	)
+	add("workshop report tools", "validate_report_html")
 	add("workshop guidance/status tools",
 		"get_workflow_command_guidance", "get_reference_doc",
 	)
@@ -199,7 +195,7 @@ func TestToolSetInvariants(t *testing.T) {
 		"create_plan", "migrate_message_sequence_code_items", "add_scripted_step", "add_routing_step", "add_human_input_step",
 		"update_scripted_step", "delete_plan_steps",
 		"execute_step", "create_human_input_request", "answer_human_input_request",
-		"update_workflow_config", "update_step_config", "get_report_plan",
+		"update_workflow_config", "update_step_config", "validate_report_html",
 		"list_schedules", "update_schedule", "get_schedule_runs",
 		"execute_shell_command", "diff_patch_workspace_file",
 		"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",

@@ -103,8 +103,8 @@ function injectMarkdownStyles(doc: Document) {
 // standalone fallback).
 //
 // autoHeight: size the iframe to its content (no inner scrollbar / clipping) and
-// keep it in sync via a ResizeObserver as content renders. Used for the inline
-// report view; the modal preview keeps a fixed height and scrolls internally.
+// keep it in sync via a ResizeObserver as content renders. The outer report
+// pane owns scrolling, so this frame must not impose its own scroll boundary.
 export function HtmlReportFrame({
   html,
   title,
@@ -161,11 +161,9 @@ export function HtmlReportFrame({
     if (!frame || !doc) return
     const content = Math.max(doc.documentElement?.scrollHeight || 0, doc.body?.scrollHeight || 0)
     if (content <= 0) return
-    // Grow to fit content, but cap at ~viewport height so a tall report can never
-    // be cut off if the outer pane doesn't scroll — past the cap the iframe itself
-    // scrolls (iframes scroll their document by default). Short reports fit exactly.
-    const cap = Math.max(360, Math.round((window.innerHeight || 800) * 0.9))
-    frame.style.height = `${Math.min(content, cap)}px`
+    // The outer report pane owns scrolling. Let the frame reach its actual content
+    // height so an HTML report never creates a second, nested scroll surface.
+    frame.style.height = `${content}px`
   }, [autoHeight])
 
   const inject = useCallback(() => {

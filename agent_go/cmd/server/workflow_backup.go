@@ -167,12 +167,12 @@ var backupHashFiles = []string{
 	"planning/step_config.json",
 	"planning/workflow_layout.json",
 	"planning/step_override.json",
-	"reports/report_plan.json",
 	"variables/variables.json",
 	"evaluation/evaluation_plan.json",
 }
 
 var backupHashFolders = []string{
+	"db/reports",
 	"knowledgebase",
 	"learnings",
 }

@@ -73,8 +73,6 @@ import type {
   WorkflowPublishSecretResponse,
   ReportHumanInputResponse,
   ReportHumanInputsResponse,
-  ReportWidgetResponseResponse,
-  ReportWidgetResponsesResponse,
   PulseModuleStateResponse,
   PulseFindingsResponse,
   PulseReviewsResponse,
@@ -1561,47 +1559,6 @@ export const agentApi = {
       workspace_path: workspacePath,
     })
     return response.data as ReportHumanInputResponse
-  },
-
-  listReportWidgetResponses: async (
-    workspacePath: string,
-    widgetId?: string,
-    instanceKey?: string,
-    status?: string,
-  ) => {
-    const response = await api.get('/api/report-widget-responses', {
-      params: {
-        workspace_path: workspacePath,
-        ...(widgetId ? { widget_id: widgetId } : {}),
-        ...(instanceKey ? { instance_key: instanceKey } : {}),
-        ...(status ? { status } : {}),
-      },
-    })
-    return response.data as ReportWidgetResponsesResponse
-  },
-
-  answerReportWidgetResponse: async (
-    workspacePath: string,
-    widgetId: string,
-		body: {
-			instance_key?: string
-			selected_option_id?: string
-			note?: string
-			expected_subject_id?: string
-			expected_subject_version?: string
-			expected_subject_hash?: string
-		},
-  ) => {
-    const response = await api.post(`/api/report-widget-responses/${encodeURIComponent(widgetId)}/answer`, {
-      workspace_path: workspacePath,
-      instance_key: body.instance_key || '',
-      selected_option_id: body.selected_option_id || '',
-			note: body.note || '',
-			expected_subject_id: body.expected_subject_id || '',
-			expected_subject_version: body.expected_subject_version || '',
-			expected_subject_hash: body.expected_subject_hash || '',
-    })
-    return response.data as ReportWidgetResponseResponse
   },
 
   updatePlannerFile: async (filepath: string, content: string, commitMessage?: string) => {

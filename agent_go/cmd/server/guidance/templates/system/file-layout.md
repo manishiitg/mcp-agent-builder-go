@@ -14,7 +14,6 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 | planning/plan.json | Workflow plan — step definitions, descriptions, validation schemas |
 | planning/step_config.json | Step-level config overrides (LLM, execution mode, learnings, etc.) |
 | variables/variables.json | Runtime variables and groups |
-| reports/report_plan.json | Registers live report HTML document(s) under db/reports/ (see persistent-stores design) |
 | soul/soul.md | Stable workflow intent only: objective, success criteria, and optional explicit user-approved constraints. Never store notification preferences, architecture, implementation choices, or agent-inferred assumptions here; notifications belong in `workflow.json`. |
 
 ### Execution Outputs (per run, per group)
@@ -76,7 +75,7 @@ Use this order when debugging latency:
 | db/db.sqlite | Workflow state and results — one SQLite database, one table per entity (agentic steps use managed DB tools; saved scripts retain direct compatibility; upsert on the primary key) |
 | db/README.md | Per-table schema contract (DDL, primary key, upsert rule, indexes, writers, consumers) |
 | db/assets/* | Durable media/file assets referenced by db.sqlite rows, reports, or later steps |
-| db/reports/*.html | Live report documents registered from reports/report_plan.json; they read db/db.sqlite through window.report |
+| db/reports/*.html | Standalone live report pages; each is labelled by its `<title>` and reads db/db.sqlite through window.report |
 | knowledgebase/context/context.md | User-supplied runtime business context that steps with KB read access must respect |
 | knowledgebase/notes/*.md | Per-topic narrative markdown — durable observations discovered by the workflow. Normally written by step agents in direct-write mode; post-step KB agent only when explicitly requested. |
 | knowledgebase/notes/_index.json | Topic registry (covers, size_bytes, section_count, last_updated) kept in sync with notes/*.md |

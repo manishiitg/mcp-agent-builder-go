@@ -2,7 +2,7 @@
 
 Review the workflow report for accuracy, live-data wiring, evidence coverage,
 goal usefulness, and presentation quality. This specialist is read-only. Do not
-edit report HTML or `reports/report_plan.json`, call report mutation tools,
+edit report HTML, call report mutation tools,
 update any presentation artifact, create questions, or mark module state. Any later
 wording such as improve, apply, edit, fix, update, reorder, add, remove, or
 resolve means **recommend the exact change to the Pulse Fixer**.
@@ -16,7 +16,7 @@ reason.
 The parent Workshop/Pulse agent supplies the relevant report contract and
 assumption-audit lens with this checklist. Do not burden the reviewer with
 Pulse presentation guidance, CSS migration, or card formatting. The
-parent may load `report-plan` and `html-output` later when applying an accepted
+parent may load `reporting-policy` and `html-output` later when applying an accepted
 report fix. The reviewer must not call Workshop-only guidance, validation,
 preview, or mutation tools.
 
@@ -83,20 +83,23 @@ MODE
 - Never invent data. If a useful section needs data the workflow does not persist, return the missing-data requirement for the Pulse Fixer or Goal Advisor.
 
 PASS 1 — STRUCTURAL VALIDATION REVIEW
-Inspect `reports/report_plan.json` and its registered files directly. The parent
-Pulse Fixer will call `validate_report_plan` before and after any edit.
-- For each error: explain what's wrong in plain language, name the document/entry it refers to, and propose the exact fix.
-- For warnings: separate ones that would visibly degrade the report (a registered document missing/unreadable, wrong renderFormat) from cosmetic ones.
-- **Errors are blockers:** report their exact fixes before lower-priority presentation suggestions. Do not apply them from the reviewer.
+Inspect each `db/reports/*.html` page directly. The parent Pulse Fixer will
+call `validate_report_html` before and after any edit. Treat a missing title,
+invalid HTML root, broken live-data query, or inaccessible referenced asset as
+a concrete report defect; propose its exact repair before presentation work.
 
 PASS 2 — IMPROVEMENT SUGGESTIONS
-Use a rendered preview supplied by the parent when available, then read the actual document file(s) under `db/reports/`. If no preview was supplied, say so and inspect the raw responsive HTML/CSS/JS without pretending to have seen the rendering; the parent Pulse Fixer performs `preview_report_render` before applying visual changes. For HTML reports, also sample the data they read: run their queries against `db/db.sqlite` (`sqlite3 db/db.sqlite ".schema"` + `SELECT ... LIMIT`), and check `db/assets/`, `knowledgebase/context/context.md`, and `knowledgebase/notes/`. Use the available preview plus raw data/document to propose improvements in these categories:
+Use a rendered Report-tab view supplied by the parent when available, then read
+the actual document file(s) under `db/reports/`. If no view was supplied, say
+so and inspect the raw responsive HTML/CSS/JS without pretending to have seen
+the rendering. For HTML reports, also sample the data they read: run their
+queries against `db/db.sqlite` (`sqlite3 db/db.sqlite ".schema"` + `SELECT ... LIMIT`), and check `db/assets/`, `knowledgebase/context/context.md`, and `knowledgebase/notes/`. Use the available view plus raw data/document to propose improvements in these categories:
 
 1. **Live vs stale.** The report is HTML; it should read its numbers live via `window.report.query` so it never goes stale. Flag any report that hardcodes data as static text (it should query the db instead), or that depends on a workflow step regenerating it each run (it shouldn't — author once, read live).
-2. **Layout (insight-first / inverted pyramid).** Does it lead with the answer? Canonical skeleton: conditional alert/status banner → headline KPI tiles → the key supporting chart → detailed tables last. A report should read like a briefing (answer first, evidence below), not a data dump. For multi-entity reports, is each entity its own tab?
+2. **Layout (insight-first / inverted pyramid).** Does it lead with the answer? Canonical skeleton: conditional alert/status banner → headline KPI tiles → the key supporting chart → detailed tables last. A report should read like a briefing (answer first, evidence below), not a data dump. For multiple pages, is each page a distinct coherent briefing?
 3. **Live-data correctness (HTML).** Do the `window.report.query` SQL statements hit the right tables/columns? Do the joins/aggregation/sort/limit happen in SQL (one `SELECT ... JOIN ... GROUP BY ... ORDER BY ... LIMIT`) rather than fetching everything and reshaping in JS, or relying on a pre-flattened helper table? Collapse derived/helper tables back to a query against the canonical tables.
 4. **Visualization fit.** For each chart, is bar/line/area/pie right for the data? (bar=categorical, line=time series, pie=composition ≤6 slices.) Are numbers shown as tables (right-aligned, tabular-nums), not raw JSON/logs?
-5. **Theme & color.** Does it follow the app's light/dark theme — keying off the `.dark`/`data-theme` and the `report:theme` event, or using the injected `hsl(var(--token))` palette? Is contrast **WCAG AA in BOTH themes**? Use semantic colour only for meaning (ok/attention/fail), not decoration. Set a per-report palette with `set_report_theme` only if a brand requires it.
+5. **Theme & color.** Does it follow the app's light/dark theme — keying off the `.dark`/`data-theme` and the `report:theme` event, or using the injected `hsl(var(--token))` palette? Is contrast **WCAG AA in BOTH themes**? Use semantic colour only for meaning (ok/attention/fail), not decoration.
 6. **Responsive & self-contained (HTML).** No horizontal overflow at ~480px; wide tables scroll/wrap; multi-column layouts stack on narrow screens; all CSS/JS inline (no CDN); body height NOT pinned (the frame auto-sizes).
 7. **Rendered reality check.** Based on the preview, what actually looks broken, cramped, misleading, empty, or visually weak even if the plan is valid?
 
