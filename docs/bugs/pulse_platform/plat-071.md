@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` for the record-corruption half; the session stall itself remains open |
+| Ticket state | `implemented` — both the record corruption and the stall's proximate cause; underlying phase-staleness still open |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P1 — Pulse's durable history understates successful runs, and terminal command states are immutable
@@ -53,9 +53,29 @@ It uses a new baseline-free helper, `workshopRunStartedDuringInvocation`, rather
 
 Tests pin both directions: a pre-existing `iteration-0` reused by this invocation counts as evidence with no baseline at all, and older or unstamped runs never do.
 
+## Fix shipped (defect 1)
+
+Traced from the log. The turn did not hang — it **finished**, and the watchdog could not tell:
+
+```
+18:08:36  eval completion steered into the session
+18:09:30  [BG AGENT] Synthetic turn completed (211 messages)
+18:09:30  [ACTIVE_SESSION] status -> completed
+          ...ten minutes of nothing at all...
+18:19:35  idle wait expired (live_child_work=false)
+```
+
+A genuinely idle session is detected in about six seconds (two consecutive not-busy polls). Timing out instead means `sessionIsBusy` kept returning **true** for ten minutes after the turn's own completion was recorded.
+
+There are two independent notions of busy and they disagreed. `sessionIsBusy` reads the runtime snapshot `Phase`; `isSessionBusy` is the explicit per-turn flag set at turn start and cleared at turn end. The snapshot phase stayed busy while the session's own lifecycle status said `completed`.
+
+**This is the same signature as PLAT-065** — there too, `sessionIsBusy` stayed true after the Gate turn's tool call had durably succeeded, causing `abortIfTurnStillBusy` to kill the remaining Pulse stages. Both are very likely one underlying defect: the runtime snapshot phase not returning to a non-busy state when a turn ends.
+
+The fix does not touch that state machine. At the point where the loop is already about to declare a timeout — nothing running, nothing progressed for the whole inactivity window — it now also consults the explicit per-turn flag. If that flag is clear, the only signal still claiming work is the snapshot phase, contradicted by everything else, and the turn is treated as finished. A genuine stall keeps its flag set and still times out. A diagnostic line records both signals when it does, so the next real stall is fully explained.
+
 ## Still open
 
-- **Defect 1**, the stall itself: why a builder turn waiting on step notifications never resumes after its workflow completes. Shares a root with PLAT-067.
+- **The underlying phase staleness**: why the runtime snapshot `Phase` fails to leave busy when a turn completes. This fix reconciles the symptom at one call site; PLAT-065's `abortIfTurnStillBusy` reads the same stale signal and is not covered by it.
 - **Historical records stay wrong.** Terminal Pulse command states are immutable by design, so the two runs already recorded as non-runs cannot be corrected. This ticket stops new ones; it does not repair the history. The reporting agent noted an identical earlier occurrence, making this at least the second.
 - **Recurrence count.** The reporting agent called this "the eighth idle-timeout in this series". Not independently verified here — the log was truncated by the 12:26 restart — but the two corroborated occurrences are enough to treat it as recurring rather than incidental.
 

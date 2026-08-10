@@ -3965,6 +3965,27 @@ func (s *SchedulerService) waitForWorkshopIdleWithInactivityTimeout(ctx context.
 					lastProgressAt = now
 					continue
 				}
+				// Two independent notions of "busy" can disagree, and only one of
+				// them carries positive evidence. sessionIsBusy reads the runtime
+				// snapshot phase; isSessionBusy is the explicit per-turn flag that
+				// is set when a turn starts and cleared when it ends. On
+				// social-media 2026-08-10 the turn's own completion was recorded
+				// (session status -> completed, 18:09:30) while the snapshot phase
+				// stayed busy for the following ten minutes with no live child and
+				// no progress, so a finished turn was reported as a stalled one and
+				// its completed workflow was written off as never having run.
+				//
+				// Reaching here already means: nothing is running, and nothing has
+				// progressed for the whole inactivity window. If the explicit flag
+				// is ALSO clear, the only signal still claiming work is the snapshot
+				// phase, contradicted by everything else — treat that as idle, which
+				// is what the loop would have concluded had the phase been accurate.
+				// A genuine stall keeps its flag set and still times out.
+				if !s.api.isSessionBusy(sessionID) {
+					scheduleLogf("[SCHEDULER] session %s reports snapshot-busy with no live child work and no progress for %s, but its per-turn busy flag is clear; treating the turn as finished rather than stalled", sessionID, maxInactivity)
+					return nil
+				}
+				scheduleLogf("[SCHEDULER] idle-wait timeout diagnostic for %s: snapshotBusy=true perTurnBusy=true liveChildWork=false inactivity=%s", sessionID, maxInactivity)
 				return fmt.Errorf(
 					"%w: no tmux, tool, execution, or session progress for %s in session %s (live_child_work=false)",
 					errWorkshopIdleWaitTimeout,
