@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — confirmed by direct grep of the guidance templates |
+| Ticket state | `implemented` — wiring shipped; verification blocked until `llm_ops_review` is re-enabled |
 | Last synchronized | `2026-08-10` |
 
 - **Priority:** P2 — no incorrect behaviour; an entire review dimension simply never runs
@@ -47,6 +47,22 @@ Upwork's own numbers make the missing dimension concrete. `search-find-and-short
 1. In `review/ops-review.md`, load the checklist explicitly for the structural pass and state that step-type/shape fitness is in scope, attributing findings as `llm_ops_review` per the existing rule in `design-plan.md` line 3.
 2. Ground it in the evidence Ops uniquely holds: it already sees per-step cost, tool-call counts and tool-call traces, which is precisely the "real evidence rather than the description alone" that line 101 asks for. A step whose trace never varies in shape is a scripted candidate; a turn with 70 tool calls is a shape question.
 3. Keep the Fixer contract unchanged — it stays the only writer, and still refuses changes with no owning finding.
+
+## What shipped (2026-08-10)
+
+`review/ops-review.md` gained item 7, "Judge structural fitness against the plan-design checklist, which names this module as its owner". It loads the checklist explicitly and applies PART 3 to the current plan, attributing findings to `llm_ops_review`, under the checklist's own read-only parent contract (findings to the parent, no workspace edits, Fixer stays the only writer). Later items renumbered 8/9.
+
+Rather than restate the checklist, the new item supplies the thing only this lens has — behavioural evidence — and directs it at three questions:
+
+- **Scripted candidates** grounded in the trace, never the description: a step whose real tool-call sequence never varies in shape is a candidate even when its description reads agentic. Judgment/synthesis/adaptive/browser work stays agentic explicitly, so "save cost" cannot be used to script something that should not be.
+- **Sequence shape**, with the actual mechanism named: every tool call is a serial model round-trip that re-reads the whole accumulated context, so *call count* is the multiplier, not payload size. Merging requires genuinely shared context; splitting requires a boundary the checklist recognises, and "it is long" is explicitly not one.
+- **Reflection yield**, now newly answerable: `reflection:<step-id>` is separated from `execution_only:<step-id>` in the cost ledger and `reflection-timing.json` sits beside the execution timing files (shipped in 28cca5b8e / fd7444e30). A reflection turn burning time with `wrote_learnings`/`wrote_kb` false is overhead — sharpen the objective or drop to `learnings_access: "read"` rather than speed the turn up.
+
+The item closes by re-binding to the evidence bar and stating the asymmetric risk directly: scripting a step that is not actually deterministic breaks it, so where the trace does not settle the question, say so and leave it agentic.
+
+**One defect found while writing it**, of exactly the PLAT-062 class (a prompt naming a path that does not resolve): the checklist is projected as `workflow-commands/references/design-plan.md`, not under `builder-reference`, which separately carries a different authoring-time `plan-design.md`. The first draft named the wrong skill and would have failed at read time. Corrected, with the distinction noted inline so the next editor does not repeat it.
+
+**Deliberately not done:** `llm_ops_review` stays disabled at the Gate. The operator's instruction was to get this into the best possible shape *for* enablement, not to enable it — the core-loop verification phase has not met its own bar, and two fresh orchestration defects were found the same day. This ticket removes the reason re-enabling would have been useless.
 
 ## Acceptance
 

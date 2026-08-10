@@ -63,7 +63,43 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    provider and compare against its catalog and `default_tier_models`; never
    infer recency from model names. Provider-profile defaults update automatically
    and are not stale pins.
-7. Require a compact result grouped by `cost`, `time`,
+7. Judge structural fitness against the plan-design checklist, which names this
+   module as its owner. Load
+   `read_skill(skills=[{"name":"workflow-commands","path":"references/design-plan.md"}])`
+   and apply **PART 3 — STEP-TYPE FITNESS** to the current plan. (It lives in
+   `workflow-commands`, not `builder-reference`; `builder-reference` carries the
+   different, authoring-time `plan-design.md`.) That checklist's
+   own contract makes this a read-only use: return findings to the parent and
+   edit no workspace file; the Pulse Fixer remains the only writer. Attribute
+   these findings to `llm_ops_review`. Cite the checklist rather than restating
+   it. This is the one review that can judge step shape from *behaviour* instead
+   of description, because it is the only one holding per-step cost, tool-call
+   counts, and full tool-call traces:
+   - **Scripted candidates.** A step whose real tool-call sequence is
+     deterministic and identical in shape across runs is a scripted candidate
+     even when its description reads as agentic. Ground the finding in the trace
+     evidence, never the description alone. Judgment, synthesis, adaptive
+     discovery, and browser/UI work stay agentic; do not propose scripting them
+     to save cost.
+   - **Sequence shape.** Report a turn whose tool-call count is large enough to
+     dominate the step's wall time, and say what would batch. Every tool call is
+     a serial model round-trip that re-reads the whole accumulated context, so
+     call count — not payload size — is usually the multiplier. Propose merging
+     adjacent steps only when they genuinely share context, and splitting only
+     at a boundary the checklist recognises (credentials/security, independent
+     outputs or retries, clean-room independence, human/routing boundaries,
+     context contamination). "It is long" is not a boundary.
+   - **Reflection yield.** `reflection:<step-id>` is attributed separately from
+     `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
+     sits beside the execution timing files. A reflection turn costing real time
+     and tokens while its `wrote_learnings`/`wrote_kb` stay false is overhead:
+     recommend sharpening the objective or dropping the step to
+     `learnings_access: "read"`, not making the turn faster.
+   Any recommendation here still obeys item 8: state current state, exact
+   suggestion, expected benefit, risk, and evidence. A step-type change carries
+   real risk — scripting a step that is not actually deterministic breaks it —
+   so where the trace does not settle it, say so and leave it agentic.
+8. Require a compact result grouped by `cost`, `time`,
    `tool/runtime reliability`, `quality`, and `setup`. Every recommendation
    needs current state, exact suggestion, expected benefit, risk, and evidence.
    Separate evidence gaps from true optimization opportunities. If a material goal criterion is below target,
@@ -88,7 +124,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
-8. Read the child completion and validate its evidence against the actual
+9. Read the child completion and validate its evidence against the actual
    artifacts. Do not write Pulse lifecycle state, apply recommendations, or
    create approval requests in this read-only command.
 
