@@ -83,6 +83,7 @@ interface RunCosts {
     stageCosts: {
       execution: number
       learning: number
+      reflection: number
       evaluation: number
       knowledgebase: number   // kb_update / kb_reorganize / kb_consolidate
       routing: number         // deterministic routing / todo_task orchestration
@@ -95,6 +96,7 @@ interface RunCosts {
       stepNum: number       // Step number (for sorting, 0 for non-step entries)
       execution: number
       learning: number
+      reflection: number
       evaluation: number
       knowledgebase: number
       routing: number
@@ -303,6 +305,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     const stageCosts = {
       execution: 0,
       learning: 0,
+      reflection: 0,
       evaluation: 0,
       knowledgebase: 0,
       routing: 0,
@@ -316,6 +319,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       stepTitle: string
       execution: number
       learning: number
+      reflection: number
       evaluation: number
       knowledgebase: number
       routing: number
@@ -406,6 +410,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepTitle,
             execution: 0,
             learning: 0,
+            reflection: 0,
             evaluation: 0,
             knowledgebase: 0,
             routing: 0,
@@ -443,6 +448,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepTitle: stepTitle || stepKey,
             execution: 0,
             learning: 0,
+            reflection: 0,
             evaluation: 0,
             knowledgebase: 0,
             routing: 0,
@@ -513,6 +519,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepTitle: `[Eval] ${stepTitle}`,
             execution: 0,
             learning: 0,
+            reflection: 0,
             evaluation: 0,
             knowledgebase: 0,
             routing: 0,
@@ -545,6 +552,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepTitle: `[Eval] ${stepTitle}`,
             execution: 0,
             learning: 0,
+            reflection: 0,
             evaluation: 0,
             knowledgebase: 0,
             routing: 0,
@@ -861,6 +869,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     const stageCosts = {
       execution: 0,
       learning: 0,
+      reflection: 0,
       evaluation: 0,
       knowledgebase: 0,
       routing: 0,
@@ -883,6 +892,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         totalReasoningTokens += runCost.costSummary.totalReasoningTokens
         stageCosts.execution += runCost.costSummary.stageCosts.execution
         stageCosts.learning += runCost.costSummary.stageCosts.learning
+        stageCosts.reflection += runCost.costSummary.stageCosts.reflection
         stageCosts.evaluation += runCost.costSummary.stageCosts.evaluation
         stageCosts.knowledgebase += runCost.costSummary.stageCosts.knowledgebase
         stageCosts.routing += runCost.costSummary.stageCosts.routing
@@ -1435,7 +1445,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                   </div>
 
                   {/* Stage Costs Summary */}
-                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                     <div className="bg-card border border-border rounded-lg p-3">
                       <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Execution</div>
                       <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.execution)}</div>
@@ -1443,6 +1453,10 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                     <div className="bg-card border border-border rounded-lg p-3">
                       <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Learning</div>
                       <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.learning)}</div>
+                    </div>
+                    <div className="bg-card border border-border rounded-lg p-3">
+                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Reflection</div>
+                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.reflection)}</div>
                     </div>
                     <div className="bg-card border border-border rounded-lg p-3">
                       <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Knowledgebase</div>
