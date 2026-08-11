@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — both the record corruption and the stall's proximate cause; underlying phase-staleness still open |
-| Last synchronized | `2026-08-10` |
+| Ticket state | `reopened` — a second false-terminal-state path was observed on 2026-08-11; underlying phase-staleness remains open |
+| Last synchronized | `2026-08-11` |
 
 - **Priority:** P1 — Pulse's durable history understates successful runs, and terminal command states are immutable
 - **Owner:** scheduler workshop turn loop (`scheduler.go`)
@@ -78,6 +78,39 @@ The fix does not touch that state machine. At the point where the loop is alread
 - **The underlying phase staleness**: why the runtime snapshot `Phase` fails to leave busy when a turn completes. This fix reconciles the symptom at one call site; PLAT-065's `abortIfTurnStillBusy` reads the same stale signal and is not covered by it.
 - **Historical records stay wrong.** Terminal Pulse command states are immutable by design, so the two runs already recorded as non-runs cannot be corrected. This ticket stops new ones; it does not repair the history. The reporting agent noted an identical earlier occurrence, making this at least the second.
 - **Recurrence count.** The reporting agent called this "the eighth idle-timeout in this series". Not independently verified here — the log was truncated by the 12:26 restart — but the two corroborated occurrences are enough to treat it as recurring rather than incidental.
+
+## Reopened: watchdog stamps failed finalizer commands before the Finalizer runs (2026-08-11)
+
+Instagram's successful scheduled run is a separate reproduction of the same
+harm: permanent Pulse status now says work failed even though the work was
+done. The producing workflow delivered a reel and email successfully, and the
+subsequent Finalizer actually ran backup and notification. Yet before that
+Finalizer turn recorded any result, `pulse_final_command_state` already
+contained these immutable rows for
+`schedule-manual--bae435e5_1786432476119732000`:
+
+```text
+backup, publish, notify -> failed
+started_at == finished_at == 2026-08-11T09:48:06Z
+reason = "Finalizer ended without recording this command's outcome"
+```
+
+The identical timestamps and wording prove these were watchdog-generated
+placeholders, not three real command attempts. The Finalizer began later, so
+it had no truthful way to replace the terminal rows. This is not fixed by the
+earlier "durable run evidence" reconciliation: that preserves evidence that a
+workflow ran; it does not stop the scheduler from finalizing command status
+before the relevant command stage starts.
+
+### Required follow-up
+
+The scheduler must not write an immutable `failed` result merely because a
+Finalizer has not started or has not yet recorded a command. Keep commands
+`waiting`/`running` until the finalizer's terminal lifecycle is known, or use
+a reversible watchdog placeholder which the Finalizer can replace. Only a
+known failed/aborted Finalizer may finalize still-unrecorded commands as
+failed. Add an integration test where a delayed but successful Finalizer
+records backup/notify after the watchdog observes an inter-stage gap.
 
 ## Acceptance
 
