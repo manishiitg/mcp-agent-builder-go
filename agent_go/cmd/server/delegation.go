@@ -919,6 +919,17 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "completed", displayResult, "", duration.Truncate(time.Second).String())
 	}
 
+	// A finished parent cannot still have live progress children. Settle any it
+	// left running, so an end event that never arrived cannot pin the session
+	// busy forever and stall the scheduler's drain-wait (PLAT-091).
+	if orphans := n.api.bgAgentRegistry.ReconcileOrphanedProgressChildren(
+		n.sessionID, execID,
+		fmt.Sprintf("parent execution %s finished without an end event for this step", execID),
+	); len(orphans) > 0 {
+		log.Printf("[BG AGENT] Settled %d orphaned progress child(ren) of finished execution %s in session %s: %v",
+			len(orphans), execID, n.sessionID, orphans)
+	}
+
 	// Signal completion to the notification loop unless the parent is already
 	// synchronously awaiting this execution's direct tool result.
 	if agent.GetSnapshot().Metadata["suppress_auto_notification"] != "true" {

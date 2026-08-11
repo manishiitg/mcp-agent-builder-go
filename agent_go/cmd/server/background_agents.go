@@ -423,6 +423,61 @@ func (r *BackgroundAgentRegistry) GetAll(sessionID string) []*BackgroundAgent {
 	return agents
 }
 
+// ReconcileOrphanedProgressChildren settles progress sub-executions that a
+// finished parent left running, and returns their ids.
+//
+// Workflow and evaluation runs publish per-step progress executions whose ids
+// are built as "<parentID>-step-<n>-<token>" (workflowProgressExecIDForStart).
+// Each is registered on OrchestratorAgentStart and settled on the matching end
+// event — but several real paths never deliver that end. A superseded or
+// abandoned evaluation stops emitting entirely, and a todo_task_orchestrator's
+// successful turn end is deliberately ignored in favour of a later
+// TodoTaskStepCompleted event that an abandoned run never sends.
+//
+// That matters because HasRunningAgents treats BGAgentRunning as live
+// unconditionally and the registry never deletes entries, so one orphan pins
+// its session busy forever. Observed live (PLAT-091): four
+// eval-full-…-step-0-* children outlived their parent and blocked Pulse's
+// Review+Fix, Finalize, backup and notification for the full three-hour
+// ceiling, on a run that was never marked failed.
+//
+// The parent finishing is a sound completion boundary: a progress child cannot
+// still be doing work once the execution that owns it has settled. Only
+// descendants of that parent are touched, so unrelated children keep holding
+// the session open exactly as before.
+func (r *BackgroundAgentRegistry) ReconcileOrphanedProgressChildren(sessionID, parentExecutionID, reason string) []string {
+	parentExecutionID = strings.TrimSpace(parentExecutionID)
+	if r == nil || parentExecutionID == "" {
+		return nil
+	}
+	prefix := parentExecutionID + "-step-"
+
+	r.mu.RLock()
+	sessionAgents, ok := r.agents[sessionID]
+	orphans := make([]*BackgroundAgent, 0, 4)
+	if ok {
+		for id, agent := range sessionAgents {
+			if agent == nil || !strings.HasPrefix(id, prefix) {
+				continue
+			}
+			orphans = append(orphans, agent)
+		}
+	}
+	r.mu.RUnlock()
+
+	settled := make([]string, 0, len(orphans))
+	for _, agent := range orphans {
+		// GetStatus takes the agent's own lock, so this must happen outside the
+		// registry lock above.
+		if agent.GetStatus() != BGAgentRunning {
+			continue
+		}
+		agent.SetError(reason)
+		settled = append(settled, agent.ID)
+	}
+	return settled
+}
+
 // CancelAgent cancels a specific background agent
 func (r *BackgroundAgentRegistry) CancelAgent(sessionID, agentID string) error {
 	r.mu.RLock()

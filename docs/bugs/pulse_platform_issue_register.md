@@ -259,7 +259,7 @@ Rules:
 | [PLAT-088](pulse_platform/plat-088.md) | Every scheduled workflow and Pulse turn was billed to `chat`, making Pulse-vs-goal cost unmeasurable | unassigned | `implemented` (runtime reverify pending) | cost scope attribution (`handleQuery`, `pkg/costobserver`) |
 | [PLAT-089](pulse_platform/plat-089.md) | Grouped runs leave previous-run attempt logs in the active evidence folder | unassigned | `open` | grouped-run cleanup and execution-evidence identity |
 | [PLAT-090](pulse_platform/plat-090.md) | No surface reports Pulse time/cost against workflow time/cost, so "is Pulse worth it?" cannot be answered | unassigned | `open` (designed, not built) | Pulse measurement surface, cost ledger read path |
-| [PLAT-091](pulse_platform/plat-091.md) | Evaluation step children never complete, pinning the session busy so Pulse loses Review+Fix, Finalize, backup and notify | unassigned | `open` (root cause isolated from live evidence) | background-agent completion for evaluation step executions |
+| [PLAT-091](pulse_platform/plat-091.md) | Evaluation step children never complete, pinning the session busy so Pulse loses Review+Fix, Finalize, backup and notify | unassigned | `implemented` (runtime reverify pending) | background-agent completion for evaluation step executions |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
