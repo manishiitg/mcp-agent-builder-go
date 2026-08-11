@@ -310,6 +310,29 @@ func matchPhaseScope(values ...string) string {
 	return ""
 }
 
+// ScopeForScheduledLLMRole maps the scheduler's explicit llm_config_source
+// marker to a cost scope, and returns "" when the request carries none.
+//
+// This marker is the only *reliable* Pulse signal on the chat/query path. A
+// scheduled Pulse turn runs in the same session, with the same agent mode and
+// the same workflow-builder phase id, as the workflow-orchestration turns that
+// precede it — so neither the mode nor the phase can tell them apart. The
+// scheduler already stamps this field when it swaps in the Pulse/maintenance
+// LLM, so the intent is known at the source and only needs to be honored here.
+//
+// scheduled_auto_improve maps to Pulse deliberately: Goal Advisor and Strategy
+// Auditor are Pulse modules that happen to run on the maintenance LLM, so their
+// spend belongs in the Pulse total rather than in a bucket of its own.
+func ScopeForScheduledLLMRole(llmConfigSource string) string {
+	switch strings.ToLower(strings.TrimSpace(llmConfigSource)) {
+	case "scheduled_pulse", "scheduled_auto_improve":
+		return ScopePulse
+	case "scheduled_chief_of_staff":
+		return ScopeChiefOfStaff
+	}
+	return ""
+}
+
 // InferScope names the scope for a chat-session agent — the chat/query path
 // and delegate() sub-agents. Anything not otherwise identified is chat.
 func InferScope(agentMode, phaseID string) string {

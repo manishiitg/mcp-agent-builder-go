@@ -5558,6 +5558,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Observers are runtime construction inputs, so attach them to the draft
 		// before finalization instead of mutating the live agent afterward.
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
+		// Scope resolution, in priority order (PLAT-088):
+		//  1. The scheduler's explicit llm_config_source marker. A scheduled
+		//     Pulse turn is indistinguishable from the workflow-orchestration
+		//     turns around it by mode or phase alone — same session, same phase
+		//     id — so this stamp is the only reliable Pulse signal here.
+		//  2. Otherwise the agent mode + phase. req.AgentMode is rewritten to
+		//     "multi-agent" far above purely to route workflow_phase requests
+		//     down the standard agent path, so inferring from it directly
+		//     charged every scheduled workflow AND Pulse turn to "chat".
+		//     isWorkflowPhase is captured before that rewrite and is what the
+		//     inference is supposed to see.
+		costScope := scopeForScheduledLLMRole(req.LLMConfigSource)
+		if costScope == "" {
+			agentModeForScope := req.AgentMode
+			if isWorkflowPhase {
+				agentModeForScope = "workflow_phase"
+			}
+			costScope = inferCostScope(agentModeForScope, workflowPhaseID)
+		}
 		costObs := newCostObserver(
 			api.costLedger,
 			sessionID,
@@ -5565,7 +5584,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			req.AgentMode,
 			withCostModel(finalProvider, finalModelID),
 			withCostAttribution(
-				inferCostScope(req.AgentMode, workflowPhaseID),
+				costScope,
 				costFirstNonEmpty(workflowPhaseFolder, req.SelectedFolder),
 				workflowPhaseRunFolder,
 				queryID,
