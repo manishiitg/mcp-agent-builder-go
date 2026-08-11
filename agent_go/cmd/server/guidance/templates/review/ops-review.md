@@ -97,6 +97,15 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      the checklist recognises (credentials/security, independent outputs or
      retries, clean-room independence, human/routing boundaries, context
      contamination). "It is long" is not a boundary.
+   - **Schedule execution model.** Inspect enabled schedules as runtime entry
+     points. Route-backed schedules should select planned work via group_names
+     and route_selections. Direct message sequences are also valid when they
+     carry `direct_messages_reason`; measure their prompt/call cost and name the
+     missing step-level lifecycle, but do not call them defective merely for
+     being long. Recommend a route only after verifying matching side effects,
+     approval boundary, failure behavior, and reuse (especially draft-only
+     versus publish routes). Artifact Review owns topology drift; record an Ops
+     finding only for measured cost, latency, or runtime impact.
    - **Reflection yield.** `reflection:<step-id>` is attributed separately from
      `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
      sits beside the execution timing files. **A single reflection turn that

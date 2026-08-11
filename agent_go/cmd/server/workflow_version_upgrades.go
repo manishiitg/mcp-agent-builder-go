@@ -42,6 +42,8 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractArtifactPurityVersion,
 		workflowContractLearningsLockAuditVersion,
 		workflowContractDirectHTMLReportsVersion,
+		workflowContractScheduledRouteVersion,
+		workflowContractScheduleExecutionModelVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -137,6 +139,40 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
+const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
+
+Workflow schedules support two valid execution models. A route-based schedule
+selects canonical plan work and therefore receives normal step learnings,
+validation/retry, repair, and Pulse attribution. A direct message sequence is a
+workshop conversation owned by the schedule; it is more flexible, but those
+step-level lifecycle guarantees are not automatic. Audit every workflow.json
+schedule and classify it from its actual behavior, not merely its text length.
+
+Choose exactly one classification per schedule:
+
+1. EQUIVALENT ROUTE EXISTS. Verify the same inputs, outputs, external side
+   effects, approval boundary, failure behavior, and group semantics. Move any
+   deterministic routing choice into route_selections and clear messages.
+2. DURABLE WORKFLOW BEHAVIOR, NO ROUTE EXISTS. Create the missing canonical
+   route/steps and their validation before changing the schedule. Never map a
+   draft-only schedule to a route that can publish. Then set route_selections
+   and clear messages.
+3. GENUINELY SCHEDULE-SPECIFIC CONVERSATION. Preserve its messages and set a
+   concise direct_messages_reason explaining why a planned route is the wrong
+   abstraction and acknowledging the weaker step-level lifecycle. Do not force
+   a route merely because the queue is long.
+
+Compact messages that only restate run_full_workflow/execute_step should normally
+be converted to data-backed group_names/route_selections. Move reusable domain
+procedure into owning steps or skills, but preserve conversation turns when their
+schedule-specific context is the reason the direct model was chosen.
+
+Validate every plan/config mutation, re-read workflow.json, and confirm each
+enabled schedule is either safely route-backed or carries an explicit direct
+message rationale. Do not run the workflow. If route equivalence is ambiguous,
+keep the direct sequence with an honest rationale rather than guessing. Then call
+set_workflow_contract_version(version="1.0.25") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -170,7 +206,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 21 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractLearningsLockAuditVersion, label: "upgrade-learnings-lock-audit", query: upgradeLearningsLockAudit})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
+	if rank < 22 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDirectHTMLReportsVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
+	}
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
 	return steps
 }
 

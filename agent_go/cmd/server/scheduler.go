@@ -2745,7 +2745,15 @@ func scheduledWorkshopMessages(sctx *ScheduleContext) []string {
 	messages := compactScheduleMessages(sctx.Schedule.Messages)
 	isOptimizer := strings.EqualFold(strings.TrimSpace(sctx.Schedule.WorkshopMode), "optimizer")
 	if len(messages) == 0 && !isOptimizer && !sctx.PulseOnly {
-		return []string{"Run the full workflow using run_full_workflow tool. " + scheduledBackgroundNoPollingInstruction}
+		groups, _ := json.Marshal(sctx.Schedule.GroupNames)
+		instruction := fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow.", string(groups))
+		if len(sctx.Schedule.RouteSelections) > 0 {
+			routes, err := json.Marshal(sctx.Schedule.RouteSelections)
+			if err == nil {
+				instruction = fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow with route_selections=%s. Do not substitute a schedule-local procedure for the selected plan route.", string(groups), string(routes))
+			}
+		}
+		return []string{instruction + " " + scheduledBackgroundNoPollingInstruction}
 	}
 	return messages
 }

@@ -54,7 +54,7 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 			Type: "function",
 			Function: &llmtypes.FunctionDefinition{
 				Name:        "create_workflow_schedule",
-				Description: "Create a new cron schedule on a workflow. Use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Pulse dynamically selects maintenance and Goal Advisor work after normal runs; do not create a separate optimizer schedule.",
+				Description: "Create a new cron schedule on a workflow. Prefer route_selections for durable planned work so it receives canonical step learnings, validation/retry, and Pulse attribution. Direct message sequences remain valid for genuinely schedule-specific conversation; when using them, provide direct_messages_reason. Pulse dynamically selects maintenance and Goal Advisor work after normal runs; do not create a separate optimizer schedule.",
 				Parameters: &llmtypes.Parameters{
 					Type: "object",
 					Properties: map[string]interface{}{
@@ -79,6 +79,11 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 							"items":       map[string]interface{}{"type": "string"},
 							"description": "Variable group names to run (e.g. ['group-1']). Required. Read variables.json to see available groups.",
 						},
+						"route_selections": map[string]interface{}{
+							"type":                 "object",
+							"additionalProperties": map[string]interface{}{"type": "string"},
+							"description":          "Optional routing-step selections passed verbatim to run_full_workflow, e.g. {\"step-router\":\"daily-draft\"}. Prefer this for durable planned behavior; use direct messages only for an explicitly justified schedule-specific conversation.",
+						},
 						"mode": map[string]interface{}{
 							"type":        "string",
 							"description": "Execution mode for workflow schedules. Only 'workshop' is supported; legacy 'workflow' input is normalized to 'workshop'.",
@@ -87,7 +92,11 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 						"messages": map[string]interface{}{
 							"type":        "array",
 							"items":       map[string]interface{}{"type": "string"},
-							"description": "Optional predefined messages sent one-by-one to the workshop LLM. Omit for the default full-workflow run message. Do not create optimizer messages for Goal Advisor; Pulse Gate owns that module. Example: ['Run the full workflow using run_full_workflow(group_name=\"group-1\")'].",
+							"description": "Optional workshop conversation turns. Prefer a planned route for durable behavior. Multi-message or procedure-like queues require direct_messages_reason because they do not automatically receive the canonical step lifecycle.",
+						},
+						"direct_messages_reason": map[string]interface{}{
+							"type":        "string",
+							"description": "Required for a multi-message or procedure-like direct queue. Explain why the behavior is genuinely schedule-specific and why weaker step-level learnings, validation/retry, and Pulse attribution are acceptable.",
 						},
 						"workshop_mode": map[string]interface{}{
 							"type":        "string",
@@ -132,6 +141,11 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 							"items":       map[string]interface{}{"type": "string"},
 							"description": "Replace the variable group names. Omit to keep current. Do not pass an empty array.",
 						},
+						"route_selections": map[string]interface{}{
+							"type":                 "object",
+							"additionalProperties": map[string]interface{}{"type": "string"},
+							"description":          "Replace the routing-step selections. Pass {} to clear them. Each key is a routing step id and each value is its selected route id.",
+						},
 						"enabled": map[string]interface{}{
 							"type":        "boolean",
 							"description": "Enable or disable the schedule.",
@@ -144,7 +158,11 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 						"messages": map[string]interface{}{
 							"type":        "array",
 							"items":       map[string]interface{}{"type": "string"},
-							"description": "Replace the workshop-mode messages. Do not use optimizer messages for Goal Advisor; Pulse Gate owns that module.",
+							"description": "Replace the workshop-mode messages. Durable workflow behavior should normally use a planned route; direct procedural queues require direct_messages_reason.",
+						},
+						"direct_messages_reason": map[string]interface{}{
+							"type":        "string",
+							"description": "Set or replace the rationale for retaining a direct schedule sequence. Pass an empty string when clearing messages or converting to a route.",
 						},
 						"workshop_mode": map[string]interface{}{
 							"type":        "string",
@@ -208,6 +226,10 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 							"type":        "array",
 							"items":       map[string]interface{}{"type": "string"},
 							"description": "Optional default workshop messages for all items. Omit for the default full-workflow run message. Do not use optimizer schedules for Goal Advisor; Pulse Gate owns that module.",
+						},
+						"direct_messages_reason": map[string]interface{}{
+							"type":        "string",
+							"description": "Required when the default or per-item calendar messages form a direct procedure. Explain why it should remain schedule-specific instead of becoming a planned route.",
 						},
 						"workshop_mode": map[string]interface{}{
 							"type":        "string",
@@ -296,6 +318,21 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 		}
 		return out
 	}
+	stringMap := func(raw interface{}) (map[string]string, bool) {
+		object, ok := raw.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		out := make(map[string]string, len(object))
+		for key, rawValue := range object {
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, false
+			}
+			out[key] = value
+		}
+		return out, true
+	}
 
 	return map[string]func(ctx context.Context, args map[string]interface{}) (string, error){
 		"list_all_schedules": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -323,9 +360,14 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 				return err.Error(), nil
 			}
 			groupNames := stringSlice(args["group_names"])
+			routeSelections, routeSelectionsOK := stringMap(args["route_selections"])
+			if _, supplied := args["route_selections"]; supplied && !routeSelectionsOK {
+				return "route_selections must be an object mapping routing step IDs to route IDs.", nil
+			}
 			mode, _ := args["mode"].(string)
 			mode = scheduleModeOrDefault(mode)
 			messages := stringSlice(args["messages"])
+			directMessagesReason, _ := args["direct_messages_reason"].(string)
 			workshopMode, _ := args["workshop_mode"].(string)
 			var resumePrevious *bool
 			if raw, ok := args["resume_previous"]; ok && raw != nil {
@@ -340,7 +382,7 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 			if len(groupNames) == 0 {
 				return "group_names is required. Read variables.json and provide at least one group.", nil
 			}
-			return cb.CreateSchedule(ctx, workflowPath, name, cronExpr, timezone, groupNames, mode, messages, workshopMode, resumePrevious)
+			return cb.CreateSchedule(ctx, workflowPath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious)
 		},
 
 		"create_calendar_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -371,8 +413,9 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 				return "create_calendar_workflow_schedule only creates workflow schedules.", nil
 			}
 			messages := stringSlice(args["messages"])
+			directMessagesReason, _ := args["direct_messages_reason"].(string)
 			workshopMode, _ := args["workshop_mode"].(string)
-			return cb.CreateCalendarSchedule(ctx, workflowPath, name, timezone, groupNames, string(calendarItemsJSON), mode, messages, workshopMode)
+			return cb.CreateCalendarSchedule(ctx, workflowPath, name, timezone, groupNames, string(calendarItemsJSON), mode, messages, directMessagesReason, workshopMode)
 		},
 
 		"update_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -400,6 +443,16 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 					return "group_names cannot be empty. Omit the argument to keep the current selection.", nil
 				}
 			}
+			setRouteSelections := false
+			var routeSelections map[string]string
+			if raw, ok := args["route_selections"]; ok && raw != nil {
+				setRouteSelections = true
+				var valid bool
+				routeSelections, valid = stringMap(raw)
+				if !valid {
+					return "route_selections must be an object mapping routing step IDs to route IDs.", nil
+				}
+			}
 
 			var enabled *bool
 			if raw, ok := args["enabled"]; ok && raw != nil {
@@ -412,6 +465,12 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 			if raw, ok := args["messages"]; ok && raw != nil {
 				messages = stringSlice(raw)
 			}
+			var directMessagesReason *string
+			if raw, ok := args["direct_messages_reason"]; ok && raw != nil {
+				if value, ok := raw.(string); ok {
+					directMessagesReason = &value
+				}
+			}
 
 			var resumePrevious *bool
 			if raw, ok := args["resume_previous"]; ok && raw != nil {
@@ -420,7 +479,7 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 				}
 			}
 
-			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, enabled, mode, messages, workshopMode, resumePrevious)
+			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, directMessagesReason, workshopMode, resumePrevious)
 		},
 
 		"delete_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {

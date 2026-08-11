@@ -7665,7 +7665,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"messages": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Optional predefined message queue sent one-by-one to the LLM. Omit for the default full-workflow run message. Messages should reference tools with full parameters. Example: ['Run the full workflow using run_full_workflow(group_name=\"group-1\")']. Read variables/variables.json for available group names.",
+					"description": "Optional workshop conversation turns. Prefer route_selections for durable planned behavior. Multi-message or procedure-like queues require direct_messages_reason because they lack the canonical step lifecycle.",
+				},
+				"route_selections": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Optional routing-step selections passed to run_full_workflow.",
+				},
+				"direct_messages_reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Required for an intentional direct procedure or multi-turn conversation. Explain why it is schedule-specific rather than canonical plan work.",
 				},
 				"workshop_mode": map[string]interface{}{
 					"type":        "string",
@@ -7700,6 +7709,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			mode, _ := args["mode"].(string)
+			routeSelections := map[string]string{}
+			if raw, ok := args["route_selections"].(map[string]interface{}); ok {
+				for key, value := range raw {
+					if routeID, ok := value.(string); ok {
+						routeSelections[key] = routeID
+					}
+				}
+			}
 			var messages []string
 			if raw, ok := args["messages"]; ok && raw != nil {
 				if arr, ok := raw.([]interface{}); ok {
@@ -7711,6 +7728,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			workshopMode, _ := args["workshop_mode"].(string)
+			directMessagesReason, _ := args["direct_messages_reason"].(string)
 			var resumePrevious *bool
 			if raw, ok := args["resume_previous"]; ok && raw != nil {
 				if b, ok2 := raw.(bool); ok2 {
@@ -7729,7 +7747,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if len(groupNames) == 0 {
 				return "group_names is required. Read variables/variables.json and provide at least one explicit group_name, e.g. ['group-1'].", nil
 			}
-			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, mode, messages, workshopMode, resumePrevious)
+			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious)
 		},
 		"workflow",
 	); err != nil {
@@ -7759,9 +7777,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						"required": []string{"date", "time"},
 					},
 				},
-				"mode":          map[string]interface{}{"type": "string", "description": "Execution mode. Only 'workshop' is supported for workflow schedules; legacy 'workflow' input is normalized to 'workshop'.", "enum": []string{"workshop"}},
-				"messages":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional default workshop messages for all items. Omit for the default full-workflow run message."},
-				"workshop_mode": map[string]interface{}{"type": "string", "description": "Run mode is the only supported value for new schedules; Pulse selects maintenance after runs.", "enum": []string{"run"}},
+				"direct_messages_reason": map[string]interface{}{"type": "string", "description": "Required when default or per-item messages form a direct procedure; explain why it is schedule-specific."},
+				"mode":                   map[string]interface{}{"type": "string", "description": "Execution mode. Only 'workshop' is supported for workflow schedules; legacy 'workflow' input is normalized to 'workshop'.", "enum": []string{"workshop"}},
+				"messages":               map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional default workshop messages for all items. Omit for the default full-workflow run message."},
+				"workshop_mode":          map[string]interface{}{"type": "string", "description": "Run mode is the only supported value for new schedules; Pulse selects maintenance after runs.", "enum": []string{"run"}},
 			},
 			"required": []string{"name", "timezone", "calendar_items", "group_names"},
 		},
@@ -7813,7 +7832,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			workshopMode, _ := args["workshop_mode"].(string)
-			return iwm.schedulerFuncs.CreateCalendarSchedule(ctx, iwm.schedulerWorkspacePath, name, timezone, groupNames, string(calendarItemsJSON), mode, messages, workshopMode)
+			directMessagesReason, _ := args["direct_messages_reason"].(string)
+			return iwm.schedulerFuncs.CreateCalendarSchedule(ctx, iwm.schedulerWorkspacePath, name, timezone, groupNames, string(calendarItemsJSON), mode, messages, directMessagesReason, workshopMode)
 		},
 		"workflow",
 	); err != nil {
@@ -7871,6 +7891,15 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "boolean",
 					"description": "Optional opt-in when this workflow runs on a coding-agent CLI. When true, scheduled runs resume the previous thread (same CLI) instead of starting fresh. Set false to go back to fresh sessions. Omit to keep the current setting.",
 				},
+				"route_selections": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Replace routing-step selections; pass {} to clear.",
+				},
+				"direct_messages_reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Set or clear the rationale for an intentional direct schedule sequence.",
+				},
 			},
 			"required": []string{"job_id"},
 		},
@@ -7905,6 +7934,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if setGroupNames && len(groupNames) == 0 {
 				return "group_names cannot be empty. Provide at least one explicit group_name from variables/variables.json, or omit group_names to keep the current selection.", nil
 			}
+			setRouteSelections := false
+			var routeSelections map[string]string
+			if raw, supplied := args["route_selections"]; supplied && raw != nil {
+				setRouteSelections = true
+				routeSelections = map[string]string{}
+				if object, ok := raw.(map[string]interface{}); ok {
+					for key, value := range object {
+						if routeID, ok := value.(string); ok {
+							routeSelections[key] = routeID
+						}
+					}
+				}
+			}
 			var enabled *bool
 			if raw, ok := args["enabled"]; ok && raw != nil {
 				if b, ok := raw.(bool); ok {
@@ -7923,13 +7965,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			workshopMode, _ := args["workshop_mode"].(string)
+			var directMessagesReason *string
+			if raw, ok := args["direct_messages_reason"]; ok && raw != nil {
+				if value, ok := raw.(string); ok {
+					directMessagesReason = &value
+				}
+			}
 			var resumePrevious *bool
 			if raw, ok := args["resume_previous"]; ok && raw != nil {
 				if b, ok := raw.(bool); ok {
 					resumePrevious = &b
 				}
 			}
-			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, enabled, mode, messages, workshopMode, resumePrevious)
+			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, directMessagesReason, workshopMode, resumePrevious)
 		},
 		"workflow",
 	); err != nil {

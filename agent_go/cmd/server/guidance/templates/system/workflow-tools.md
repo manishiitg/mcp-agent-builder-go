@@ -138,11 +138,11 @@ Every schedule in `workflow.json` has a `schedule_type` — `"cron"` (default) o
 
 Workflow schedules always use the workshop builder execution path. Do not create direct `mode="workflow"` schedules; legacy manifests with that value are normalized to workshop execution.
 
-- **Run** (`mode=workshop`, `workshop_mode=run`) — LLM-driven execution with per-step notifications. `messages` is optional; if omitted, the scheduler sends a default full-workflow run instruction. Prefer an explicit message when you need group-specific wording, backup instructions, or strict unattended behavior.
+- **Run** (`mode=workshop`, `workshop_mode=run`) — LLM-driven execution. Prefer an empty queue plus `group_names`/`route_selections` for durable workflow behavior: canonical steps receive their normal learning, validation/retry, repair, and Pulse attribution lifecycle. Direct messages remain valid for genuinely schedule-specific conversation, but require `direct_messages_reason` and do not automatically gain that step-level lifecycle.
 
 **Default mode rule:** create workflow schedules with `mode="workshop"`. New schedules should never use `mode="workflow"`.
 
-**`/pulse-setup` rule**: When setting up recurring Pulse, create or update the recurring execution schedule only: `mode="workshop", workshop_mode="run"` with a message that calls `run_full_workflow(group_name="...")` for each configured group, and enable Pulse with `update_workflow_config(post_run_monitor=true)`. Do not create a separate optimizer Goal Advisor schedule; Pulse Gate decides when the Goal Advisor module is due. `/goal-advisor` is a one-off strategy review and must not change schedules or the Pulse toggle.
+**`/pulse-setup` rule**: When setting up recurring Pulse, create or update the recurring execution schedule only: `mode="workshop", workshop_mode="run"`, select configured groups/routes as data, leave messages empty, and enable Pulse with `update_workflow_config(post_run_monitor=true)`. Do not create a separate optimizer Goal Advisor schedule; Pulse Gate decides when the Goal Advisor module is due. `/goal-advisor` is a one-off strategy review and must not change schedules or the Pulse toggle.
 
 ### Back up scheduled workflows
 
@@ -150,7 +150,6 @@ Scheduled runs execute unattended and accumulate state (`workflow.json`, `planni
 
 - Set `workflow.json.backup.enabled=true`, `mode="agent"`, `triggers.after_scheduled_run=true`, and a `destinations` entry for each backup target (git/github for config, R2/S3/B2/HuggingFace for large artifacts as needed).
 - After each backup attempt, write `backup/status.json` with the destination results, timestamps, summary, and errors. Do not put changing backup status in `workflow.json`.
-- If an explicit schedule message is needed, append a final backup turn to `messages`, e.g. `"After the run completes, follow workflow.json.backup and the backup-strategy skill, perform the configured backup, and update backup/status.json. Do not ask for confirmation."`
 - If you rely on the default full-workflow message, the auto-notification after `run_full_workflow` will still ask the builder to honor `workflow.json.backup` and write `backup/status.json`.
 
 Confirm with the user before skipping backup on a recurring schedule.
@@ -160,8 +159,9 @@ Confirm with the user before skipping backup on a recurring schedule.
 `messages` is an ordered queue of strings sent to the workshop LLM one-by-one as user turns. The LLM completes all tool calls triggered by message N before message N+1 is sent.
 
 - Write each message as a plain instruction, like you would type in chat: `"Run the full workflow"`, `"Generate the final report"`.
-- **Run mode** (`workshop_mode="run"`): typically one message with exact groups, e.g. `"Do not ask for confirmation. Run the full workflow for group-1 using run_full_workflow(group_name=\"group-1\")."`
-- Use multiple messages to break work into sequential phases, e.g. `["Run the workflow", "Generate the final report"]`.
+- **Route-backed mode (default)**: select planned work through `group_names` plus optional `route_selections`, and keep `messages` empty. Use this for durable workflow behavior so one canonical plan owns its lifecycle.
+- **Direct-sequence mode (supported exception)**: use one or more messages when the conversation itself is genuinely schedule-specific and should not become reusable plan behavior. Set `direct_messages_reason` with the concrete tradeoff. These turns run in the workshop but are not canonical steps, so step learnings, validation/retry, repair, and Pulse attribution are weaker or unavailable unless the sequence explicitly invokes planned work.
+- Never choose solely from message length. Compare behavior, inputs/outputs, external side effects, approval boundaries, failure behavior, and expected reuse.
 - Read `variables/variables.json` for available group names and include them explicitly in the message if needed.
 
 **CRITICAL — schedules run unattended; messages must never require human input:**

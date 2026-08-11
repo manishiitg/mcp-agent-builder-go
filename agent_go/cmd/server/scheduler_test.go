@@ -1374,10 +1374,9 @@ func TestScheduledWorkshopTurnsRunAllMissingUpgradesBeforeFirstScheduleMessage(t
 	if err != nil {
 		t.Fatalf("scheduledWorkshopTurns: %v", err)
 	}
-	// Direct HTML reports add a seventh bounded upgrade after the six existing
-	// behavioral/data migrations.
-	if got := len(turns); got != 8 {
-		t.Fatalf("turn count = %d, want seven required upgrades + schedule message", got)
+	// Scheduled-route normalization follows the direct-report migration.
+	if got := len(turns); got != 9 {
+		t.Fatalf("turn count = %d, want eight required upgrades + schedule message", got)
 	}
 	if turns[0].label != "upgrade-message-sequence-code" || turns[0].upgradeTarget != workflowContractMessageSequenceCodeVersion {
 		t.Fatalf("first turn = %+v, want message-sequence-code upgrade", turns[0])
@@ -1385,11 +1384,14 @@ func TestScheduledWorkshopTurnsRunAllMissingUpgradesBeforeFirstScheduleMessage(t
 	if turns[5].label != "upgrade-learnings-lock-audit" || turns[5].upgradeTarget != workflowContractLearningsLockAuditVersion {
 		t.Fatalf("sixth upgrade turn = %+v, want learnings-lock-audit reaching 1.0.22", turns[5])
 	}
-	if turns[6].label != "upgrade-direct-html-reports" || turns[6].upgradeTarget != WorkflowContractCurrentVersion {
-		t.Fatalf("last upgrade turn = %+v, want direct-report migration reaching current version", turns[6])
+	if turns[6].label != "upgrade-direct-html-reports" || turns[6].upgradeTarget != workflowContractDirectHTMLReportsVersion {
+		t.Fatalf("seventh upgrade turn = %+v, want direct-report migration", turns[6])
 	}
-	if turns[7].label != "schedule-message-1" || turns[7].query != "run the workflow" || turns[7].upgradeTarget != "" {
-		t.Fatalf("normal schedule turn = %+v", turns[7])
+	if turns[7].label != "upgrade-schedule-execution-model" || turns[7].upgradeTarget != WorkflowContractCurrentVersion {
+		t.Fatalf("eighth upgrade turn = %+v, want scheduled-route migration reaching current version", turns[7])
+	}
+	if turns[8].label != "schedule-message-1" || turns[8].query != "run the workflow" || turns[8].upgradeTarget != "" {
+		t.Fatalf("normal schedule turn = %+v", turns[8])
 	}
 }
 

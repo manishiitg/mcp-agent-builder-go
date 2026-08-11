@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.23"
+const WorkflowContractCurrentVersion = "1.0.25"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -41,6 +41,8 @@ const workflowContractExecutivePulseJournalVersion = "1.0.20"
 const workflowContractArtifactPurityVersion = "1.0.21"
 const workflowContractLearningsLockAuditVersion = "1.0.22"
 const workflowContractDirectHTMLReportsVersion = "1.0.23"
+const workflowContractScheduledRouteVersion = "1.0.24"
+const workflowContractScheduleExecutionModelVersion = "1.0.25"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -283,11 +285,18 @@ type WorkflowSchedule struct {
 	TriggerPayload json.RawMessage        `json:"trigger_payload,omitempty"`
 	CalendarItems  []CalendarScheduleItem `json:"calendar_items,omitempty"`
 	GroupNames     []string               `json:"group_names,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`            // "workshop" for workflow schedules; legacy "workflow" is normalized at runtime
-	Messages       []string               `json:"messages,omitempty"`        // Predefined message queue for workshop schedules (sent one-by-one)
-	WorkshopMode   string                 `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
-	Query          string                 `json:"query,omitempty"`           // Message to execute (multi-agent mode)
-	ResumePrevious *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
+	// RouteSelections selects deterministic routing-step branches for the scheduled
+	// full workflow. It is the same shape accepted by run_full_workflow; keeping it
+	// as data prevents a schedule from becoming a second, free-text workflow.
+	RouteSelections map[string]string `json:"route_selections,omitempty"`
+	Mode            string            `json:"mode,omitempty"`     // "workshop" for workflow schedules; legacy "workflow" is normalized at runtime
+	Messages        []string          `json:"messages,omitempty"` // Predefined message queue for workshop schedules (sent one-by-one)
+	// DirectMessagesReason records why a schedule-local conversation is preferable
+	// to a canonical route despite its weaker step-level lifecycle.
+	DirectMessagesReason string `json:"direct_messages_reason,omitempty"`
+	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
+	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
+	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
 }
 
 // ShouldResumePrevious reports whether a scheduled run should resume the

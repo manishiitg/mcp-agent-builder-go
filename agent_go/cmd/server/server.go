@@ -8631,11 +8631,17 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				} else {
 					sb.WriteString("- **Groups**: all\n")
 				}
+				if len(sched.RouteSelections) > 0 {
+					sb.WriteString(fmt.Sprintf("- **Route selections**: %v\n", sched.RouteSelections))
+				}
+				if strings.TrimSpace(sched.DirectMessagesReason) != "" {
+					sb.WriteString(fmt.Sprintf("- **Direct message rationale**: %s\n", sched.DirectMessagesReason))
+				}
 				sb.WriteString("\n")
 			}
 			return sb.String(), nil
 		},
-		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error) {
+		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow schedules must use workshop mode; create multi-agent schedules in the multi-agent schedule store")
@@ -8644,6 +8650,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
 			}
 			if err := ValidateScheduleTimezone(timezone); err != nil {
+				return "", err
+			}
+			if err := validateScheduleMessages(messages, directMessagesReason); err != nil {
 				return "", err
 			}
 			manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
@@ -8655,16 +8664,18 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", err
 			}
 			newSched := WorkflowSchedule{
-				ID:             generateScheduleID(),
-				Name:           name,
-				CronExpression: cronExpr,
-				Timezone:       timezone,
-				GroupNames:     groupNames,
-				Enabled:        true,
-				Mode:           mode,
-				Messages:       messages,
-				WorkshopMode:   workshopMode,
-				ResumePrevious: resumePrevious,
+				ID:                   generateScheduleID(),
+				Name:                 name,
+				CronExpression:       cronExpr,
+				Timezone:             timezone,
+				GroupNames:           groupNames,
+				RouteSelections:      routeSelections,
+				Enabled:              true,
+				Mode:                 mode,
+				Messages:             messages,
+				DirectMessagesReason: directMessagesReason,
+				WorkshopMode:         workshopMode,
+				ResumePrevious:       resumePrevious,
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -8682,9 +8693,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, cronExpr, timezone, nextRunStr), nil
+			result := fmt.Sprintf("Schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, cronExpr, timezone, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(messages, directMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
-		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, workshopMode string) (string, error) {
+		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow calendar schedules must use workshop mode")
@@ -8700,6 +8715,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if err := validateScheduleRequest("calendar", "", calendarItems); err != nil {
 				return "", err
 			}
+			allMessages := append([]string(nil), messages...)
+			for _, item := range calendarItems {
+				allMessages = append(allMessages, item.Messages...)
+			}
+			if err := validateScheduleMessages(allMessages, directMessagesReason); err != nil {
+				return "", err
+			}
 			manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
 			if err != nil || !found {
 				return "", fmt.Errorf("workflow manifest not found at %s", workspacePath)
@@ -8709,16 +8731,17 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", err
 			}
 			newSched := WorkflowSchedule{
-				ID:            generateScheduleID(),
-				Name:          name,
-				ScheduleType:  "calendar",
-				Timezone:      timezone,
-				CalendarItems: calendarItems,
-				GroupNames:    groupNames,
-				Enabled:       true,
-				Mode:          mode,
-				Messages:      messages,
-				WorkshopMode:  workshopMode,
+				ID:                   generateScheduleID(),
+				Name:                 name,
+				ScheduleType:         "calendar",
+				Timezone:             timezone,
+				CalendarItems:        calendarItems,
+				GroupNames:           groupNames,
+				Enabled:              true,
+				Mode:                 mode,
+				Messages:             messages,
+				DirectMessagesReason: directMessagesReason,
+				WorkshopMode:         workshopMode,
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -8735,9 +8758,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Calendar schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Items**: %d\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, len(calendarItems), timezone, nextRunStr), nil
+			result := fmt.Sprintf("Calendar schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Items**: %d\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, len(calendarItems), timezone, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(allMessages, directMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
-		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, enabled *bool, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error) {
+		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error) {
 			if cronExpr != "" {
 				if err := ValidateCronExpression(cronExpr); err != nil {
 					return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -8769,6 +8796,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				sched.GroupNames = validGroupNames
 			}
+			if setRouteSelections {
+				sched.RouteSelections = routeSelections
+			}
 			if enabled != nil {
 				sched.Enabled = *enabled
 			}
@@ -8779,8 +8809,24 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				sched.Mode = normalizedMode
 			}
+			candidateMessages := sched.Messages
+			candidateReason := sched.DirectMessagesReason
+			if messages != nil {
+				candidateMessages = messages
+			}
+			if directMessagesReason != nil {
+				candidateReason = *directMessagesReason
+			}
+			if messages != nil || directMessagesReason != nil {
+				if err := validateScheduleMessages(candidateMessages, candidateReason); err != nil {
+					return "", err
+				}
+			}
 			if messages != nil {
 				sched.Messages = messages
+			}
+			if directMessagesReason != nil {
+				sched.DirectMessagesReason = *directMessagesReason
 			}
 			if workshopMode != "" {
 				sched.WorkshopMode = workshopMode
@@ -8806,7 +8852,11 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Schedule updated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Enabled**: %v\n- **Next Run**: %s", sched.ID, sched.Name, sched.CronExpression, sched.Enabled, nextRunStr), nil
+			result := fmt.Sprintf("Schedule updated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Enabled**: %v\n- **Next Run**: %s", sched.ID, sched.Name, sched.CronExpression, sched.Enabled, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(sched.Messages, sched.DirectMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
 		DeleteSchedule: func(ctx context.Context, jobID string) error {
 			workspacePath, manifest, idx, err := findScheduleByID(ctx, jobID)

@@ -59,12 +59,13 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
    - report/eval checks use stale artifacts, fields, thresholds, or run identity
    - a changed success criterion lacks eval coverage, or an eval is orphaned/duplicative
    - deleted steps still have live references, or new steps lack required dependent wiring
-   - a schedule message drives no plan step, or carries the work inline instead
-     of calling one. A message that specifies queries, output contracts,
-     recipients, or commands is a step living outside the plan: it never passes
-     `validate_plan`, has no `validation_schema` or pre-validation gate, and
-     cannot be run or tested with `execute_step`. Report it with the step it
-     should become.
+   - a schedule-local procedure that duplicates durable plan behavior, lacks
+     `direct_messages_reason`, or claims canonical step-level learning,
+     validation/retry, repair, or Pulse attribution that it does not receive.
+     Direct schedule conversation is a supported execution model, so do not
+     report it merely because it is long. Compare reuse, inputs/outputs,
+     side effects, approval and failure boundaries; report the missing route
+     only when those facts show the work belongs in the canonical plan.
    - a plan step no schedule message reaches, and no other step invokes — dead
      work, or a queue that was never updated after the step was added
    - execution order or grouping that exists only in the message queue while
