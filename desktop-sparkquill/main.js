@@ -244,8 +244,32 @@ function createTray() {
 }
 
 function buildMenu() {
+  const isMac = process.platform === 'darwin'
   const template = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    // Spelled out rather than `{ role: 'appMenu' }` for one reason: macOS
+    // convention puts "Check for Updates…" in the app menu directly under
+    // About (Safari, Chrome, Slack all do this), and that is the first place
+    // anyone looks for it — but the appMenu role is opaque, so an item cannot
+    // be inserted into it. Everything else here is the standard role set, in
+    // the standard order, so this behaves exactly like the built-in otherwise.
+    ...(isMac
+      ? [{
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { label: 'Check for Updates…', click: () => checkForUpdates(true) },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' },
+          ],
+        }]
+      : []),
     { role: 'editMenu' },
     {
       label: 'View',
@@ -263,7 +287,9 @@ function buildMenu() {
     {
       role: 'help',
       submenu: [
-        { label: 'Check for Updates…', click: () => checkForUpdates(true) },
+        // On macOS this lives in the app menu above, where it belongs; keep it
+        // here only on platforms that have no app menu to put it in.
+        ...(isMac ? [] : [{ label: 'Check for Updates…', click: () => checkForUpdates(true) }]),
         { label: 'Release Notes', click: openReleaseNotes },
         { type: 'separator' },
         {
