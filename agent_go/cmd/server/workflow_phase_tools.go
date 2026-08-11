@@ -278,7 +278,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		}
 
 		if phaseTemplateVars["WorkshopMode"] == "workshop" || phaseTemplateVars["WorkshopMode"] == "builder" || phaseTemplateVars["WorkshopMode"] == "optimizer" || phaseTemplateVars["WorkshopMode"] == "reporting" {
-			// HTML reports are discovered directly from db/reports/*.html. The
+			// The HTML report is loaded directly from db/reports/index.html. The
 			// builder edits those files with normal workspace tools and validates
 			// each page; there is no report-plan JSON registry or widget layer.
 			if err := todo_creation_human.RegisterHTMLReportTools(

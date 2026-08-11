@@ -1,12 +1,12 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-063 — the report pane flashed mid-run because a view flip remounts it
+# PLAT-063 — the report pane flashed mid-run because a view flip or outer render reloaded it
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | `Claude Code` |
+| Assigned agent | `Claude Code`, Codex follow-up |
 | Ticket state | `done` — user-confirmed on the live UI |
-| Last synchronized | `2026-08-09` |
+| Last synchronized | `2026-08-11` |
 
 - **Priority:** P3 (cosmetic; no data loss)
 - **Owner:** workflow canvas mounting / workspace-view sync
@@ -40,13 +40,12 @@ Two remounts back to back — a visible flash.
 
 ## Why it read as a data refresh but was not
 
-The rebuilt viewer repopulates **synchronously from the module-level
-`reportDataCache`** (`ReportViewer.tsx`), so no fetch occurs and `loading` never
-shows. That is precisely why it was *fast*, and why instrumenting all four
-report events (`workflow-report-data-stale`,
+The rebuilt viewer immediately recreates its report document, so the failure
+looks like a data refresh even when no user-invoked refresh occurred. That is
+why instrumenting all four report events (`workflow-report-data-stale`,
 `workflow-report-refresh-requested`, the preference and export events) produced
 **zero logs** while the flashing continued. The negative probe result was the
-decisive clue: whatever it was, it was not the refresh path.
+decisive clue: whatever it was, it was not the explicit refresh path.
 
 ## Two wrong theories worth recording
 
@@ -86,3 +85,23 @@ flashing stopped**. That is why this ships `done` rather than the usual
   component type that switches its inner content would remove the whole class.
 - The dead `workflow_end` / `batch_execution_end` entries in `EVENT_TYPES.COMPLETION`
   (see above) deserve their own ticket.
+
+## Second root cause and fix (2026-08-11)
+
+The view-flip fix stopped the **component-tree** remount. It did not protect the
+HTML report iframe from an ordinary render of its still-mounted parent. The
+iframe accepts the report document through React's `srcDoc` prop; Chromium can
+treat a repeated assignment as a document navigation. Live terminal, Pulse,
+and human-input status updates therefore made the report visibly reload even
+when the selected workspace view never changed.
+
+`HtmlWidgetFrame.tsx` now memoizes the iframe component. It receives a numeric
+`refreshToken` only from `ReportViewer`'s explicit Refresh action. A new page
+document, a changed data API, or that token change emits `report:data`; unrelated
+parent renders do none of those things and leave the frame/document untouched.
+
+**Verification:** in the live Electron app, the report iframe remained present
+across a seven-second background polling interval while terminal activity
+continued. No report file changed on disk and no explicit report-refresh event
+was dispatched. `ReportViewerStability.test.ts` pins the explicit-refresh and
+memoization contract. This is frontend-only; no server restart is required.

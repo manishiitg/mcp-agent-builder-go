@@ -1374,21 +1374,22 @@ func TestScheduledWorkshopTurnsRunAllMissingUpgradesBeforeFirstScheduleMessage(t
 	if err != nil {
 		t.Fatalf("scheduledWorkshopTurns: %v", err)
 	}
-	// PLAT-055/J added a sixth mandatory upgrade (upgrade-learnings-lock-audit,
-	// unconditionally appended as the new final step to reach the current
-	// contract version) — a workflow starting from an unset version now needs
-	// six upgrades, not five.
-	if got := len(turns); got != 7 {
-		t.Fatalf("turn count = %d, want six required upgrades + schedule message", got)
+	// Direct HTML reports add a seventh bounded upgrade after the six existing
+	// behavioral/data migrations.
+	if got := len(turns); got != 8 {
+		t.Fatalf("turn count = %d, want seven required upgrades + schedule message", got)
 	}
 	if turns[0].label != "upgrade-message-sequence-code" || turns[0].upgradeTarget != workflowContractMessageSequenceCodeVersion {
 		t.Fatalf("first turn = %+v, want message-sequence-code upgrade", turns[0])
 	}
-	if turns[5].label != "upgrade-learnings-lock-audit" || turns[5].upgradeTarget != WorkflowContractCurrentVersion {
-		t.Fatalf("last upgrade turn = %+v, want learnings-lock-audit reaching current version", turns[5])
+	if turns[5].label != "upgrade-learnings-lock-audit" || turns[5].upgradeTarget != workflowContractLearningsLockAuditVersion {
+		t.Fatalf("sixth upgrade turn = %+v, want learnings-lock-audit reaching 1.0.22", turns[5])
 	}
-	if turns[6].label != "schedule-message-1" || turns[6].query != "run the workflow" || turns[6].upgradeTarget != "" {
-		t.Fatalf("normal schedule turn = %+v", turns[6])
+	if turns[6].label != "upgrade-direct-html-reports" || turns[6].upgradeTarget != WorkflowContractCurrentVersion {
+		t.Fatalf("last upgrade turn = %+v, want direct-report migration reaching current version", turns[6])
+	}
+	if turns[7].label != "schedule-message-1" || turns[7].query != "run the workflow" || turns[7].upgradeTarget != "" {
+		t.Fatalf("normal schedule turn = %+v", turns[7])
 	}
 }
 

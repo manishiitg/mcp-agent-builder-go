@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useCallback, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   BookOpen,
@@ -112,12 +112,52 @@ interface CompactToolbarMenuProps {
 
 function CompactToolbarMenu({ label, icon, active = false, children }: CompactToolbarMenuProps) {
   const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, ready: false })
   const containerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = containerRef.current?.querySelector('button')
+    const menu = menuRef.current
+    if (!trigger || !menu) return
+    const triggerRect = trigger.getBoundingClientRect()
+    const menuWidth = menu.offsetWidth || 208
+    const menuHeight = menu.offsetHeight || 0
+    const gap = 8
+    const viewportGap = 8
+    const left = Math.max(
+      viewportGap,
+      Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - viewportGap),
+    )
+    const spaceBelow = window.innerHeight - triggerRect.bottom - gap - viewportGap
+    const spaceAbove = triggerRect.top - gap - viewportGap
+    const openAbove = menuHeight > spaceBelow && spaceAbove > spaceBelow
+    const desiredTop = openAbove
+      ? triggerRect.top - gap - menuHeight
+      : triggerRect.bottom + gap
+    const top = Math.max(viewportGap, Math.min(desiredTop, window.innerHeight - menuHeight - viewportGap))
+    setMenuPosition({ top, left, ready: true })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    updateMenuPosition()
+    window.addEventListener('resize', updateMenuPosition)
+    window.addEventListener('scroll', updateMenuPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition)
+      window.removeEventListener('scroll', updateMenuPosition, true)
+    }
+  }, [open, updateMenuPosition])
 
   useEffect(() => {
     if (!open) return
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (
+        containerRef.current
+        && !containerRef.current.contains(event.target as Node)
+        && !menuRef.current?.contains(event.target as Node)
+      ) {
         setOpen(false)
       }
     }
@@ -150,13 +190,21 @@ function CompactToolbarMenu({ label, icon, active = false, children }: CompactTo
         <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
       </Tooltip>
       {open && (
-        <div
-          role="menu"
-          aria-label={label}
-          className="absolute right-0 top-full z-[70] mt-2 min-w-52 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
-        >
-          {children(() => setOpen(false))}
-        </div>
+        <ModalPortal>
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            className="fixed z-[10000] max-h-[calc(100vh-1rem)] min-w-52 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+            style={{
+              top: menuPosition.top,
+              left: menuPosition.left,
+              visibility: menuPosition.ready ? 'visible' : 'hidden',
+            }}
+          >
+            {children(() => setOpen(false))}
+          </div>
+        </ModalPortal>
       )}
     </div>
   )
@@ -747,17 +795,30 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     : view === 'flow'
                       ? workflowWorkspaceView !== 'files' && !isInspectorView && canvasViewMode === 'flow'
                       : workflowWorkspaceView === view
+                  const viewButton = (
+                    <button
+                      type="button"
+                      onClick={() => openWorkspaceView(view)}
+                      className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+                      aria-label={label}
+                      aria-pressed={active}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </button>
+                  )
+
+                  // A clicked view button retains focus. A tooltip on that selected
+                  // button can remain over the report/plan header, where it is both
+                  // redundant and, in Electron, sometimes renders as an empty panel.
+                  // Keep discovery labels for unselected icons only.
+                  if (active) {
+                    return <React.Fragment key={view}>{viewButton}</React.Fragment>
+                  }
+
                   return (
                   <Tooltip key={view}>
                     <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => openWorkspaceView(view)}
-                        className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                        aria-label={label}
-                      >
-                        <Icon className="h-3.5 w-3.5" />
-                      </button>
+                      {viewButton}
                     </TooltipTrigger>
                     <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
                   </Tooltip>
@@ -892,6 +953,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <TooltipTrigger asChild>
                   <button
                     type="button"
+                    onClick={() => setShowWorkflowSchedulesPanel(true)}
+                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Schedules"
+                  >
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>{scheduleTooltip}</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
                     onClick={runPulseNow}
                     disabled={!canWriteWorkflow || manualPulseStarting}
                     className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
@@ -908,22 +983,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 label="Automation operations"
                 icon={<MoreHorizontal className="h-3.5 w-3.5" />}
               >
-                {(close) => (
-                  <>
-                    <CompactToolbarMenuItem
-                      icon={(
-                        <span className="relative">
-                          <CalendarClock className="h-3.5 w-3.5" />
-                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
-                        </span>
-                      )}
-                      label="Schedules"
-                      detail={scheduleTooltip.replace(/^Schedules · /, '')}
-                      onClick={() => {
-                        setShowWorkflowSchedulesPanel(true)
-                        close()
-                      }}
-                    />
+                  {(close) => (
+                    <>
                     <CompactToolbarMenuItem
                       icon={(
                         <span className="relative">

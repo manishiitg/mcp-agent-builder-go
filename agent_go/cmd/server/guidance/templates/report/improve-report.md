@@ -83,20 +83,20 @@ MODE
 - Never invent data. If a useful section needs data the workflow does not persist, return the missing-data requirement for the Pulse Fixer or Goal Advisor.
 
 PASS 1 — STRUCTURAL VALIDATION REVIEW
-Inspect each `db/reports/*.html` page directly. The parent Pulse Fixer will
+Inspect `db/reports/index.html` directly, including each internal section/view. The parent Pulse Fixer will
 call `validate_report_html` before and after any edit. Treat a missing title,
 invalid HTML root, broken live-data query, or inaccessible referenced asset as
 a concrete report defect; propose its exact repair before presentation work.
 
 PASS 2 — IMPROVEMENT SUGGESTIONS
 Use a rendered Report-tab view supplied by the parent when available, then read
-the actual document file(s) under `db/reports/`. If no view was supplied, say
+the actual `db/reports/index.html` document. If no view was supplied, say
 so and inspect the raw responsive HTML/CSS/JS without pretending to have seen
 the rendering. For HTML reports, also sample the data they read: run their
 queries against `db/db.sqlite` (`sqlite3 db/db.sqlite ".schema"` + `SELECT ... LIMIT`), and check `db/assets/`, `knowledgebase/context/context.md`, and `knowledgebase/notes/`. Use the available view plus raw data/document to propose improvements in these categories:
 
 1. **Live vs stale.** The report is HTML; it should read its numbers live via `window.report.query` so it never goes stale. Flag any report that hardcodes data as static text (it should query the db instead), or that depends on a workflow step regenerating it each run (it shouldn't — author once, read live).
-2. **Layout (insight-first / inverted pyramid).** Does it lead with the answer? Canonical skeleton: conditional alert/status banner → headline KPI tiles → the key supporting chart → detailed tables last. A report should read like a briefing (answer first, evidence below), not a data dump. For multiple pages, is each page a distinct coherent briefing?
+2. **Layout (insight-first / inverted pyramid).** Does it lead with the answer? Canonical skeleton: conditional alert/status banner → headline KPI tiles → the key supporting chart → detailed tables last. A report should read like a briefing (answer first, evidence below), not a data dump. When it has internal views, does each view answer a distinct question?
 3. **Live-data correctness (HTML).** Do the `window.report.query` SQL statements hit the right tables/columns? Do the joins/aggregation/sort/limit happen in SQL (one `SELECT ... JOIN ... GROUP BY ... ORDER BY ... LIMIT`) rather than fetching everything and reshaping in JS, or relying on a pre-flattened helper table? Collapse derived/helper tables back to a query against the canonical tables.
 4. **Visualization fit.** For each chart, is bar/line/area/pie right for the data? (bar=categorical, line=time series, pie=composition ≤6 slices.) Are numbers shown as tables (right-aligned, tabular-nums), not raw JSON/logs?
 5. **Theme & color.** Does it follow the app's light/dark theme — keying off the `.dark`/`data-theme` and the `report:theme` event, or using the injected `hsl(var(--token))` palette? Is contrast **WCAG AA in BOTH themes**? Use semantic colour only for meaning (ok/attention/fail), not decoration.

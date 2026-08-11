@@ -41,6 +41,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractExecutivePulseJournalVersion,
 		workflowContractArtifactPurityVersion,
 		workflowContractLearningsLockAuditVersion,
+		workflowContractDirectHTMLReportsVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -103,9 +104,42 @@ Pulse state is SQLite-backed and shown only in the Pulse popup. Do not create, r
 
 Then inspect workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md and referenced learning Markdown, plus knowledgebase notes. Remove only shared AgentWorks transport, MCP bridge, Folder Guard, managed-tool, tool-discovery, or native-session mechanics from workflow-authored prose. Preserve domain-specific inputs, outputs, side effects, safety boundaries, acceptance criteria, selectors, external API behavior, and recovery knowledge. Use the normal typed plan/config tools for plan changes. Re-read every changed artifact and validate the plan/config. If a rewrite is ambiguous, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.21") and stop.`
 
+const upgradeDirectHTMLReports = `WORKFLOW CONTRACT UPGRADE: DIRECT HTML REPORT PAGES.
+
+This workflow predates the direct HTML report-page contract. Migrate its report
+documents agentically; do not replace them with generic placeholders, wrappers,
+iframes, or an empty navigation shell.
+
+First inspect reports/report_plan.json when it exists. In its existing section and
+entry order, inventory every enabled HTML file widget and read every complete source
+document, including old sources outside the report folder such as db/report.html.
+Also inventory immediate db/reports/*.html files so useful report content
+that was not registered in the old plan is preserved.
+
+Compose one complete standalone report at db/reports/index.html. The platform does
+not create report tabs or navigation: this HTML owns the entire user experience and
+may choose tabs, a sidebar, anchored sections, expandable panels, or one scrolling
+briefing according to the workflow's reporting needs. Preserve the old primary
+dashboard, SQL, window.report calls, scripts, styles, media references, and all
+useful user-visible content. Consolidate secondary documents as coherent sections
+or views inside index.html rather than exposing their filenames as platform pages.
+Historical setup/choice artifacts should be linked or placed in a clearly secondary
+view, not presented as peers of the operational dashboard. Ensure index.html has a
+meaningful <title>. Fix relative asset references only when consolidation changes
+their resolution. Do not change what the report measures during this migration.
+
+Validate db/reports/index.html with validate_report_html. Re-read it and confirm
+every enabled old-plan document is represented, including the primary dashboard,
+and that its internal navigation exposes every intended reporting section. Only
+after that verification, delete the retired reports/report_plan.json and superseded
+standalone report HTML files; retain their media assets. Do not delete any old source
+until index.html has passed validation. Do not run the workflow. If a source is
+missing or the consolidation is ambiguous, report the blocker and do not stamp.
+Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
-// workflows still need. They are deliberately grouped into five bounded,
+// workflows still need. They are deliberately grouped into bounded,
 // blocking preflight turns rather than replaying the old 21-turn HTML chain.
 func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpgrade {
 	version := workflowContractVersionForUpgrade(manifest)
@@ -114,7 +148,7 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 		return nil
 	}
 
-	steps := make([]workflowVersionUpgrade, 0, 5)
+	steps := make([]workflowVersionUpgrade, 0, 7)
 	if rank < 10 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractMessageSequenceCodeVersion, label: "upgrade-message-sequence-code", query: upgradeMessageSequenceCode})
 	}
@@ -133,7 +167,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 20 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractArtifactPurityVersion, label: "upgrade-current-artifact-contract", query: upgradeCurrentArtifactContract})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-learnings-lock-audit", query: upgradeLearningsLockAudit})
+	if rank < 21 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractLearningsLockAuditVersion, label: "upgrade-learnings-lock-audit", query: upgradeLearningsLockAudit})
+	}
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
 	return steps
 }
 

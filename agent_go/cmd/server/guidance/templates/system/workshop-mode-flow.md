@@ -128,7 +128,7 @@ Workshop is for the run/eval/classify/act loop. If the user asks about:
 
 - **Report documents (HTML/Markdown), themes, tabs, custom colors** → handle them
   here with the report-plan tools. Workshop can maintain
-  `reports/report_plan.json` when report changes need to reflect
+  `db/reports/index.html` when report changes need to reflect
   run/eval evidence.
 - **Greenfield workflow design — adding new execution steps or
   defining a new workflow's structure from scratch** → handle it here.

@@ -40,7 +40,7 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
    - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance
    - relevant `knowledgebase/notes/` content and KB access/contribution settings; treat `knowledgebase/context/` as read-only user-owned context
    - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers
-   - report HTML/SQL/data contracts and `reports/report_plan.json` when present
+   - `db/reports/index.html`, its internal views, SQL, and data contracts; flag a remaining `reports/report_plan.json` as an incomplete version migration
    - `evaluation/evaluation_plan.json`, `evaluation/step_config.json`, and matching goal/success-criteria coverage
    - one representative recent run for changed runtime behavior when evidence exists
    - for any changed status, strategy, feature flag, guard, routing rule, or

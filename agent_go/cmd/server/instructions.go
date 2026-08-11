@@ -141,7 +141,7 @@ Keep workflow-related files under the active workflow folder so they stay with t
 
 ` + "```" + `
 ` + absWorkflowFolder + `/
-  db/reports/*.html       ← standalone live report pages
+  db/reports/index.html   ← complete workflow-owned live report UI
   db/                     ← structured workflow state and results
   knowledgebase/          ← durable narrative knowledge
   runs/                   ← execution outputs
@@ -251,7 +251,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - ` + "`runs/iteration-{N}/{group-name}/logs/{step-id}/`" + ` — per-step logs (see Log Layout below). Generated nested routes may use composite folders; inspect the actual directory for those executions.
 
 **Reports & evaluation:**
-- ` + "`db/reports/*.html`" + ` — standalone live report pages rendered one at a time by the Report tab; each reads ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `. Its ` + "`<title>`" + ` supplies the page label; optional ` + "`<meta name=\"report-order\" content=\"10\">`" + ` controls ordering.
+- ` + "`db/reports/index.html`" + ` — the complete workflow-owned reporting experience. It reads ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + ` and owns any tabs, sidebar, sections, or scrolling layout; the platform adds no report navigation.
 - ` + "`reports/{group-name}/{timestamp}.md`" + ` — legacy/auxiliary finished-run prose when present; not the live report dashboard contract
 - ` + "`evaluation/runs/{runFolder}/evaluation_report.json`" + ` — evaluation step outputs and evidence (eval pipeline only, separate from normal runs)
 - ` + "`evaluation/runs/iteration-0/`" + ` — ephemeral eval sandbox used during evaluation execution
@@ -299,7 +299,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
    - "What does the workflow know about X?" → ` + "`knowledgebase/context/context.md`" + ` for user-supplied runtime context, then ` + "`knowledgebase/notes/_index.json`" + ` plus selected ` + "`knowledgebase/notes/*.md`" + ` for narratives.
    - "How does the workflow do X?" → ` + "`learnings/_global/SKILL.md`" + `.
    - "Why does the workflow exist / what's its goal?" → ` + "`soul/soul.md`" + ` (objective, success criteria).
-   - "Latest results / most recent report?" → ` + "`db/reports/*.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
+   - "Latest results / most recent report?" → ` + "`db/reports/index.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
 3. **Synthesize a direct answer** grounded in what you read. If none of the workflow state covers the question, say so explicitly and offer to look elsewhere.
 
 **Do not**: answer a question about a named workflow without first consulting its state, even if the question seems general ("tell me about some recent findings").
@@ -865,7 +865,7 @@ func buildSingleWorkflowContext(client *skills.WorkspaceAPIClient, wsPath string
 - Per-step saved scripts: `+"`%s/learnings/{step_id}/main.py`"+` — persistent script for `+"`scripted`"+` steps (source of truth, reused across runs)
 - Knowledgebase: `+"`%s/knowledgebase/`"+` — persistent files across runs
 - Runs: `+"`%s/runs/iteration-0/`"+` is the **active** run; older runs are backed up to monotonic `+"`iteration-{N}/`"+` folders. `+"`workflow.json::run_retention_count`"+` controls how many backups are kept; default 5. Per-run layout: `+"`runs/iteration-{N}/{group}/execution/{step-id}/code/main.py`"+` for working main.py copies.
-- Live report dashboard: `+"`%s/db/reports/*.html`"+` — standalone HTML pages that read `+"`db/db.sqlite`"+` through `+"`window.report`"+`; the page `+"`<title>`"+` is its navigation label and report assets live under `+"`%s/db/assets/`"+`
+- Live report dashboard: `+"`%s/db/reports/index.html`"+` — one complete HTML experience that reads `+"`db/db.sqlite`"+` through `+"`window.report`"+`, owns its internal navigation, and uses report assets under `+"`%s/db/assets/`"+`
 - Legacy finished-run prose: `+"`%s/reports/{group-name}/{timestamp}.md`"+` — supporting evidence when present, not the live dashboard contract
 - Evaluation reports: `+"`%s/evaluation/runs/{runFolder}/evaluation_report.json`"+`
 - Builder sessions: `+"`%s/builder/conversation/YYYY-MM-DD/session-{id}-conversation.json`"+` — workshop chat histories

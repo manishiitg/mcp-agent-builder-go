@@ -2178,7 +2178,7 @@ func RegisterEvaluationValidationTools(
 }
 
 // RegisterHTMLReportTools registers the HTML-only report contract for a
-// workflow-builder session. A report page is a db/reports/*.html file; the
+// workflow-builder session. The report is db/reports/index.html; the
 // frontend discovers those files directly rather than reading a JSON layout.
 func RegisterHTMLReportTools(
 	mcpAgent DefinitionToolRegistrar,

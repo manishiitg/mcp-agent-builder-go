@@ -2174,7 +2174,7 @@ export type ReportSectionLayout = ReportPlanDocumentSectionLayout;
 // can rely on it being defined — the schema makes it optional because Go's
 // omitempty allows it to be absent on the wire.
 //
-// HTML report documents render stored artifacts and read db/db.sqlite live via
+// The workflow-owned HTML report document renders stored artifacts and reads db/db.sqlite live via
 // window.report. Native interaction widgets have no `source`; they persist
 // configured user responses to the workflow database.
 export type ReportWidget = ReportPlanDocumentWidget & {

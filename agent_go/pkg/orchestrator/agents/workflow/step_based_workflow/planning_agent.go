@@ -3393,7 +3393,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
 	b.WriteString("- KB: if business context or notes consumed/produced changed, update knowledgebase_access, knowledgebase_contribution, and description references.\n")
 	b.WriteString("- Scripted code: if this step uses scripted/code execution or learnings/" + stepID + "/main.py exists, patch or regenerate main.py, or delete stale script state when returning to agentic execution.\n")
-	b.WriteString("- Downstream wiring: if semantics changed, review db/reports/*.html, evaluation/evaluation_plan.json, routes, and downstream context_dependencies.\n")
+	b.WriteString("- Downstream wiring: if semantics changed, review db/reports/index.html, evaluation/evaluation_plan.json, routes, and downstream context_dependencies.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }
@@ -3419,7 +3419,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("- DB: decide whether the step reads/writes db/ files; update db/README.md and schemas/merge rules if it does.\n")
 	b.WriteString("- KB: decide knowledgebase_access and knowledgebase_contribution for business context and notes.\n")
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
-	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/*.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
+	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/index.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }
@@ -3441,7 +3441,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	b.WriteString("- Pre-validation: remove validation schemas that validate deleted-step outputs and update schemas that depended on them.\n")
 	b.WriteString("- Learnings/code: remove or archive stale learnings/<step-id>/ content and main.py scripts, unless intentionally kept as reusable docs.\n")
 	b.WriteString("- DB/KB: remove stale db writers/readers, db/README.md mentions, knowledgebase references, and contribution rules tied to deleted steps.\n")
-	b.WriteString("- Reports/evals/docs: update db/reports/*.html, evaluation/evaluation_plan.json, and docs that referenced deleted outputs.\n")
+	b.WriteString("- Reports/evals/docs: update db/reports/index.html, evaluation/evaluation_plan.json, and docs that referenced deleted outputs.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"deleted steps\").")
 	return b.String()
 }

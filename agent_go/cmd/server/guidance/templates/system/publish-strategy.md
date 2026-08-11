@@ -76,7 +76,7 @@ publish secrets, `db/db.sqlite` raw, credentials, or `.env`/key files.
 
 A live report won't work on static hosting. Bake it to static HTML at publish time:
 
-1. **Find the queries.** Read the report HTML (and `reports/report_plan.json`) and collect
+1. **Find the queries.** Read `db/reports/index.html`, including each internal view, and collect
    every `window.report.query("…")` SQL string it runs.
 2. **Run them** against `db/db.sqlite` (`sqlite3 -json db/db.sqlite "<sql>"`), capturing each
    result set as JSON.

@@ -605,7 +605,7 @@ priority and historical run context.
 | [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-074](pulse_platform/plat-074.md) |
 | [PLAT-075](pulse_platform/plat-075.md) | [PLAT-076](pulse_platform/plat-076.md) | [PLAT-077](pulse_platform/plat-077.md) | [PLAT-078](pulse_platform/plat-078.md) |
 | [PLAT-080](pulse_platform/plat-080.md) | [PLAT-081](pulse_platform/plat-081.md) | [PLAT-082](pulse_platform/plat-082.md) | [PLAT-083](pulse_platform/plat-083.md) |
-| [PLAT-084](pulse_platform/plat-084.md) |  |  |  |
+| [PLAT-084](pulse_platform/plat-084.md) | [PLAT-085](pulse_platform/plat-085.md) |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

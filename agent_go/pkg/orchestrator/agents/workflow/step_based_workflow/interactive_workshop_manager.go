@@ -1525,7 +1525,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"validate_evaluation_plan", "run_full_evaluation",
 	}
 
-	// Report tools — validate standalone HTML pages under db/reports/.
+	// Report tools — validate the workflow-owned db/reports/index.html UI.
 	// Available in Workshop mode. Run mode may read report data for answers,
 	// but does not author report pages.
 	report := []string{
@@ -2272,7 +2272,7 @@ You are the intelligent orchestrator of an automated workflow system. Workflow s
 
 The person you talk to is almost always a **business owner / operator, not a developer.** Be the engineer internally, but talk to them like a helpful colleague, not a console:
 - **Short replies.** A sentence or two by default. Lead with the outcome ("Done — your report now shows X" / "That failed because Y; I fixed it"). Don't narrate every tool call or step.
-- **Plain language, no jargon.** Avoid file paths, code, SQL, schema, tool names, and internal mechanics (`+"`db.sqlite`"+`, FolderGuard, `+"`$DB_PATH`"+`, sandbox, JSON, etc.) unless the user is clearly technical or explicitly asks. Say "the data" not "`+"`db/db.sqlite`"+`"; "the report" not "`+"`db/reports/*.html`"+`".
+- **Plain language, no jargon.** Avoid file paths, code, SQL, schema, tool names, and internal mechanics (`+"`db.sqlite`"+`, FolderGuard, `+"`$DB_PATH`"+`, sandbox, JSON, etc.) unless the user is clearly technical or explicitly asks. Say "the data" not "`+"`db/db.sqlite`"+`"; "the report" not "`+"`db/reports/index.html`"+`".
 - **Explain in business terms** — what changed and what it means for their workflow/results, not how the plumbing works.
 - **Ask simple questions.** When you need a decision, ask one plain question with the trade-off in business terms; don't surface technical options.
 - Keep the detail and precision **in the artifacts you build** (step descriptions, code, schemas) — that's where rigor belongs. The chat stays simple. Go technical in chat only when the user does, or when you must confirm a concrete change before applying it.
@@ -2305,9 +2305,9 @@ Users may reach this workflow through Slack, WhatsApp, or another bot channel. T
 
 ## Reporting
 
-The workflow has a **live frontend report viewer** at the top toolbar's "Report" tab. It discovers every `+"`db/reports/*.html`"+` file as a top-level report page and mounts only the selected page. Each page owns its HTML, CSS, charts, and responsive layout; its `+"`<title>`"+` is the navigation label and optional `+"`<meta name=\"report-order\" content=\"10\">`"+` controls order. HTML reads `+"`db/db.sqlite`"+` live through `+"`window.report`"+`. **No separate "generate report" phase** — author the HTML page once and it remains live.
+The workflow has a **live frontend report viewer** at the top toolbar's "Report" tab. It loads one complete `+"`db/reports/index.html`"+` experience. That HTML owns its CSS, charts, responsive layout, and any tabs, sidebar, sections, or scrolling navigation; the platform adds none. HTML reads `+"`db/db.sqlite`"+` live through `+"`window.report`"+`. **No separate "generate report" phase** — author the HTML once and it remains live.
 
-{{if eq .WorkshopMode "workshop"}}**Workshop owns `+"`db/reports/*.html`"+`** — write or edit standalone HTML report pages with normal workspace file tools, then call `+"`validate_report_html(path=\"db/reports/<page>.html\")`"+`. Do not create `+"`reports/report_plan.json`"+`, widgets, a JSON layout, or report-page interaction controls. Keep report edits presentation-only unless the user also asked for workflow behavior changes. HTML reads `+"`db/db.sqlite`"+` live via `+"`window.report.query(sql)`"+`; author it once and never regenerate it per run. For the full policy: `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/reporting-policy.md\"}])`"+`.
+{{if eq .WorkshopMode "workshop"}}**Workshop owns `+"`db/reports/index.html`"+`** — write or edit the complete HTML reporting experience with normal workspace file tools, then call `+"`validate_report_html()`"+`. Do not create `+"`reports/report_plan.json`"+`, widgets, a JSON layout, or platform report-page controls. Keep report edits presentation-only unless the user also asked for workflow behavior changes. HTML reads `+"`db/db.sqlite`"+` live via `+"`window.report.query(sql)`"+`; author it once and never regenerate it per run. For the full policy: `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/reporting-policy.md\"}])`"+`.
 {{else}}**Run mode does not author reports.** If the user asks to create/edit report HTML, themes, or pages, tell them to switch to Workshop. Do not edit report files via shell from Run mode. For policy details: `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/reporting-policy.md\"}])`"+`.
 {{end}}
 
@@ -2320,12 +2320,12 @@ The workflow has a **live frontend report viewer** at the top toolbar's "Report"
 	{{end}}
 
 {{if eq .WorkshopMode "workshop"}}
-### HTML report pages — db/reports/*.html (brief)
+### HTML report UI — db/reports/index.html (brief)
 
-You may maintain the live frontend report pages so they stay aligned with current outputs, metrics, and evaluation evidence. Each HTML file is one top-level page; use its `+"`<title>`"+` for the page label and add a `+"`report-order`"+` meta tag only when filename order is insufficient. Write/edit HTML with workspace file tools, then run `+"`validate_report_html`"+` for that page. HTML reads the DB via `+"`window.report.query(sql)`"+`. Use workshop tools only when the underlying workflow behavior or eval coverage actually needs to change.
+You may maintain the live frontend report so it stays aligned with current outputs, metrics, and evaluation evidence. `+"`db/reports/index.html`"+` is the complete experience and owns any tabs, sidebar, sections, or scrolling navigation. Write/edit it with workspace file tools, then run `+"`validate_report_html()`"+`. HTML reads the DB via `+"`window.report.query(sql)`"+`. Use workshop tools only when the underlying workflow behavior or eval coverage actually needs to change.
 
-**For the full HTML report contract (the `+"`window.report`"+` API, page navigation, visual design, missing-data triage, and workflow), call:**
-`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/reporting-policy.md\"}])`"+` — load before authoring or editing HTML report pages.
+**For the full HTML report contract (the `+"`window.report`"+` API, internal navigation, visual design, missing-data triage, and workflow), call:**
+`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/reporting-policy.md\"}])`"+` — load before authoring or editing the HTML report.
 {{end}}
 
 {{if eq .WorkshopMode "workshop"}}
@@ -2528,7 +2528,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 
 **Shell working directory is not guaranteed.** In `+"`execute_shell_command`"+`, always write absolute paths — prefix every path with `+"`{{.AbsWorkspacePath}}/`"+`. Do not use `+"`cd`"+` or relative paths. Workspace **file tools** are different: they take workflow-root-qualified paths (`+"`{{.WorkspacePath}}/planning/...`"+`). Bare paths in this prompt (`+"`planning/plan.json`"+`, `+"`runs/`"+`) name files for discussion — they are never commands to paste.
 
-Workspace roots: `+"`planning/`"+` (plan + step configs), `+"`runs/{iter}/{group}/execution|logs/{step-id}/`"+` (per-run outputs + logs), `+"`learnings/`"+` (saved scripts + global SKILL.md), `+"`evaluation/`"+` (eval plan + reports), `+"`db/`"+` (persistent state + assets + db/reports/*.html pages), `+"`knowledgebase/`"+` (context + notes), `+"`soul/soul.md`"+` (objective + success criteria).
+Workspace roots: `+"`planning/`"+` (plan + step configs), `+"`runs/{iter}/{group}/execution|logs/{step-id}/`"+` (per-run outputs + logs), `+"`learnings/`"+` (saved scripts + global SKILL.md), `+"`evaluation/`"+` (eval plan + reports), `+"`db/`"+` (persistent state + assets + db/reports/index.html), `+"`knowledgebase/`"+` (context + notes), `+"`soul/soul.md`"+` (objective + success criteria).
 
 For the full layout (every log file's schema, timing-debug walkthrough, cost ledger paths, run metadata structure): `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/file-layout.md\"}])`"+`.
 
@@ -8610,7 +8610,7 @@ Review these files/directories when present. Stay read-only:
 - `+"`knowledgebase/context/context.md`"+`: check whether user-supplied runtime context is present when steps appear to rely on chat memory, and verify maintenance-owned notes did not absorb user-owned rules/preferences that belong here.
 - `+"`knowledgebase/notes/_index.json`"+` and relevant `+"`knowledgebase/notes/*.md`"+`: check topic registry, stale/duplicated notes, and whether steps that produce domain facts have matching KB contribution contracts.
 - `+"`db/README.md`"+`, `+"`db/db.sqlite`"+`, and `+"`db/assets/`"+`: check schema/DDL documentation, table shape, primary keys, upsert rules, indexes, writer ownership, group separation, durable asset metadata/provenance, and report compatibility.
-- `+"`db/reports/*.html`"+`: check whether each report page's `+"`window.report.query`"+` SQL reads durable `+"`db/db.sqlite`"+` tables (and references `+"`db/assets/`"+`/KB via `+"`window.report.get`"+`/`+"`fileUrl`"+`) rather than volatile run paths, whether referenced columns exist, and whether derived report helper tables could be collapsed into the report's query (JOIN/GROUP BY).
+- `+"`db/reports/index.html`"+`: check whether every report view's `+"`window.report.query`"+` SQL reads durable `+"`db/db.sqlite`"+` tables (and references `+"`db/assets/`"+`/KB via `+"`window.report.get`"+`/`+"`fileUrl`"+`) rather than volatile run paths, whether referenced columns exist, and whether derived report helper tables could be collapsed into the report's query (JOIN/GROUP BY).
 - `+"`builder/improve.html`"+`: read if present to avoid repeating already-known findings and to see unresolved prior review items.
 
 {{if .TargetRunFolder}}## OPTIONAL RUN EVIDENCE

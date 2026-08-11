@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-// PLAT-055 / J. WorkflowContractCurrentVersion moved 1.0.21 -> 1.0.22 to add
+// PLAT-055 / J. The learnings-lock audit remains its own 1.0.22 boundary even
+// after later contract upgrades are added.
 // the learnings-lock audit as a mandatory final preflight. The regression this
 // guards against is real: workflowContractArtifactPurityVersion ("1.0.21")
 // sits at rank 20 in the known-version list, one below the new audit's rank
@@ -14,14 +15,17 @@ import (
 
 func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.21"})
-	if len(plan) != 1 {
-		t.Fatalf("plan from 1.0.21 = %d steps, want exactly 1 (the new audit only): %+v", len(plan), plan)
+	if len(plan) != 2 {
+		t.Fatalf("plan from 1.0.21 = %d steps, want audit then direct-report migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-learnings-lock-audit" {
 		t.Fatalf("plan[0].label = %q, want upgrade-learnings-lock-audit", plan[0].label)
 	}
-	if plan[0].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[0].to = %q, want %q", plan[0].to, WorkflowContractCurrentVersion)
+	if plan[0].to != workflowContractLearningsLockAuditVersion {
+		t.Fatalf("plan[0].to = %q, want %q", plan[0].to, workflowContractLearningsLockAuditVersion)
+	}
+	if plan[1].label != "upgrade-direct-html-reports" || plan[1].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[1] = %+v, want direct-report migration reaching current version", plan[1])
 	}
 	for _, label := range []string{"upgrade-current-artifact-contract"} {
 		for _, step := range plan {
@@ -34,14 +38,17 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 
 func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.20"})
-	if len(plan) != 2 {
-		t.Fatalf("plan from 1.0.20 = %d steps, want exactly 2 (artifact-purity then audit): %+v", len(plan), plan)
+	if len(plan) != 3 {
+		t.Fatalf("plan from 1.0.20 = %d steps, want artifact-purity, audit, then report migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-current-artifact-contract" || plan[0].to != workflowContractArtifactPurityVersion {
 		t.Fatalf("plan[0] = %+v, want the 1.0.21 purification step first", plan[0])
 	}
-	if plan[1].label != "upgrade-learnings-lock-audit" || plan[1].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[1] = %+v, want the learnings-lock audit reaching current version", plan[1])
+	if plan[1].label != "upgrade-learnings-lock-audit" || plan[1].to != workflowContractLearningsLockAuditVersion {
+		t.Fatalf("plan[1] = %+v, want the learnings-lock audit reaching 1.0.22", plan[1])
+	}
+	if plan[2].label != "upgrade-direct-html-reports" || plan[2].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[2] = %+v, want direct-report migration reaching current version", plan[2])
 	}
 }
 

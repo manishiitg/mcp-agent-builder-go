@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PulseFindingLifecycle } from '../../services/api-types'
-import { pulseFindingPresentation } from './pulseFindingPresentation'
+import { pulseFindingPresentation, pulseFindingProgress } from './pulseFindingPresentation'
 
 function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
@@ -45,5 +45,29 @@ describe('pulse finding action lanes', () => {
         recorded_at: '2026-08-08T00:00:00Z',
       }],
     }))).toMatchObject({ queue: 'waiting_proof', label: 'Waiting for next run' })
+  })
+
+  it('uses the latest verification instead of a historical pass', () => {
+    const record = finding({
+      verifications: [
+        {
+          check: 'Global learning skill size and purity',
+          verdict: 'failed',
+          expected: 'The learning skill stays within its compact, pure-skill contract.',
+          observed: 'The file still exceeds the contract.',
+          verified_at: '2026-08-06T00:00:00Z',
+        },
+        {
+          check: 'Contradictory claims removed',
+          verdict: 'passed',
+          verified_at: '2026-08-05T00:00:00Z',
+        },
+      ],
+    })
+
+    expect(pulseFindingPresentation(record)).toMatchObject({
+      queue: 'needs_action', label: 'Verification failed',
+    })
+    expect(pulseFindingProgress(record).find((step) => step.label === 'Verified')?.state).not.toBe('done')
   })
 })

@@ -43,6 +43,12 @@ function titleCase(value: string): string {
   return value.replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
+function latestVerification(finding: PulseFindingLifecycle): PulseFindingVerification | undefined {
+  // The lifecycle API returns verification records newest-first. A historical
+  // passing check must not hide a later failed check on the same finding.
+  return finding.verifications[0]
+}
+
 /**
  * The raw step_id is the durable origin of a finding. `module` may be a
  * normalized grouping (for example an old bug_review is grouped under the new
@@ -131,7 +137,7 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
   }
 
   if (finding.status === 'awaiting_verification') {
-    const failed = finding.verifications.some((verification) => verification.verdict === 'failed')
+    const failed = latestVerification(finding)?.verdict === 'failed'
     return {
       label: failed ? 'Verification failed' : 'Fix applied · needs verification',
       queue: failed ? 'needs_action' : 'waiting_proof',
@@ -161,6 +167,16 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       nextAction: finding.resolution_note?.trim()
         || finding.details?.next_check?.trim()
         || 'Pulse will select this safe repair in a later Engineering pass.',
+    }
+  }
+
+  if (finding.status === 'open' && latestVerification(finding)?.verdict === 'failed') {
+    return {
+      label: 'Verification failed',
+      queue: 'needs_action',
+      tone: 'danger',
+      nextAction: finding.resolution_note?.trim()
+        || 'The latest verification failed; Pulse must reopen the repair and check it again.',
     }
   }
 
@@ -264,7 +280,7 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
     || presentation.queue === 'resolved'
   const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
     || ['changed_unverified', 'fixed_verified'].includes(disposition)
-  const verified = finding.verifications.some((verification) => verification.verdict === 'passed')
+  const verified = latestVerification(finding)?.verdict === 'passed'
     || ['fixed_verified', 'verified_no_change'].includes(disposition)
   const closed = presentation.queue === 'resolved'
   const flags = [true, diagnosed, fixApplied, verified, closed]
