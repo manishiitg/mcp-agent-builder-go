@@ -1,17 +1,31 @@
 ## Pulse Gate / Worklist
 
 **TEMPORARY — core-system verification phase.** Do not select `goal_advisor`
-or `strategy_auditor` as due for any workflow, regardless of evidence, cadence,
-or how long they have been deferred. Record each as skipped with reason
+as due for any workflow, regardless of evidence, cadence, or how long it has
+been deferred. Record it as skipped with reason
 `"temporarily disabled for core-system verification"` and a
 `next_check_after_run_id` rather than a time boundary.
 
-`llm_ops_review` was re-enabled on 2026-08-10 by operator decision, ahead of the
-other two, because the same workflows are run repeatedly: per-run inefficiency
-compounds every cycle, and this is the only lens that can see it or judge a
-default-tier change against outcome. So **`workflow_review` and
-`llm_ops_review` are the two selectable modules**; the two-module cap is now
-reachable, and the ranking rule below decides between them.
+Two lenses have since been restored by operator decision.
+`llm_ops_review` on 2026-08-10, because the same workflows are run repeatedly:
+per-run inefficiency compounds every cycle, and it is the only lens that can
+see that or judge a default-tier change against outcome. `strategy_auditor` on
+2026-08-11, because engineering correctness is not the same question as whether
+the strategy can reach the goal — a workflow can run flawlessly and still be
+pointed somewhere that will never arrive, and nothing else in the loop asks
+that. So **`workflow_review`, `llm_ops_review` and `strategy_auditor` are the
+three selectable modules**; the two-module cap now genuinely binds, and the
+ranking rules below decide which two.
+
+**`strategy_auditor` needs longitudinal evidence, not a free slot.** It judges
+whether the current strategy and measurement system can reach the goal, which
+requires enough accumulated outcome history to see a trend. Select it when
+there is a real product/measurement question its evidence can settle — a goal
+metric that is flat or unmeasurable, a measurement system that cannot answer
+its own success criterion, a strategy contradicted by recorded outcomes — and
+not merely because engineering has nothing due this run. When it is not
+selected, skip it with a `next_check_after_run_id` boundary so it returns on
+evidence rather than on a clock.
 
 **Engineering Review keeps priority when it has real work.** Drainage, not
 detection, is the current bottleneck — the backlog is heavily weighted toward
@@ -27,16 +41,18 @@ all of it at once would bury the drainage work this phase exists to protect.
 Lead with the highest-value few, grounded in measurement, and defer the rest
 with a concrete next-check boundary rather than filing everything it can see.
 
-This still narrows Pulse to a small loop: **steps raise concerns → Engineering
-Review repairs them**, plus cost/structural review. The priority remains
-confirming that basic workflow execution, the reflection turn (PLAT-055) and
-the scheduler watchdog (PLAT-054) work on real producing runs before layering
-strategy or goal review back on top. Note that suppressing any lens also
+This still narrows Pulse: **steps raise concerns → Engineering Review repairs
+them**, plus cost/structural review and now strategy review. The remaining
+suppression is `goal_advisor` alone — exploring materially different approaches
+is the one lens whose value depends on the current approach having been
+measured first, which is what `strategy_auditor` re-entering is meant to
+establish. Note that suppressing any lens also
 reduces new finding volume on its own — a shrinking backlog while a lens is off
 is suppression, not evidence that a platform fix worked, and re-enabling one
 will legitimately raise the count without anything having got worse.
 
-Remove this section to restore normal four-module selection.
+Remove this section to restore normal four-module selection (`goal_advisor` is
+all that remains suppressed).
 
 Use only for the scheduler's Gate stage — a progressive evidence scan, not a
 full audit or fixer.
