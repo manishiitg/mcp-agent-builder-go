@@ -2896,11 +2896,12 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			// baseline-free check: the pre-run snapshot can itself be lost
 			// (PLAT-070), and an empty baseline would make every folder look new
 			// and answer "evidence" unconditionally — the opposite error.
-			if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil {
-				if workshopRunStartedDuringInvocation(folders, invocationStartedAt) {
-					sctx.ProducedRunEvidence = true
-					s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but a run started during this invocation and its own metadata is the authority; preserving run evidence for Pulse", sctx.Schedule.ID)
-				}
+			if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil && workshopRunStartedDuringInvocation(folders, invocationStartedAt) {
+				sctx.ProducedRunEvidence = true
+				s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but a full workflow run started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
+			} else if s.scheduledWorkflowStepProducedEvidence(sessionID, invocationStartedAt) {
+				sctx.ProducedRunEvidence = true
+				s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but scheduled workflow steps started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
 			}
 			return sessionID, runFolder, fmt.Errorf("workshop idle wait failed after turn %d (%s): %w", i+1, turn.label, err)
 		}
@@ -2967,6 +2968,10 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// "success" for a run that fully failed at its first posting step).
 	postRunFolders, postRunFoldersErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	sctx.ProducedRunEvidence = workshopRunProducedEvidence(preRunFolderNames, postRunFolders, invocationStartedAt)
+	if !sctx.ProducedRunEvidence && s.scheduledWorkflowStepProducedEvidence(sessionID, invocationStartedAt) {
+		sctx.ProducedRunEvidence = true
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] scheduled workflow-step executions are this invocation's authoritative Pulse evidence")
+	}
 	if !sctx.ProducedRunEvidence {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] no run folder was created or restarted during this invocation for %s; Pulse evidence-dependent stages will be skipped", sctx.Schedule.ID)
 	}
@@ -3047,6 +3052,31 @@ func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, 
 			if !stamp.IsZero() && !stamp.Before(since) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// scheduledWorkflowStepProducedEvidence recognizes a schedule that deliberately
+// invokes workflow steps with execute_step instead of run_full_workflow. Those
+// executions are attached to the schedule's own session, so they are the same
+// invocation boundary—not a second synthetic workflow run. A generic background
+// agent does not count: only a declared workflow step can make Pulse review the
+// resulting workflow evidence.
+func (s *SchedulerService) scheduledWorkflowStepProducedEvidence(sessionID string, since time.Time) bool {
+	if s == nil || s.api == nil || s.api.bgAgentRegistry == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	for _, agent := range s.api.bgAgentRegistry.GetAll(sessionID) {
+		if agent == nil {
+			continue
+		}
+		snapshot := agent.GetSnapshot()
+		if snapshot.CreatedAt.Before(since) {
+			continue
+		}
+		if snapshot.Kind == "workflow_step" || snapshot.Metadata["execution_type"] == "workflow-step" {
+			return true
 		}
 	}
 	return false

@@ -3656,6 +3656,47 @@ func TestWorkshopRunProducedEvidence(t *testing.T) {
 	}
 }
 
+func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testing.T) {
+	since := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	registry := NewBackgroundAgentRegistry()
+	registry.Register("schedule-session", &BackgroundAgent{
+		ID:        "exec-daily-report-1",
+		SessionID: "schedule-session",
+		Kind:      "workflow_step",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(time.Minute),
+		Metadata:  map[string]string{"execution_type": "workflow-step"},
+	})
+	service := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: registry}}
+	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("a workflow step launched by this schedule must be Pulse evidence")
+	}
+
+	registry.Register("schedule-session", &BackgroundAgent{
+		ID:        "bg-unrelated-1",
+		SessionID: "schedule-session",
+		Kind:      "workshop_background",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(2 * time.Minute),
+	})
+	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("unrelated background work must not erase linked workflow-step evidence")
+	}
+
+	otherRegistry := NewBackgroundAgentRegistry()
+	otherRegistry.Register("schedule-session", &BackgroundAgent{
+		ID:        "bg-only-1",
+		SessionID: "schedule-session",
+		Kind:      "workshop_background",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(time.Minute),
+	})
+	otherService := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: otherRegistry}}
+	if otherService.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("generic background work must not manufacture workflow evidence")
+	}
+}
+
 func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 	reason := `workflow upgrade preflight upgrade-1.0.18 did not stamp required version "1.0.18"; normal schedule message was not started`
 	steps := postRunMonitorNoRunSteps("pulse-run-1", reason, workflowNotificationContentInstructions{
@@ -3802,7 +3843,7 @@ func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T
 	folders := []RunFolderInfo{
 		{Name: "iteration-254", Metadata: &RunMetadata{Status: "completed", StartedAt: since.Add(-2 * time.Hour)}},
 		{Name: "iteration-253", Metadata: &RunMetadata{Status: "failed"}}, // no timestamps
-		{Name: "iteration-252"},                                          // no metadata
+		{Name: "iteration-252"}, // no metadata
 	}
 	if workshopRunStartedDuringInvocation(folders, since) {
 		t.Fatal("older or unstamped runs must not be reported as evidence for this invocation")

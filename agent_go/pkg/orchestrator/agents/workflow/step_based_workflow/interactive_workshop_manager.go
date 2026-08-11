@@ -3171,7 +3171,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				ID:                execID,
 				ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 				Name:              stepDisplayName,
-				Cancel:            cancel,
+				// This is a real workflow step, even when a schedule invokes it
+				// directly instead of through run_full_workflow. The scheduler uses
+				// the declared kind as invocation evidence for Pulse.
+				Kind: string(orchestrator_events.ExecutionKindWorkflowStep),
+				Metadata: map[string]string{
+					"execution_type": "workflow-step",
+				},
+				Cancel: cancel,
 			})
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
 			execCtx = context.WithValue(execCtx, orchestrator_events.ParentExecutionIDKey, execID)
