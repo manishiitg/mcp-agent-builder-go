@@ -26,8 +26,8 @@ graded, not tied to the syllabus, and not something the child requests herself.
    find out?"). Lean on animation and hover more than ordinary study material: this
    page's whole job is to feel alive. It does NOT need to carry the discovery itself.
 
-4. **Finalize** the activity with `teaching_mode: "beginner"` (nothing here is being
-   tested) and a `goal` describing what finishing actually looks like — e.g. "get
+4. **Finalize** the activity with a `goal` describing what finishing actually looks
+   like, and saying plainly that nothing here is being tested — e.g. "get
    through all the facts, hearing her guess for each one first, and end on the
    closing question".
 

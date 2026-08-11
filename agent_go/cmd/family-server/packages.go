@@ -30,7 +30,6 @@ type activityResp struct {
 	// every turn, and is surfaced here so the parent can confirm in the UI
 	// what they actually asked for.
 	Goal         string             `json:"goal,omitempty"`
-	TeachingMode string             `json:"teaching_mode,omitempty"`
 	Persona      string             `json:"persona,omitempty"`
 	CreatedAt    string             `json:"created_at,omitempty"`
 	Attempts     []activityItemResp `json:"attempts,omitempty"`
@@ -68,7 +67,6 @@ func toActivityResp(act Activity) activityResp {
 		Topic:        act.Topic,
 		Items:        items,
 		Goal:         act.Goal,
-		TeachingMode: act.TeachingMode,
 		Persona:      act.Persona,
 		CreatedAt:    act.CreatedAt,
 		Attempts:     attempts,

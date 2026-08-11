@@ -187,8 +187,8 @@ for going-well / to-practise, a `.grid` of `.card`s for the academic map's subje
 `.answered-note` records WHAT she answered and never whether it was right. Write it
 as `✎ Answered: <em>her words</em>` — a pencil, never a tick, and never green. A tick
 and a green note were both being read as "correct" by the parent AND the child, which
-quietly turns a neutral record into a grade the tutor never gave — and under a strict
-`teaching_mode` the tutor must not reveal correctness at all. Marking is the parent's
+quietly turns a neutral record into a grade the tutor never gave — and during a real
+assessment the tutor must not reveal correctness at all. Marking is the parent's
 job, from the answer key.
 
 ## Real pictures

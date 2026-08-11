@@ -772,9 +772,6 @@ details[open] > .fl-tree-dir .fl-tree-icon.is-open { display: block; }
 .fl-act-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 14px 13px; }
 .fl-act-sub { flex: 1; min-width: 0; color: #7a869a; font-size: var(--text-caption); }
 .fl-act-mode { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; background: #eef1f6; color: #5c6d88; font-size: 10.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
-.fl-act-mode.is-learn { background: #eaf7ee; color: #2f8a52; }
-.fl-act-mode.is-practice { background: #eaf2fb; color: #2f6db0; }
-.fl-act-mode.is-test { background: #fdf1de; color: #a9701a; }
 .fl-act-mode.is-live { background: var(--navy); color: #fff; text-transform: none; letter-spacing: 0; }
 .fl-act .fl-package-note, .fl-act .fl-package-goal { margin: 0 14px 12px; }
 .fl-act .fl-file-item { margin: 0 14px 12px; width: auto; }

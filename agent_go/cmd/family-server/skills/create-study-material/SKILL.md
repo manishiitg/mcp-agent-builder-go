@@ -48,9 +48,10 @@ description: Create clear, child-ready study material (notes, worked examples, a
 4. **Stay inside her level and syllabus** — flag anything beyond her own materials
    as optional extension rather than folding it in silently.
 
-5. **Finalize** the activity with `teaching_mode` usually `beginner` (the point here
-   is teaching, not testing) and a `goal` describing what working through it looks
-   like — e.g. "read every section and try the practice questions at the end".
+5. **Finalize** the activity with a `goal` describing what working through it looks
+   like — e.g. "read every section and try the practice questions at the end". Say in
+   it that this is for learning rather than testing, so the tutor knows to teach
+   openly here instead of holding answers back.
 
 6. **Tell the parent** what you made.
 

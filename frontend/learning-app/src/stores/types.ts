@@ -67,7 +67,6 @@ export type Activity = {
   // goal is the one instruction field — what finishing looks like AND how to
   // run it. It absorbed the former separate guide_note.
   goal?: string
-  teaching_mode?: string
   persona?: string
   created_at?: string
   attempts?: ActivityItem[]

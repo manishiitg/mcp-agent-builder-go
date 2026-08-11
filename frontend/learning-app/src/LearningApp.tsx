@@ -186,20 +186,6 @@ function formatDuration(seconds?: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
 }
 
-// activityMode turns an activity's teaching_mode into the one word a parent
-// actually cares about when scanning their library: is this something she'll
-// be taught, something she'll practise, or something she's being tested on?
-// It's already recorded on every activity but was invisible in the UI until
-// now. Colours reuse the app's own long-standing guides/tests/reports tints.
-function activityMode(mode?: string): { label: string; cls: string } | null {
-  switch (mode) {
-    case 'beginner': return { label: 'Learn', cls: 'is-learn' }
-    case 'graduated': return { label: 'Practice', cls: 'is-practice' }
-    case 'strict': return { label: 'Test', cls: 'is-test' }
-    default: return null // older activities predate the field — say nothing rather than guess
-  }
-}
-
 // Which side of the handoff the browser should land on after a refresh.
 // Without this, a refresh always falls back to Parent Mode — letting a child
 // bypass the PIN gate entirely just by reloading the page. Persisted in
@@ -3970,11 +3956,10 @@ export default function LearningApp() {
                     const renderActivities = (acts: Activity[]) => acts.map((act) => {
                       const expanded = expandedActivity === act.dir
                       const openable = act.items.length > 0
-                      const mode = activityMode(act.teaching_mode)
                       const isCurrent = childActivity?.dir === act.dir
                       // Details show for an expanded activity, and always for an
-                      // adaptive one — it has no items to expand, so its guide
-                      // note IS the activity.
+                      // adaptive one — it has no items to expand, so its goal
+                      // IS the activity.
                       const showDetails = expanded || !openable
                       return (
                         <div key={act.dir} className={`fl-act${expanded ? ' is-expanded' : ''}${isCurrent ? ' is-current' : ''}`}>
@@ -3989,9 +3974,7 @@ export default function LearningApp() {
                             {openable && <ChevronDown size={15} className={`fl-act-chev${expanded ? ' is-open' : ''}`} />}
                           </button>
                           <div className="fl-act-row">
-                            {isCurrent
-                              ? <span className="fl-act-mode is-live">With {childName || 'your child'} now</span>
-                              : mode && <span className={`fl-act-mode ${mode.cls}`}>{mode.label}</span>}
+                            {isCurrent && <span className="fl-act-mode is-live">With {childName || 'your child'} now</span>}
                             <span className="fl-act-sub">
                               {openable ? `${act.items.length} part${act.items.length === 1 ? '' : 's'}` : 'Adaptive'}
                               {dateTimeLabel(act.created_at) ? ` · ${dateTimeLabel(act.created_at)}` : ''}
