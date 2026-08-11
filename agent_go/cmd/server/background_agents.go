@@ -323,11 +323,24 @@ func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 	return snap
 }
 
-// SetMetadata stores arbitrary key-value metadata on the agent (thread-safe).
+// SetMetadata merges the given key-value pairs into the agent's existing
+// metadata (thread-safe). A replace-all here would silently wipe
+// registration-time fields (execution_type, workflow_path,
+// suppress_auto_notification, ...) the moment an execution completes, since
+// completion-time callers only know their own subset of keys (iteration,
+// group_name, ...) and have no way to preserve fields set earlier in the
+// execution's lifecycle (PLAT-084 follow-up). An empty/nil value for an
+// existing key still overwrites it — callers that want to clear a key pass
+// it explicitly, same as before; only keys absent from meta are preserved.
 func (a *BackgroundAgent) SetMetadata(meta map[string]string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Metadata = meta
+	if a.Metadata == nil {
+		a.Metadata = make(map[string]string, len(meta))
+	}
+	for k, v := range meta {
+		a.Metadata[k] = v
+	}
 }
 
 // BackgroundAgentRegistry manages background agents across sessions

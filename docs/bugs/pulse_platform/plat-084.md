@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — fixed and tested; runtime reverify pending |
+| Ticket state | `implemented` — main fix + the SetMetadata follow-up both fixed and tested; runtime reverify pending |
 | Last synchronized | `2026-08-11` |
 
 - **Priority:** P0 — Pulse's entire review/fix/publish pipeline was silently
@@ -78,20 +78,31 @@ No sessionID mismatch, no premature reaping of registry entries (confirmed:
 `BackgroundAgentRegistry.Cleanup` is only ever called from the explicit
 `/stop-session` handler, not mid-run).
 
-## A related, independent defect found and NOT yet fixed
+## A related, independent defect — found and fixed (2026-08-11)
 
 While tracing this, found that `OnExecutionComplete` (`delegation.go:~907`)
 calls `agent.SetMetadata(meta)`, and `BackgroundAgent.SetMetadata`
-(`background_agents.go:~326`) **replaces** `Metadata` wholesale rather than
+(`background_agents.go:~326`) **replaced** `Metadata` wholesale rather than
 merging. The completion-time `meta` (`{"iteration", "group_name", "lock_code",
 "workshop_mode"}`) does not include `execution_type`, so every background
 execution's registration-time metadata (`execution_type`, `workflow_path`,
-`preset_query_id`, `execution_source`) is silently wiped the moment it
-completes. This did **not** cause the bug above — `scheduledWorkflowStepProducedEvidence`
-also checks `Kind`, which is set once at `Register` and never mutated by
-`SetMetadata` — but it is a real defect on its own (affects every consumer
-that reads `Metadata` post-completion, not just this one) and should get its
-own fix: merge into `Metadata` instead of overwriting it.
+`preset_query_id`, `execution_source`, `suppress_auto_notification`) was
+silently wiped the moment it completed. This did not cause the bug above —
+`scheduledWorkflowStepProducedEvidence` also checks `Kind`, which is set once
+at `Register` and never mutated by `SetMetadata` — but it's a real defect on
+its own with a genuine behavioral consequence: `OnExecutionComplete` itself
+reads `agent.GetSnapshot().Metadata["suppress_auto_notification"]` (line 924)
+*after* the overwrite, so a caller that suppressed auto-notification at
+registration time would have that suppression silently undone by its own
+completion, firing an unwanted notification.
+
+**Fixed**: `SetMetadata` now merges the given keys into the existing map
+instead of replacing it. A key explicitly present in the completion-time
+`meta` still overwrites (this is a merge, not a "first write wins" union) —
+only keys absent from `meta` are preserved. Tests in
+`plat084_background_agent_metadata_merge_test.go`: registration-time keys
+survive a completion-time call that doesn't mention them; an explicitly
+passed key still overwrites; a nil initial `Metadata` map is handled.
 
 ## Verification
 
