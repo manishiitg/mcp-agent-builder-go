@@ -41,8 +41,19 @@ from her own conversations.
 
 The cover page is just the opening. Once she starts, deliver each fact or beat as its
 own `show_scene`, generated fresh so it can follow HER reactions rather than a fixed
-script: the surprise, then — where it fits — an SQ.choose button offering a real next
-choice ("which do you think it is?", "what should we explore next?").
+script.
+
+**Every scene that asks her something carries its answers as `SQ.choose` buttons** —
+two to four of them ("which do you think it is?", "what should we explore next?").
+This is the difference between playing and doing homework, and it is the single
+thing most worth getting right here. Measured on a real space-detective session: ten
+scenes ran with no button on any of them, so all thirteen of her replies had to be
+typed out — by the end they had decayed into fragments and she asked to stop. She can
+always type instead; the buttons exist so she doesn't have to.
+
+Vary the rhythm too. In that same session every reply ended with another question,
+and it turned a mystery into an interrogation. Sometimes just land the astonishing
+thing and let it sit.
 
 If she takes it somewhere the cover page never anticipated, follow her there; a fresh
 scene matching where she's actually going beats forcing her back to a plan. Keep
