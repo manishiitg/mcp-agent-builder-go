@@ -11,6 +11,14 @@ Use **JSXGraph**, which is already available on every page — declare the
 geometry and it computes every coordinate itself. Do not compute points, arc
 paths or label positions yourself.
 
+Write ONLY the container and the `initBoard` calls. Never add a `<script src>`
+for the library and never try to save a copy of it beside the page: it is
+supplied automatically wherever the page is properly opened (in the app, and
+over `http://127.0.0.1:8010/api/workspace/raw?path=…` for print, PDF and your
+own checks). Opened as a bare `file://` path it is NOT supplied, and every
+figure will look like an empty box — that is the URL being wrong, never the
+figure.
+
 This is not a style preference. Hand-authored SVG gets three things wrong
 almost every time, and a wrong figure teaches the wrong thing:
 

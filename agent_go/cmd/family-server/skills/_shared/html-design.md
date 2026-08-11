@@ -284,7 +284,18 @@ A figure is the one thing on a page you cannot verify by re-reading your own
 markup: it either renders correctly or it silently doesn't, and a wrong or blank
 figure teaches the wrong thing. So look at it:
 
-1. Open the page with `agent_browser` and take a `screenshot` of it.
+1. Open the page with `agent_browser` at
+   `http://127.0.0.1:8010/api/workspace/raw?path=<the page's workspace-relative path>`
+   (URL-encode the path) and take a `screenshot`.
+
+   **Never open it as a `file://` path.** The page carries only the figure's
+   own few lines; the drawing library is supplied by the server on that URL. A
+   `file://` copy has no library, so EVERY figure looks like an empty box and
+   the console says "JXG is not defined" — you would be staring at a fault in
+   how you opened it, not in your figure, and "fixing" geometry that was
+   already right. (Port 8010 is the default; if it isn't reachable, skip this
+   check and finish rather than retrying — a page with an unverified figure is
+   better than no page.)
 2. `read_image` the screenshot.
 3. Check the things that actually go wrong: is the figure THERE at all (not a
    blank box)? Are the labels on the right points — is the vertex of ∠ABC really
