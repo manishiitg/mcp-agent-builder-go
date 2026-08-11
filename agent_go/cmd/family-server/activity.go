@@ -28,12 +28,17 @@ type activityManifest struct {
 	Subject           string   `json:"subject,omitempty"`
 	Topic             string   `json:"topic,omitempty"`
 	Items             []string `json:"items,omitempty"`
-	GuideNote         string   `json:"guide_note,omitempty"`          // HOW to run it: pacing, tone, what to do if stuck
-	Goal              string   `json:"goal,omitempty"`                // WHAT completion looks like: the tutor steers back to this even if the chat wanders
-	TeachingMode      string   `json:"teaching_mode,omitempty"`       // beginner | graduated | strict
-	HintsBeforeAnswer int      `json:"hints_before_answer,omitempty"` // for graduated
-	Persona           string   `json:"persona,omitempty"`
-	CreatedAt         string   `json:"created_at,omitempty"`
+	// Goal is the ONE instruction field: what finishing looks like AND how to
+	// run it (pacing, order, what to do when she's stuck). It absorbed the
+	// former separate guide_note — two fields split the same intent in a way
+	// that was never clean to draw a line through, and only one of them (this)
+	// is the standing target the tutor is told to steer back toward all
+	// conversation long.
+	Goal              string `json:"goal,omitempty"`
+	TeachingMode      string `json:"teaching_mode,omitempty"`       // beginner | graduated | strict
+	HintsBeforeAnswer int    `json:"hints_before_answer,omitempty"` // for graduated
+	Persona           string `json:"persona,omitempty"`
+	CreatedAt         string `json:"created_at,omitempty"`
 }
 
 // Activity is a loaded activity: its workspace-relative folder Dir plus the
@@ -147,7 +152,7 @@ func findActivityForPath(path string) string {
 
 // currentActivityPointer is the tiny root-level `current-activity.json` naming
 // which activity the child session is currently bound to. Everything else the
-// child needs (items, guide_note, teaching_mode, persona) it reads from that
+// child needs (items, goal, teaching_mode, persona) it reads from that
 // activity's own activity.json, which it has full access to.
 type currentActivityPointer struct {
 	Dir string `json:"dir"`

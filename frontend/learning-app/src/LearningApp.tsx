@@ -381,6 +381,34 @@ function withSceneResizeScript(html: string): string {
 })();</script>`
 }
 
+// withDiagramLib supplies JSXGraph to a generated page that draws a geometric
+// figure (an angle, a circle, a labelled triangle, a graph). The page itself
+// only ever contains a `<div class="jxgbox">` plus a few declarative
+// JXG.JSXGraph.initBoard(...) calls — the ~1MB library is NOT written into
+// every activity file; it's served once from the app's own dist (public/lib/)
+// and browser-cached, so pages stay small and a second diagram costs nothing.
+//
+// Why the URL must be absolute: the viewer is a srcDoc iframe, whose document
+// URL is about:srcdoc — relative paths have no base to resolve against and
+// silently 404. That's the same reason images are rewritten to absolute
+// FAMILY_API URLs (see rewriteImgSrcsRelativeTo).
+//
+// Why PREPEND and not append: the page's own initBoard call is inline in its
+// body, so the library has to be defined before that runs — appending it (the
+// way withViewerPositionScript appends) would raise "JXG is not defined".
+// Injected into <head> when there is one, else at the very front.
+//
+// Skipped entirely for pages with no figure, so a plain worksheet never pays
+// for it.
+function withDiagramLib(html: string): string {
+  if (!/jxgbox|JXG\./.test(html)) return html
+  const tags =
+    `<link rel="stylesheet" href="${FAMILY_API}/lib/jsxgraph.css">` +
+    `<script src="${FAMILY_API}/lib/jsxgraphcore.js"></script>`
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + tags)
+  return tags + html
+}
+
 // withViewerPositionScript keeps the child's place in her worksheet across the
 // re-opens the tutor triggers, and jumps to a specific question only when the
 // tutor deliberately asks for one.
@@ -596,7 +624,7 @@ function SceneFrame({ html, activityDir }: { html: string; activityDir: string }
   const clipped = rawHeight > SCENE_MAX_HEIGHT
   return (
     <div className="fl-scene-card">
-      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(resolved)} />
+      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(withDiagramLib(resolved))} />
       {clipped && <div className="fl-scene-more" aria-hidden="true">scroll for more ↓</div>}
     </div>
   )
@@ -1562,7 +1590,7 @@ export default function LearningApp() {
   // per genuine content/focus/path/zoom change, not once per render.
   const childViewerSrcDoc = useMemo(
     () => withViewerPositionScript(
-      childViewerContent?.content ?? '',
+      withDiagramLib(childViewerContent?.content ?? ''),
       childViewerFocus,
       childViewerScrollRef.current[childViewerPath ?? ''] ?? 0,
       childZoom,
@@ -1596,8 +1624,8 @@ export default function LearningApp() {
   const setViewerContent = useWorkspaceStore((s) => s.setViewerContent)
   const [viewerMeta, setViewerMeta] = useState<Record<string, unknown> | null>(null)
   const [metaOpen, setMetaOpen] = useState(false)
-  // Which activity's guide_note (the parent's own pacing/instructions for
-  // that activity) is currently revealed via its (i) button — collapsed by default.
+  // Which activity's goal (the parent's own instructions for that activity)
+  // is currently revealed via its (i) button — collapsed by default.
   const [expandedActivity, setExpandedActivity] = useState<string | null>(null)
   // Which folders in the "all files" tree the user has explicitly opened or
   // closed, keyed by path — survives the FileTree unmounting when a file is
@@ -2769,7 +2797,7 @@ export default function LearningApp() {
   // respond to, but only Quill's own real reply is added to the visible
   // thread. base is the message list to keep showing beforehand (empty for a
   // fresh session, the resumed history when continuing).
-  const sendChildKickoff = (greeting: string, base: ParentMsg[]) => {
+  const sendChildKickoff = (greeting: string, base: ParentMsg[], modelExtra?: string) => {
     const text = greeting.trim()
     if (!text || childSending) return
     const convId = childActivity?.dir ?? ''
@@ -2792,6 +2820,9 @@ export default function LearningApp() {
     }
     statusSource.onerror = () => statusSource.close()
     const history = hidden.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
+    if (modelExtra && history.length > 0) {
+      history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
+    }
     fetch(`${FAMILY_API}/api/child/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2839,7 +2870,7 @@ export default function LearningApp() {
   // (if any) is opened automatically by the auto-open effect above once
   // childActivity reflects this handoff — no need to thread a file path
   // through the handoff call itself.
-  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string) => {
+  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, goal?: string) => {
     persistHandoffSide('tutor')
     setScreen('tutor')
     setChildTreeRefreshKey((k) => k + 1)
@@ -2848,17 +2879,22 @@ export default function LearningApp() {
     // conversation, so there's nothing to send here: just the screen switch
     // above, and the child sees exactly where they left off.
     //
-    // On a fresh session, Quill opens purely on her own initiative — reading
-    // activity.json (items, goal, guide_note, persona) herself, per
-    // childSystemPrompt, rather than being handed a plan-statement forced
-    // into modelExtra here. That used to lock a specific "here's our plan"
-    // framing in at the moment of handoff, which the parent could no longer
-    // meaningfully revise once the child was partway through the activity —
-    // guide_note stays live in the file for Quill to read at any point
-    // instead of being frozen into the opening turn.
+    // goal is passed through so Quill reliably has it from her very first
+    // reply, rather than it being contingent on her remembering to go read
+    // activity.json before answering. The explicit "do NOT recite it" wording
+    // matters: an earlier version force-fed the (then separate) guide_note
+    // here WITH an instruction to open by stating the plan verbatim, which
+    // locked a specific framing in at the moment of handoff that the parent
+    // could no longer revise once the child was partway through. Handing over
+    // the standing target is useful; scripting the opening line is not.
+    const modelExtra = goal
+      ? `(For you, Quill — not from ${childName || 'the child'}: this activity's goal is: ${goal}. Keep this in mind ` +
+        `and steer back toward it over the whole conversation — do NOT recite it or turn your opening reply into a ` +
+        `stated plan; just start naturally, the same as always.)`
+      : undefined
     if (newSession) {
       setChildMessages([])
-      sendChildKickoff(greeting, [])
+      sendChildKickoff(greeting, [], modelExtra)
     }
   }
 
@@ -2880,14 +2916,14 @@ export default function LearningApp() {
       body: JSON.stringify({ dir, resume }),
     })
       .then((res) => res.json())
-      .then((data: { new_session?: boolean; dir?: string }) => {
+      .then((data: { new_session?: boolean; dir?: string; goal?: string }) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
         // activity, clicked before this request finished) — its own response
         // will apply instead, so bail out here rather than starting a chat
         // for an activity the parent already navigated away from.
         if (myGeneration !== handoffGenerationRef.current) return
-        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText))
+        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.goal)
       })
       .catch(() => {})
   }
@@ -3639,7 +3675,7 @@ export default function LearningApp() {
                   // rather than a blank iframe.
                   <p className="fl-note">The academic map hasn't been built yet — ask Quill to "update the academic map" once there's some material to show.</p>
                 ) : (
-                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={mapHtml} />
+                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={withDiagramLib(mapHtml)} />
                 )
               )}
 
@@ -3650,7 +3686,7 @@ export default function LearningApp() {
                   ) : progressHtml.includes('living report grows as') ? (
                     <p className="fl-note">The progress report hasn't been built yet — ask Quill to "update the progress report" once there's some real activity to show.</p>
                   ) : (
-                    <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={progressHtml} />
+                    <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={withDiagramLib(progressHtml)} />
                   )}
                 </>
               )}
@@ -3821,7 +3857,7 @@ export default function LearningApp() {
                   ) : !viewerContent.isText ? (
                     <NonPreviewableFile path={viewerPath} meta={viewerMeta} />
                   ) : (viewerPath.endsWith('.html') || viewerPath.endsWith('.htm')) ? (
-                    <iframe ref={iframeRef} className="fl-viewer-frame" title="File preview" sandbox="allow-scripts" srcDoc={viewerContent.content} />
+                    <iframe ref={iframeRef} className="fl-viewer-frame" title="File preview" sandbox="allow-scripts" srcDoc={withDiagramLib(viewerContent.content)} />
                   ) : (viewerPath.endsWith('.md') || viewerPath.endsWith('.markdown')) ? (
                     <div className="fl-viewer-md"><Markdown text={viewerContent.content} /></div>
                   ) : (viewerPath.endsWith('.json') || viewerPath.endsWith('.jsonl')) ? (
@@ -3870,7 +3906,6 @@ export default function LearningApp() {
                           )}
                         </div>
                       </div>
-                      {(act.items.length === 0 || expanded) && act.guide_note && <p className="fl-package-note">{act.guide_note}</p>}
                       {(act.items.length === 0 || expanded) && act.goal && <p className="fl-package-goal"><strong>Goal:</strong> {act.goal}</p>}
                       {expanded && act.items.length > 0 && (
                         <div className="fl-package-detail-items">
@@ -3970,7 +4005,6 @@ export default function LearningApp() {
                               Give to {childName || 'child'}
                             </button>
                           </div>
-                          {showDetails && act.guide_note && <p className="fl-package-note">{act.guide_note}</p>}
                           {showDetails && act.goal && <p className="fl-package-goal"><strong>Goal:</strong> {act.goal}</p>}
                           {expanded && act.items.map((item) => (
                             <div key={item.path} className="fl-file-item fl-package-item has-preview">
@@ -4458,7 +4492,7 @@ export default function LearningApp() {
                   <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong><small>Let’s keep learning together</small></div>
                 </div>
                 {childActivity?.title && (() => {
-                  const hasInfo = !!(childActivity.goal || childActivity.guide_note)
+                  const hasInfo = !!childActivity.goal
                   return (
                     <div className="fl-child-assignment-wrap">
                       {goalPopoverOpen && <div className="fl-menu-backdrop" onClick={() => setGoalPopoverOpen(false)} />}
@@ -4476,7 +4510,6 @@ export default function LearningApp() {
                       {goalPopoverOpen && hasInfo && (
                         <div className="fl-child-goal-popover" role="dialog">
                           {childActivity.goal && <p><strong>Goal</strong>{childActivity.goal}</p>}
-                          {childActivity.guide_note && <p><strong>Plan</strong>{childActivity.guide_note}</p>}
                         </div>
                       )}
                     </div>

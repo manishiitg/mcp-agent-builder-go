@@ -33,13 +33,17 @@ description: Create clear, child-ready study material (notes, worked examples, a
    examples, so she meets the method before practising it. Close with a line of
    encouragement addressed to her.
 
-   Pictures: draw it yourself in HTML/CSS or inline SVG when the point is a
-   relationship, a process or a comparison — it stays crisp, needs no extra file,
-   and can use the page's own colours. Reach for `find_image` when seeing the real
-   thing IS the teaching: an actual landform, a world map, a labeled anatomical
-   diagram, a historical photograph. Print the credit it returns, and don't force a
-   picture in where it adds nothing. See `skills/_shared/html-design.md`
-   → "Real pictures".
+   Pictures: draw it yourself when the point is a relationship, a process or a
+   comparison — it stays crisp, needs no extra file, and can use the page's own
+   colours. For geometry, graphs and number lines (an angle, a circle, a labelled
+   triangle, a bar chart), read `skills/_shared/diagrams.md` and declare the
+   figure with JSXGraph — never hand-write SVG coordinates, which gets the y-axis
+   direction and arc/label placement wrong. Reach for `find_image` when seeing the
+   real thing IS the teaching: an actual landform, a world map, a labeled
+   anatomical diagram, a historical photograph. Print the credit it returns, and
+   don't force a picture in where it adds nothing. See
+   `skills/_shared/html-design.md` → "Real pictures", and check any figure you
+   drew before finishing (→ "Check a figure before you finish").
 
 4. **Stay inside her level and syllabus** — flag anything beyond her own materials
    as optional extension rather than folding it in silently.

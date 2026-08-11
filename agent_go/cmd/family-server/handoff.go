@@ -53,7 +53,7 @@ func handleHandoff(w http.ResponseWriter, r *http.Request) {
 		"ok":          true,
 		"dir":         act.Dir,
 		"title":       act.Title,
-		"guide_note":  act.GuideNote,
+		"goal":        act.Goal,
 		"new_session": newSession,
 	})
 }

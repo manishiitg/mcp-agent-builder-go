@@ -24,6 +24,12 @@ description: Create a practice test for the child from their materials and progr
    `skills/_shared/html-design.md`). It should read like a real test paper: a clear
    header with her name, grade/board, subject and topic, then numbered questions,
    marks shown as a `.badge`, and genuine space to work under each.
+   A question that needs a figure — an angle, a circle, a labelled triangle, a
+   graph to read values off — declares it with JSXGraph per
+   `skills/_shared/diagrams.md`, never as hand-written SVG coordinates; check any
+   figure renders correctly before you finish (html-design.md → "Check a figure
+   before you finish"). When she is meant to DRAW the graph herself, give her the
+   empty grid instead, and don't state the scale.
    Cover the methods that appear in her own materials, and make **most of the
    questions target the specific weak moves from step 1** — a couple she can already
    do (so it isn't demoralizing), the rest on the moves that actually need work,

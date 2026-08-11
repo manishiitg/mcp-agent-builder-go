@@ -23,13 +23,12 @@ type activityResp struct {
 	Title     string             `json:"title"`
 	Subject   string             `json:"subject,omitempty"`
 	Topic     string             `json:"topic,omitempty"`
-	Items     []activityItemResp `json:"items"`
-	GuideNote string             `json:"guide_note,omitempty"`
-	// Goal is what finishing the activity concretely looks like. It's written
-	// into activity.json by create_learning_activity and read by the child tutor
-	// every turn, but was missing from this response type — so it existed on disk
-	// and drove the tutor's behavior while being invisible to the parent in the
-	// UI, which is where they'd expect to confirm what they asked for.
+	Items []activityItemResp `json:"items"`
+	// Goal is the one instruction field — what finishing looks like AND how to
+	// run it (it absorbed the former separate guide_note). It's written into
+	// activity.json by create_learning_activity and read by the child tutor
+	// every turn, and is surfaced here so the parent can confirm in the UI
+	// what they actually asked for.
 	Goal         string             `json:"goal,omitempty"`
 	TeachingMode string             `json:"teaching_mode,omitempty"`
 	Persona      string             `json:"persona,omitempty"`
@@ -68,7 +67,6 @@ func toActivityResp(act Activity) activityResp {
 		Subject:      act.Subject,
 		Topic:        act.Topic,
 		Items:        items,
-		GuideNote:    act.GuideNote,
 		Goal:         act.Goal,
 		TeachingMode: act.TeachingMode,
 		Persona:      act.Persona,
