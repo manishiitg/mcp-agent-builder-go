@@ -4652,11 +4652,11 @@ export default function LearningApp() {
                 </div>
                 <button
                   type="button"
-                  className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                  className={`composer-icon ${childFastMode ? 'is-active' : ''}`}
                   aria-label="Fast mode"
-                  aria-pressed={fastMode}
-                  title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                  onClick={() => toggleFastMode(!fastMode)}
+                  aria-pressed={childFastMode}
+                  title={childFastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                  onClick={() => toggleChildFastModeSetting(!childFastMode)}
                   disabled={savingFastMode}
                 >
                   <Zap size={19} />
