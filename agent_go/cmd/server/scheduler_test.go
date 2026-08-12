@@ -2943,12 +2943,14 @@ func TestPulseStepFailureMustStopBeforeNextTurn(t *testing.T) {
 	}
 }
 
-// TestReconcilePulseStepSessionBusy pins the PLAT-094 fix: a Pulse step
-// boundary must not abort on a stale runtime-snapshot busy signal once the
-// explicit per-turn flag says the turn has actually finished. Observed live
-// on build-in-public 2026-08-12 — Finalize was aborted on exactly this
-// disagreement, and no backup/publish/notify ran for that pass.
-func TestReconcilePulseStepSessionBusy(t *testing.T) {
+// TestReconcileSessionBusySignal pins the PLAT-094 fix and its PLAT-095
+// generalization: neither a Pulse step boundary nor the workshop idle-wait
+// may abort on a stale runtime-snapshot busy signal once the explicit
+// per-turn flag says the turn has actually finished. Observed live on
+// build-in-public 2026-08-12 — Finalize was aborted on exactly this
+// disagreement, and no backup/publish/notify ran for that pass. Both call
+// sites now share this one function rather than each re-deriving the rule.
+func TestReconcileSessionBusySignal(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		snapshotBusy bool
@@ -2974,8 +2976,8 @@ func TestReconcilePulseStepSessionBusy(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := reconcilePulseStepSessionBusy(test.snapshotBusy, test.explicitBusy); got != test.wantBusy {
-				t.Fatalf("reconcilePulseStepSessionBusy(snapshot=%v, explicit=%v) = %v, want %v",
+			if got := reconcileSessionBusySignal(test.snapshotBusy, test.explicitBusy); got != test.wantBusy {
+				t.Fatalf("reconcileSessionBusySignal(snapshot=%v, explicit=%v) = %v, want %v",
 					test.snapshotBusy, test.explicitBusy, got, test.wantBusy)
 			}
 		})
@@ -2994,7 +2996,7 @@ func TestAbortIfTurnStillBusyReclassificationChangesTheOutcome(t *testing.T) {
 	if !pulseStepFailureMustStopBeforeNextTurn(result, staleSnapshotBusy) {
 		t.Fatal("precondition: the unreconciled stale snapshot must still read as must-stop, or this test proves nothing")
 	}
-	reconciled := reconcilePulseStepSessionBusy(staleSnapshotBusy, explicitBusy)
+	reconciled := reconcileSessionBusySignal(staleSnapshotBusy, explicitBusy)
 	if pulseStepFailureMustStopBeforeNextTurn(result, reconciled) {
 		t.Fatal("a finished turn's stale snapshot-busy signal must not abort Finalize (PLAT-094)")
 	}

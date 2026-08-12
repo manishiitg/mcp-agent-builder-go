@@ -2250,9 +2250,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	abortIfTurnStillBusy := func(st postRunMonitorStep, result postRunMonitorStepRunResult) bool {
 		// PLAT-094: two independent "busy" signals can disagree, mirroring the
 		// PLAT-071 race at the workshop idle-wait — see
-		// reconcilePulseStepSessionBusy for which one wins and why.
+		// reconcileSessionBusySignal for which one wins and why.
 		snapshotBusy := s.api.sessionIsBusy(sessionID)
-		busy := reconcilePulseStepSessionBusy(snapshotBusy, s.api.isSessionBusy(sessionID))
+		busy := reconcileSessionBusySignal(snapshotBusy, s.api.isSessionBusy(sessionID))
 		if snapshotBusy && !busy {
 			s.sessionLogf(sctx, sessionID, "[PULSE] step %s reports snapshot-busy but its per-turn busy flag is clear; treating the turn as finished rather than stalled", st.label)
 		}
@@ -2417,27 +2417,35 @@ func pulseStepFailureMustStopBeforeNextTurn(result postRunMonitorStepRunResult, 
 	return result.outcome != postRunMonitorStepCompleted && sessionBusy
 }
 
-// reconcilePulseStepSessionBusy decides whether a Pulse step boundary should
-// trust the runtime snapshot phase (sessionIsBusy) when it disagrees with the
-// explicit per-turn flag (isSessionBusy, set when a turn starts and cleared
-// when it ends).
+// reconcileSessionBusySignal decides whether a scheduled-turn completion check
+// should trust the runtime snapshot phase (sessionIsBusy) when it disagrees
+// with the explicit per-turn flag (isSessionBusy, set when a turn starts and
+// cleared when it ends).
 //
 // PLAT-071 diagnosed and fixed this exact disagreement for the workshop
-// idle-wait: the snapshot phase can lag a turn's own completion, reporting
-// busy for minutes after the turn genuinely finished. PLAT-094 is the same
-// race at the Pulse Gate/Review-Fix/Finalize step boundary — observed live on
-// build-in-public 2026-08-12, where [COMPLETION] and [ACTIVE_SESSION] both
-// logged the turn's status flipping to "completed" in the same second
-// abortIfTurnStillBusy fired on a stale snapshotBusy=true, aborting Finalize
+// idle-wait (waitForWorkshopIdleWithInactivityTimeout): the snapshot phase can
+// lag a turn's own completion, reporting busy for minutes after the turn
+// genuinely finished. PLAT-094 found the same race at the Pulse
+// Gate/Review-Fix/Finalize step boundary (abortIfTurnStillBusy) — observed
+// live on build-in-public 2026-08-12, where [COMPLETION] and [ACTIVE_SESSION]
+// both logged the turn's status flipping to "completed" in the same second
+// the step boundary aborted on a stale snapshotBusy=true, dropping Finalize
 // entirely. No backup, publish, or notify ran for that pass, and nothing
 // surfaced the loss beyond one diagnostic log line.
+//
+// PLAT-095 merged what had become two independent copies of this same rule —
+// one inline in waitForWorkshopIdleWithInactivityTimeout, one in
+// abortIfTurnStillBusy — into this single function both now call. "Is this
+// message actually done" is asked at every scheduled-turn boundary across the
+// platform (schedule messages, contract upgrades, decision drains, Pulse
+// steps); it must have one answer, not one per call site re-deriving it.
 //
 // Deliberately asymmetric, matching PLAT-071's own precedent: the explicit
 // flag is only ever consulted to correct a snapshot CLAIMING busy. An idle
 // snapshot is trusted as-is and never escalated to busy from the explicit
 // flag alone — that would trade a known race (stale busy) for a new, unproven
 // one (spurious aborts on a session the snapshot never flagged).
-func reconcilePulseStepSessionBusy(snapshotBusy, explicitBusy bool) bool {
+func reconcileSessionBusySignal(snapshotBusy, explicitBusy bool) bool {
 	if snapshotBusy && !explicitBusy {
 		return false
 	}
@@ -4149,12 +4157,12 @@ func (s *SchedulerService) waitForWorkshopIdleWithInactivityTimeout(ctx context.
 				// its completed workflow was written off as never having run.
 				//
 				// Reaching here already means: nothing is running, and nothing has
-				// progressed for the whole inactivity window. If the explicit flag
-				// is ALSO clear, the only signal still claiming work is the snapshot
-				// phase, contradicted by everything else — treat that as idle, which
-				// is what the loop would have concluded had the phase been accurate.
-				// A genuine stall keeps its flag set and still times out.
-				if !s.api.isSessionBusy(sessionID) {
+				// progressed for the whole inactivity window. reconcileSessionBusySignal
+				// (PLAT-095, shared with the Pulse step boundary's identical check)
+				// decides whether the snapshot's claim still holds against the
+				// explicit flag. A genuine stall keeps its flag set and still times
+				// out.
+				if !reconcileSessionBusySignal(true, s.api.isSessionBusy(sessionID)) {
 					scheduleLogf("[SCHEDULER] session %s reports snapshot-busy with no live child work and no progress for %s, but its per-turn busy flag is clear; treating the turn as finished rather than stalled", sessionID, maxInactivity)
 					return nil
 				}
