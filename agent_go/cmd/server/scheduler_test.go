@@ -2943,6 +2943,63 @@ func TestPulseStepFailureMustStopBeforeNextTurn(t *testing.T) {
 	}
 }
 
+// TestReconcilePulseStepSessionBusy pins the PLAT-094 fix: a Pulse step
+// boundary must not abort on a stale runtime-snapshot busy signal once the
+// explicit per-turn flag says the turn has actually finished. Observed live
+// on build-in-public 2026-08-12 — Finalize was aborted on exactly this
+// disagreement, and no backup/publish/notify ran for that pass.
+func TestReconcilePulseStepSessionBusy(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		snapshotBusy bool
+		explicitBusy bool
+		wantBusy     bool
+	}{
+		{name: "both agree idle", snapshotBusy: false, explicitBusy: false, wantBusy: false},
+		{name: "both agree busy", snapshotBusy: true, explicitBusy: true, wantBusy: true},
+		{
+			name:         "stale snapshot outlives the turn's own completion",
+			snapshotBusy: true, explicitBusy: false,
+			wantBusy: false, // the exact race: trust the explicit flag over the lagging snapshot
+		},
+		{
+			// Mirrors PLAT-071's own precedent exactly: the explicit flag is only
+			// ever consulted to correct a snapshot CLAIMING busy. An idle snapshot
+			// is trusted as-is and never escalated to busy from the explicit flag
+			// alone — that would be a new failure mode (spurious aborts), not the
+			// one either fix addresses.
+			name:         "snapshot idle is trusted even if the explicit flag disagrees",
+			snapshotBusy: false, explicitBusy: true,
+			wantBusy: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := reconcilePulseStepSessionBusy(test.snapshotBusy, test.explicitBusy); got != test.wantBusy {
+				t.Fatalf("reconcilePulseStepSessionBusy(snapshot=%v, explicit=%v) = %v, want %v",
+					test.snapshotBusy, test.explicitBusy, got, test.wantBusy)
+			}
+		})
+	}
+}
+
+// TestAbortIfTurnStillBusyReclassificationChangesTheOutcome proves the fix
+// matters, not just that the helper returns the right bool in isolation: with
+// the stale-snapshot shape, pulseStepFailureMustStopBeforeNextTurn — the
+// function that actually gates the abort — must flip from "stop" to
+// "continue" once the reconciliation is applied.
+func TestAbortIfTurnStillBusyReclassificationChangesTheOutcome(t *testing.T) {
+	result := postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed}
+	staleSnapshotBusy, explicitBusy := true, false
+
+	if !pulseStepFailureMustStopBeforeNextTurn(result, staleSnapshotBusy) {
+		t.Fatal("precondition: the unreconciled stale snapshot must still read as must-stop, or this test proves nothing")
+	}
+	reconciled := reconcilePulseStepSessionBusy(staleSnapshotBusy, explicitBusy)
+	if pulseStepFailureMustStopBeforeNextTurn(result, reconciled) {
+		t.Fatal("a finished turn's stale snapshot-busy signal must not abort Finalize (PLAT-094)")
+	}
+}
+
 func TestRunningScheduleInSetLockedFindsOtherRunningSchedule(t *testing.T) {
 	states := map[string]*ScheduleRuntimeState{
 		"daily":     {LastStatus: "running", LastSessionID: "session-daily"},

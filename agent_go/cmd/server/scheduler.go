@@ -2248,7 +2248,14 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		return true
 	}
 	abortIfTurnStillBusy := func(st postRunMonitorStep, result postRunMonitorStepRunResult) bool {
-		busy := s.api.sessionIsBusy(sessionID)
+		// PLAT-094: two independent "busy" signals can disagree, mirroring the
+		// PLAT-071 race at the workshop idle-wait — see
+		// reconcilePulseStepSessionBusy for which one wins and why.
+		snapshotBusy := s.api.sessionIsBusy(sessionID)
+		busy := reconcilePulseStepSessionBusy(snapshotBusy, s.api.isSessionBusy(sessionID))
+		if snapshotBusy && !busy {
+			s.sessionLogf(sctx, sessionID, "[PULSE] step %s reports snapshot-busy but its per-turn busy flag is clear; treating the turn as finished rather than stalled", st.label)
+		}
 		if !pulseStepFailureMustStopBeforeNextTurn(result, busy) {
 			return false
 		}
@@ -2408,6 +2415,33 @@ type postRunMonitorStepRunResult struct {
 
 func pulseStepFailureMustStopBeforeNextTurn(result postRunMonitorStepRunResult, sessionBusy bool) bool {
 	return result.outcome != postRunMonitorStepCompleted && sessionBusy
+}
+
+// reconcilePulseStepSessionBusy decides whether a Pulse step boundary should
+// trust the runtime snapshot phase (sessionIsBusy) when it disagrees with the
+// explicit per-turn flag (isSessionBusy, set when a turn starts and cleared
+// when it ends).
+//
+// PLAT-071 diagnosed and fixed this exact disagreement for the workshop
+// idle-wait: the snapshot phase can lag a turn's own completion, reporting
+// busy for minutes after the turn genuinely finished. PLAT-094 is the same
+// race at the Pulse Gate/Review-Fix/Finalize step boundary — observed live on
+// build-in-public 2026-08-12, where [COMPLETION] and [ACTIVE_SESSION] both
+// logged the turn's status flipping to "completed" in the same second
+// abortIfTurnStillBusy fired on a stale snapshotBusy=true, aborting Finalize
+// entirely. No backup, publish, or notify ran for that pass, and nothing
+// surfaced the loss beyond one diagnostic log line.
+//
+// Deliberately asymmetric, matching PLAT-071's own precedent: the explicit
+// flag is only ever consulted to correct a snapshot CLAIMING busy. An idle
+// snapshot is trusted as-is and never escalated to busy from the explicit
+// flag alone — that would trade a known race (stale busy) for a new, unproven
+// one (spurious aborts on a session the snapshot never flagged).
+func reconcilePulseStepSessionBusy(snapshotBusy, explicitBusy bool) bool {
+	if snapshotBusy && !explicitBusy {
+		return false
+	}
+	return snapshotBusy
 }
 
 func postRunMonitorIntro(contextSummary, workspacePath, pulseRunID, runStatus, runFolder string) string {
