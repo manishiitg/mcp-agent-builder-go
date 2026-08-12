@@ -61,3 +61,11 @@ upgrade. It must expose `set_workflow_contract_version` in its tool index,
 stamp `workflow.json` to `1.0.21` only after the migration succeeds, and start
 the normal scheduled workflow. A missing, failed, or prematurely invoked stamp
 reopens this ticket.
+
+## Follow-up 2026-08-12 — the tool this added was unbounded in time
+
+`set_workflow_contract_version` fixed the missing capability, but nothing
+constrained *when* it could be called. A confida-login session stamped `1.0.21`
+ten minutes after the scheduler had adjudicated that upgrade turn as failed,
+and the next preflight trusted the value and skipped the migration. See
+[PLAT-096](plat-096.md), which fences the stamp to its own open turn.

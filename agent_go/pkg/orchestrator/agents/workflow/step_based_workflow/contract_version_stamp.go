@@ -2,7 +2,6 @@ package step_based_workflow
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/contractupgrade"
 )
@@ -25,10 +24,10 @@ func authorizeContractVersionStamp(sessionID, version string) (string, bool) {
 	if contractupgrade.Consume(sessionID, version) {
 		return "", true
 	}
-	if granted := contractupgrade.Granted(sessionID); len(granted) > 0 {
+	if granted := contractupgrade.Granted(sessionID); granted != "" {
 		return fmt.Sprintf(
 			"Refused: this turn is authorized to stamp %s, not %s. Stamp the version its own upgrade instruction named.",
-			strings.Join(granted, " or "), version,
+			granted, version,
 		), false
 	}
 	return "Refused: no contract upgrade turn is open for this session, so there is no version to stamp. " +

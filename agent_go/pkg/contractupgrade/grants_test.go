@@ -1,7 +1,6 @@
 package contractupgrade
 
 import (
-	"reflect"
 	"sync"
 	"testing"
 )
@@ -54,20 +53,21 @@ func TestGrantIsOneShotPerVersion(t *testing.T) {
 	}
 }
 
-// Pulse folds every outstanding upgrade query into one Review+Fix turn, so a
-// single turn can owe several stamps.
-func TestGrantCarriesASetOfTargets(t *testing.T) {
+// Only the pre-run preflight mints, and it opens one rung at a time, so a
+// session holds at most one authorization. Minting again supersedes it.
+func TestMintSupersedesThePreviousTarget(t *testing.T) {
 	t.Cleanup(func() { Revoke("session-a") })
 
-	Mint("session-a", "1.0.21", "1.0.22", "1.0.23")
-	if got := Granted("session-a"); !reflect.DeepEqual(got, []string{"1.0.21", "1.0.22", "1.0.23"}) {
-		t.Fatalf("Granted() = %v, want all three targets", got)
+	Mint("session-a", "1.0.21")
+	Mint("session-a", "1.0.22")
+	if Consume("session-a", "1.0.21") {
+		t.Fatal("a superseded target was still spendable")
+	}
+	if got := Granted("session-a"); got != "1.0.22" {
+		t.Fatalf("Granted() = %q, want the current target", got)
 	}
 	if !Consume("session-a", "1.0.22") {
-		t.Fatal("mid-set target refused")
-	}
-	if got := Granted("session-a"); !reflect.DeepEqual(got, []string{"1.0.21", "1.0.23"}) {
-		t.Fatalf("Granted() after spending 1.0.22 = %v", got)
+		t.Fatal("the current target should be spendable")
 	}
 }
 
@@ -80,7 +80,7 @@ func TestGrantsAreScopedToOneSession(t *testing.T) {
 	}
 }
 
-func TestMintWithNoUsableTargetRevokes(t *testing.T) {
+func TestMintWithABlankTargetRevokes(t *testing.T) {
 	t.Cleanup(func() { Revoke("session-a") })
 
 	Mint("session-a", "1.0.21")

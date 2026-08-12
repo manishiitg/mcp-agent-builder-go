@@ -5,101 +5,83 @@ import (
 	"testing"
 )
 
-// confida-login sat at 1.0.20 indefinitely: the 1.0.21 turn found 19 finding
-// IDs in builder/improve-archive absent from the pulse_* tables, correctly
-// declined to delete them, and every later trigger re-derived the same blocker
-// while the QA work never ran. A recorded owner decision is the way out.
-
-func TestUpgradeQueryCarriesTheOperatorDecisionForItsOwnTarget(t *testing.T) {
-	manifest := &WorkflowManifest{
-		Version: "1.0.20",
-		ContractUpgradeDecisions: map[string]WorkflowContractUpgradeDecision{
-			workflowContractArtifactPurityVersion: {
-				Decision:  "The pre-2026-07-22 finding history in builder/improve-archive is not worth keeping. Delete it.",
-				DecidedAt: "2026-08-12",
-			},
-		},
-	}
-	plan := workflowVersionUpgradePlan(manifest)
-	if len(plan) == 0 {
-		t.Fatal("no upgrade plan for a 1.0.20 workflow")
-	}
-
-	var artifactStep, auditStep string
-	for _, step := range plan {
-		switch step.label {
-		case "upgrade-current-artifact-contract":
-			artifactStep = step.query
-		case "upgrade-learnings-lock-audit":
-			auditStep = step.query
-		}
-	}
-	if artifactStep == "" || auditStep == "" {
-		t.Fatalf("plan is missing the steps under test: %+v", plan)
-	}
-
+// confida-login stalled on the 1.0.21 rung three times: each turn found history
+// in the retired improve archive that SQLite did not have, correctly refused to
+// destroy it, and asked the owner — who was asleep, because these turns are
+// fired by the scheduler. The disposition now lives in the instruction, and the
+// archive is moved rather than deleted so deciding autonomously costs nothing.
+func TestArtifactContractUpgradeDecidesTheArchiveItself(t *testing.T) {
 	for _, want := range []string{
-		"OPERATOR DECISION ON THIS UPGRADE (recorded 2026-08-12)",
-		"not worth keeping",
-		// The decision authorizes one blocker, not the migration generally.
-		"nothing wider",
-		"do not read this as general permission to proceed",
-	} {
-		if !strings.Contains(artifactStep, want) {
-			t.Errorf("1.0.21 upgrade query missing %q", want)
-		}
-	}
-
-	// A decision is scoped to the version it was recorded against. Leaking it
-	// into the neighboring rung would authorize a migration nobody answered for.
-	if strings.Contains(auditStep, "OPERATOR DECISION") {
-		t.Errorf("the 1.0.21 decision leaked into the 1.0.22 upgrade query:\n%s", auditStep)
-	}
-}
-
-func TestUpgradeQueryIsUnchangedWithoutADecision(t *testing.T) {
-	without := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.20"})
-	if len(without) == 0 {
-		t.Fatal("no upgrade plan for a 1.0.20 workflow")
-	}
-	for _, step := range without {
-		if strings.Contains(step.query, "OPERATOR DECISION") {
-			t.Fatalf("%s carries a decision note with no decision recorded", step.label)
-		}
-	}
-	if got := workflowContractUpgradeDecisionNote(nil, "1.0.21"); got != "" {
-		t.Errorf("nil manifest note = %q, want empty", got)
-	}
-	blank := &WorkflowManifest{ContractUpgradeDecisions: map[string]WorkflowContractUpgradeDecision{"1.0.21": {Decision: "   "}}}
-	if got := workflowContractUpgradeDecisionNote(blank, "1.0.21"); got != "" {
-		t.Errorf("blank decision note = %q, want empty", got)
-	}
-}
-
-func TestDecisionNoteOmitsTheTimestampWhenAbsent(t *testing.T) {
-	manifest := &WorkflowManifest{
-		ContractUpgradeDecisions: map[string]WorkflowContractUpgradeDecision{"1.0.21": {Decision: "Discard it."}},
-	}
-	note := workflowContractUpgradeDecisionNote(manifest, "1.0.21")
-	if !strings.Contains(note, "OPERATOR DECISION ON THIS UPGRADE.") {
-		t.Errorf("note should read cleanly with no recorded date: %s", note)
-	}
-	if strings.Contains(note, "recorded ") {
-		t.Errorf("note invented a recorded date: %s", note)
-	}
-}
-
-// The blocker wording is what makes a stalled turn diagnosable instead of
-// looking like caution, and what tells it not to decide the owner's question.
-func TestArtifactContractUpgradeStatesTheArchiveBlockerExplicitly(t *testing.T) {
-	for _, want := range []string{
-		"the SQLite pulse_* tables do not",
-		"that is a blocker, not a judgement call for this turn",
-		"Name the specific records",
-		"workflow owner's decision",
+		// The refusal this replaced read "retire" as "delete". Lead with the
+		// property that makes the objection moot.
+		"NOTHING IS DELETED IN THIS MIGRATION",
+		"migration-backups/",
+		"stay on disk, and in git history, at the new location",
+		// The turn verifies the no-loss claim rather than taking it on faith.
+		"Read them back at the new path",
+		"if the move cannot preserve a file, that IS a blocker",
+		// Answer the prior revert on its merits instead of talking over it.
+		"A previous turn on this workflow may have declined",
+		"DESTROYED",
 	} {
 		if !strings.Contains(upgradeCurrentArtifactContract, want) {
 			t.Errorf("1.0.21 upgrade prompt missing %q", want)
+		}
+	}
+	if strings.Contains(upgradeCurrentArtifactContract, "workflow owner's decision") {
+		t.Error("1.0.21 upgrade prompt still defers the archive to an owner who is not reading it")
+	}
+}
+
+// Every upgrade turn is scheduler-fired with nobody reading it, so each one has
+// to say so — as a fact about the execution context, not as pressure.
+func TestEveryUpgradeQueryCarriesTheUnattendedContract(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.9"})
+	if len(plan) < 2 {
+		t.Fatalf("expected a multi-rung plan from 1.0.9, got %+v", plan)
+	}
+	for _, step := range plan {
+		for _, want := range []string{
+			"EXECUTION CONTEXT",
+			// Naming what this is matters: an agent that reads the turn as a
+			// third party relaying a previously-rejected request treats it as
+			// something to resist, rather than as its own maintenance work.
+			"automated platform migration",
+			"not a user request relayed through the scheduler",
+			"take the best action to complete the migration properly",
+			"create_human_input_request",
+			// Refusing has to stay plainly available, or the note reads as
+			// coercion and a correctly-cautious agent refuses the whole turn.
+			"stopping without stamping, are both acceptable outcomes",
+		} {
+			if !strings.Contains(step.query, want) {
+				t.Errorf("%s query missing %q", step.label, want)
+			}
+		}
+		// An earlier draft pressured the agent into compliance. An agent that
+		// had correctly blocked this migration cited that framing when it
+		// refused again.
+		for _, coercive := range []string{
+			"do not re-open it as a judgement call",
+			"reaches nobody",
+			"is not an available move",
+		} {
+			if strings.Contains(step.query, coercive) {
+				t.Errorf("%s query pressures the agent (%q); state the context, leave refusing available", step.label, coercive)
+			}
+		}
+	}
+}
+
+// Blocked upgrades route through the existing operator-decision lifecycle
+// (create_human_input_request, drained pre-run by scheduledDecisionDrainTurn).
+// A second, upgrade-specific answer channel in workflow.json was built and then
+// removed as a duplicate; this pins that it stays gone.
+func TestNoParallelContractUpgradeDecisionChannel(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.20"})
+	for _, step := range plan {
+		if strings.Contains(step.query, "contract_upgrade_decision") || strings.Contains(step.query, "OPERATOR DECISION ON THIS UPGRADE") {
+			t.Errorf("%s query still references the removed upgrade-specific decision channel", step.label)
 		}
 	}
 }

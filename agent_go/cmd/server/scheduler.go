@@ -1915,7 +1915,17 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		// the user / builder enabled Pulse. Only after an actual workflow RUN, not an
 		// optimizer/improvement pass (there's no fresh run output to scan there).
 		// Never affects the run's recorded result.
-		if !userInterrupted && runFolder != "" && sctx.Schedule.WorkshopMode != "optimizer" {
+		// A blocked contract-upgrade preflight is the one failure where Pulse has
+		// nothing to steward: the workflow never executed, so there is no
+		// evidence to gate on, nothing to review, and nothing to publish. All a
+		// pass can do is spend an LLM turn restating the blocker the upgrade turn
+		// already reported — on every trigger, for as long as the workflow waits
+		// on an owner decision. Skip it and let the preflight error be the record.
+		upgradeBlocked := errors.Is(execErr, errWorkflowUpgradePreflightBlocked)
+		if upgradeBlocked {
+			s.sessionLogf(sctx, sessionID, "[PULSE] skipped for %s: the contract-upgrade preflight blocked, so the workflow did not run and there is no evidence to review", schedID)
+		}
+		if !upgradeBlocked && !userInterrupted && runFolder != "" && sctx.Schedule.WorkshopMode != "optimizer" {
 			if manifest, found, mErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath); mErr == nil && found && shouldRunPostRunMonitor(sctx, manifest) {
 				pulseEvidenceStatus := status
 				if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunStatus) != "" {
@@ -2166,18 +2176,23 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	}
 	intro := postRunMonitorIntro(pulseContext, sctx.WorkspacePath, pulseRunID, runStatus, runFolder)
 
-	upgradeSteps := postRunMonitorUpgradeStepsForManifest(manifest)
-	upgradeTargets := workflowUpgradeTargetsForManifest(manifest)
-	// Pulse reaches this workflow through the same session the scheduler used.
-	// Whatever that session was authorized to stamp during the preflight is
-	// spent or withdrawn by now; only the Review+Fix turn below re-earns it.
+	// Pulse does not carry contract upgrades. It used to: b4e4fc14 (2026-07-08)
+	// delivered them through this Review+Fix turn, and f58ac5b5 (2026-07-16)
+	// replaced that with the blocking pre-run preflight — "contract upgrades are
+	// a blocking preflight, not post-run cleanup" — without removing the older
+	// path. Both stayed live, and the difference matters: the preflight runs one
+	// rung per turn and re-reads the manifest to verify that exact target before
+	// advancing, while this path concatenated every outstanding rung into a
+	// single review turn with no verification or ordering between them. Observed
+	// on confida-login 2026-08-12, where a failed-open preflight left four
+	// migrations (1.0.21/22/23/25) bundled into one dispatch. The preflight owns
+	// migrations; it retries on the next trigger.
+	//
+	// Pulse shares the scheduler's session, so withdraw any stamp authorization
+	// the preflight left behind rather than letting it outlive its turn.
 	contractupgrade.Revoke(sessionID)
 	defer contractupgrade.Revoke(sessionID)
-	s.sessionLogf(sctx, sessionID, "[PULSE] starting pulse for %s (run_folder=%s status=%s, upgrades=%d)", sctx.Schedule.ID, runFolder, runStatus, len(upgradeSteps))
-	reviewFixPreflight := make([]string, 0, len(upgradeSteps)+1)
-	for _, upgrade := range upgradeSteps {
-		reviewFixPreflight = append(reviewFixPreflight, upgrade.query)
-	}
+	s.sessionLogf(sctx, sessionID, "[PULSE] starting pulse for %s (run_folder=%s status=%s)", sctx.Schedule.ID, runFolder, runStatus)
 	introSent := false
 	recoveryNotes := []string{}
 	runStep := func(st postRunMonitorStep) postRunMonitorStepRunResult {
@@ -2342,9 +2357,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		if gateCompleted {
 			if due, err := pulseWorklistHasDueModule(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving Review+Fix turn: %v", err)
-				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
+				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID))
 			} else if due {
-				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID, reviewFixPreflight))
+				steps = append(steps, postRunMonitorAgenticReviewFixStep(pulseRunID))
 			} else {
 				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting Review+Fix turn")
 			}
@@ -2362,14 +2377,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	}
 
 	for i, st := range steps {
-		// Review+Fix is the only Pulse turn that carries upgrade instructions
-		// (postRunMonitorAgenticReviewFixStep folds the outstanding ones in),
-		// so it is the only Pulse turn entitled to stamp. Every other turn —
-		// the finalizer that quotes the preflight failure back at the agent
-		// included — runs without a grant.
-		if st.label == "review-fix" && len(upgradeTargets) > 0 {
-			contractupgrade.Mint(sessionID, upgradeTargets...)
-		}
+		// No Pulse turn stamps a contract version, so none of them is granted
+		// one. Revoking after each turn keeps that true even if a future step
+		// starts minting.
 		result := runStep(st)
 		contractupgrade.Revoke(sessionID)
 		if abortIfInterrupted(st, result) {
@@ -2533,7 +2543,7 @@ func workflowHasPendingPlanChangelogArtifactReview(ctx context.Context, workspac
 func postRunMonitorSteps() []postRunMonitorStep {
 	steps := []postRunMonitorStep{
 		postRunMonitorGateStep("<pulse_run_id>", "<run_folder>", "<run_status>"),
-		postRunMonitorAgenticReviewFixStep("<pulse_run_id>", nil),
+		postRunMonitorAgenticReviewFixStep("<pulse_run_id>"),
 	}
 	steps = append(steps, postRunMonitorFinalSteps("<pulse_run_id>")...)
 	return steps
@@ -2547,18 +2557,14 @@ func postRunMonitorGateStep(pulseRunID, runFolder, runStatus string) postRunMoni
 	}
 }
 
-func postRunMonitorAgenticReviewFixStep(pulseRunID string, preflight []string) postRunMonitorStep {
-	preflightContext := ""
-	if len(preflight) > 0 {
-		preflightContext = "\n\nMAINTENANCE ALREADY IDENTIFIED FOR THIS TURN. Handle these items inside this same Review+Fix turn; they are not separate scheduler stages:\n- " + strings.Join(preflight, "\n- ")
-	}
+func postRunMonitorAgenticReviewFixStep(pulseRunID string) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "review-fix",
 		query: fmt.Sprintf(`PULSE REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow it as the operating contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) to obtain its persisted mode; handle only modules marked due and only in that mode.
 
 		This is a dispatch turn. In backlog_drain, launch only one Engineering/Ops executor sequence when its module is due: it starts with verification of due prior fixes, then repairs retained active issues; do not launch broad discovery or Strategy/Goal children. In discovery, use ordinary run_in_background agents only: launch one executor message sequence for selected Engineering and/or Operations work. Its fixed order is Engineering Review → Stores Health when the workflow_review Gate evidence selects learnings/knowledgebase/DB integrity → Operations Review when llm_ops_review is due → consolidate, repair, and verify safe technical changes. Stores Health is an internal Engineering turn, never a separate Pulse module or receipt. In strategy, launch Strategy Auditor and Goal Advisor as separate executor agents only when their own modules are due. In observe, launch no child. For run_in_background, put the first review in instruction and give every later message_sequence item a non-empty message; IDs are optional diagnostic labels generated by the backend. Give every child the pulse run ID, selected mode, selected module/lens, relevant Gate evidence, full normal builder authority for its task, and a compact evidence/result contract. Do not use a deleted generic-review tool, a residual Fixer, polling, or a Go-selected reviewer. Children return their evidence and completed work through normal automatic notifications.
 
-		After dispatching every needed child, end this turn immediately. The runtime tracks registered children and waits for them before it advances Pulse. A later continuation turn will reconcile their evidence, persist the typed Pulse lifecycle rows, and record exactly one terminal record_pulse_result receipt per due module. If no modules are due, record the required skipped/terminal receipts yourself and stop. Do not render the dashboard, back up, publish, or notify in this turn.%s`, pulseRunID, preflightContext),
+		After dispatching every needed child, end this turn immediately. The runtime tracks registered children and waits for them before it advances Pulse. A later continuation turn will reconcile their evidence, persist the typed Pulse lifecycle rows, and record exactly one terminal record_pulse_result receipt per due module. If no modules are due, record the required skipped/terminal receipts yourself and stop. Do not render the dashboard, back up, publish, or notify in this turn.`, pulseRunID),
 	}
 }
 
@@ -2607,6 +2613,11 @@ func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities)
 //
 // The preflight label survives, because naming which migration stalled is real
 // diagnostic value. The target version and the stamp verb do not.
+//
+// Since a declined stamp now skips Pulse outright
+// (errWorkflowUpgradePreflightBlocked), this is belt-and-braces rather than the
+// primary defense: it still covers any future path that routes an upgrade
+// reason into a live session, which is the shape that caused the damage.
 func pulseSafeRunFailureReason(reason string) string {
 	reason = strings.TrimSpace(reason)
 	if !strings.HasPrefix(reason, "workflow upgrade preflight") {
@@ -2858,9 +2869,10 @@ func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]sc
 	manifestVersion := workflowContractVersionForUpgrade(manifest)
 	if manifestVersion != WorkflowContractCurrentVersion && (len(upgradePlan) == 0 || upgradePlan[len(upgradePlan)-1].to != WorkflowContractCurrentVersion) {
 		return nil, fmt.Errorf(
-			"workflow upgrade preflight has no complete upgrade path from version %q to %q; normal schedule message was not started",
+			"workflow upgrade preflight has no complete upgrade path from version %q to %q; normal schedule message was not started: %w",
 			manifestVersion,
 			WorkflowContractCurrentVersion,
+			errWorkflowUpgradePreflightBlocked,
 		)
 	}
 
@@ -3121,14 +3133,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 					s.sessionLogf(sctx, sessionID, "[SCHEDULER] WARNING: failed to persist preflight failure count for %s: %v", turn.label, recordErr)
 				}
 				if !failOpen {
-					return sessionID, runFolder, fmt.Errorf(
-						"workflow upgrade preflight %s did not stamp required version %q (found %q, failure %d/%d consecutive); normal schedule message was not started",
-						turn.label,
-						turn.upgradeTarget,
-						actual,
-						failureCount,
-						workflowSchedulePreflightFailOpenThreshold,
-					)
+					return sessionID, runFolder, workflowUpgradePreflightStampError(turn.label, turn.upgradeTarget, actual, failureCount)
 				}
 				s.sessionLogf(sctx, sessionID,
 					"[SCHEDULER] WARNING: workflow upgrade preflight %s failed to stamp %q %d consecutive times (found %q). Failing OPEN: running the normal schedule message on the unstamped contract. This workflow needs owner attention — a supported configuration control could not complete this migration. Retrying the preflight fresh next scheduled run.",
@@ -4000,6 +4005,27 @@ func (s *SchedulerService) sessionHasLiveChildWork(sessionID string) bool {
 var errWorkshopIdleWaitTimeout = errors.New("workshop idle wait timed out")
 var errWorkshopSequenceInterrupted = errors.New("workshop sequence interrupted by user")
 var errWorkshopSessionFailed = errors.New("workshop session failed")
+
+// errWorkflowUpgradePreflightBlocked marks a run that never started because a
+// blocking contract-upgrade turn declined to stamp. Pulse is a post-run
+// steward, and there is no run to steward here: the workflow did not execute,
+// no evidence was produced, and the only honest thing a Pulse pass can do is
+// spend an LLM turn saying so. Repeating that on every trigger of a workflow
+// waiting on an owner decision is noise, so the caller skips Pulse entirely on
+// this error.
+var errWorkflowUpgradePreflightBlocked = errors.New("workflow upgrade preflight blocked")
+
+// workflowUpgradePreflightStampError reports an upgrade turn that ran and
+// declined to stamp. It wraps errWorkflowUpgradePreflightBlocked so the caller
+// can tell this apart from a workflow that ran and failed — the difference
+// decides whether Pulse has anything to do.
+func workflowUpgradePreflightStampError(label, target, actual string, failureCount int) error {
+	return fmt.Errorf(
+		"workflow upgrade preflight %s did not stamp required version %q (found %q, failure %d/%d consecutive); normal schedule message was not started: %w",
+		label, target, actual, failureCount, workflowSchedulePreflightFailOpenThreshold,
+		errWorkflowUpgradePreflightBlocked,
+	)
+}
 
 var pulseTurnSettleDelay = 500 * time.Millisecond
 

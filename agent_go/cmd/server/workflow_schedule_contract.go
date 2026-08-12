@@ -2,8 +2,36 @@ package server
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// Markers that are effectively never ordinary prose: a message containing one
+// is quoting a command or a tool call wherever it appears.
+var scheduleProcedureSubstrings = []string{
+	"sqlite3 ", "curl ", "execute_step(", "notify_user", "backup/",
+}
+
+// Bare SQL and shell verbs cannot be told from prose by the verb alone.
+// confida-login's reconciliation schedule became unsavable because a message
+// read "...update the issue status..." and tripped the marker "update ";
+// "git " also matches inside "digit ", and an imperative sentence opens with
+// its verb, so anchoring to the start of a line does not separate them either.
+//
+// What does separate them is shape. SQL is recognized by its clause pairs, and
+// a shell command by an actual subcommand — neither of which appears in an
+// English instruction by accident.
+var scheduleProcedurePatterns = []struct {
+	name    string
+	pattern *regexp.Regexp
+}{
+	{"a SELECT ... FROM query", regexp.MustCompile(`(?is)\bselect\b.{0,200}?\bfrom\b`)},
+	{"an INSERT INTO statement", regexp.MustCompile(`(?i)\binsert\s+into\b`)},
+	{"an UPDATE ... SET statement", regexp.MustCompile(`(?is)\bupdate\b.{0,200}?\bset\b`)},
+	{"a DELETE FROM statement", regexp.MustCompile(`(?i)\bdelete\s+from\b`)},
+	{"a git command", regexp.MustCompile(`(?i)\bgit\s+(add|commit|push|pull|clone|checkout|switch|status|log|diff|rebase|merge|stash|tag|fetch|reset|revert|rm|mv|branch|show)\b`)},
+	{"numbered procedure steps", regexp.MustCompile(`(?im)^[\s>*+\-–—]*(?:\d+[.)]|step\s+\d)`)},
+}
 
 // scheduleMessagesNeedExplicitReason distinguishes a compact trigger from a
 // schedule-local procedure. Direct procedures are supported, but unlike planned
@@ -22,12 +50,14 @@ func scheduleMessagesNeedExplicitReason(messages []string) (bool, string) {
 			return true, fmt.Sprintf("messages[%d] is %d characters", index, len(message))
 		}
 		lower := strings.ToLower(message)
-		for _, marker := range []string{
-			"sqlite3 ", "select ", "insert ", "update ", "curl ", "git ",
-			"execute_step(", "notify_user", "backup/", "step 1", "step 2",
-		} {
+		for _, marker := range scheduleProcedureSubstrings {
 			if strings.Contains(lower, marker) {
 				return true, fmt.Sprintf("messages[%d] contains procedure marker %q", index, marker)
+			}
+		}
+		for _, candidate := range scheduleProcedurePatterns {
+			if candidate.pattern.MatchString(message) {
+				return true, fmt.Sprintf("messages[%d] contains %s", index, candidate.name)
 			}
 		}
 	}

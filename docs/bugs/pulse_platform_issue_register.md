@@ -264,6 +264,7 @@ Rules:
 | [PLAT-093](pulse_platform/plat-093.md) | Answered decisions were applied after the run, so the run they were meant to change had already happened | unassigned | `implemented` (runtime reverify pending) | scheduler pre-run turn sequence |
 | [PLAT-094](pulse_platform/plat-094.md) | A stale busy signal aborted Pulse Finalize on a turn that had already finished, matching the PLAT-071 race at a different call site | unassigned | `implemented` (runtime reverify pending) | Pulse step-boundary busy check |
 | [PLAT-095](pulse_platform/plat-095.md) | The PLAT-071/094 busy-signal reconciliation existed as two independent copies; merged to one. `/api/workflow/running` had no collapsed busy/idle/stopped field at all, forcing callers to re-derive it — added. Frontend global-monitor finding remains open: same fix shape there would misclassify a legitimate state | unassigned | `implemented` (reconciliation merged, missing field added; frontend finding open) | scheduler + runtime-coordinator busy classification |
+| [PLAT-096](pulse_platform/plat-096.md) | Contract upgrades had two delivery paths (Pulse still carried them four weeks after the pre-run preflight replaced it, bundling four unverified rungs), an unfenced stamp a closed turn could still write, and no way for an unattended turn to finish or escalate | Claude Code | `implemented` (runtime reverify pending: confida-login has not yet climbed 1.0.20 → 1.0.25) | contract-upgrade preflight, stamp authorization, Pulse dispatch |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -619,7 +620,7 @@ priority and historical run context.
 | [PLAT-086](pulse_platform/plat-086.md) |  |  |  |
 | [PLAT-087](pulse_platform/plat-087.md) | [PLAT-088](pulse_platform/plat-088.md) | [PLAT-089](pulse_platform/plat-089.md) | [PLAT-090](pulse_platform/plat-090.md) |
 | [PLAT-091](pulse_platform/plat-091.md) | [PLAT-092](pulse_platform/plat-092.md) | [PLAT-093](pulse_platform/plat-093.md) | [PLAT-094](pulse_platform/plat-094.md) |
-| [PLAT-095](pulse_platform/plat-095.md) |  |  |  |
+| [PLAT-095](pulse_platform/plat-095.md) | [PLAT-096](pulse_platform/plat-096.md) |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

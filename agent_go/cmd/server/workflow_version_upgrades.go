@@ -102,9 +102,11 @@ set_workflow_contract_version(version="1.0.22") and stop.`
 
 const upgradeCurrentArtifactContract = `WORKFLOW CONTRACT UPGRADE: CURRENT ARTIFACT CONTRACT.
 
-Pulse state is SQLite-backed and shown only in the Pulse popup. Do not create, read, update, publish, validate, or archive a separate Pulse HTML journal. Delete a retired builder/improve.html and its retired improve archive only after preserving no workflow-owned information from them: typed Pulse state, soul, plan/config, reports, knowledgebase, learnings, runs, and database remain authoritative.
+Pulse state is SQLite-backed and shown only in the Pulse popup. Do not create, read, update, publish, validate, or archive a separate Pulse HTML journal. builder/improve.html and builder/improve-archive/ are retired presentation surfaces, not a store of record. Typed Pulse state, soul, plan/config, reports, knowledgebase, learnings, runs, and database remain authoritative.
 
-If the retired archive holds records the SQLite pulse_* tables do not — finding IDs, verdicts, or history that would be lost with the file — that is a blocker, not a judgement call for this turn. Name the specific records and where you looked for them, do not delete the file, and do not stamp. Whether that history is worth keeping is the workflow owner's decision; once they record one it will be quoted back to this turn, and until then repeating the blocker is the correct outcome.
+NOTHING IS DELETED IN THIS MIGRATION. Move builder/improve.html and builder/improve-archive/ into migration-backups/artifact-purity-<UTC timestamp>/, keeping their relative paths. Both files stay on disk, and in git history, at the new location. Read them back at the new path and confirm builder/ no longer holds them before you stamp; if the move cannot preserve a file, that IS a blocker — report it and do not stamp.
+
+A previous turn on this workflow may have declined to advance this version. Read its recorded reason before deciding whether it still applies. The objection on record is to stamping the version while old finding history would be DESTROYED. A relocation does not destroy it: history that exists only in these files and not in the pulse_* tables survives this migration unchanged, at the new path. So do not migrate that history into SQLite, and do not treat its absence from SQLite as a reason to stop — verify the files are intact where you moved them, which is the thing that objection was actually protecting.
 
 Then inspect workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md and referenced learning Markdown, plus knowledgebase notes. Remove only shared AgentWorks transport, MCP bridge, Folder Guard, managed-tool, tool-discovery, or native-session mechanics from workflow-authored prose. Preserve domain-specific inputs, outputs, side effects, safety boundaries, acceptance criteria, selectors, external API behavior, and recovery knowledge. Use the normal typed plan/config tools for plan changes. Re-read every changed artifact and validate the plan/config. If a rewrite is ambiguous, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.21") and stop.`
 
@@ -212,72 +214,43 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDirectHTMLReportsVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
 	}
 	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
-	// Attach the operator's answer here rather than at either call site, so the
-	// scheduler's blocking preflight and Pulse's Review+Fix turn cannot drift
-	// apart on whether a blocker has already been decided.
+	// Attached here rather than at the call site so the turn text is identical
+	// wherever it is built. The version pair used to be added only on the Pulse
+	// delivery path, which meant the blocking preflight — the one that actually
+	// gates on the stamp — never told the agent which version it was moving
+	// from or to. That path is gone; the context it carried is not.
 	for i := range steps {
-		steps[i].query += workflowContractUpgradeDecisionNote(manifest, steps[i].to)
+		steps[i].query += fmt.Sprintf(
+			"\n\nCurrent workflow.json version seen by scheduler: %q. Target workflow contract version: %q.",
+			version, steps[i].to,
+		) + upgradeTurnAutonomyNote
 	}
 	return steps
 }
 
-// workflowContractUpgradeDecisionNote surfaces the operator's recorded answer
-// for one target version, and nothing at all when they have not answered.
+// upgradeTurnAutonomyNote is appended to every upgrade query.
 //
-// An upgrade turn that hits a genuine blocker is supposed to stop — that is the
-// gate working. What it could not do before was ever learn the answer, so a
-// decided question kept re-blocking every trigger.
-func workflowContractUpgradeDecisionNote(manifest *WorkflowManifest, target string) string {
-	if manifest == nil {
-		return ""
-	}
-	recorded := manifest.ContractUpgradeDecisions[target]
-	decision := strings.TrimSpace(recorded.Decision)
-	if decision == "" {
-		return ""
-	}
-	when := ""
-	if decidedAt := strings.TrimSpace(recorded.DecidedAt); decidedAt != "" {
-		when = fmt.Sprintf(" (recorded %s)", decidedAt)
-	}
-	return fmt.Sprintf(
-		"\n\nOPERATOR DECISION ON THIS UPGRADE%s. The workflow owner has already answered a blocker raised against this migration:\n%s\n\n"+
-			"That is authorization for exactly what it says and nothing wider. If it resolves the blocker you find, finish the migration and stamp. "+
-			"If your blocker is a different one, say so plainly and stop without stamping — do not read this as general permission to proceed.",
-		when, decision,
-	)
-}
+// These turns are fired by the scheduler, usually outside working hours, and
+// nobody reads their output. An upgrade turn that ends by asking the owner a
+// question in its reply text is not waiting for an answer — it is stalling, and
+// the stall repeats on every future trigger while the workflow never runs.
+// confida-login sat at 1.0.20 that way: three separate turns each correctly
+// identified the same blocker, each ended with "Which would you like?", and its
+// QA had not executed since.
+//
+// The wording matters more than it looks. An earlier draft said "do not
+// re-open it as a judgement call" and "a question reaches nobody", which reads
+// as pressure to override a safety pause — the exact shape of an injection
+// attempt. An agent that had correctly blocked this migration refused again,
+// and cited the urgency framing as its reason. It was right to.
+//
+// So this states a fact about the execution context and leaves refusing fully
+// available. What it removes is only the *ineffective* form of stopping:
+// a question in reply text that no one receives. create_human_input_request is
+// durable, surfaces to the owner, and scheduledDecisionDrainTurn applies the
+// answer before the next run.
+const upgradeTurnAutonomyNote = `
 
-func postRunMonitorStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {
-	steps := postRunMonitorUpgradeStepsForManifest(manifest)
-	return append(steps, postRunMonitorSteps()...)
-}
+EXECUTION CONTEXT. This is an automated platform migration — the platform's own scheduled maintenance on this workflow, not a user request relayed through the scheduler. It runs unattended, and this turn is the one that owns the decision. Use your engineering judgment and take the best action to complete the migration properly, the same way you would if you had found this work yourself.
 
-// workflowUpgradeTargetsForManifest lists the versions the outstanding upgrade
-// turns are entitled to stamp. Pulse folds every one of them into a single
-// Review+Fix turn, so that turn's grant has to cover the whole set rather than
-// one rung.
-func workflowUpgradeTargetsForManifest(manifest *WorkflowManifest) []string {
-	upgrades := workflowVersionUpgradePlan(manifest)
-	targets := make([]string, 0, len(upgrades))
-	for _, upgrade := range upgrades {
-		targets = append(targets, upgrade.to)
-	}
-	return targets
-}
-
-func postRunMonitorUpgradeStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {
-	upgrades := workflowVersionUpgradePlan(manifest)
-	if len(upgrades) == 0 {
-		return nil
-	}
-
-	steps := make([]postRunMonitorStep, 0, len(upgrades))
-	for _, upgrade := range upgrades {
-		steps = append(steps, postRunMonitorStep{
-			label: upgrade.label,
-			query: fmt.Sprintf("%s\n\nCurrent workflow.json version seen by scheduler: %q. Target workflow contract version: %q.", upgrade.query, workflowContractVersionForUpgrade(manifest), upgrade.to),
-		})
-	}
-	return steps
-}
+Completing it and stamping, or stopping without stamping, are both acceptable outcomes. What does not work is asking a question in your reply: the reply is not delivered to anyone, so the run simply ends and the same turn repeats unchanged on the next schedule. If you find something the instruction above does not cover, raise it with create_human_input_request — durable, reaches the workflow owner, and their answer is applied before the next run — then stop without stamping.`

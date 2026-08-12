@@ -6292,15 +6292,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"uniqueItems": true,
 					"description": "Optional specialized CDP browser ports (maximum 4). Use multiple ports only when one workflow needs independent Chrome profiles/login identities, such as testing two accounts on the same site. Each port must be launched with a distinct --user-data-dir. Normal concurrent workflows should share the default single CDP browser.",
 				},
-				"contract_upgrade_decision_version": map[string]interface{}{
-					"type":        "string",
-					"pattern":     `^\d+\.\d+\.\d+$`,
-					"description": "Contract version whose upgrade blocker the owner is answering, for example \"1.0.21\". Pass together with contract_upgrade_decision.",
-				},
-				"contract_upgrade_decision": map[string]interface{}{
-					"type":        "string",
-					"description": "The workflow owner's answer to a blocker a contract-upgrade preflight reported (for example: the legacy Pulse history in builder/improve-archive is not worth migrating, delete it). The next preflight quotes this back to that upgrade turn, which then completes the migration or stops on a different blocker. Record only what the owner actually decided — this authorizes the named migration, not upgrades generally. Pass an empty string to withdraw a recorded decision.",
-				},
 				"run_retention_count": map[string]interface{}{
 					"type":        "integer",
 					"minimum":     1,
@@ -7526,65 +7517,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor=%v", enabled))
 			}
 
-			// --- Owner's answer to a contract-upgrade blocker ---
-			// An upgrade turn that hits a real blocker stops, which is correct,
-			// but before this there was no way to ever tell it the answer: the
-			// same blocker was re-derived on every trigger and the workflow
-			// never ran. Recording the decision here lets the next preflight
-			// quote it back to the turn that raised it.
-			versionRaw, versionProvided := args["contract_upgrade_decision_version"]
-			decisionRaw, decisionProvided := args["contract_upgrade_decision"]
-			if (versionProvided && versionRaw != nil) || (decisionProvided && decisionRaw != nil) {
-				targetVersion, _ := versionRaw.(string)
-				targetVersion = strings.TrimSpace(targetVersion)
-				if targetVersion == "" {
-					return "Error: contract_upgrade_decision_version must name the contract version the decision answers, for example \"1.0.21\".", nil
-				}
-				decisionText, _ := decisionRaw.(string)
-				decisionText = strings.TrimSpace(decisionText)
-
-				content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
-				if err != nil {
-					return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
-				}
-				var manifest map[string]interface{}
-				if err := json.Unmarshal([]byte(content), &manifest); err != nil {
-					return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
-				}
-				decisions, _ := manifest["contract_upgrade_decisions"].(map[string]interface{})
-				if decisions == nil {
-					decisions = map[string]interface{}{}
-				}
-				if decisionText == "" {
-					delete(decisions, targetVersion)
-				} else {
-					decisions[targetVersion] = map[string]interface{}{
-						"decision":   decisionText,
-						"decided_at": time.Now().UTC().Format(time.RFC3339),
-					}
-				}
-				if len(decisions) == 0 {
-					delete(manifest, "contract_upgrade_decisions")
-				} else {
-					manifest["contract_upgrade_decisions"] = decisions
-				}
-				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
-				out, err := json.MarshalIndent(manifest, "", "  ")
-				if err != nil {
-					return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
-				}
-				if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(out)); err != nil {
-					return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
-				}
-				anyChanged = true
-				if decisionText == "" {
-					sb.WriteString(fmt.Sprintf("\n### Contract upgrade decision for %s (cleared)\nThe next upgrade preflight for %s will raise its blocker again.\n", targetVersion, targetVersion))
-				} else {
-					sb.WriteString(fmt.Sprintf("\n### Contract upgrade decision for %s\nRecorded. The %s upgrade turn will be shown this answer on the next scheduled preflight; it still stops if it finds a different blocker.\n", targetVersion, targetVersion))
-				}
-				logger.Info(fmt.Sprintf("Recorded contract upgrade decision for %s (cleared=%v)", targetVersion, decisionText == ""))
-			}
-
 			// --- Owner-approved advisor specialization ---
 			if raw, ok := args["advisor_specialization_approval_input_id"]; ok && raw != nil {
 				inputID, _ := raw.(string)
@@ -7603,7 +7535,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			if !anyChanged {
-				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, post_run_monitor, contract_upgrade_decision_version + contract_upgrade_decision, advisor_specialization_approval_input_id.", nil
+				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, post_run_monitor, advisor_specialization_approval_input_id.", nil
 			}
 
 			// Persist config changes to workflow.json manifest (file-backed)

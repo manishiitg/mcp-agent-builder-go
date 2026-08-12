@@ -406,8 +406,10 @@ func TestSchedulerPulsePromptsNameNoRemovedTool(t *testing.T) {
 	for _, step := range postRunMonitorSteps() {
 		prompts[step.label] = step.query
 	}
-	for _, step := range postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"}) {
-		prompts[step.label+"-upgrade"] = step.query
+	// Contract-upgrade turns are delivered by the pre-run preflight, not by
+	// Pulse, but they name tools too and are built in the same package.
+	for _, upgrade := range workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.0"}) {
+		prompts[upgrade.label+"-upgrade"] = upgrade.query
 	}
 	if len(prompts) == 0 {
 		t.Fatal("no scheduler Pulse prompts were collected")

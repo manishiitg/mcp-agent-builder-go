@@ -82,3 +82,34 @@ rationale is supplied. Live proof is a build-in-public upgrade in which each X
 and LinkedIn schedule is classified from behavior: safe draft-only routes are
 created where the procedure is durable, while any genuinely schedule-specific
 conversation remains direct with an explicit rationale.
+
+## Follow-up 2026-08-12 — the message validator rejected prose
+
+`scheduleMessagesNeedExplicitReason` matched its procedure markers as bare
+substrings against the message text. That cannot separate embedded SQL and shell
+from ordinary instructions:
+
+- `"update "` matched *"…update the GitHub issue status…"*
+- `"git "` matches inside *"digit "*
+- `"select "` / `"insert "` match any sentence using those verbs
+- `"step 1"` matched *"…the failing step 1 more time…"*
+
+confida-login's "GitHub Issue Reconciliation" schedule could not be saved:
+
+```
+tool=update_schedule: direct schedule messages are supported, but this queue
+needs direct_messages_reason because messages[1] contains procedure marker "update "
+```
+
+Anchoring to the start of a line does not fix it either — an imperative English
+sentence opens with its verb.
+
+**Fix.** Match on shape rather than on the verb alone: `SELECT … FROM`,
+`INSERT INTO`, `UPDATE … SET`, `DELETE FROM`, `git <subcommand>`, and
+line-opening numbered steps. Unambiguous markers (`sqlite3 `, `curl `,
+`execute_step(`, `notify_user`, `backup/`) stay as plain substrings. Covered both
+directions in `workflow_schedule_contract_markers_test.go`.
+
+This does not change the `nonEmptyCount > 1` rule: a multi-message schedule is a
+direct sequence and still needs `direct_messages_reason`. All three confida
+schedules do — they now fail with that true reason instead of a spurious marker.

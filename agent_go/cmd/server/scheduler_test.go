@@ -1365,34 +1365,7 @@ func TestGateCanSkipEveryReviewAndFixer(t *testing.T) {
 }
 
 func TestPostRunMonitorPrependsWorkflowVersionUpgradeForOldManifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"})
-	assertDirectContractUpgrade(t, steps, "1.0.0")
-}
-
-func TestScheduledWorkshopTurnsRunAllMissingUpgradesBeforeFirstScheduleMessage(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{}, []string{"run the workflow"})
-	if err != nil {
-		t.Fatalf("scheduledWorkshopTurns: %v", err)
-	}
-	// Scheduled-route normalization follows the direct-report migration.
-	if got := len(turns); got != 9 {
-		t.Fatalf("turn count = %d, want eight required upgrades + schedule message", got)
-	}
-	if turns[0].label != "upgrade-message-sequence-code" || turns[0].upgradeTarget != workflowContractMessageSequenceCodeVersion {
-		t.Fatalf("first turn = %+v, want message-sequence-code upgrade", turns[0])
-	}
-	if turns[5].label != "upgrade-learnings-lock-audit" || turns[5].upgradeTarget != workflowContractLearningsLockAuditVersion {
-		t.Fatalf("sixth upgrade turn = %+v, want learnings-lock-audit reaching 1.0.22", turns[5])
-	}
-	if turns[6].label != "upgrade-direct-html-reports" || turns[6].upgradeTarget != workflowContractDirectHTMLReportsVersion {
-		t.Fatalf("seventh upgrade turn = %+v, want direct-report migration", turns[6])
-	}
-	if turns[7].label != "upgrade-schedule-execution-model" || turns[7].upgradeTarget != WorkflowContractCurrentVersion {
-		t.Fatalf("eighth upgrade turn = %+v, want scheduled-route migration reaching current version", turns[7])
-	}
-	if turns[8].label != "schedule-message-1" || turns[8].query != "run the workflow" || turns[8].upgradeTarget != "" {
-		t.Fatalf("normal schedule turn = %+v", turns[8])
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.0"}, "1.0.0")
 }
 
 func TestScheduledWorkshopTurnsCurrentWorkflowStartsWithScheduleMessage(t *testing.T) {
@@ -1416,597 +1389,102 @@ func TestScheduledWorkshopTurnsRejectsUnknownVersionBeforeScheduleMessage(t *tes
 }
 
 func TestPostRunMonitorPrependsWorkflowVersionUpgradeForMissingVersion(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{})
-	assertDirectContractUpgrade(t, steps, "1.0.0")
+	assertDirectContractUpgrade(t, &WorkflowManifest{}, "1.0.0")
 }
 
-func assertDirectContractUpgrade(t *testing.T, steps []postRunMonitorStep, from string) {
+func TestPostRunMonitorPrependsPublishGateUpgradeForVersion101Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.1"}, "1.0.1")
+}
+
+func TestPostRunMonitorPrependsPulseReadabilityUpgradeForVersion103Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.3"}, "1.0.3")
+}
+
+func TestPostRunMonitorPrependsPulseFilterUpgradeForVersion104Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.4"}, "1.0.4")
+}
+
+func TestPostRunMonitorPrependsRichPulseWidgetUpgradeForVersion105Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.5"}, "1.0.5")
+}
+
+func TestPostRunMonitorPrependsLegacyOptimizerCleanupUpgradeForVersion106Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.6"}, "1.0.6")
+}
+
+func TestPostRunMonitorPrependsPulseDatePickerCleanupForVersion107Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.7"}, "1.0.7")
+}
+
+func TestPostRunMonitorPrependsStableSoulAndPulseHierarchyUpgradeForVersion108Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.8"}, "1.0.8")
+}
+
+func TestPostRunMonitorPrependsMessageSequenceCodeMigrationForVersion109Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.9"}, "1.0.9")
+}
+
+func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.10"}, "1.0.10")
+}
+
+// assertDirectContractUpgrade checks the upgrade turns a workflow at `from`
+// receives. It reads the blocking pre-run preflight, which is the only path
+// that delivers contract migrations: Pulse used to deliver a second copy of
+// them (b4e4fc14), the preflight replaced that (f58ac5b5), and the older path
+// was finally removed once it started bundling four unverified rungs into one
+// Review+Fix turn.
+func assertDirectContractUpgrade(t *testing.T, manifest *WorkflowManifest, from string) {
 	t.Helper()
+	turns, err := scheduledWorkshopTurns(manifest, nil)
+	if err != nil {
+		t.Fatalf("scheduledWorkshopTurns(%s): %v", from, err)
+	}
 	upgrades := workflowVersionUpgradePlan(&WorkflowManifest{Version: from})
-	if got, want := len(steps), len(upgrades)+3; got != want {
-		t.Fatalf("postRunMonitorStepsForManifest(%s) length = %d, want %d upgrades + 3 Pulse stages", from, got, len(upgrades))
+	if got, want := len(turns), len(upgrades); got != want {
+		t.Fatalf("upgrade turns for %s = %d, want %d", from, got, want)
 	}
 	for index, upgrade := range upgrades {
-		if got := steps[index].label; got != upgrade.label {
+		if got := turns[index].label; got != upgrade.label {
 			t.Fatalf("upgrade %d label = %q, want %q", index, got, upgrade.label)
 		}
+		if got := turns[index].upgradeTarget; got != upgrade.to {
+			t.Fatalf("upgrade %q target = %q, want %q", upgrade.label, got, upgrade.to)
+		}
+		// The version pair reached only the retired Pulse path for a while, so
+		// the preflight never told the agent what it was migrating between.
 		for _, want := range []string{
 			"WORKFLOW CONTRACT UPGRADE",
 			`Current workflow.json version seen by scheduler: "` + from + `"`,
 			`Target workflow contract version: "` + upgrade.to + `"`,
 		} {
-			if !strings.Contains(steps[index].query, want) {
-				t.Fatalf("upgrade %q missing %q:\n%s", upgrade.label, want, steps[index].query)
+			if !strings.Contains(turns[index].query, want) {
+				t.Fatalf("upgrade %q missing %q:\n%s", upgrade.label, want, turns[index].query)
 			}
 		}
 	}
-	if got := steps[len(upgrades)].label; got != "gate" {
-		t.Fatalf("first Pulse step label = %q, want gate", got)
-	}
 }
 
-func TestPostRunMonitorPrependsPublishGateUpgradeForVersion101Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.1"})
-	assertDirectContractUpgrade(t, steps, "1.0.1")
-}
-
-func TestPostRunMonitorPrependsHTMLReportUpgradeForVersion102Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.2"})
-	assertDirectContractUpgrade(t, steps, "1.0.2")
-	return
-	if got := len(steps); got != 21 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.2) length = %d, want 21", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.3" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.3", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.2 -> v1.0.3",
-		`reports/report_plan.json`,
-		`db/reports/`,
-		`window.report.query(sql)`,
-		`kind "file"`,
-		`renderFormat "html"`,
-		"Remove legacy widget kinds",
-		`workflow.json "version" to "1.0.3"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("html report upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.4" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.4", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.5" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.6" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.7" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.8" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.9" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.10" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.11" {
-		t.Fatalf("ninth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[12].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 12 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[13].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 13 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[18].label; got != "gate" {
-		t.Fatalf("step 18 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsPulseReadabilityUpgradeForVersion103Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.3"})
-	assertDirectContractUpgrade(t, steps, "1.0.3")
-	return
-	if got := len(steps); got != 20 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.3) length = %d, want 20", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.4" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.4", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.3 -> v1.0.4",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"What matters now",
-		"recent runs: metadata row first",
-		"full-width second row",
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.4"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("pulse readability upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.5" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.6" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.7" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.8" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.9" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.10" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.11" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[11].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 11 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[12].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 12 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[17].label; got != "gate" {
-		t.Fatalf("step 17 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsPulseFilterUpgradeForVersion104Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.4"})
-	assertDirectContractUpgrade(t, steps, "1.0.4")
-	return
-	if got := len(steps); got != 19 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.4) length = %d, want 19", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.5" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.5", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.4 -> v1.0.5",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"Kind, Search, Reset",
-		"do not add a date picker",
-		`data-date="YYYY-MM-DD"`,
-		`data-kind="run|monitor|artifact|decision|advisor|cos|open|user|note"`,
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.5"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("pulse filter upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.6" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.7" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.8" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.9" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.10" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.11" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[10].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 10 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[11].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 11 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[16].label; got != "gate" {
-		t.Fatalf("step 16 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsRichPulseWidgetUpgradeForVersion105Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.5"})
-	assertDirectContractUpgrade(t, steps, "1.0.5")
-	return
-	if got := len(steps); got != 18 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.5) length = %d, want 18", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.6" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.6", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.5 -> v1.0.6",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"What matters now widget cards",
-		"color-coded signal tiles",
-		".tile.ok",
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.6"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("rich pulse widget upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.7" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.8" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.9" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.10" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.11" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 9 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[10].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 10 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[15].label; got != "gate" {
-		t.Fatalf("step 15 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsLegacyOptimizerCleanupUpgradeForVersion106Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.6"})
-	assertDirectContractUpgrade(t, steps, "1.0.6")
-	return
-	if got := len(steps); got != 17 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.6) length = %d, want 17", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.7" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.7", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.6 -> v1.0.7",
-		"remove old separate Auto Improve / Goal Advisor optimizer schedules",
-		`workshop_mode is "optimizer"`,
-		"messages is missing/empty",
-		"STEP 1/5 PRE-BACKUP",
-		"Do not remove a schedule by name alone",
-		"Preserve explicit custom optimizer jobs",
-		"remove it from workflow.json schedules",
-		"schedule-runs.json history",
-		"post_run_monitor=true",
-		`workflow.json "version" to "1.0.7"`,
-		"do not publish",
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("legacy optimizer cleanup step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.8" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.9" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.10" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.11" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 8 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 9 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[14].label; got != "gate" {
-		t.Fatalf("step 14 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsPulseDatePickerCleanupForVersion107Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.7"})
-	assertDirectContractUpgrade(t, steps, "1.0.7")
-	return
-	if got := len(steps); got != 16 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.7) length = %d, want 16", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.8" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.8", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.7 -> v1.0.8",
-		"remove the date picker",
-		`id="filter-date"`,
-		"keep Kind, Search, Reset",
-		"keep visible dates and data-date attributes",
-		`workflow.json "version" to "1.0.8"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("Pulse date-picker cleanup step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.9" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.10" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.11" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 8 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[13].label; got != "gate" {
-		t.Fatalf("step 13 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsStableSoulAndPulseHierarchyUpgradeForVersion108Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.8"})
-	assertDirectContractUpgrade(t, steps, "1.0.8")
-	return
-	if got := len(steps); got != 15 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.8) length = %d, want 15", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.9" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.9", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.8 -> v1.0.9",
-		"keep soul/soul.md limited to stable intent",
-		"explicit user-approved constraints",
-		"remove architecture",
-		"Assumptions challenged",
-		"Today's outcome",
-		`<details class="technical">`,
-		"#pulse-agent-handoff",
-		"must not repeat the user-facing report",
-		"Needs your decision",
-		`workflow.json "version" to "1.0.9"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("stable soul/Pulse hierarchy upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.10" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.11" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 6 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[12].label; got != "gate" {
-		t.Fatalf("step 12 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsMessageSequenceCodeMigrationForVersion109Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.9"})
-	assertDirectContractUpgrade(t, steps, "1.0.9")
-	return
-	if got := len(steps); got != 14 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.9) length = %d, want 14", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.10" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.10", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.9 -> v1.0.10",
-		"migrate_message_sequence_code_items",
-		"standalone regular scripted step",
-		"do not guess and do not stamp the workflow version",
-		"Do not edit workflow.json",
-		"scheduler independently verifies",
-		`stamps version "1.0.10"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("message-sequence code migration missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.11" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 5 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 6 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.18" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.18", got)
-	}
-	if got := steps[11].label; got != "gate" {
-		t.Fatalf("step 11 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.10"})
-	assertDirectContractUpgrade(t, steps, "1.0.10")
-	return
-	if got := len(steps); got != 13 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.10) length = %d, want 13", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.11" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.11", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.10 -> v1.0.11",
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}])`,
-		`data-pulse-schema="2"`,
-		"Issues and reviews",
-		"Decisions and analysis",
-		"Fixes and improvements",
-		"builder/improve.html stays time-first and newest-first",
-		"remove any duplicated Goal/Profile card",
-		"Current unanswered requests remain in report_human_inputs",
-		"selected option and/or free-form answer",
-		"#pulse-agent-handoff",
-		"Do not edit workflow.json",
-		"scheduler independently verifies",
-		`stamps version "1.0.11"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("Pulse history contract upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[4].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 4 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 5 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.18" {
-		t.Fatalf("step 6 label = %q, want upgrade-1.0.18", got)
-	}
-	if got := steps[10].label; got != "gate" {
-		t.Fatalf("step 10 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorDoesNotPrependWorkflowVersionUpgradeForCurrentManifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: WorkflowContractCurrentVersion})
-	if got := len(steps); got != 3 {
-		t.Fatalf("postRunMonitorStepsForManifest(current) length = %d, want 3", got)
-	}
-	if got := steps[0].label; got != "gate" {
-		t.Fatalf("first step label = %q, want gate", got)
-	}
-	if got := steps[1].label; got != "review-fix" {
-		t.Fatalf("second step label = %q, want review-fix", got)
-	}
-	for _, want := range []string{
-		"PULSE REVIEW + FIX DISPATCH",
-		"durable Gate worklist",
-		"run_in_background",
-		"later continuation turn will reconcile",
-	} {
-		if !strings.Contains(steps[1].query, want) {
-			t.Fatalf("review-fix step missing %q:\n%s", want, steps[1].query)
-		}
+func TestNoUpgradeTurnsForAWorkflowAlreadyAtTheCurrentContract(t *testing.T) {
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"run the workflow"})
+	if err != nil {
+		t.Fatalf("scheduledWorkshopTurns: %v", err)
+	}
+	if len(turns) != 1 || turns[0].upgradeTarget != "" {
+		t.Fatalf("a current-contract workflow should start straight at its schedule message: %+v", turns)
 	}
 }
 
 func TestPostRunMonitorPrependsLightweightPulseReportUpgradeForVersion118Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.18"})
-	assertDirectContractUpgrade(t, steps, "1.0.18")
-	return
-	if got := len(steps); got != 6 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.18) length = %d, want 6", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.19" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.19", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.18 -> v1.0.19",
-		`data-pulse-schema="4"`,
-		"exactly three Latest Pulse cells",
-		"Current work count strip",
-		"Remove Current work issue-title queues",
-		"Keep material Activity history concise through editorial judgment",
-		"Never omit history merely to meet an item count",
-		"Do not impose a byte, character, or token budget",
-		`workflow.json "version" to "1.0.19"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("lightweight Pulse report upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.20" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.20", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.21" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.21", got)
-	}
-	if got := steps[3].label; got != "gate" {
-		t.Fatalf("fourth step label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.18"}, "1.0.18")
 }
 
 func TestPostRunMonitorPrependsExecutivePulseJournalUpgradeForVersion119Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.19"})
-	assertDirectContractUpgrade(t, steps, "1.0.19")
-	return
-	if got := len(steps); got != 5 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.19) length = %d, want 5", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.20" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.20", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.19 -> v1.0.20",
-		`data-pulse-schema="5"`,
-		"exactly three Latest Pulse cells",
-		"Remove visible reviewer coverage",
-		"Use editorial judgment: retain important active history",
-		"Never omit history merely to meet an item count",
-		"Do not impose a byte, character, or token budget",
-		`workflow.json "version" to "1.0.20"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("executive Pulse journal upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.21" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.21", got)
-	}
-	if got := steps[2].label; got != "gate" {
-		t.Fatalf("third step label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.19"}, "1.0.19")
 }
 
 func TestPostRunMonitorPrependsArtifactPurityUpgradeForVersion120Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.20"})
-	assertDirectContractUpgrade(t, steps, "1.0.20")
-	return
-	if got := len(steps); got != 4 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.20) length = %d, want 4", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.21" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.21", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.20 -> v1.0.21",
-		"Inventory exact occurrences",
-		"Preserve target/domain-specific HOW",
-		"typed plan mutation tools",
-		"The migration is idempotent",
-		`workflow.json "version" to "1.0.21"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("artifact purity upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "gate" {
-		t.Fatalf("second step label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.20"}, "1.0.20")
 }
 
 func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
