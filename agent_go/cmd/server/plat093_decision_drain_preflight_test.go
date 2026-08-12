@@ -1,0 +1,121 @@
+package server
+
+import (
+	"strings"
+	"testing"
+)
+
+func plat093Answered(ids ...string) []ReportHumanInput {
+	out := make([]ReportHumanInput, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, ReportHumanInput{ID: id, Status: "answered", SelectedOptionID: "approve"})
+	}
+	return out
+}
+
+// TestDecisionDrainTurnOnlyExistsWhenThereIsSomethingToApply keeps an ordinary
+// run from paying for an extra LLM turn it does not need. Most runs have no
+// answered decisions waiting.
+func TestDecisionDrainTurnOnlyExistsWhenThereIsSomethingToApply(t *testing.T) {
+	if _, ok := scheduledDecisionDrainTurn(nil); ok {
+		t.Fatal("no pending decisions must produce no turn")
+	}
+	if _, ok := scheduledDecisionDrainTurn([]ReportHumanInput{}); ok {
+		t.Fatal("an empty slice must produce no turn")
+	}
+	// An input with no usable id is not something to apply.
+	if _, ok := scheduledDecisionDrainTurn([]ReportHumanInput{{ID: "   ", Status: "answered"}}); ok {
+		t.Fatal("a blank id must produce no turn")
+	}
+	if _, ok := scheduledDecisionDrainTurn(plat093Answered("plan-proposal-1")); !ok {
+		t.Fatal("a real answered decision must produce a turn")
+	}
+}
+
+// TestDecisionDrainTurnCarriesTheOperatorsActualAnswer pins that the prompt
+// names each decision and the option the operator actually chose. Applying a
+// decision without honoring its selected option — approving something they
+// rejected — is the worst available outcome, so the answer travels with the id.
+func TestDecisionDrainTurnCarriesTheOperatorsActualAnswer(t *testing.T) {
+	turn, ok := scheduledDecisionDrainTurn([]ReportHumanInput{
+		{ID: "plan-proposal-scoring", Status: "answered", SelectedOptionID: "approve-both"},
+		{ID: "strategy-proposal-stops", Status: "answered", SelectedOptionID: "reject"},
+	})
+	if !ok {
+		t.Fatal("expected a turn")
+	}
+	for _, want := range []string{
+		"plan-proposal-scoring (answered: approve-both)",
+		"strategy-proposal-stops (answered: reject)",
+		"mark_human_input_consumed",
+		"BEFORE this run starts",
+	} {
+		if !strings.Contains(turn.query, want) {
+			t.Fatalf("drain prompt missing %q:\n%s", want, turn.query)
+		}
+	}
+	if !turn.decisionDrain {
+		t.Fatal("the turn must be flagged decisionDrain so the loop treats it as non-fatal")
+	}
+	if turn.upgradeTarget != "" {
+		t.Fatal("a decision drain is not a contract upgrade and must not carry an upgrade target")
+	}
+}
+
+// TestDecisionDrainTurnRefusesToRunTheWorkflow guards the boundary that makes
+// this safe to run before the schedule's own message: it applies decisions and
+// nothing else. A drain that started executing steps would duplicate the run.
+func TestDecisionDrainTurnRefusesToRunTheWorkflow(t *testing.T) {
+	turn, _ := scheduledDecisionDrainTurn(plat093Answered("plan-proposal-1"))
+	if !strings.Contains(turn.query, "Do NOT run the workflow") {
+		t.Fatalf("drain prompt must forbid running the workflow:\n%s", turn.query)
+	}
+	// It must also refuse to consume what it could not apply — consuming to
+	// tidy the list would erase the operator's decision while recording that it
+	// was honored.
+	if !strings.Contains(turn.query, "never to tidy the list") {
+		t.Fatalf("drain prompt must forbid consuming what was not applied:\n%s", turn.query)
+	}
+	if !strings.Contains(turn.query, "post-run Pulse pass will pick it up") {
+		t.Fatalf("drain prompt must name the fallback for what it cannot apply:\n%s", turn.query)
+	}
+}
+
+// TestDecisionDrainRunsAfterUpgradesAndBeforeScheduleMessages pins the
+// ordering, which is the entire point of the change. A contract upgrade can
+// rewrite the very artifacts a decision edits, so the upgrade goes first; the
+// schedule's own message must come last so the run executes on the applied
+// decision rather than the stale plan.
+func TestDecisionDrainRunsAfterUpgradesAndBeforeScheduleMessages(t *testing.T) {
+	upgrades := []scheduledWorkshopTurn{
+		{label: "upgrade-a", upgradeTarget: "1.0.21"},
+		{label: "upgrade-b", upgradeTarget: "1.0.22"},
+	}
+	messages := []scheduledWorkshopTurn{
+		{label: "schedule-message-1"},
+		{label: "schedule-message-2"},
+	}
+	turns := append(append([]scheduledWorkshopTurn{}, upgrades...), messages...)
+	drain, ok := scheduledDecisionDrainTurn(plat093Answered("plan-proposal-1"))
+	if !ok {
+		t.Fatal("expected a drain turn")
+	}
+
+	// Mirrors the insertion in executeWorkshopJob: at the upgrade count.
+	insertAt := len(upgrades)
+	turns = append(turns[:insertAt], append([]scheduledWorkshopTurn{drain}, turns[insertAt:]...)...)
+
+	gotOrder := make([]string, 0, len(turns))
+	for _, turn := range turns {
+		gotOrder = append(gotOrder, turn.label)
+	}
+	want := []string{"upgrade-a", "upgrade-b", "decision-drain-preflight", "schedule-message-1", "schedule-message-2"}
+	if len(gotOrder) != len(want) {
+		t.Fatalf("turn order = %v, want %v", gotOrder, want)
+	}
+	for i := range want {
+		if gotOrder[i] != want[i] {
+			t.Fatalf("turn order = %v, want %v", gotOrder, want)
+		}
+	}
+}

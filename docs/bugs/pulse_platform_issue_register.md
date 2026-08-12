@@ -261,6 +261,7 @@ Rules:
 | [PLAT-090](pulse_platform/plat-090.md) | No surface reports Pulse time/cost against workflow time/cost, so "is Pulse worth it?" cannot be answered | unassigned | `open` (designed, not built) | Pulse measurement surface, cost ledger read path |
 | [PLAT-091](pulse_platform/plat-091.md) | Evaluation step children never complete, pinning the session busy so Pulse loses Review+Fix, Finalize, backup and notify | unassigned | `implemented` (runtime reverify pending) | background-agent completion for evaluation step executions |
 | [PLAT-092](pulse_platform/plat-092.md) | Answered operator decisions are never applied or consumed; 26 stranded across 6 workflows, oldest 31 days | unassigned | `implemented` (drain contract shipped; historical backlog stranded) | Pulse Review+Fix decision drain |
+| [PLAT-093](pulse_platform/plat-093.md) | Answered decisions were applied after the run, so the run they were meant to change had already happened | unassigned | `implemented` (runtime reverify pending) | scheduler pre-run turn sequence |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -615,7 +616,7 @@ priority and historical run context.
 | [PLAT-084](pulse_platform/plat-084.md) | [PLAT-085](pulse_platform/plat-085.md) |  |  |
 | [PLAT-086](pulse_platform/plat-086.md) |  |  |  |
 | [PLAT-087](pulse_platform/plat-087.md) | [PLAT-088](pulse_platform/plat-088.md) | [PLAT-089](pulse_platform/plat-089.md) | [PLAT-090](pulse_platform/plat-090.md) |
-| [PLAT-091](pulse_platform/plat-091.md) | [PLAT-092](pulse_platform/plat-092.md) |  |  |
+| [PLAT-091](pulse_platform/plat-091.md) | [PLAT-092](pulse_platform/plat-092.md) | [PLAT-093](pulse_platform/plat-093.md) |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

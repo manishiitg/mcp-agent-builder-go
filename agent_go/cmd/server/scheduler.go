@@ -2708,6 +2708,64 @@ type scheduledWorkshopTurn struct {
 	label         string
 	query         string
 	upgradeTarget string
+	// decisionDrain marks the pre-run turn that applies operator decisions the
+	// user already answered. It runs on the Pulse LLM like an upgrade turn, but
+	// unlike one it is never allowed to fail the run — see the loop in
+	// executeWorkshopJob.
+	decisionDrain bool
+}
+
+// scheduledDecisionDrainTurn returns the pre-run turn that applies answered
+// operator decisions, or ok=false when there are none to apply.
+//
+// Timing is the whole point (PLAT-092/PLAT-093). These decisions overwhelmingly
+// change what a run should DO — scoring units, eval cadence, plan edits,
+// enabling a feature — so draining them only in the post-run Pulse pass means
+// the run that just happened still used the old behavior and the operator's
+// answer lands a full cycle late. Measured on the stranded backlog: 24 of 26
+// answered decisions required an action rather than a mere acknowledgement.
+//
+// Applying is deliberately an agent turn rather than Go: the decision's own
+// context field carries a prose "what happens next if you approve" section
+// written for the operator, not a machine-readable patch, and the typed plan,
+// config, eval and schedule tools it needs already exist. This mirrors the
+// contract-upgrade preflight, which is the proven precedent for mutating plan
+// artifacts before the first schedule message.
+func scheduledDecisionDrainTurn(pending []ReportHumanInput) (scheduledWorkshopTurn, bool) {
+	if len(pending) == 0 {
+		return scheduledWorkshopTurn{}, false
+	}
+	ids := make([]string, 0, len(pending))
+	for _, input := range pending {
+		id := strings.TrimSpace(input.ID)
+		if id == "" {
+			continue
+		}
+		if selected := strings.TrimSpace(input.SelectedOptionID); selected != "" {
+			id += " (answered: " + selected + ")"
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return scheduledWorkshopTurn{}, false
+	}
+
+	return scheduledWorkshopTurn{
+		label:         "decision-drain-preflight",
+		decisionDrain: true,
+		query: fmt.Sprintf(
+			"PRE-RUN DECISION DRAIN. The operator has answered %d decision(s) that are still unapplied. "+
+				"Apply them now, BEFORE this run starts, so the run uses what they decided rather than repeating the behavior they already asked you to change.\n\n"+
+				"Answered and unapplied: %s\n\n"+
+				"Read each one with report_human_inputs. Its `context` states what happens if approved, and `selected_option_id` is the operator's actual answer — honor that answer, including a rejection.\n\n"+
+				"For each decision, exactly one of:\n"+
+				"1. APPLY it with the normal typed tools (plan modification, update_step_config, evaluation, schedule, workflow config), confirm the change actually landed by re-reading the artifact, then call mark_human_input_consumed with an outcome_summary naming what changed. Consume only what you truly applied — never to tidy the list.\n"+
+				"2. LEAVE it, when you cannot honestly apply it now: the answer needs evidence from a run that has not happened yet, the premise no longer holds because the plan moved since it was answered (compare its run_id and answered_at against the current plan and changelog), or the intent is ambiguous. Say so plainly in your reply and do not consume it. The post-run Pulse pass will pick it up with fresh evidence.\n\n"+
+				"A rejection is applied by consuming it with an outcome_summary recording that the operator declined and nothing changed.\n\n"+
+				"Do NOT run the workflow, execute steps, back up, publish, or notify — this turn only applies decisions. Stop when every decision above has been applied or explicitly left with a reason.",
+			len(ids), strings.Join(ids, ", "),
+		),
+	}, true
 }
 
 func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]scheduledWorkshopTurn, error) {
@@ -2850,6 +2908,22 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Running %d blocking workflow upgrade preflight turn(s) before %d schedule message(s)", upgradeCount, len(messages))
 	}
 
+	// Apply answered operator decisions before the run, not after it, so this
+	// run behaves the way the operator already asked (PLAT-093). Inserted after
+	// any contract upgrade — an upgrade can change the very artifacts a decision
+	// edits — and before the first schedule message. Failure to read the store
+	// is not a reason to skip the run: log it and continue unchanged.
+	if pending, listErr := listReportHumanInputs(ctx, sctx.WorkspacePath, "answered", ""); listErr != nil {
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Could not read answered decisions for the pre-run drain (continuing): %v", listErr)
+	} else if drainTurn, ok := scheduledDecisionDrainTurn(pending); ok {
+		insertAt := upgradeCount
+		if insertAt < 0 || insertAt > len(turns) {
+			insertAt = 0
+		}
+		turns = append(turns[:insertAt], append([]scheduledWorkshopTurn{drainTurn}, turns[insertAt:]...)...)
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Draining %d answered operator decision(s) before this run's first schedule message", len(pending))
+	}
+
 	// Once a preflight upgrade turn has failed open (see below), any FURTHER
 	// upgrade turn in this same run is skipped without attempting it — later
 	// migrations may assume the skipped one already ran. Message turns still
@@ -2868,7 +2942,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			reqMap[k] = v
 		}
 		reqMap["query"] = turn.query
-		if turn.upgradeTarget != "" {
+		if turn.upgradeTarget != "" || turn.decisionDrain {
 			s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
 		}
 
@@ -2881,6 +2955,14 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		}
 
 		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
+			// A decision drain that cannot start must not cost the operator the
+			// run itself. The decisions stay answered-and-unapplied, exactly as
+			// before this turn existed, and the post-run Pulse pass still sees
+			// them (PLAT-093).
+			if turn.decisionDrain {
+				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain could not start (continuing to the run): %v", err)
+				continue
+			}
 			return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) failed: %w", i+1, len(turns), turn.label, err)
 		}
 
@@ -2890,6 +2972,14 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		s.stampScheduleNameOnSession(sessionID, sctx)
 
 		if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
+			// Same rule as the start failure above: a decision drain that stalls
+			// costs its decisions, never the run (PLAT-093). Checked before the
+			// run-evidence reconciliation below because this turn precedes the
+			// first schedule message, so there is no run evidence to preserve yet.
+			if turn.decisionDrain {
+				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain did not settle (continuing to the run): %v", err)
+				continue
+			}
 			// A stalled session says the turn stopped progressing. It says nothing
 			// about whether the workflow ran. This path returns before the
 			// evidence check further below, so ProducedRunEvidence would keep its
