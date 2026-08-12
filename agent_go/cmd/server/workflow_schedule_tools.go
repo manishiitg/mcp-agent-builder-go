@@ -158,7 +158,7 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 						"messages": map[string]interface{}{
 							"type":        "array",
 							"items":       map[string]interface{}{"type": "string"},
-							"description": "Replace the workshop-mode messages. Durable workflow behavior should normally use a planned route; direct procedural queues require direct_messages_reason.",
+							"description": "Replace the workshop-mode messages. Durable workflow behavior should normally use a planned route; direct procedural queues require direct_messages_reason. Pass [] or null to clear back to the route-based default. Omit this field entirely to leave existing messages untouched.",
 						},
 						"direct_messages_reason": map[string]interface{}{
 							"type":        "string",
@@ -462,7 +462,13 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 			}
 
 			var messages []string
-			if raw, ok := args["messages"]; ok && raw != nil {
+			setMessages := false
+			// Presence of the key alone means "set this" — an explicit null or
+			// empty array is a caller clearing messages back to the
+			// route-based default, and must not be conflated with omitting
+			// the field. See PLAT-097.
+			if raw, ok := args["messages"]; ok {
+				setMessages = true
 				messages = stringSlice(raw)
 			}
 			var directMessagesReason *string
@@ -479,7 +485,7 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 				}
 			}
 
-			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, directMessagesReason, workshopMode, resumePrevious)
+			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious)
 		},
 
 		"delete_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {

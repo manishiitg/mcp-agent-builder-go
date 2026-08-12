@@ -16,6 +16,7 @@ import (
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
+	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/robfig/cron/v3"
@@ -623,6 +624,125 @@ func TestWorkflowScheduleListExposesWorkshopMode(t *testing.T) {
 			t.Fatalf("schedule list missing %q:\n%s", want, out)
 		}
 	}
+}
+
+// TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet pins PLAT-097:
+// update_schedule(messages=[]) or update_schedule(messages=null) must clear a
+// schedule's messages back to the route-based default, and omitting the field
+// entirely must leave existing messages untouched. Before the fix, all three
+// cases collapsed to the same "messages == nil" value downstream, so an
+// explicit clear silently no-oped — the schedule reported success but
+// workflow.json kept the full prior array, with no way to migrate a
+// message-based schedule to the canonical route-backed model without
+// deleting and recreating it (losing get_schedule_runs history).
+func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
+	workspacePath := "Workflow/social-media"
+	newManifest := func() *WorkflowManifest {
+		return &WorkflowManifest{
+			SchemaVersion: WorkflowManifestSchemaVersion,
+			ID:            "social-media",
+			Label:         "Social Media",
+			Schedules: []WorkflowSchedule{
+				{
+					ID:             "run-schedule",
+					Name:           "Daily publish",
+					CronExpression: "0 9 * * *",
+					Timezone:       "Asia/Kolkata",
+					Enabled:        true,
+					GroupNames:     []string{"group-1"},
+					Mode:           "workshop",
+					WorkshopMode:   "run",
+					Messages:       []string{"Run the full workflow using run_full_workflow(group_name=\"group-1\")"},
+				},
+			},
+		}
+	}
+
+	setup := func(t *testing.T) (*todo_creation_human.SchedulerCallbacks, func() []string) {
+		t.Helper()
+		manifest := newManifest()
+		manifestJSON, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		variablesJSON, err := json.Marshal(VariablesManifest{
+			Groups: []VariableGroup{{Name: "group-1", Enabled: true, Values: map[string]string{}}},
+		})
+		if err != nil {
+			t.Fatalf("marshal variables manifest: %v", err)
+		}
+		mock := &mockWorkspaceAPI{files: map[string]string{
+			workspacePath + "/workflow.json":            string(manifestJSON),
+			workspacePath + "/variables/variables.json": string(variablesJSON),
+		}}
+		workspace := httptest.NewServer(mock)
+		t.Cleanup(workspace.Close)
+		t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+		callbacks := (&StreamingAPI{}).buildSchedulerCallbacks()
+		currentMessages := func() []string {
+			mock.mu.Lock()
+			content := mock.files[workspacePath+"/workflow.json"]
+			mock.mu.Unlock()
+			var current WorkflowManifest
+			if err := json.Unmarshal([]byte(content), &current); err != nil {
+				t.Fatalf("unmarshal persisted manifest: %v", err)
+			}
+			return current.Schedules[0].Messages
+		}
+		return callbacks, currentMessages
+	}
+
+	t.Run("omitting messages leaves existing messages untouched", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 1 {
+			t.Fatalf("messages = %v, want unchanged 1-item array", got)
+		}
+	})
+
+	// Both interactive_workshop_manager.go's append-loop parser and
+	// workflow_schedule_tools.go's stringSlice() helper turn a JSON []
+	// (empty array) into a nil Go slice, same as an explicit JSON null — so
+	// this is the shape that actually reaches UpdateSchedule for messages=[]
+	// through the primary (workshop) tool path. setMessages=true is what
+	// must carry the "clear" intent, since messages itself is
+	// indistinguishable from "omitted".
+	t.Run("explicit empty array clears messages (nil-slice parsing shape)", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
+
+	// workflow_schedule_tools.go's stringSlice() helper produces a non-nil
+	// empty slice for messages=[] specifically (unlike the workshop path
+	// above) — pin that setMessages, not messages' nil-ness, is what
+	// UpdateSchedule must trust either way.
+	t.Run("explicit empty array clears messages (non-nil empty-slice parsing shape)", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
+
+	t.Run("explicit null clears messages", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
 }
 
 func TestShouldUpdateChiefTaskReport(t *testing.T) {

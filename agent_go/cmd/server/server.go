@@ -8764,7 +8764,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return result, nil
 		},
-		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error) {
+		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error) {
 			if cronExpr != "" {
 				if err := ValidateCronExpression(cronExpr); err != nil {
 					return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -8811,18 +8811,18 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			candidateMessages := sched.Messages
 			candidateReason := sched.DirectMessagesReason
-			if messages != nil {
+			if setMessages {
 				candidateMessages = messages
 			}
 			if directMessagesReason != nil {
 				candidateReason = *directMessagesReason
 			}
-			if messages != nil || directMessagesReason != nil {
+			if setMessages || directMessagesReason != nil {
 				if err := validateScheduleMessages(candidateMessages, candidateReason); err != nil {
 					return "", err
 				}
 			}
-			if messages != nil {
+			if setMessages {
 				sched.Messages = messages
 			}
 			if directMessagesReason != nil {

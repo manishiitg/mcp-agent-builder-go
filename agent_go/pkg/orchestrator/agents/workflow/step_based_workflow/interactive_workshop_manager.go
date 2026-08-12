@@ -7892,7 +7892,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"messages": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Replaces existing messages. Messages should reference tools with full parameters, e.g. ['Run the full workflow using run_full_workflow(group_name=\"group-1\")'].",
+					"description": "Replaces existing messages. Messages should reference tools with full parameters, e.g. ['Run the full workflow using run_full_workflow(group_name=\"group-1\")']. Pass [] or null to clear back to the route-based default (equivalent to omitting messages on create_schedule). Omit this field entirely to leave existing messages untouched.",
 				},
 				"workshop_mode": map[string]interface{}{
 					"type":        "string",
@@ -7967,7 +7967,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			mode, _ := args["mode"].(string)
 			var messages []string
-			if raw, ok := args["messages"]; ok && raw != nil {
+			setMessages := false
+			// The key being present at all — including an explicit null or an
+			// empty array — means "set this", not just a non-empty array. A
+			// caller clearing messages back to the route-based default (an
+			// empty list) must be distinguishable from omitting the field
+			// entirely, or the clear silently no-ops. See PLAT-097.
+			if raw, ok := args["messages"]; ok {
+				setMessages = true
 				if arr, ok := raw.([]interface{}); ok {
 					for _, v := range arr {
 						if s, ok := v.(string); ok {
@@ -7989,7 +7996,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					resumePrevious = &b
 				}
 			}
-			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, directMessagesReason, workshopMode, resumePrevious)
+			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious)
 		},
 		"workflow",
 	); err != nil {
