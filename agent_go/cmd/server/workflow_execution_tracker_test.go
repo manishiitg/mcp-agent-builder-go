@@ -46,6 +46,48 @@ func TestRunningWorkflowListIncludesWorkflowBuilderTask(t *testing.T) {
 	}
 }
 
+// TestRunningWorkflowListCarriesTheCollapsedDisplayStatus pins PLAT-095's
+// follow-up: ActiveSessionInfo has always shipped a pre-collapsed
+// busy/idle/stopped DisplayStatus alongside its raw RuntimeState, computed
+// from the exact same snapshot so the two can never disagree.
+// ActiveWorkflowExecution — what /api/workflow/running (the Global Monitor's
+// workflow view) actually returns — shipped RuntimeState but had no
+// DisplayStatus field at all, forcing every consumer to re-derive the
+// collapse from raw Phase itself instead of trusting an authoritative answer.
+func TestRunningWorkflowListCarriesTheCollapsedDisplayStatus(t *testing.T) {
+	startedAt := time.Now().UTC()
+	api := &StreamingAPI{
+		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+			"exec-1": {
+				ExecutionID:   "exec-1",
+				SessionID:     "session-busy",
+				Source:        trackedExecutionSourceWorkshopBackground,
+				Kind:          "workflow_builder_task",
+				WorkspacePath: "Workflow/rts-video",
+				Status:        trackedExecutionStatusRunning,
+				UserID:        "user-1",
+				StartedAt:     startedAt,
+			},
+		},
+	}
+	api.setSessionBusy("session-busy", true)
+
+	running := api.listRunningWorkflowExecutions("user-1")
+	if len(running) != 1 {
+		t.Fatalf("running len = %d, want 1", len(running))
+	}
+	if running[0].RuntimeState == nil {
+		t.Fatal("RuntimeState was not populated")
+	}
+	if running[0].DisplayStatus != sessionExecutionDisplayBusy {
+		t.Fatalf("DisplayStatus = %q, want %q — the collapsed status must match RuntimeState.Phase, not be left for the caller to re-derive",
+			running[0].DisplayStatus, sessionExecutionDisplayBusy)
+	}
+	if got := sessionDisplayStatusFromRuntime(*running[0].RuntimeState).Status; got != running[0].DisplayStatus {
+		t.Fatalf("DisplayStatus %q disagrees with sessionDisplayStatusFromRuntime(RuntimeState) %q — they must be computed from the same snapshot", running[0].DisplayStatus, got)
+	}
+}
+
 func TestRunningWorkflowListKeepsInternalWorkflowStepsOut(t *testing.T) {
 	api := &StreamingAPI{
 		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{

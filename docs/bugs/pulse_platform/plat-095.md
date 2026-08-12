@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — busy-signal reconciliation consolidated in Go; runtime reverify pending. The global-monitor finding below is investigated but **not fixed** |
+| Ticket state | `implemented` — busy-signal reconciliation consolidated in Go, plus a follow-up fix for the global-monitor gap this investigation found; runtime reverify pending |
 | Last synchronized | `2026-08-12` |
 
 - **Priority:** P1 — every scheduled message in the platform depends on this
@@ -68,6 +68,42 @@ polling overhead — not the same duplication as the reconciliation rule.
 Collapsing them was scoped out explicitly: higher risk, touches every
 scheduled message in the platform, and this file has multiple concurrent
 editors at any given time.
+
+## Follow-up fix shipped: `ActiveWorkflowExecution` was missing the collapsed status entirely
+
+Chasing the frontend finding below turned up something more concrete than a
+"same bug class, be careful" note. `ActiveSessionInfo` (the model behind
+polling/SSE/the execution tree) has always computed and shipped a pre-collapsed
+`DisplayStatus` (`busy`/`idle`/`stopped`) alongside its raw `RuntimeState`, from
+one `snapshot` value in one call — `polling.go:440-443`:
+
+```go
+if snapshot, ok := api.authoritativeRuntimeSnapshot(session.SessionID); ok {
+    enriched.RuntimeState = &snapshot
+    enriched.DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
+}
+```
+
+Because both come from the same value, they can never disagree — the
+frontend's own `runtimeDisplayStatus()` re-deriving the identical mapping from
+`runtime_state.phase` is redundant, but not a live bug (verified: the two
+mappings agree today).
+
+`ActiveWorkflowExecution` — the model behind `/api/workflow/running`, the
+endpoint the Global Monitor actually reads for workflow-level busy state — had
+**no `DisplayStatus` field at all** (`workflow.go:598-624`). All three call
+sites that attach its `RuntimeState` shipped only the raw 7-state `Phase`,
+with no collapsed answer available — the one API surface where a consumer is
+*forced* to re-derive busy/idle/stopped from scratch, because nothing
+authoritative was ever offered.
+
+Fixed by adding the field and populating it the same way, at all three sites:
+`workflow_execution_tracker.go:463` (`listRunningWorkflowExecutions`),
+`workflow_running_routes.go:87` (`handleGetRunningWorkflow`), and
+`workflow_running_routes.go:157` (`handleUpdateRunningWorkflow`). Mirrored
+into the frontend type (`RunningWorkflowInfo` gained `runtime_state` — which
+the Go struct had always sent but the TS type never declared — and
+`display_status`) so it's actually usable from TypeScript.
 
 ## Open finding: the same bug class exists in the frontend, but the naive fix is wrong
 
@@ -142,6 +178,12 @@ merged into one in Go.
   full timing-loop test would need separate test infrastructure. Coverage
   instead comes from the pure-function table test (proves the rule) plus the
   unchanged integration suite (proves no regression in the common paths).
+- `TestRunningWorkflowListCarriesTheCollapsedDisplayStatus` (new): pins that
+  `listRunningWorkflowExecutions` populates `DisplayStatus` from the same
+  snapshot as `RuntimeState`, and that the two can never disagree. Verified to
+  fail (with a nil-vs-populated mismatch) when the assignment is neutered, and
+  pass with it restored.
+- `npx tsc --noEmit` clean after the `RunningWorkflowInfo` type additions.
 - **Not yet reverified live.**
 
 ## Acceptance

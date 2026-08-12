@@ -1551,6 +1551,11 @@ export interface RunningWorkflowInfo {
   needs_user_input?: boolean;
   waiting_message?: string;
   waiting_since?: string;
+  runtime_state?: RuntimeSnapshot;
+  // Same collapsed busy/idle/stopped read ActiveSessionInfo.display_status
+  // ships, computed from runtime_state so callers don't have to re-derive it
+  // from runtime_state.phase themselves. See PLAT-095.
+  display_status?: 'busy' | 'idle' | 'stopped';
 }
 
 export interface UpdateRunningWorkflowRequest {

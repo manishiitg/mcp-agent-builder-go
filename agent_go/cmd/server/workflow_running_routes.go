@@ -84,6 +84,7 @@ func (api *StreamingAPI) handleGetRunningWorkflow(w http.ResponseWriter, r *http
 	}
 	if snapshot, ok := api.authoritativeRuntimeSnapshot(sessionID); ok {
 		out.RuntimeState = &snapshot
+		out.DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
@@ -153,6 +154,7 @@ func (api *StreamingAPI) handleUpdateRunningWorkflow(w http.ResponseWriter, r *h
 	api.trackedWorkflowExecutionsMux.Unlock()
 	if snapshot, ok := api.authoritativeRuntimeSnapshot(sessionID); ok {
 		out.RuntimeState = &snapshot
+		out.DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -621,6 +621,11 @@ type ActiveWorkflowExecution struct {
 	WaitingMessage string           `json:"waiting_message,omitempty"`
 	WaitingSince   *time.Time       `json:"waiting_since,omitempty"`
 	RuntimeState   *RuntimeSnapshot `json:"runtime_state,omitempty"`
+	// DisplayStatus is the same collapsed busy/idle/stopped read ActiveSessionInfo
+	// ships (sessionDisplayStatusFromRuntime(RuntimeState).Status), computed here
+	// too so a caller never has to re-derive it from RuntimeState.Phase itself —
+	// see PLAT-095.
+	DisplayStatus string `json:"display_status,omitempty"`
 }
 
 // RunMetadataLLM captures which model was used for a specific role

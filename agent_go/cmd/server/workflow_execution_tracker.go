@@ -460,6 +460,7 @@ func (api *StreamingAPI) listRunningWorkflowExecutions(userID string) []ActiveWo
 		list[i].WaitingSince = waitingSince
 		if snapshot, ok := api.authoritativeRuntimeSnapshot(list[i].SessionID); ok {
 			list[i].RuntimeState = &snapshot
+			list[i].DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
 		}
 	}
 
