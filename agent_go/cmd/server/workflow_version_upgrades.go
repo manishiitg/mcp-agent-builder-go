@@ -104,6 +104,8 @@ const upgradeCurrentArtifactContract = `WORKFLOW CONTRACT UPGRADE: CURRENT ARTIF
 
 Pulse state is SQLite-backed and shown only in the Pulse popup. Do not create, read, update, publish, validate, or archive a separate Pulse HTML journal. Delete a retired builder/improve.html and its retired improve archive only after preserving no workflow-owned information from them: typed Pulse state, soul, plan/config, reports, knowledgebase, learnings, runs, and database remain authoritative.
 
+If the retired archive holds records the SQLite pulse_* tables do not — finding IDs, verdicts, or history that would be lost with the file — that is a blocker, not a judgement call for this turn. Name the specific records and where you looked for them, do not delete the file, and do not stamp. Whether that history is worth keeping is the workflow owner's decision; once they record one it will be quoted back to this turn, and until then repeating the blocker is the correct outcome.
+
 Then inspect workflow.json, planning/plan.json, planning/step_config.json, learnings/_global/SKILL.md and referenced learning Markdown, plus knowledgebase notes. Remove only shared AgentWorks transport, MCP bridge, Folder Guard, managed-tool, tool-discovery, or native-session mechanics from workflow-authored prose. Preserve domain-specific inputs, outputs, side effects, safety boundaries, acceptance criteria, selectors, external API behavior, and recovery knowledge. Use the normal typed plan/config tools for plan changes. Re-read every changed artifact and validate the plan/config. If a rewrite is ambiguous, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.21") and stop.`
 
 const upgradeDirectHTMLReports = `WORKFLOW CONTRACT UPGRADE: DIRECT HTML REPORT PAGES.
@@ -210,12 +212,58 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDirectHTMLReportsVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
 	}
 	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
+	// Attach the operator's answer here rather than at either call site, so the
+	// scheduler's blocking preflight and Pulse's Review+Fix turn cannot drift
+	// apart on whether a blocker has already been decided.
+	for i := range steps {
+		steps[i].query += workflowContractUpgradeDecisionNote(manifest, steps[i].to)
+	}
 	return steps
+}
+
+// workflowContractUpgradeDecisionNote surfaces the operator's recorded answer
+// for one target version, and nothing at all when they have not answered.
+//
+// An upgrade turn that hits a genuine blocker is supposed to stop — that is the
+// gate working. What it could not do before was ever learn the answer, so a
+// decided question kept re-blocking every trigger.
+func workflowContractUpgradeDecisionNote(manifest *WorkflowManifest, target string) string {
+	if manifest == nil {
+		return ""
+	}
+	recorded := manifest.ContractUpgradeDecisions[target]
+	decision := strings.TrimSpace(recorded.Decision)
+	if decision == "" {
+		return ""
+	}
+	when := ""
+	if decidedAt := strings.TrimSpace(recorded.DecidedAt); decidedAt != "" {
+		when = fmt.Sprintf(" (recorded %s)", decidedAt)
+	}
+	return fmt.Sprintf(
+		"\n\nOPERATOR DECISION ON THIS UPGRADE%s. The workflow owner has already answered a blocker raised against this migration:\n%s\n\n"+
+			"That is authorization for exactly what it says and nothing wider. If it resolves the blocker you find, finish the migration and stamp. "+
+			"If your blocker is a different one, say so plainly and stop without stamping — do not read this as general permission to proceed.",
+		when, decision,
+	)
 }
 
 func postRunMonitorStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {
 	steps := postRunMonitorUpgradeStepsForManifest(manifest)
 	return append(steps, postRunMonitorSteps()...)
+}
+
+// workflowUpgradeTargetsForManifest lists the versions the outstanding upgrade
+// turns are entitled to stamp. Pulse folds every one of them into a single
+// Review+Fix turn, so that turn's grant has to cover the whole set rather than
+// one rung.
+func workflowUpgradeTargetsForManifest(manifest *WorkflowManifest) []string {
+	upgrades := workflowVersionUpgradePlan(manifest)
+	targets := make([]string, 0, len(upgrades))
+	for _, upgrade := range upgrades {
+		targets = append(targets, upgrade.to)
+	}
+	return targets
 }
 
 func postRunMonitorUpgradeStepsForManifest(manifest *WorkflowManifest) []postRunMonitorStep {

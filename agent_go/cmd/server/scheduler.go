@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/contractupgrade"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
@@ -2166,6 +2167,12 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	intro := postRunMonitorIntro(pulseContext, sctx.WorkspacePath, pulseRunID, runStatus, runFolder)
 
 	upgradeSteps := postRunMonitorUpgradeStepsForManifest(manifest)
+	upgradeTargets := workflowUpgradeTargetsForManifest(manifest)
+	// Pulse reaches this workflow through the same session the scheduler used.
+	// Whatever that session was authorized to stamp during the preflight is
+	// spent or withdrawn by now; only the Review+Fix turn below re-earns it.
+	contractupgrade.Revoke(sessionID)
+	defer contractupgrade.Revoke(sessionID)
 	s.sessionLogf(sctx, sessionID, "[PULSE] starting pulse for %s (run_folder=%s status=%s, upgrades=%d)", sctx.Schedule.ID, runFolder, runStatus, len(upgradeSteps))
 	reviewFixPreflight := make([]string, 0, len(upgradeSteps)+1)
 	for _, upgrade := range upgradeSteps {
@@ -2355,7 +2362,16 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	}
 
 	for i, st := range steps {
+		// Review+Fix is the only Pulse turn that carries upgrade instructions
+		// (postRunMonitorAgenticReviewFixStep folds the outstanding ones in),
+		// so it is the only Pulse turn entitled to stamp. Every other turn —
+		// the finalizer that quotes the preflight failure back at the agent
+		// included — runs without a grant.
+		if st.label == "review-fix" && len(upgradeTargets) > 0 {
+			contractupgrade.Mint(sessionID, upgradeTargets...)
+		}
 		result := runStep(st)
+		contractupgrade.Revoke(sessionID)
 		if abortIfInterrupted(st, result) {
 			return
 		}
@@ -2577,6 +2593,33 @@ func notificationInstructionsFromCapabilities(capabilities WorkflowCapabilities)
 	}
 }
 
+// pulseSafeRunFailureReason tells the finalizer why the workflow did not run
+// without handing it the upgrade instruction a second time.
+//
+// The finalizer shares the scheduler's session. On confida-login 2026-08-12 it
+// was told `did not stamp required version "1.0.21"` three seconds after the
+// turn that owed that stamp had been adjudicated and closed — and ten minutes
+// later something in that session stamped 1.0.21, which the next preflight
+// trusted and skipped the migration for. The grant in pkg/contractupgrade is
+// what makes the write impossible; keeping the instruction out of unrelated
+// turns is what stops the attempt from being made and reported as a confusing
+// refusal in the operator's run-summary email.
+//
+// The preflight label survives, because naming which migration stalled is real
+// diagnostic value. The target version and the stamp verb do not.
+func pulseSafeRunFailureReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if !strings.HasPrefix(reason, "workflow upgrade preflight") {
+		return reason
+	}
+	idx := strings.Index(reason, " did not stamp")
+	if idx <= 0 {
+		return reason
+	}
+	return reason[:idx] + " did not complete, so the scheduled workflow was not started." +
+		" That migration belongs to its own upgrade turn: do not attempt it here and do not stamp a contract version from this turn."
+}
+
 // postRunMonitorNoRunSteps is the truthful finalizer for an invocation that
 // never produced new run evidence — the workshop session ran but the workflow
 // itself never started or restarted a run folder (e.g. a preflight abort
@@ -2589,7 +2632,7 @@ func postRunMonitorNoRunSteps(pulseRunID, reason string, instructions ...workflo
 	if len(instructions) > 0 {
 		ownerInstructions = instructions[0]
 	}
-	reason = strings.TrimSpace(reason)
+	reason = pulseSafeRunFailureReason(reason)
 	if reason == "" {
 		reason = "the scheduler recorded no error, but no workflow run was started or resumed during this invocation"
 	}
@@ -2949,6 +2992,11 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	if upgradeCount > 0 {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Running %d blocking workflow upgrade preflight turn(s) before %d schedule message(s)", upgradeCount, len(messages))
 	}
+	// Backstop for the paths that leave this loop without reaching adjudication
+	// — a session that fails to start, or an idle wait that expires. Neither
+	// may leave a live stamp authorization behind for the schedule messages
+	// that follow, or for Pulse afterwards.
+	defer contractupgrade.Revoke(sessionID)
 
 	// Apply answered operator decisions before the run, not after it, so this
 	// run behaves the way the operator already asked (PLAT-093). Inserted after
@@ -2986,6 +3034,13 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		reqMap["query"] = turn.query
 		if turn.upgradeTarget != "" || turn.decisionDrain {
 			s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
+			// The stamp is authorized for the life of this turn and no longer.
+			// Revoking at adjudication below is what stops a later turn in the
+			// same session from stamping a version this turn declined — the
+			// confida-login 2026-08-12 case, where the stamp arrived ten
+			// minutes after the verdict and the next preflight skipped the
+			// migration it certified. See pkg/contractupgrade.
+			contractupgrade.Mint(sessionID, turn.upgradeTarget)
 		}
 
 		// Resume the workflow's latest thread (same CLI) on the first message
@@ -3047,6 +3102,11 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		}
 
 		if turn.upgradeTarget != "" {
+			// Adjudicating the turn closes it. A turn that has been judged must
+			// not be able to change the thing it was judged on, so the stamp
+			// stops being accepted here — on the passing path as much as the
+			// failing one.
+			contractupgrade.Revoke(sessionID)
 			updatedManifest, updatedFound, readErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
 			if readErr != nil {
 				return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight %s completed but manifest could not be re-read: %w", turn.label, readErr)

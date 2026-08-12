@@ -3777,10 +3777,20 @@ func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 		"source-hash-gated backup",
 		"electron, slack",
 		"owner@example.com",
-		reason,
+		// The label survives so the operator's run summary can name which
+		// migration stalled.
+		"workflow upgrade preflight upgrade-1.0.18 did not complete",
 	} {
 		if !strings.Contains(steps[0].query, want) {
 			t.Fatalf("no-run finalizer missing %q:\n%s", want, steps[0].query)
+		}
+	}
+	// The finalizer shares the scheduler's session. Restating the stamp
+	// instruction here is what invited the confida-login 2026-08-12 out-of-turn
+	// stamp, so the target version and the verb must not reach this turn.
+	for _, forbidden := range []string{"did not stamp", `"1.0.18"`} {
+		if strings.Contains(steps[0].query, forbidden) {
+			t.Fatalf("no-run finalizer restates the upgrade instruction (%q):\n%s", forbidden, steps[0].query)
 		}
 	}
 	if strings.Contains(steps[0].query, "write builder/improve.html once") {

@@ -216,9 +216,9 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 		"label":          "linkedin",
 		"capabilities":   map[string]interface{}{},
 		"execution_defaults": map[string]interface{}{
-			"always_use_same_run":   true,
+			"always_use_same_run":    true,
 			"global_skill_objective": "retired field text",
-			"workshop_mode":         "optimizer",
+			"workshop_mode":          "optimizer",
 		},
 		"schedules": []interface{}{},
 	})
@@ -249,5 +249,56 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 	}
 	if !strings.Contains(persistedJSON, "\"workshop_mode\": \"optimizer\"") {
 		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)
+	}
+}
+
+// A recorded contract-upgrade decision has to survive an ordinary read. The
+// same pass that prunes retired fields rewrites workflow.json, so a decision
+// the schema did not know about would be silently deleted the next time the
+// workflow was opened — and the blocker it answered would come straight back.
+func TestReadWorkflowManifestPreservesContractUpgradeDecisions(t *testing.T) {
+	const workspacePath = "Workflow/confida-login"
+	manifestJSON, err := json.Marshal(map[string]interface{}{
+		"schema_version": 1,
+		"id":             "wf_confida",
+		"version":        "1.0.20",
+		"label":          "confida-qa-testing",
+		"capabilities":   map[string]interface{}{},
+		"schedules":      []interface{}{},
+		"contract_upgrade_decisions": map[string]interface{}{
+			"1.0.21": map[string]interface{}{
+				"decision":   "The pre-2026-07-22 finding history in builder/improve-archive is not worth keeping. Delete it.",
+				"decided_at": "2026-08-12T00:00:00Z",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	workspace := &mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/workflow.json": string(manifestJSON),
+	}}
+	server := httptest.NewServer(workspace)
+	defer server.Close()
+	t.Setenv("WORKSPACE_API_URL", server.URL)
+
+	manifest, found, err := ReadWorkflowManifest(context.Background(), workspacePath)
+	if err != nil || !found {
+		t.Fatalf("ReadWorkflowManifest() found=%v err=%v", found, err)
+	}
+	decision, ok := manifest.ContractUpgradeDecisions["1.0.21"]
+	if !ok {
+		t.Fatalf("decision for 1.0.21 lost on read: %+v", manifest.ContractUpgradeDecisions)
+	}
+	if !strings.Contains(decision.Decision, "not worth keeping") || decision.DecidedAt != "2026-08-12T00:00:00Z" {
+		t.Fatalf("decision round-tripped incorrectly: %+v", decision)
+	}
+
+	workspace.mu.Lock()
+	persistedJSON := workspace.files[workspacePath+"/workflow.json"]
+	workspace.mu.Unlock()
+	if persistedJSON != "" && !strings.Contains(persistedJSON, "contract_upgrade_decisions") {
+		t.Fatalf("a rewrite pruned contract_upgrade_decisions as a retired field: %s", persistedJSON)
 	}
 }

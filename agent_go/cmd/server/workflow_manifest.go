@@ -82,6 +82,21 @@ type WorkflowManifest struct {
 	// specialize the stable reviewer contracts; they never replace them.
 	Pulse *WorkflowPulseConfig `json:"pulse,omitempty"`
 
+	// ContractUpgradeDecisions records the operator's answer to a blocker an
+	// upgrade turn raised, keyed by the contract version that turn targets.
+	//
+	// Without it a blocked rung has exactly one outcome: block again next time.
+	// confida-login sat at 1.0.20 doing that indefinitely — the 1.0.21 turn
+	// found 19 finding IDs in builder/improve-archive that were absent from the
+	// pulse_* tables, correctly declined to delete them, and every trigger
+	// afterwards re-derived the same blocker while the QA work never ran.
+	//
+	// The decision lives in the manifest rather than in the shared upgrade
+	// prompt because it is the owner's call about their data, not policy for
+	// every install. It travels with the workflow, so a machine that has never
+	// seen the blocker still honors the answer.
+	ContractUpgradeDecisions map[string]WorkflowContractUpgradeDecision `json:"contract_upgrade_decisions,omitempty"`
+
 	// Backup is declarative configuration for builder-agent managed backup.
 	// Operational status is written separately to backup/status.json so normal
 	// backup attempts do not churn workflow.json.
@@ -102,6 +117,16 @@ type WorkflowManifest struct {
 
 type WorkflowPulseConfig struct {
 	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
+}
+
+// WorkflowContractUpgradeDecision is an operator's standing answer to one
+// upgrade turn's blocker. Decision is free text on purpose: the blockers are
+// specific ("the pre-2026-07-22 finding history in builder/improve-archive is
+// not worth migrating — delete it"), and an enum would either lose that or
+// force every future blocker into categories nobody has seen yet.
+type WorkflowContractUpgradeDecision struct {
+	Decision  string `json:"decision"`
+	DecidedAt string `json:"decided_at,omitempty"`
 }
 
 type WorkflowAdvisorSpecialization struct {
