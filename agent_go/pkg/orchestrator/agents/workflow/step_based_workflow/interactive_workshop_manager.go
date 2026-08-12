@@ -1513,7 +1513,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// Schedule tools
 	schedule := []string{
 		"list_schedules", "create_schedule", "create_calendar_schedule", "update_schedule",
-		"delete_schedule", "trigger_schedule", "get_schedule_runs",
+		"delete_schedule", "trigger_schedule", "get_schedule_runs", "get_contract_upgrades",
 	}
 
 	// Skill tools
@@ -7555,7 +7555,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// in a prompt made agents search for a tool that could never exist.
 	if err := mcpAgent.RegisterCustomTool(
 		"set_workflow_contract_version",
-		"Stamp workflow.json with a completed workflow contract version. Use only as the final action of a scheduler-requested WORKFLOW VERSION UPGRADE, after every requested migration check has passed. This changes only workflow.json.version and updated_at; it cannot change plans, schedules, capabilities, or notifications.",
+		"Stamp workflow.json with a completed workflow contract version, after that migration's work is actually done and verified. Two callers: the final action of a scheduler-requested WORKFLOW CONTRACT UPGRADE turn, or an operator-led upgrade in this chat — use get_contract_upgrades to see what is pending, do the migration the instruction describes, then stamp that same version. Stamp one version at a time, in order; the version is the record that the migration happened, so never stamp work that was not performed. This changes only workflow.json.version and updated_at; it cannot change plans, schedules, capabilities, or notifications.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7599,7 +7599,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if iwm.controller != nil {
 				sessionID = iwm.controller.httpSessionID
 			}
-			if refusal, ok := authorizeContractVersionStamp(sessionID, version); !ok {
+			var nextPending func() (string, string, error)
+			if iwm.schedulerFuncs != nil && iwm.schedulerFuncs.NextContractUpgrade != nil && iwm.schedulerWorkspacePath != "" {
+				nextPending = func() (string, string, error) {
+					return iwm.schedulerFuncs.NextContractUpgrade(ctx, iwm.schedulerWorkspacePath)
+				}
+			}
+			if refusal, ok := authorizeContractVersionStamp(sessionID, version, nextPending); !ok {
 				return refusal, nil
 			}
 
@@ -7643,6 +7649,28 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register list_schedules tool: %v", err))
+	}
+
+	// Tool: get_contract_upgrades — show pending platform migrations
+	if err := mcpAgent.RegisterCustomTool(
+		"get_contract_upgrades",
+		"Show this workflow's pending platform contract migrations: its current contract version, every migration still owed with the full instruction text the scheduler sends, and any recorded failed attempts per schedule. Use when the owner asks why a workflow is not running, why its version is behind, or what a contract upgrade is asking for. These migrations run as a blocking preflight before a scheduled run, so a stalled one stops the workflow itself.",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			if iwm.schedulerFuncs == nil || iwm.schedulerFuncs.GetContractUpgrades == nil {
+				return "Contract upgrade status is not available in this session.", nil
+			}
+			if iwm.schedulerWorkspacePath == "" {
+				return "No workspace path associated with this workflow session.", nil
+			}
+			return iwm.schedulerFuncs.GetContractUpgrades(ctx, iwm.schedulerWorkspacePath)
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_contract_upgrades tool: %v", err))
 	}
 
 	// Tool: create_schedule — Create a new cron schedule

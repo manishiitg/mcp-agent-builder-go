@@ -1941,6 +1941,11 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 	}
 
 	// Now the whole scheduled job, including post-run side effects, is done.
+	// Release the session so nothing outlives the run holding a stamp
+	// authorization, and so a later interactive session reusing the id is not
+	// treated as scheduler-driven.
+	contractupgrade.ClearScheduled(sessionID)
+
 	terminalState := schedulerstate.StateCompleted
 	if userInterrupted {
 		terminalState = schedulerstate.StateStopped
@@ -2969,6 +2974,11 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	sctx.ProducedRunEvidence = false
 
 	sessionID := s.newScheduleSessionID(sctx)
+	// Claim the session for the whole scheduled run — preflight, schedule
+	// messages, and the Pulse pass that reuses it. Only a claimed session needs
+	// an open upgrade turn to stamp; an operator in the workflow builder is
+	// authorized by being there.
+	contractupgrade.MarkScheduled(sessionID)
 
 	s.updateRuntimeState(scheduleRuntimeKey(sctx), func(state *ScheduleRuntimeState) {
 		state.LastSessionID = sessionID

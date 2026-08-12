@@ -56,6 +56,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"update_variable", "add_group", "update_group", "delete_group",
 		"list_schedules", "create_schedule", "create_calendar_schedule",
 		"update_schedule", "delete_schedule", "trigger_schedule", "get_schedule_runs",
+		"get_contract_upgrades",
 		"list_skills", "import_skill", "uninstall_skill", "search_skills", "install_skill",
 		"list_published_llms", "list_provider_models", "test_llm", "set_workflow_llm_config",
 	)

@@ -36,7 +36,52 @@ import (
 var (
 	mu     sync.Mutex
 	grants = map[string]string{}
+	// Sessions the scheduler drives. The fence binds only these.
+	scheduled = map[string]bool{}
 )
+
+// MarkScheduled records that the scheduler owns this session for the whole of
+// a scheduled run — upgrade preflight, schedule messages, and Pulse.
+//
+// The fence exists because a *scheduled* session stamped a version ten minutes
+// after its upgrade turn had been adjudicated, and the next preflight trusted
+// it. It was never meant to bind an operator working in the workflow builder:
+// there, a human asked for the migration and can see what the agent does, so
+// the stamp is authorized by their presence. Enforcing it everywhere removed
+// the only way a person could unblock a stalled upgrade by hand.
+func MarkScheduled(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	scheduled[sessionID] = true
+}
+
+// ClearScheduled releases a session at the end of its scheduled run.
+func ClearScheduled(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	delete(scheduled, sessionID)
+	delete(grants, sessionID)
+}
+
+// IsScheduled reports whether the scheduler owns this session, and therefore
+// whether a stamp from it needs an open upgrade turn.
+func IsScheduled(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return scheduled[sessionID]
+}
 
 // Mint authorizes sessionID to stamp exactly target, replacing any previous
 // authorization for that session. One turn, one version: the scheduler opens a

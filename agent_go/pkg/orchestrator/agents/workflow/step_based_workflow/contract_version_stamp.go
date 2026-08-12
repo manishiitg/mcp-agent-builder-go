@@ -20,7 +20,37 @@ import (
 // upgrade turn that owed that stamp had been adjudicated and closed. Both paths
 // land here, so both are covered; no wording in a prompt could have covered the
 // shell one.
-func authorizeContractVersionStamp(sessionID, version string) (string, bool) {
+func authorizeContractVersionStamp(sessionID, version string, nextPending func() (string, string, error)) (string, bool) {
+	// An operator working in the workflow builder is the authorization. They
+	// asked for the migration and can see what the agent does, so there is
+	// nothing to forge. Binding them too removed the only way a person could
+	// unblock a stalled upgrade by hand — which is exactly what a workflow that
+	// keeps declining its own migration needs.
+	//
+	// What still has to hold is the ladder. Without a scheduler grant pinning
+	// the target, nothing otherwise stops a stamp jumping straight to the
+	// newest version and skipping three migrations whose work was never done.
+	if !contractupgrade.IsScheduled(sessionID) {
+		if nextPending == nil {
+			return "", true
+		}
+		target, label, err := nextPending()
+		if err != nil {
+			// A lookup failure is not evidence of a bad stamp; do not block the
+			// operator's only manual route on it.
+			return "", true
+		}
+		switch {
+		case target == "":
+			return "Refused: this workflow owes no contract migration, so there is nothing to stamp. Use get_contract_upgrades to confirm what it is on.", false
+		case target != version:
+			return fmt.Sprintf(
+				"Refused: the next migration this workflow owes is %s (%s), not %s. Migrations are stamped one at a time, in order — stamping %s now would record %s as done without its work being performed. Use get_contract_upgrades, complete %s, then stamp it.",
+				target, label, version, version, target, target,
+			), false
+		}
+		return "", true
+	}
 	if contractupgrade.Consume(sessionID, version) {
 		return "", true
 	}
