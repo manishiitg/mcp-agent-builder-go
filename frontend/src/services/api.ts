@@ -609,9 +609,14 @@ export const agentApi = {
     options?: {
       limit?: number
       offset?: number
+	      // The normal chat working set omits detailed child transcripts. The
+	      // terminal Conversation view needs the complete page, then scopes it
+	      // locally to the selected terminal before rendering.
+	      workingSet?: 'session' | 'all'
     }
   ): Promise<GetEventsResponse> => {
-    const params: Record<string, string | number> = { working_set: 'session' }
+    const params: Record<string, string | number> = {}
+    if (options?.workingSet !== 'all') params.working_set = 'session'
 
     // Forward polling mode: use sinceIndex
     if (sinceIndex !== undefined && sinceIndex >= -1) {
@@ -633,12 +638,15 @@ export const agentApi = {
     return response.data
   },
 
-  // Initial restores should not use since=-1. That requests the entire
-  // in-memory event buffer before the frontend trims it, which can spike both
-  // backend and Electron memory on large workflow runs. since=0 uses the
-  // backend's bounded initial page and still returns last_processed_index.
+  // Initial restores use a bounded backward page. `since=0` looks similar but
+  // is not equivalent: event index zero legitimately contains the opening
+  // user message, so forward polling from zero can omit the very first message
+  // while still returning later tools and the answer.
   getRecentSessionEvents: async (sessionId: string): Promise<GetEventsResponse> => {
-    return agentApi.getSessionEvents(sessionId, 0)
+    return agentApi.getSessionEvents(sessionId, undefined, {
+      limit: 300,
+      offset: 0,
+    })
   },
 
   getTerminalEvents: async (

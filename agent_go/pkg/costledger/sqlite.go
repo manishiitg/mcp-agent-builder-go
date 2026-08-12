@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS cost_events (
     effective_model_id TEXT NOT NULL DEFAULT '',
     turn_count INTEGER NOT NULL DEFAULT 0,
     llm_call_count INTEGER NOT NULL DEFAULT 0,
+	llm_generation_duration_ms INTEGER NOT NULL DEFAULT 0,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
@@ -105,7 +106,29 @@ func NewSQLiteLedger(dbPath string) (*Ledger, error) {
 		db.Close()
 		return nil, fmt.Errorf("costledger: initialize SQLite schema: %w", err)
 	}
+	if err := ensureCostEventColumn(db, "llm_generation_duration_ms", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("costledger: migrate duration column: %w", err)
+	}
 	return &Ledger{db: &sqliteLedger{db: db}}, nil
+}
+
+// ensureCostEventColumn keeps existing local ledgers forward-compatible. The
+// cost ledger is intentionally long-lived, so CREATE TABLE IF NOT EXISTS alone
+// cannot add a field to databases created by an older server.
+func ensureCostEventColumn(db *sql.DB, column, definition string) error {
+	var found int
+	err := db.QueryRow(`SELECT 1 FROM pragma_table_info('cost_events') WHERE name = ?`, column).Scan(&found)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("inspect cost_events schema: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE cost_events ADD COLUMN %s %s", column, definition)); err != nil {
+		return fmt.Errorf("add %s: %w", column, err)
+	}
+	return nil
 }
 
 func (s *sqliteLedger) append(e Entry) error {
@@ -127,15 +150,15 @@ INSERT OR IGNORE INTO cost_events (
     event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
     run_id, execution_id, scope, agent_mode, component, correlation_id,
     requested_provider, requested_model_id, effective_provider, effective_model_id,
-    turn_count, llm_call_count, prompt_tokens, completion_tokens, reasoning_tokens,
+    turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
     cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
     pricing_source, pricing_version, tool_name, operation_metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	args := []interface{}{
 		e.EventID, e.IdempotencyKey, e.Timestamp.UTC().Format(time.RFC3339Nano),
 		e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope,
 		e.AgentMode, e.Component, e.CorrelationID, e.Provider, e.ModelID,
-		e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount,
+		e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount, e.LLMGenerationDurationMS,
 		e.PromptTokens, e.CompletionTokens, e.ReasoningTokens, e.CacheReadTokens,
 		e.CacheWriteTokens, e.TotalCostUSD, e.Currency, e.BillingBasis,
 		e.PricingSource, e.PricingVersion, e.ToolName, string(metadata),
@@ -152,7 +175,7 @@ INSERT OR IGNORE INTO cost_events (
 	}
 }
 
-func (s *sqliteLedger) summarize(from, to, executionID string) (*Summary, error) {
+func (s *sqliteLedger) summarize(from, to, executionID, workflowID string) (*Summary, error) {
 	fromInclusive, toExclusive, err := costDateBounds(from, to)
 	if err != nil {
 		return nil, err
@@ -160,18 +183,19 @@ func (s *sqliteLedger) summarize(from, to, executionID string) (*Summary, error)
 	summary := &Summary{
 		From: from, To: to,
 		ByDate: make(map[string]*DateAggregate), ByModel: make(map[string]*Aggregate),
+		ByScope:  make(map[string]*ScopeAggregate),
 		Coverage: Coverage{Source: "sqlite"},
 	}
 	query := `
 SELECT event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
        run_id, execution_id, scope, agent_mode, component, correlation_id,
        requested_provider, requested_model_id, effective_provider, effective_model_id,
-       turn_count, llm_call_count, prompt_tokens, completion_tokens, reasoning_tokens,
+       turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
        cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
        pricing_source, pricing_version, tool_name, operation_metadata_json
 FROM cost_events`
-	where := make([]string, 0, 3)
-	args := make([]interface{}, 0, 3)
+	where := make([]string, 0, 4)
+	args := make([]interface{}, 0, 4)
 	if fromInclusive != "" {
 		where = append(where, "occurred_at >= ?")
 		args = append(args, fromInclusive)
@@ -183,6 +207,10 @@ FROM cost_events`
 	if executionID = strings.TrimSpace(executionID); executionID != "" {
 		where = append(where, "execution_id = ?")
 		args = append(args, executionID)
+	}
+	if workflowID = strings.TrimSpace(workflowID); workflowID != "" {
+		where = append(where, "workflow_id = ?")
+		args = append(args, workflowID)
 	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -200,7 +228,7 @@ FROM cost_events`
 			&e.EventID, &e.IdempotencyKey, &occurredAt, &e.UserID, &e.WorkflowID,
 			&e.SessionID, &e.RunID, &e.ExecutionID, &e.Scope, &e.AgentMode,
 			&e.Component, &e.CorrelationID, &e.Provider, &e.ModelID,
-			&e.EffectiveProvider, &e.EffectiveModelID, &e.TurnCount, &e.LLMCallCount,
+			&e.EffectiveProvider, &e.EffectiveModelID, &e.TurnCount, &e.LLMCallCount, &e.LLMGenerationDurationMS,
 			&e.PromptTokens, &e.CompletionTokens, &e.ReasoningTokens,
 			&e.CacheReadTokens, &e.CacheWriteTokens, &e.TotalCostUSD, &e.Currency,
 			&e.BillingBasis, &e.PricingSource, &e.PricingVersion, &e.ToolName,
@@ -317,14 +345,14 @@ INSERT OR IGNORE INTO cost_events (
     event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
     run_id, execution_id, scope, agent_mode, component, correlation_id,
     requested_provider, requested_model_id, effective_provider, effective_model_id,
-    turn_count, llm_call_count, prompt_tokens, completion_tokens, reasoning_tokens,
+    turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
     cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
     pricing_source, pricing_version, tool_name, operation_metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			e.EventID, e.IdempotencyKey, e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope,
 			e.AgentMode, e.Component, e.CorrelationID, e.Provider, e.ModelID,
-			e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount,
+			e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount, e.LLMGenerationDurationMS,
 			e.PromptTokens, e.CompletionTokens, e.ReasoningTokens, e.CacheReadTokens,
 			e.CacheWriteTokens, e.TotalCostUSD, e.Currency, e.BillingBasis,
 			e.PricingSource, e.PricingVersion, e.ToolName, string(metadata),

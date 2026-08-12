@@ -5,10 +5,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
+
+var (
+	reportHTMLIDPattern                = regexp.MustCompile(`(?i)\bid\s*=\s*["']([^"']+)["']`)
+	reportHTMLImmediateDOMWritePattern = regexp.MustCompile(`(?s)document\.getElementById\(\s*["']([^"']+)["']\s*\)\s*\.\s*(?:innerHTML|textContent|style|className|value)\b`)
+)
+
+func missingImmediateReportDOMTargets(content string) []string {
+	ids := make(map[string]struct{})
+	for _, match := range reportHTMLIDPattern.FindAllStringSubmatch(content, -1) {
+		ids[match[1]] = struct{}{}
+	}
+	missing := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, match := range reportHTMLImmediateDOMWritePattern.FindAllStringSubmatch(content, -1) {
+		id := match[1]
+		if _, ok := ids[id]; ok {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		missing = append(missing, id)
+	}
+	return missing
+}
 
 // registerHTMLReportTools exposes the deliberately small report contract. A
 // workflow owns one complete HTML reporting experience at db/reports/index.html;
@@ -55,6 +82,9 @@ func registerHTMLReportTools(
 			}
 			if title == "" {
 				errors = append(errors, "missing non-empty <title> for the workflow report")
+			}
+			for _, id := range missingImmediateReportDOMTargets(content) {
+				errors = append(errors, fmt.Sprintf("script writes to missing element id %q; update the script or restore that element", id))
 			}
 			result := map[string]interface{}{
 				"valid":         len(errors) == 0,

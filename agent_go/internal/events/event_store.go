@@ -1060,6 +1060,11 @@ func (es *EventStore) GetEvents(sessionID string, opts GetEventsOptions) GetEven
 		} else {
 			result = []Event{}
 		}
+		// Offset pagination is used by the Conversation view to prepend older
+		// history. Report whether another page really exists; guessing from a
+		// full page makes the final "Load earlier" action appear forever when
+		// the total happens to be an exact multiple of the page size.
+		hasMore = end < len(eventsToPaginate)
 		// For pagination, lastProcessedIndex is not relevant (offset-based, not index-based)
 		lastProcessedIndex = -1
 	} else {

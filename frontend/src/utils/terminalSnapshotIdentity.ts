@@ -100,26 +100,27 @@ export function shouldLoadTerminalEvents(
 }
 
 /** Main-agent transcripts live in the session event store rather than the
- * per-terminal event endpoint. Hydrate that potentially large history only
- * after the user explicitly asks for the formatted view.
+ * per-terminal event endpoint. Hydrate one bounded durable page when the
+ * formatted conversation is opened. A non-empty live tail is not proof that
+ * the beginning was loaded: a reconnect can contain tools and the answer while
+ * omitting the opening user message.
  */
 export function shouldHydrateMainTerminalEvents(
   usesSessionEvents: boolean,
   formattedViewRequested: boolean,
-  loadedEventCount: number,
-  restoredHistoryRequired = false,
-  restoredHistoryLoaded = false,
+  _loadedEventCount: number,
+  _restoredHistoryRequired = false,
+  durableHistoryLoaded = false,
 ): boolean {
   return Boolean(
     usesSessionEvents &&
     formattedViewRequested &&
-    !restoredHistoryLoaded &&
-    (restoredHistoryRequired || loadedEventCount === 0),
+    !durableHistoryLoaded,
   )
 }
 
-/** Raw terminal is the primary coding-agent view. The formatted event transcript
- * remains an explicit per-terminal choice when it is available.
+/** Raw tmux output is the primary view. The formatted conversation remains an
+ * explicit per-terminal reading mode whenever structured events are available.
  */
 export function resolveTerminalFormattedView(
   canShowFormattedView: boolean,
@@ -127,4 +128,21 @@ export function resolveTerminalFormattedView(
 ): boolean {
   if (!canShowFormattedView) return false
   return explicitPreference ?? false
+}
+
+/** A terminal can offer Raw/Formatted even after its live tmux process is
+ * released. Retained raw bytes and main-session events are durable views; a
+ * live tmux_session is only one possible source, not the eligibility rule.
+ */
+export function canToggleTerminalView(
+  terminal: TerminalSnapshot | null,
+  isSynthetic: boolean,
+  hasRawContent: boolean,
+  usesSessionEvents: boolean,
+): boolean {
+  return Boolean(
+    terminal?.terminal_id &&
+    !isSynthetic &&
+    (terminal.tmux_session || hasRawContent || usesSessionEvents),
+  )
 }

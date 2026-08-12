@@ -1481,7 +1481,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   // Changing the device width resizes the flow pane; re-fit the diagram after the
   // CSS width transition (~300ms) so it recenters into the new width.
   useEffect(() => {
-    if (effectiveCanvasViewMode === 'report' || toolbarOnly) return
+    if (effectiveCanvasViewMode === 'report' || toolbarOnly || previewDevice === 'tablet') return
     const t = setTimeout(() => {
       try { void fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }) } catch { /* ignore */ }
     }, 360)
@@ -2716,6 +2716,17 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     if (!hasInitializedView.current && nodes.length > 0) {
       const fitTimer = window.setTimeout(() => {
         window.requestAnimationFrame(() => {
+          if (previewDevice === 'tablet') {
+            const firstNode = nodes.find(node => node.id !== 'start' && node.id !== 'variables') ?? nodes[0]
+            setViewport({
+              x: 48 - firstNode.position.x * 0.85,
+              y: 48 - firstNode.position.y * 0.85,
+              zoom: 0.85,
+            }, { duration: 350 })
+            viewportStateRef.current = getViewport()
+            hasInitializedView.current = true
+            return
+          }
           Promise.resolve(
             fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM })
           ).finally(() => {
@@ -2727,7 +2738,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
       return () => window.clearTimeout(fitTimer)
     }
-  }, [nodes, fitView, getViewport, toolbarOnly, effectiveCanvasViewMode])
+  }, [nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly, effectiveCanvasViewMode])
 
   // Track previous stepStatusMap to detect actual changes
   const prevStepStatusMapRef = React.useRef<Map<string, 'pending' | 'running' | 'completed' | 'failed'>>(new Map())

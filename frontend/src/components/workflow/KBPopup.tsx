@@ -3,8 +3,9 @@
 // existing workspace file API (same path as ReportViewer). All mutations happen
 // via the workshop builder's reorganize_knowledgebase tool — this popup never writes.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  ArrowLeft,
   X,
   Database,
   Loader2,
@@ -13,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  Search,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
@@ -167,6 +169,7 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
   // Per-topic markdown body cache. undefined = not loaded; null = loaded and missing/empty.
   const [notesBodies, setNotesBodies] = useState<Record<string, string | null>>({})
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+  const [searchTerm, setSearchTerm] = useState('')
 
   const notesIndexPath = workspacePath
     ? `${workspacePath}/knowledgebase/notes/_index.json`
@@ -203,14 +206,11 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
 
   const toggleNoteExpanded = useCallback(
     async (topic: KBNotesTopic) => {
-      const next = new Set(expandedNotes)
-      if (next.has(topic.id)) {
-        next.delete(topic.id)
-        setExpandedNotes(next)
+      if (expandedNotes.has(topic.id)) {
+        setExpandedNotes(new Set())
         return
       }
-      next.add(topic.id)
-      setExpandedNotes(next)
+      setExpandedNotes(new Set([topic.id]))
       // Selective load — only fetch the markdown when the row is expanded.
       // Matches the index-first read discipline the KB agent enforces.
       if (notesBodies[topic.id] === undefined && workspacePath) {
@@ -221,10 +221,20 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
     [expandedNotes, notesBodies, workspacePath],
   )
 
-  if (!embedded && !isOpen) return null
-
-  const topics = notesIndex?.topics ?? []
+  const topics = useMemo(() => notesIndex?.topics ?? [], [notesIndex])
   const hasNotesContent = topics.length > 0
+  const focusedTopicId = expandedNotes.values().next().value as string | undefined
+  const filteredTopics = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase()
+    if (!query) return topics
+    return topics.filter(topic => [topic.id, topic.file, ...(topic.covers || [])]
+      .some(value => value.toLowerCase().includes(query)))
+  }, [searchTerm, topics])
+  const visibleTopics = focusedTopicId
+    ? topics.filter(topic => topic.id === focusedTopicId)
+    : filteredTopics
+
+  if (!embedded && !isOpen) return null
 
   const shell = (
       <div className={embedded
@@ -301,7 +311,28 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
 
           {!loading && !error && hasNotesContent && (
             <div className="space-y-1">
-              {topics.map(t => {
+              {focusedTopicId ? (
+                <button
+                  type="button"
+                  onClick={() => setExpandedNotes(new Set())}
+                  className="mb-3 inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to all topics
+                </button>
+              ) : (
+                <div className="relative mb-3">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={searchTerm}
+                    onChange={event => setSearchTerm(event.target.value)}
+                    placeholder="Search topics and coverage"
+                    aria-label="Search knowledgebase topics and coverage"
+                    className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none transition-colors focus:border-primary"
+                  />
+                </div>
+              )}
+              {visibleTopics.map(t => {
                 const isOpenRow = expandedNotes.has(t.id)
                 const body = notesBodies[t.id]
                 const isMarkdownFile = t.file.toLowerCase().endsWith('.md')
@@ -309,6 +340,8 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                   <div key={t.id} className="border border-border rounded-md">
                     <button
                       onClick={() => toggleNoteExpanded(t)}
+                      aria-expanded={isOpenRow}
+                      aria-label={`${isOpenRow ? 'Close' : 'Open'} ${t.id} knowledgebase topic`}
                       className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
                     >
                       {isOpenRow ? (
@@ -344,7 +377,7 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                           <div>
                             <span className="font-medium">Last updated by: </span>
                             <span className="font-mono">
-                              {t.last_updated_by?.step ?? '?'} / {t.last_updated_by?.run ?? '?'}
+                              {[t.last_updated_by?.step, t.last_updated_by?.run].filter(Boolean).join(' / ')}
                             </span>
                           </div>
                         )}
@@ -365,7 +398,7 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                               Topic file missing or empty.
                             </div>
                           ) : isMarkdownFile ? (
-                            <div className="text-sm text-foreground bg-background border border-border/60 rounded p-3 max-h-[60vh] overflow-y-auto">
+                            <div className="text-sm text-foreground bg-background border border-border/60 rounded p-3">
                               <MarkdownRenderer
                                 content={body}
                                 className="max-w-none !text-sm [&_p]:!text-sm [&_li]:!text-sm [&_code]:!text-[12px]"
@@ -382,6 +415,9 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                   </div>
                 )
               })}
+              {!focusedTopicId && visibleTopics.length === 0 && (
+                <div className="py-10 text-center text-sm text-muted-foreground">No matching knowledgebase topics.</div>
+              )}
             </div>
           )}
         </div>

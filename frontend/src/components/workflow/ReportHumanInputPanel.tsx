@@ -22,6 +22,13 @@ type ReportHumanInputDraft = {
   delegating?: boolean
 }
 
+function keepPreviousInputsWhenUnchanged(
+  previous: ReportHumanInput[],
+  next: ReportHumanInput[],
+): ReportHumanInput[] {
+  return JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+}
+
 function sourceLabel(source?: string): string {
 	if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
@@ -127,21 +134,25 @@ export function ReportHumanInputPanel({
 	const visibleLoading = externallyManaged ? Boolean(providedLoading) : loading
 	const visibleError = externallyManaged ? (providedError || null) : error
 
-  const loadInputs = useCallback(async (cancelled?: () => boolean) => {
+  const loadInputs = useCallback(async (cancelled?: () => boolean, showLoading = true) => {
     if (!workspacePath) return
-    setLoading(true)
-    setError(null)
+    if (showLoading) setLoading(true)
+    if (showLoading) setError(null)
     try {
       const res = await agentApi.listReportHumanInputs(workspacePath, undefined, source)
       if (cancelled?.()) return
       if (!res.success) throw new Error(res.error || 'Failed to load questions.')
-      setInputs(res.inputs || [])
+      const nextInputs = res.inputs || []
+      setInputs(previous => keepPreviousInputsWhenUnchanged(previous, nextInputs))
+      if (!showLoading) setError(null)
     } catch (err) {
       if (cancelled?.()) return
       setError(err instanceof Error ? err.message : 'Failed to load questions.')
-      setInputs([])
+      // A transient background-poll failure must not blank a decision card the
+      // user is reading. Explicit/initial loads still surface an empty result.
+      if (showLoading) setInputs([])
     } finally {
-      if (!cancelled?.()) setLoading(false)
+      if (showLoading && !cancelled?.()) setLoading(false)
     }
   }, [source, workspacePath])
 
@@ -162,7 +173,7 @@ export function ReportHumanInputPanel({
 	const needsStatusPolling = visibleInputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
 		if (externallyManaged || !needsStatusPolling) return
-    const timer = window.setInterval(() => { void loadInputs() }, 5000)
+    const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
     return () => window.clearInterval(timer)
 	}, [externallyManaged, loadInputs, needsStatusPolling])
 
@@ -611,25 +622,27 @@ export function ReportHumanInputCollection({
 	const [error, setError] = useState<string | null>(null)
 	const [refreshNonce, setRefreshNonce] = useState(0)
 
-	const loadInputs = useCallback(async (cancelled?: () => boolean) => {
+	const loadInputs = useCallback(async (cancelled?: () => boolean, showLoading = true) => {
 		const paths = stableScopes.map(scope => scope.workspacePath).filter(Boolean)
 		if (paths.length === 0) {
 			setInputs([])
 			return
 		}
-		setLoading(true)
-		setError(null)
+		if (showLoading) setLoading(true)
+		if (showLoading) setError(null)
 		try {
 			const result = await agentApi.listReportHumanInputsAggregate(paths, undefined, source)
 			if (cancelled?.()) return
 			if (!result.success) throw new Error(result.error || 'Failed to load questions.')
-			setInputs(result.inputs || [])
+			const nextInputs = result.inputs || []
+			setInputs(previous => keepPreviousInputsWhenUnchanged(previous, nextInputs))
+			if (!showLoading) setError(null)
 		} catch (err) {
 			if (cancelled?.()) return
 			setError(err instanceof Error ? err.message : 'Failed to load questions.')
-			setInputs([])
+			if (showLoading) setInputs([])
 		} finally {
-			if (!cancelled?.()) setLoading(false)
+			if (showLoading && !cancelled?.()) setLoading(false)
 		}
 	}, [source, stableScopes])
 
@@ -648,7 +661,7 @@ export function ReportHumanInputCollection({
 	const needsStatusPolling = inputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
 		if (!needsStatusPolling) return
-		const timer = window.setInterval(() => { void loadInputs() }, 5000)
+		const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
 		return () => window.clearInterval(timer)
 	}, [loadInputs, needsStatusPolling])
 

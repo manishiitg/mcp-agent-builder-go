@@ -12,23 +12,23 @@ import {
   TrendingUp,
   TrendingDown,
   RefreshCw,
-  Plus,
-  Minus
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import { formatStartedAt } from '../../utils/duration'
 import {
-  buildDailyStepCostsByDate,
   classifyPhase,
   formatPhaseTitle,
 } from '../../utils/dailyCostBreakdown'
+import { buildCostActivityBreakdown } from '../../utils/costActivityBreakdown'
 import type {
+  CostSummary,
   TokenUsageFile,
   StepExecutionLogs,
   PhaseTokenUsageFile,
   WorkflowRunCostsEntry,
   WorkflowPhaseDailyCostsEntry,
-  WorkflowRunDailyCostsEntry
+  WorkflowRunDailyCostsEntry,
+  WorkflowActivityTimingSummary,
 } from '../../services/api-types'
 import ModalPortal from '../ui/ModalPortal'
 
@@ -63,6 +63,18 @@ const formatTokens = (count?: number) => {
     return (count / 1000).toFixed(1) + 'K'
   }
   return count.toString()
+}
+
+const formatDuration = (milliseconds?: number) => {
+  if (!milliseconds || milliseconds <= 0) return '—'
+  const seconds = Math.round(milliseconds / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
 
 interface RunCosts {
@@ -157,14 +169,14 @@ interface RunDailyCostSummaryEntry {
 
 interface CombinedDailyCostSummaryEntry {
   date: string
-  executionCost: number
+  workflowCost: number
   evaluationCost: number
   builderCost: number
+  pulseCost: number | null
   totalCost: number
   totalTokens: number
-  totalLLMCalls: number
+  agentDurationMS: number
   runCount: number
-  updatedAt: string | null
 }
 
 const getRunFolderDisplayName = (runFolder: string) => {
@@ -284,11 +296,15 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   const [phaseCostSummary, setPhaseCostSummary] = useState<PhaseCostSummary | null>(null)
   const [phaseDailyCostSummaries, setPhaseDailyCostSummaries] = useState<PhaseDailyCostSummaryEntry[]>([])
   const [runDailyCostSummaries, setRunDailyCostSummaries] = useState<RunDailyCostSummaryEntry[]>([])
+  const [scopedCosts, setScopedCosts] = useState<CostSummary | null>(null)
+  const [activityTiming, setActivityTiming] = useState<WorkflowActivityTimingSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [expandedDailyDates, setExpandedDailyDates] = useState<Set<string>>(new Set())
   const [expandedRunFolders, setExpandedRunFolders] = useState<Set<string>>(new Set())
   const [expandedCostModels, setExpandedCostModels] = useState<Set<string>>(new Set())
   const [costViewMode, setCostViewMode] = useState<Record<string, 'step' | 'model'>>({})
+  const [expandedDailyDate, setExpandedDailyDate] = useState<string | null>(null)
+  const activityBreakdown = useMemo(() => buildCostActivityBreakdown(scopedCosts, activityTiming), [scopedCosts, activityTiming])
+  const hasScopedActivity = Object.keys(scopedCosts?.by_scope || {}).length > 0
 
   // Calculate cost summary from token usage
   const calculateCostSummary = (tokenUsage: TokenUsageFile | null, evaluationTokenUsage: TokenUsageFile | null | undefined, steps?: Record<string, StepExecutionLogs>): RunCosts['costSummary'] => {
@@ -681,11 +697,13 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       setPhaseCostSummary(null)
       setPhaseDailyCostSummaries([])
       setRunDailyCostSummaries([])
+      setScopedCosts(null)
+      setActivityTiming(null)
       setError(null)
-      setExpandedDailyDates(new Set())
       setExpandedRunFolders(new Set())
       setExpandedCostModels(new Set())
       setCostViewMode({})
+      setExpandedDailyDate(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, embedded, workspacePath, runFolders])
@@ -709,6 +727,8 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     setError(null)
     try {
       const costsResponse = await agentApi.getCosts(workspacePath)
+      setScopedCosts(costsResponse.scoped_costs ?? null)
+      setActivityTiming(costsResponse.activity_timing ?? null)
       const costEntriesByRunFolder = new Map<string, WorkflowRunCostsEntry>(
         (costsResponse.runs || []).map(entry => [entry.run_folder, entry])
       )
@@ -824,18 +844,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     })
   }
 
-  const toggleDailyDate = (date: string) => {
-    setExpandedDailyDates(prev => {
-      const next = new Set(prev)
-      if (next.has(date)) {
-        next.delete(date)
-      } else {
-        next.add(date)
-      }
-      return next
-    })
-  }
-
   const toggleCostModel = (modelId: string) => {
     setExpandedCostModels(prev => {
       const next = new Set(prev)
@@ -929,6 +937,13 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   }, [runCosts])
 
   const overallSummary = useMemo(() => {
+    if (scopedCosts && Object.keys(scopedCosts.by_scope || {}).length > 0) {
+      return {
+        totalCost: scopedCosts.total.total_cost_usd,
+        totalTokens: scopedCosts.total.prompt_tokens + scopedCosts.total.completion_tokens,
+        totalRuns: aggregateSummary?.totalRuns || 0
+      }
+    }
     if (!aggregateSummary && !phaseCostSummary) return null
 
     return {
@@ -936,81 +951,93 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       totalTokens: (aggregateSummary?.totalTokens || 0) + (phaseCostSummary?.totalTokens || 0),
       totalRuns: aggregateSummary?.totalRuns || 0
     }
-  }, [aggregateSummary, phaseCostSummary])
+  }, [aggregateSummary, phaseCostSummary, scopedCosts])
 
   const combinedDailyCostSummaries = useMemo(() => {
-    const byDate = new Map<string, CombinedDailyCostSummaryEntry & { runKeys: Set<string> }>()
-
-    const ensureEntry = (date: string) => {
-      let entry = byDate.get(date)
-      if (!entry) {
-        entry = {
-          date,
-          executionCost: 0,
-          evaluationCost: 0,
-          builderCost: 0,
-          totalCost: 0,
-          totalTokens: 0,
-          totalLLMCalls: 0,
-          runCount: 0,
-          updatedAt: null,
-          runKeys: new Set<string>()
+    const byDate = scopedCosts?.by_date || {}
+    const hasDailyScopeAttribution = Object.values(byDate).some(total => Object.keys(total.by_scope || {}).length > 0)
+    if (!hasDailyScopeAttribution) {
+      const legacyByDate = new Map<string, CombinedDailyCostSummaryEntry & { runKeys: Set<string> }>()
+      const ensureLegacyEntry = (date: string) => {
+        let entry = legacyByDate.get(date)
+        if (!entry) {
+          entry = {
+            date,
+            builderCost: 0,
+            pulseCost: null,
+            workflowCost: 0,
+            evaluationCost: 0,
+            totalCost: 0,
+            totalTokens: 0,
+            agentDurationMS: 0,
+            runCount: 0,
+            runKeys: new Set<string>(),
+          }
+          legacyByDate.set(date, entry)
         }
-        byDate.set(date, entry)
+        return entry
       }
-      return entry
+
+      phaseDailyCostSummaries.forEach(daily => {
+        const entry = ensureLegacyEntry(daily.date)
+        entry.builderCost += daily.summary.totalCost
+        entry.totalCost += daily.summary.totalCost
+        entry.totalTokens += daily.summary.totalTokens
+      })
+      runDailyCostSummaries.forEach(daily => {
+        const entry = ensureLegacyEntry(daily.date)
+        if (daily.scope === 'evaluation') entry.evaluationCost += daily.summary.totalCost
+        else entry.workflowCost += daily.summary.totalCost
+        entry.totalCost += daily.summary.totalCost
+        entry.totalTokens += daily.summary.totalTokens
+        entry.runKeys.add(`${daily.scope}:${daily.runFolder}`)
+        entry.runCount = entry.runKeys.size
+      })
+      Object.entries(activityTiming?.by_date || {}).forEach(([date, timing]) => {
+        const entry = ensureLegacyEntry(date)
+        entry.agentDurationMS = Object.values(timing.by_scope || {}).reduce(
+          (sum, scopeTiming) => sum + (scopeTiming.duration_ms || 0),
+          0,
+        )
+      })
+      return Array.from(legacyByDate.values())
+        .map(({ runKeys: _runKeys, ...entry }) => entry)
+        .sort((a, b) => b.date.localeCompare(a.date))
     }
 
-    const setLatestUpdate = (entry: CombinedDailyCostSummaryEntry, updatedAt: string | null) => {
-      if (!updatedAt) return
-      if (!entry.updatedAt || new Date(updatedAt).getTime() > new Date(entry.updatedAt).getTime()) {
-        entry.updatedAt = updatedAt
-      }
-    }
-
-    phaseDailyCostSummaries.forEach(daily => {
-      const entry = ensureEntry(daily.date)
-      entry.builderCost += daily.summary.totalCost
-      entry.totalCost += daily.summary.totalCost
-      entry.totalTokens += daily.summary.totalTokens
-      entry.totalLLMCalls += daily.summary.totalLLMCalls
-      setLatestUpdate(entry, daily.summary.updatedAt)
-    })
-
-    runDailyCostSummaries.forEach(daily => {
-      const entry = ensureEntry(daily.date)
-      if (daily.scope === 'evaluation') {
-        entry.evaluationCost += daily.summary.totalCost
-      } else {
-        entry.executionCost += daily.summary.totalCost
-      }
-      entry.totalCost += daily.summary.totalCost
-      entry.totalTokens += daily.summary.totalTokens
-      entry.totalLLMCalls += daily.summary.totalLLMCalls
-      entry.runKeys.add(`${daily.scope}:${daily.runFolder}`)
-      entry.runCount = entry.runKeys.size
-      setLatestUpdate(entry, daily.updatedAt)
-    })
-
-    return Array.from(byDate.values())
-      .map((entry): CombinedDailyCostSummaryEntry => ({
-        date: entry.date,
-        executionCost: entry.executionCost,
-        evaluationCost: entry.evaluationCost,
-        builderCost: entry.builderCost,
-        totalCost: entry.totalCost,
-        totalTokens: entry.totalTokens,
-        totalLLMCalls: entry.totalLLMCalls,
-        runCount: entry.runCount,
-        updatedAt: entry.updatedAt,
-      }))
+    return Object.entries(byDate)
+      .map(([date, total]): CombinedDailyCostSummaryEntry => {
+        const byScope = total.by_scope || {}
+        const costFor = (scope: string) => byScope[scope]?.total_cost_usd || 0
+        const timingScopes = activityTiming?.by_date?.[date]?.by_scope || {}
+        const agentDurationMS = Object.values(timingScopes).reduce((sum, timing) => sum + (timing.duration_ms || 0), 0)
+        return {
+          date,
+          builderCost: costFor('builder') + costFor('chat'),
+          pulseCost: costFor('pulse'),
+          workflowCost: costFor('workflow_execution'),
+          evaluationCost: costFor('evaluation'),
+          totalCost: total.total_cost_usd || 0,
+          totalTokens: (total.prompt_tokens || 0) + (total.completion_tokens || 0),
+          agentDurationMS,
+          runCount: total.workflow_run_count || 0,
+        }
+      })
       .sort((a, b) => b.date.localeCompare(a.date))
-  }, [phaseDailyCostSummaries, runDailyCostSummaries])
+  }, [activityTiming, phaseDailyCostSummaries, runDailyCostSummaries, scopedCosts])
 
-  const dailyStepCostsByDate = useMemo(
-    () => buildDailyStepCostsByDate(runCosts, runDailyCostSummaries, phaseDailyCostSummaries),
-    [runCosts, runDailyCostSummaries, phaseDailyCostSummaries]
-  )
+  const dailyActivityBreakdown = useMemo(() => {
+    const details = new Map<string, ReturnType<typeof buildCostActivityBreakdown>>()
+    Object.entries(scopedCosts?.by_date || {}).forEach(([date, total]) => {
+      if (Object.keys(total.by_scope || {}).length > 0) {
+        details.set(date, buildCostActivityBreakdown(
+          { by_scope: total.by_scope },
+          activityTiming?.by_date?.[date] || null,
+        ))
+      }
+    })
+    return details
+  }, [activityTiming, scopedCosts])
 
   if (!embedded && !isOpen) return null
 
@@ -1092,7 +1119,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                 Retry
               </button>
             </div>
-          ) : runCosts.length === 0 && !phaseCostSummary ? (
+          ) : runCosts.length === 0 && !phaseCostSummary && !hasScopedActivity ? (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <DollarSign className="w-12 h-12 mb-3 opacity-50" />
               <p>No cost data found.</p>
@@ -1100,6 +1127,36 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             </div>
           ) : (
             <div className="space-y-6">
+              {/* Canonical product activity hierarchy */}
+              {hasScopedActivity && (
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">Cost by activity</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Builder, Pulse, workflow, and evaluation costs from the authoritative event ledger.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                    {activityBreakdown.map(category => {
+                      const tokenTotal = category.total.prompt_tokens + category.total.completion_tokens
+                      return (
+                      <div key={category.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-sm">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-foreground">{category.label}</div>
+                          <div className="truncate text-xs text-muted-foreground">{category.description}</div>
+                        </div>
+                          <div className="text-right">
+                            <div className="font-mono font-semibold text-foreground">{formatUSD(category.total.total_cost_usd)}</div>
+                            <div className="text-xs text-muted-foreground">{formatTokens(tokenTotal)} tokens</div>
+                            <div className="text-xs text-muted-foreground">Agent time: {formatDuration(category.timing.duration_ms)}</div>
+                          </div>
+                      </div>
+                      )
+                    })}
+                  </div>
+                </section>
+              )}
+
               {/* Daily Costs */}
               {combinedDailyCostSummaries.length > 0 && (
                 <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
@@ -1110,7 +1167,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                         Daily Cost Breakdown
                       </h3>
                       <p className="text-xs text-muted-foreground">
-                        Includes execution, evaluation, and builder costs from daily ledgers.
+                        Daily totals using the same Builder, Pulse, Workflow, and Evaluation categories above.
                       </p>
                     </div>
                   </div>
@@ -1119,124 +1176,87 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-muted-foreground border-b border-border pb-2">
-                          <th className="w-9 pb-2"></th>
                           <th className="text-left font-medium pb-2">Date</th>
                           <th className="text-right font-medium pb-2">Runs</th>
-                          <th className="text-right font-medium pb-2">Exec</th>
-                          <th className="text-right font-medium pb-2">Eval</th>
                           <th className="text-right font-medium pb-2">Builder</th>
-                          <th className="text-right font-medium pb-2">Calls</th>
+                          <th className="text-right font-medium pb-2">Pulse</th>
+                          <th className="text-right font-medium pb-2">Workflow</th>
+                          <th className="text-right font-medium pb-2">Evaluation</th>
+                          <th className="text-right font-medium pb-2">Agent time</th>
                           <th className="text-right font-medium pb-2">Tokens</th>
                           <th className="text-right font-medium pb-2">Total</th>
-                          <th className="text-right font-medium pb-2">Updated</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
                         {combinedDailyCostSummaries.map(entry => {
-                          const isExpanded = expandedDailyDates.has(entry.date)
-                          const dailySteps = dailyStepCostsByDate.get(entry.date) || []
-
+                          const isExpanded = expandedDailyDate === entry.date
+                          const categories = dailyActivityBreakdown.get(entry.date)
                           return (
                             <React.Fragment key={entry.date}>
                               <tr className="hover:bg-accent/50 transition-colors">
                                 <td className="py-2">
-                                  <button
-                                    onClick={() => toggleDailyDate(entry.date)}
-                                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-                                    title={isExpanded ? 'Hide daily step costs' : 'Show daily step costs'}
-                                    aria-label={isExpanded ? 'Hide daily step costs' : 'Show daily step costs'}
-                                  >
-                                    {isExpanded ? <Minus className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                                  </button>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-foreground">{entry.date}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedDailyDate(current => current === entry.date ? null : entry.date)}
+                                      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                                      aria-expanded={isExpanded}
+                                    >
+                                      <span aria-hidden="true" className="text-sm leading-none">{isExpanded ? '−' : '+'}</span>
+                                      <span className="sr-only">{isExpanded ? 'Hide daily activity details' : 'Show daily activity details'}</span>
+                                    </button>
+                                  </div>
                                 </td>
-                                <td className="py-2">
-                                  <div className="font-medium text-foreground">{entry.date}</div>
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {entry.runCount.toLocaleString()}
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {formatUSD(entry.executionCost)}
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {formatUSD(entry.evaluationCost)}
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {formatUSD(entry.builderCost)}
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {entry.totalLLMCalls.toLocaleString()}
-                                </td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">
-                                  {formatTokens(entry.totalTokens)}
-                                </td>
-                                <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">
-                                  {formatUSD(entry.totalCost)}
-                                </td>
-                                <td className="py-2 text-right text-muted-foreground">
-                                  {formatTimestampLabel(entry.updatedAt) || '-'}
-                                </td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{entry.runCount.toLocaleString()}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.builderCost)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{entry.pulseCost === null ? '—' : formatUSD(entry.pulseCost)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.workflowCost)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.evaluationCost)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatDuration(entry.agentDurationMS)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatTokens(entry.totalTokens)}</td>
+                                <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">{formatUSD(entry.totalCost)}</td>
                               </tr>
                               {isExpanded && (
                                 <tr className="bg-muted/20">
-                                  <td colSpan={10} className="p-0">
-                                    <div className="p-3 sm:p-4">
-                                      {dailySteps.length === 0 ? (
-                                        <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
-                                          No step-level costs were recorded for this date.
-                                        </div>
-                                      ) : (
-                                        <div className="overflow-x-auto rounded-md border border-border bg-background">
-                                          <table className="w-full text-xs">
-                                            <thead>
-                                              <tr className="border-b border-border bg-muted/40 text-muted-foreground">
-                                                <th className="px-3 py-2 text-left font-medium">Step / Model</th>
-                                                <th className="px-3 py-2 text-left font-medium">Type</th>
-                                                <th className="px-3 py-2 text-right font-medium">Calls</th>
-                                                <th className="px-3 py-2 text-right font-medium">Input</th>
-                                                <th className="px-3 py-2 text-right font-medium">Cached</th>
-                                                <th className="px-3 py-2 text-right font-medium">Output</th>
-                                                <th className="px-3 py-2 text-right font-medium">Cost</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-border">
-                                              {dailySteps.map(step => (
-                                                <React.Fragment key={step.key}>
-                                                  <tr className="bg-card/60">
-                                                    <td className="px-3 py-2">
-                                                      <div className="font-medium text-foreground">{step.stepTitle}</div>
-                                                      <div className="font-mono text-[10px] text-muted-foreground">
-                                                        {step.groupLabel ? `${step.groupLabel} · ` : ''}{step.stepID}
-                                                      </div>
-                                                    </td>
-                                                    <td className="px-3 py-2 text-muted-foreground">{step.stageLabel}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-muted-foreground">{step.llmCalls.toLocaleString()}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-muted-foreground">{step.inputTokens.toLocaleString()}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-muted-foreground">-</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-muted-foreground">{step.outputTokens.toLocaleString()}</td>
-                                                    <td className="px-3 py-2 text-right font-bold text-foreground">{formatUSD(step.totalCost)}</td>
-                                                  </tr>
-                                                  {step.models.map(model => (
-                                                    <tr key={`${step.key}:${model.modelID}`} className="hover:bg-muted/30">
-                                                      <td className="px-3 py-2 pl-8">
-                                                        <div className="font-mono text-foreground">{model.modelID}</div>
-                                                        <div className="text-[10px] uppercase text-muted-foreground">{model.provider}</div>
-                                                      </td>
-                                                      <td className="px-3 py-2 text-muted-foreground">Model</td>
-                                                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{model.llmCalls.toLocaleString()}</td>
-                                                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{model.inputTokens.toLocaleString()}</td>
-                                                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{model.cacheReadTokens.toLocaleString()}</td>
-                                                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{model.outputTokens.toLocaleString()}</td>
-                                                      <td className="px-3 py-2 text-right font-semibold text-green-600 dark:text-green-400">{formatUSD(model.totalCost)}</td>
-                                                    </tr>
+                                  <td colSpan={9} className="p-3">
+                                    {!categories ? (
+                                      <p className="text-xs text-muted-foreground">This older daily record has totals but no activity attribution.</p>
+                                    ) : (
+                                      <div className="space-y-3">
+                                        {categories.map(category => {
+                                          const tokenTotal = category.total.prompt_tokens + category.total.completion_tokens
+                                          return (
+                                            <div key={category.id} className="overflow-hidden rounded-md border border-border bg-card">
+                                              <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+                                                <div className="text-xs font-semibold text-foreground">
+                                                  {category.id === 'pulse' ? 'Pulse (including background agents)' : category.label}
+                                                </div>
+                                                  <div className="text-right text-[10px] text-muted-foreground">
+                                                    <div className="font-mono text-foreground">{formatUSD(category.total.total_cost_usd)}</div>
+                                                    <div>{formatTokens(tokenTotal)} tokens</div>
+                                                    <div>Agent time: {formatDuration(category.timing.duration_ms)}</div>
+                                                </div>
+                                              </div>
+                                              {category.executions.length === 0 ? (
+                                                <p className="px-3 py-2 text-[10px] text-muted-foreground">No activity recorded.</p>
+                                              ) : (
+                                                <div className="max-h-48 overflow-y-auto px-3">
+                                                  {category.executions.map(execution => (
+                                                    <div key={execution.id} className="flex items-center gap-2 border-b border-border/70 py-2 text-[10px] last:border-0" title={execution.id}>
+                                                      <span className="min-w-0 flex-1 truncate text-foreground">{execution.label}</span>
+                                                      <span className="shrink-0 font-mono text-muted-foreground">{formatTokens(execution.cost.prompt_tokens + execution.cost.completion_tokens)}</span>
+                                                      <span className="shrink-0 font-mono text-muted-foreground">Agent time: {formatDuration(execution.timing.duration_ms)}</span>
+                                                      <span className="shrink-0 font-mono text-foreground">{formatUSD(execution.cost.total_cost_usd)}</span>
+                                                    </div>
                                                   ))}
-                                                </React.Fragment>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      )}
-                                    </div>
+                                                </div>
+                                              )}
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                    )}
                                   </td>
                                 </tr>
                               )}
@@ -1250,7 +1270,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
               )}
 
               {/* Automation Builder / Phase Costs */}
-              {phaseCostSummary && (
+              {!hasScopedActivity && phaseCostSummary && (
                 <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-4 mb-4">
                     <div>
@@ -1397,7 +1417,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
               )}
 
               {/* Aggregate Summary */}
-              {aggregateSummary && (
+              {!hasScopedActivity && aggregateSummary && (
                 <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
                   <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
                     <Award className="w-4 h-4 text-primary" />
@@ -1484,9 +1504,14 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                 </div>
               )}
 
-              {/* Individual Run Folders */}
-              {runCosts.length > 0 ? (
+              {/* Legacy per-run explorer: the canonical ledger provides the grouped
+                  activity detail above. Retain this only when the ledger is absent. */}
+              {!hasScopedActivity && runCosts.length > 0 && (
                 <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Workflow runs</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">Open a run only when you need its step or model-level cost detail.</p>
+                </div>
                 {runCosts.map((runCost) => {
                   const isExpanded = expandedRunFolders.has(runCost.runFolder)
                   const viewMode = costViewMode[runCost.runFolder] || 'step'
@@ -1635,7 +1660,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                     <thead>
                                       <tr className="text-muted-foreground border-b border-border pb-2">
                                         <th className="text-left font-medium pb-2">Step</th>
-                                        <th className="text-right font-medium pb-2">Calls</th>
                                         <th className="text-right font-medium pb-2">Tokens</th>
                                         <th className="text-right font-medium pb-2 text-blue-500">Execution</th>
                                         <th className="text-right font-medium pb-2 text-purple-500">Learning</th>
@@ -1672,9 +1696,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                             </div>
                                           </td>
                                           <td className="py-2 text-right font-mono text-muted-foreground">
-                                            {step.llmCalls.toLocaleString()}
-                                          </td>
-                                          <td className="py-2 text-right font-mono text-muted-foreground">
                                             {(step.inputTokens + step.outputTokens).toLocaleString()}
                                           </td>
                                           <td className="py-2 text-right font-mono text-blue-600 dark:text-blue-400">
@@ -1703,9 +1724,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                       {/* Total Row */}
                                       <tr className="bg-muted/30 font-semibold">
                                         <td className="py-2 text-foreground">Total</td>
-                                        <td className="py-2 text-right font-mono text-muted-foreground">
-                                          {costSummary.totalLLMCalls.toLocaleString()}
-                                        </td>
                                         <td className="py-2 text-right font-mono text-muted-foreground">
                                           {costSummary.totalTokens.toLocaleString()}
                                         </td>
@@ -1744,7 +1762,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                       <tr className="text-muted-foreground border-b border-border pb-2">
                                         <th className="w-8"></th>
                                         <th className="text-left font-medium pb-2">Model</th>
-                                        <th className="text-right font-medium pb-2">Calls</th>
                                         <th className="text-right font-medium pb-2">Input</th>
                                         <th className="text-right font-medium pb-2">Cached In</th>
                                         <th className="text-right font-medium pb-2">Cache Write</th>
@@ -1828,7 +1845,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                 <div className="font-mono text-foreground font-medium">{modelId}</div>
                                                 <div className="text-[10px] text-muted-foreground uppercase">{usage.provider}</div>
                                               </td>
-                                              <td className="py-2 text-right text-foreground">{usage.llm_call_count}</td>
                                               <td className="py-2 text-right text-muted-foreground">{usage.input_tokens.toLocaleString()}</td>
                                               <td className="py-2 text-right">
                                                 <div className="text-foreground">{cacheRead.toLocaleString()}</div>
@@ -1843,7 +1859,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                             </tr>
                                             {isModelExpanded && modelSteps.length > 0 && (
                                               <tr className="bg-muted/20">
-                                                <td colSpan={9} className="p-0">
+                                                <td colSpan={8} className="p-0">
                                                   <div className="p-4 space-y-4">
                                                     <div className="border border-border rounded-md overflow-hidden bg-background">
                                                       <div className="bg-muted/50 px-4 py-2 border-b border-border flex justify-between items-center">
@@ -1900,7 +1916,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                               {[usage.provider, usage.model_id, usage.estimated ? 'estimated' : ''].filter(Boolean).join(' | ')}
                                             </div>
                                           </td>
-                                          <td className="py-2 text-right text-muted-foreground">{usage.count || '-'}</td>
                                           <td className="py-2 text-right text-muted-foreground" colSpan={5}>
                                             {usage.quantity ? `${usage.quantity.toFixed(4)} ${usage.unit || ''}` : (usage.unit || 'tool usage')}
                                           </td>
@@ -1916,7 +1931,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                               {['evaluation', usage.provider, usage.model_id, usage.estimated ? 'estimated' : ''].filter(Boolean).join(' | ')}
                                             </div>
                                           </td>
-                                          <td className="py-2 text-right text-muted-foreground">{usage.count || '-'}</td>
                                           <td className="py-2 text-right text-muted-foreground" colSpan={5}>
                                             {usage.quantity ? `${usage.quantity.toFixed(4)} ${usage.unit || ''}` : (usage.unit || 'tool usage')}
                                           </td>
@@ -1928,7 +1942,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                       <tr className="border-t-2 border-border font-bold">
                                         <td></td>
                                         <td className="py-3 text-foreground">Total Summary</td>
-                                        <td className="py-3 text-right text-foreground">{costSummary.totalLLMCalls}</td>
                                         <td className="py-3 text-right text-muted-foreground">{costSummary.totalInputTokens.toLocaleString()}</td>
                                         <td className="py-3 text-right text-muted-foreground">
                                           {costSummary.totalCacheReadTokens.toLocaleString()}
@@ -1954,10 +1967,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                     </div>
                   )
                 })}
-                </div>
-              ) : (
-                <div className="bg-card border border-border rounded-lg p-6 text-sm text-muted-foreground">
-                  No automation run cost data found yet. Run one or more automation runs to compare execution costs alongside the builder costs above.
                 </div>
               )}
             </div>

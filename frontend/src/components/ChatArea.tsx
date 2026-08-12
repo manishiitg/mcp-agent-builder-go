@@ -665,6 +665,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const filtered = tabEvents.filter(event => {
       if (event.type === 'workspace_file_operation') return false
 
+      // These drive the live streaming text buffer. They are transport-level
+      // chunks, not durable conversation records; rendering retained chunks
+      // creates one "Unknown Event Type" JSON card per packet after a page
+      // refresh or when the main terminal is opened in Formatted view.
+      if (isStreamingEventType(event.type)) return false
+
       // Synthetic auto-notifications are orchestration input for the agent, not
       // human chat. Keep them in the session/event store for sequencing and
       // history, but do not replay dozens of internal prompts when a read-only

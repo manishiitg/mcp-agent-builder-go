@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { agentApi } from '../services/api'
 import {
+  canToggleTerminalView,
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
   resolveTerminalFormattedView,
@@ -125,6 +126,15 @@ interface SelectedTerminalEventPage {
   error?: string
 }
 
+interface MainSessionOlderEventPage {
+  sessionId: string | null
+  events: PollingEvent[]
+  loadingOlder: boolean
+  hasOlder?: boolean
+  nextOffset: number
+  error?: string
+}
+
 const EMPTY_SELECTED_TERMINAL_EVENT_PAGE: SelectedTerminalEventPage = {
   terminalId: null,
   events: [],
@@ -132,6 +142,12 @@ const EMPTY_SELECTED_TERMINAL_EVENT_PAGE: SelectedTerminalEventPage = {
   loading: false,
   loadingOlder: false,
   hasOlder: false,
+}
+const EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE: MainSessionOlderEventPage = {
+  sessionId: null,
+  events: [],
+  loadingOlder: false,
+  nextOffset: 0,
 }
 const EMPTY_TERMINAL_EVENTS: PollingEvent[] = []
 const LIVE_ATTACH_RESEED_DEBOUNCE_MS = 150
@@ -2623,8 +2639,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const [error, setError] = useState<string | null>(null)
   const [terminalActionBusy, setTerminalActionBusy] = useState<string | null>(null)
   const [debugPanelOpenForID, setDebugPanelOpenForID] = useState<string | null>(null)
+  const [errorPanelOpenForID, setErrorPanelOpenForID] = useState<string | null>(null)
   const [debugText, setDebugText] = useState<string>('')
   const debugMenuRef = useRef<HTMLDivElement | null>(null)
+  const errorMenuRef = useRef<HTMLDivElement | null>(null)
 
   const activeWorkflowPath = useGlobalPresetStore(state => {
     const activeWorkflowId = state.activePresetIds.workflow
@@ -2652,8 +2670,18 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const sessionEvents = useChatStore(state => (
     currentSessionId ? state.tabEvents[currentSessionId] : undefined
   ))
+  const sessionHasMoreOlderEvents = useChatStore(state => (
+    currentSessionId ? (state.tabHasMoreOlderEvents[currentSessionId] ?? false) : false
+  ))
   const [selectedTerminalEventPage, setSelectedTerminalEventPage] = useState<SelectedTerminalEventPage>(
     EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
+  )
+  // Main-agent events live in the session stream rather than the per-terminal
+  // cursor endpoint. Keep older pages locally: they are only needed while the
+  // user has explicitly opened this Conversation, and should not bloat every
+  // other consumer of the session-wide store.
+  const [mainSessionOlderEventPage, setMainSessionOlderEventPage] = useState<MainSessionOlderEventPage>(
+    EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE,
   )
   const selectedTerminalEventPageRef = useRef(selectedTerminalEventPage)
   const terminalEventRequestGenerationRef = useRef(0)
@@ -2661,6 +2689,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   useEffect(() => {
     selectedTerminalEventPageRef.current = selectedTerminalEventPage
   }, [selectedTerminalEventPage])
+  useEffect(() => {
+    setMainSessionOlderEventPage(current => (
+      current.sessionId === currentSessionId ? current : EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE
+    ))
+  }, [currentSessionId])
   useEffect(() => {
     setDismissedErrorIDs(readDismissedTerminalErrorIDs(currentSessionId))
   }, [currentSessionId])
@@ -2753,15 +2786,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       }
       if (terminalID) {
         const items = byTerminalID.get(terminalID) || []
-        if (items.length < 2) {
-          items.push(entry)
-          byTerminalID.set(terminalID, items)
-        }
-      } else if (global.length < 3) {
+        items.push(entry)
+        byTerminalID.set(terminalID, items)
+      } else {
         global.push(entry)
-      }
-      if (global.length >= 3 && byTerminalID.size >= terminals.length) {
-        break
       }
     }
     return { global, byTerminalID }
@@ -2985,6 +3013,27 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [debugPanelOpenForID])
+
+  // Error details use the same compact header-menu interaction as terminal
+  // diagnostics. Keeping the menu out of the terminal body avoids covering
+  // live output or changing the tmux viewport whenever a noisy run records an
+  // expected/recoverable tool failure.
+  useEffect(() => {
+    if (!errorPanelOpenForID) return
+    const handleMouseDown = (event: MouseEvent) => {
+      if (errorMenuRef.current?.contains(event.target as Node)) return
+      setErrorPanelOpenForID(null)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setErrorPanelOpenForID(null)
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [errorPanelOpenForID])
 
   const selectTerminalFromRail = useCallback((terminal: TerminalSnapshot) => {
     const key = terminalPaneKey(terminal)
@@ -3343,14 +3392,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     },
     [selectedTerminalView, priorArchivedTurns, archivedTurnContents],
   )
-  // Per-terminal explicit view choices. A tmux pane shows
+  // Per-terminal explicit view choices. Raw tmux is the default; a tmux pane shows
   // raw TUI bytes, but the same turn is ALSO emitted as structured events
   // (tool_call_start/end with arguments, llm_generation_end with the answer) --
   // that is what the transcript renders for structured providers. Both views
   // describe the same run, so which one is useful is a reading choice, not a
   // property of the transport. Coding-agent TUIs commonly use tmux's alternate
-  // screen (history_size=0), so their durable transcript is the useful default
-  // for both parent and child agents. An explicit user toggle wins.
+  // screen (history_size=0), so the durable transcript remains available for
+  // both parent and child agents when the user explicitly selects it.
   const [formattedViewPreferences, setFormattedViewPreferences] = useState<Record<string, boolean>>({})
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
   const selectedTerminalIsTmux = Boolean(
@@ -3367,8 +3416,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // The toggle describes an available view, not already-loaded data. In
   // particular, restored Schedule tabs intentionally start with no event
   // history; hiding the toggle in that state made Formatted unreachable.
-  const canShowFormattedView = Boolean(
-    selectedTerminalIsTmux && selectedTerminalID,
+  const canShowFormattedView = canToggleTerminalView(
+    selectedTerminalView,
+    selectedTerminalIsSynthetic,
+    Boolean(selectedTerminalDisplayContent),
+    selectedTerminalUsesSessionEvents,
   )
   const showFormattedView = resolveTerminalFormattedView(
     canShowFormattedView,
@@ -3459,6 +3511,85 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       })
     }
   }, [activeWorkflowPath, currentSessionId, selectedTabRequiresHistoryHydration])
+
+  useEffect(() => {
+    if (!shouldHydrateMainTerminalEvents(
+      selectedTerminalUsesSessionEvents,
+      showFormattedView,
+      sessionEvents?.length ?? 0,
+      selectedTabRequiresHistoryHydration,
+      mainEventHydration.sessionId === currentSessionId && !!mainEventHydration.loaded,
+    )) return
+    if (mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading) return
+    void loadMainSessionEvents()
+  }, [
+    currentSessionId,
+    loadMainSessionEvents,
+    mainEventHydration.loaded,
+    mainEventHydration.loading,
+    mainEventHydration.sessionId,
+    selectedTabRequiresHistoryHydration,
+    selectedTerminalUsesSessionEvents,
+    sessionEvents?.length,
+    showFormattedView,
+  ])
+
+  const mainSessionHasOlderEvents = mainSessionOlderEventPage.sessionId === currentSessionId &&
+    mainSessionOlderEventPage.hasOlder !== undefined
+    ? mainSessionOlderEventPage.hasOlder
+    : sessionHasMoreOlderEvents
+
+  const loadOlderMainSessionEvents = useCallback(async () => {
+    if (!currentSessionId || !mainSessionHasOlderEvents || mainSessionOlderEventPage.loadingOlder) return
+
+    const sessionId = currentSessionId
+    const offset = mainSessionOlderEventPage.sessionId === sessionId
+      ? mainSessionOlderEventPage.nextOffset
+      : 0
+    setMainSessionOlderEventPage(current => (
+      current.sessionId === sessionId
+        ? { ...current, loadingOlder: true, error: undefined }
+        : {
+            sessionId,
+            events: [],
+            loadingOlder: true,
+            hasOlder: undefined,
+            nextOffset: offset,
+          }
+    ))
+    try {
+      // Request the full session page. selectTerminalEvents below already
+      // removes events owned by sibling terminals; fetching the full page is
+      // what makes the offset a stable cursor instead of skipping history that
+      // the generic chat working set happened to filter out.
+      const response = await agentApi.getSessionEvents(sessionId, undefined, {
+        limit: TERMINAL_EVENT_PAGE_LIMIT,
+        offset,
+        workingSet: 'all',
+      })
+      setMainSessionOlderEventPage(current => {
+        if (current.sessionId !== sessionId) return current
+        const pageEvents = response.events || []
+        return {
+          ...current,
+          events: mergeTerminalEventPages(current.events, pageEvents),
+          loadingOlder: false,
+          hasOlder: response.has_more,
+          // Offset advances through the server's full page even when a later
+          // terminal-selection filter hides some entries from this view.
+          nextOffset: offset + pageEvents.length,
+        }
+      })
+    } catch (loadError) {
+      setMainSessionOlderEventPage(current => current.sessionId === sessionId
+        ? {
+            ...current,
+            loadingOlder: false,
+            error: loadError instanceof Error ? loadError.message : 'Failed to load older conversation events.',
+          }
+        : current)
+    }
+  }, [currentSessionId, mainSessionHasOlderEvents, mainSessionOlderEventPage.loadingOlder, mainSessionOlderEventPage.nextOffset, mainSessionOlderEventPage.sessionId])
 
   const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
     const nextFormatted = !currentlyFormatted
@@ -3596,7 +3727,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   const selectedTerminalEventSource = selectedTerminalUsesSessionEvents
-    ? sessionEvents
+    ? mergeTerminalEventPages(
+        mainSessionOlderEventPage.sessionId === currentSessionId ? mainSessionOlderEventPage.events : [],
+        sessionEvents || [],
+      )
     : selectedTerminalEventPage.terminalId === selectedTerminalID
       ? selectedTerminalEventPage.events
       : EMPTY_TERMINAL_EVENTS
@@ -3806,6 +3940,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalErrors = selectedTerminalView
     ? terminalErrorsByID.get(terminalPaneKey(selectedTerminalView)) || []
     : []
+  const selectedTerminalErrorEntries = selectedTerminalView
+    ? [...selectedTerminalErrors, ...sessionErrorBanner]
+    : []
+  const selectedTerminalErrorPanelKey = selectedTerminalView
+    ? terminalPaneKey(selectedTerminalView)
+    : null
   const railSpinner = useSpinnerFrame(groupedTerminals.activeTerminals.length > 0)
   const selectedTerminalSpinner = useSpinnerFrame(isSelectedTerminalStreaming)
 
@@ -4334,57 +4474,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           </div>
         )}
 
-        {/* Error disclosure must not participate in terminal layout. A height
-            change makes live xterm reconnect at a new grid and clears the
-            scrollback the user is currently reading. */}
-        {sessionErrorBanner.length > 0 && (
-          <div
-            className="absolute left-2 right-2 top-2 z-[70] flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm sm:left-16"
-            data-testid="terminal-global-error-overlay"
-          >
-            {sessionErrorBanner.map(entry => {
-              const isOpen = expandedErrorIDs.has(entry.id)
-              return (
-              <div key={entry.id} className="text-xs text-red-300">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
-                    {entry.type.replace(/_/g, ' ')}
-                  </span>
-                  {entry.toolName && (
-                    <span className="max-w-48 shrink truncate font-mono text-[10px] text-red-200/80" title={entry.toolName}>
-                      {entry.toolName}
-                    </span>
-                  )}
-                  <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
-                    {compactTerminalErrorMessage(entry.message)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => toggleTerminalError(entry.id)}
-                    className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
-                    aria-expanded={isOpen}
-                  >
-                    {isOpen ? 'Close' : 'Open'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => dismissTerminalError(entry.id)}
-                    className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
-                    title="Dismiss"
-                    aria-label="Dismiss error"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-                {isOpen && (
-                  <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-32" />
-                )}
-              </div>
-              )
-            })}
-          </div>
-        )}
-
         {!error && terminals.length === 0 && routingDecisions.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
             <Terminal className="h-10 w-10 text-neutral-700" strokeWidth={1.25} />
@@ -4493,11 +4582,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                               : 'text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100'
                           }`}
                           title={showFormattedView
-                            ? 'Showing Formatted conversation. Click to inspect the Raw terminal.'
-                            : 'Showing Raw terminal. Retained terminal snapshots may have no scrollback; click to open the complete Formatted conversation.'}
+                            ? 'Showing the readable conversation. Click to inspect the technical terminal.'
+                            : 'Showing the technical terminal. Click to return to the readable conversation.'}
                         >
                           {showFormattedView ? <Braces className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
-                          <span>{showFormattedView ? 'Formatted' : 'Raw'}</span>
+                          <span>{showFormattedView ? 'Conversation' : 'Terminal'}</span>
                         </button>
                       )}
                       {selectedTerminalIsTmux && !showFormattedView && (
@@ -4525,6 +4614,102 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                             )}
                           </button>
                         </>
+                      )}
+                      {selectedTerminalErrorEntries.length > 0 && selectedTerminalErrorPanelKey && (
+                        <div ref={errorMenuRef} className="relative inline-flex">
+                          <button
+                            type="button"
+                            onMouseDown={event => event.preventDefault()}
+                            onClick={() => setErrorPanelOpenForID(current => (
+                              current === selectedTerminalErrorPanelKey ? null : selectedTerminalErrorPanelKey
+                            ))}
+                            className={`relative inline-flex items-center justify-center rounded border p-1 transition-colors hover:bg-red-950/40 hover:text-red-100 ${
+                              errorPanelOpenForID === selectedTerminalErrorPanelKey
+                                ? 'border-red-700/80 bg-red-950/45 text-red-200'
+                                : 'border-red-900/70 text-red-300'
+                            }`}
+                            title={`${selectedTerminalErrorEntries.length} captured error${selectedTerminalErrorEntries.length === 1 ? '' : 's'}`}
+                            aria-label={`Show ${selectedTerminalErrorEntries.length} captured error${selectedTerminalErrorEntries.length === 1 ? '' : 's'}`}
+                            aria-haspopup="menu"
+                            aria-expanded={errorPanelOpenForID === selectedTerminalErrorPanelKey}
+                            data-testid="terminal-error-indicator"
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <span className="absolute -right-1.5 -top-1.5 min-w-3.5 rounded-full bg-red-600 px-1 text-center text-[9px] font-semibold leading-3.5 text-white tabular-nums">
+                              {selectedTerminalErrorEntries.length > 99 ? '99+' : selectedTerminalErrorEntries.length}
+                            </span>
+                          </button>
+                          {errorPanelOpenForID === selectedTerminalErrorPanelKey && (
+                            <div
+                              role="menu"
+                              className="absolute right-0 top-full z-[80] mt-1 flex max-h-[min(55vh,28rem)] w-[min(34rem,calc(100vw-5rem))] flex-col overflow-hidden rounded-lg border border-red-900/70 bg-[#171313] text-xs text-neutral-200 shadow-2xl"
+                              data-testid="terminal-error-menu"
+                            >
+                              <div className="flex items-center justify-between border-b border-red-950 px-3 py-2">
+                                <div className="flex items-center gap-2 font-medium text-red-200">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  <span>Captured errors</span>
+                                  <span className="rounded bg-red-950 px-1.5 py-0.5 text-[10px] tabular-nums text-red-300">
+                                    {selectedTerminalErrorEntries.length}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setErrorPanelOpenForID(null)}
+                                  className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100"
+                                  aria-label="Close captured errors"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                              <div className="flex min-h-0 flex-col gap-1 overflow-y-auto p-2">
+                                {selectedTerminalErrorEntries.map(entry => {
+                                  const isOpen = expandedErrorIDs.has(entry.id)
+                                  return (
+                                    <div key={entry.id} className="rounded border border-red-950/90 bg-red-950/20 p-2 text-red-200">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-red-200">
+                                          {entry.type.replace(/_/g, ' ')}
+                                        </span>
+                                        {entry.toolName && (
+                                          <span className="max-w-40 shrink truncate font-mono text-[10px] text-red-200/75" title={entry.toolName}>
+                                            {entry.toolName}
+                                          </span>
+                                        )}
+                                        <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
+                                          {compactTerminalErrorMessage(entry.message)}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleTerminalError(entry.id)}
+                                          className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
+                                          aria-expanded={isOpen}
+                                        >
+                                          {isOpen ? 'Less' : 'Details'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            dismissTerminalError(entry.id)
+                                            if (selectedTerminalErrorEntries.length === 1) setErrorPanelOpenForID(null)
+                                          }}
+                                          className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
+                                          title="Dismiss"
+                                          aria-label="Dismiss terminal error"
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </button>
+                                      </div>
+                                      {isOpen && (
+                                        <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-48" />
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                       {hasTerminalDebugActions(selectedTerminalView) && (
                         <div ref={debugMenuRef} className="relative inline-flex">
@@ -4766,57 +4951,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       {terminalPreValidationSummary(selectedTerminalView)}
                     </div>
                   )}
-                  {/* Keep scoped errors over the viewport rather than above it.
-                      Opening, closing, or dismissing one must not resize tmux. */}
                   <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                    {selectedTerminalErrors.length > 0 && (
-                    <div
-                      className="absolute left-2 right-2 top-2 z-30 flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm"
-                      data-testid="terminal-scoped-error-overlay"
-                    >
-                      {selectedTerminalErrors.map(entry => {
-                        const isOpen = expandedErrorIDs.has(entry.id)
-                        return (
-                          <div key={entry.id} className="text-xs text-red-300">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-300" aria-hidden />
-                              <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
-                                {entry.type.replace(/_/g, ' ')}
-                              </span>
-                              {entry.toolName && (
-                                <span className="max-w-48 shrink truncate font-mono text-[10px] text-red-200/80" title={entry.toolName}>
-                                  {entry.toolName}
-                                </span>
-                              )}
-                              <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
-                                {compactTerminalErrorMessage(entry.message)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => toggleTerminalError(entry.id)}
-                                className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
-                                aria-expanded={isOpen}
-                              >
-                                {isOpen ? 'Close' : 'Open'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => dismissTerminalError(entry.id)}
-                                className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
-                                title="Dismiss"
-                                aria-label="Dismiss terminal error"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                            {isOpen && (
-                              <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-40" />
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                    )}
                     {selectedTerminalView?.execution_tree_placeholder ? (
                       <TerminalWaitingPane
                         className="min-w-0 flex-1 overflow-hidden overscroll-contain"
@@ -4840,13 +4975,19 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       loading={selectedTerminalUsesSessionEvents
                         ? mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading
                         : selectedTerminalEventPage.loading}
-                      loadingOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loadingOlder}
-                      hasOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.hasOlder}
+                      loadingOlder={selectedTerminalUsesSessionEvents
+                        ? mainSessionOlderEventPage.loadingOlder
+                        : selectedTerminalEventPage.loadingOlder}
+                      hasOlder={selectedTerminalUsesSessionEvents
+                        ? mainSessionHasOlderEvents
+                        : selectedTerminalEventPage.hasOlder}
                       error={selectedTerminalUsesSessionEvents
-                        ? mainEventHydration.sessionId === currentSessionId ? mainEventHydration.error : undefined
+                        ? (mainSessionOlderEventPage.error || (mainEventHydration.sessionId === currentSessionId ? mainEventHydration.error : undefined))
                         : selectedTerminalEventPage.error}
-                      onLoadOlder={!selectedTerminalUsesSessionEvents ? loadOlderSelectedTerminalEvents : undefined}
-                      onRetry={selectedTerminalUsesSessionEvents ? loadMainSessionEvents : loadSelectedTerminalEventPage}
+                      onLoadOlder={selectedTerminalUsesSessionEvents ? loadOlderMainSessionEvents : loadOlderSelectedTerminalEvents}
+                      onRetry={selectedTerminalUsesSessionEvents
+                        ? (mainSessionOlderEventPage.error ? loadOlderMainSessionEvents : loadMainSessionEvents)
+                        : loadSelectedTerminalEventPage}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane

@@ -222,23 +222,10 @@ func (api *StreamingAPI) handleGetSessionEvents(w http.ResponseWriter, r *http.R
 		api.logger.Debug(fmt.Sprintf("  [%d] %s", i, event.Type))
 	}
 
-	// Determine has_more based on mode
-	// Use hasMoreFromStore which is calculated correctly by the event store:
-	// - For sinceIndex=0: hasMore is true if there are older events beyond InitialEventsLimit
-	// - For sinceIndex>0 (forward polling): hasMore is false (frontend continues polling anyway)
-	// - For limit/offset (backward pagination): hasMore is true if more events exist
+	// The event store calculates this against the filtered pagination source.
+	// Do not infer it from page length: an exact final page would otherwise
+	// advertise a nonexistent next page forever.
 	hasMore := hasMoreFromStore
-	if !hasMoreFromStore && opts.Limit > 0 {
-		// Backward pagination: has more if there are more filtered events after current offset
-		// totalCount is the total UNFILTERED events, but we need to check filtered count
-		// Since we filter first then paginate, we can check if we got a full page
-		// If we got fewer events than requested limit, we've reached the end
-		hasMore = len(sessionEvents) >= opts.Limit
-	}
-	// Note: For forward polling (sinceIndex >= 0), hasMore from store is correct:
-	// - It's true only when we limited results due to InitialEventsLimit (sinceIndex=0 case)
-	// - It's false for normal polling (sinceIndex > 0) which is correct behavior
-	// Frontend doesn't need hasMore for streaming - it keeps polling until session completes
 
 	response := GetEventsResponse{
 		Events:                     sessionEvents,

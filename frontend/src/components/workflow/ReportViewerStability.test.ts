@@ -30,13 +30,19 @@ describe('open report stability', () => {
     expect(frame).not.toContain('srcDoc={html}')
   })
 
-  it('preserves report scroll across unsolicited outer-shell resets', () => {
+  it('does not fight native scrolling with a corrective reset loop', () => {
     const viewer = readFileSync('src/components/workflow/ReportViewer.tsx', 'utf8')
 
-    expect(viewer).toContain('lastStableScrollTopRef')
-    expect(viewer).toContain('unexpected scroll reset restored')
-    expect(viewer).toContain('onScroll={handleReportScroll}')
-    expect(viewer).toContain('onWheelCapture={noteUserScrollIntent}')
     expect(viewer).toContain('aria-label="Report content"')
+    expect(viewer).not.toContain('unexpected scroll reset restored')
+    expect(viewer).not.toContain('onScroll={handleReportScroll}')
+  })
+
+  it('keeps decision-status polling visually silent when nothing changed', () => {
+    const panel = readFileSync('src/components/workflow/ReportHumanInputPanel.tsx', 'utf8')
+
+    expect(panel).toContain('keepPreviousInputsWhenUnchanged')
+    expect(panel).toContain('loadInputs(undefined, false)')
+    expect(panel).toContain('if (showLoading) setLoading(true)')
   })
 })

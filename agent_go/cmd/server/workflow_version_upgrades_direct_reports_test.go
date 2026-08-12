@@ -19,6 +19,7 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 }
 
 func TestUpgradeDirectHTMLReportsPreservesPrimaryDocuments(t *testing.T) {
+	normalizedPrompt := strings.ToLower(strings.Join(strings.Fields(upgradeDirectHTMLReports), " "))
 	for _, want := range []string{
 		"reports/report_plan.json",
 		"inventory every enabled HTML file widget",
@@ -30,7 +31,7 @@ func TestUpgradeDirectHTMLReportsPreservesPrimaryDocuments(t *testing.T) {
 		"validate_report_html",
 		`set_workflow_contract_version(version="1.0.23")`,
 	} {
-		if !strings.Contains(upgradeDirectHTMLReports, want) {
+		if !strings.Contains(normalizedPrompt, strings.ToLower(want)) {
 			t.Errorf("direct-report upgrade prompt missing %q", want)
 		}
 	}

@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Claude Code`, Codex follow-up |
 | Ticket state | `done` — user-confirmed on the live UI |
-| Last synchronized | `2026-08-11` |
+| Last synchronized | `2026-08-12` |
 
 - **Priority:** P3 (cosmetic; no data loss)
 - **Owner:** workflow canvas mounting / workspace-view sync
@@ -105,3 +105,25 @@ across a seven-second background polling interval while terminal activity
 continued. No report file changed on disk and no explicit report-refresh event
 was dispatched. `ReportViewerStability.test.ts` pins the explicit-refresh and
 memoization contract. This is frontend-only; no server restart is required.
+
+## Third root cause: polling and the scroll-repair workaround (2026-08-12)
+
+The remaining visible jitter was present even before a report document loaded,
+so it could not originate in the iframe. The decision panel above the document
+polls pending human inputs every five seconds. Every background check toggled
+its public `loading` state and replaced the input array even when the payload was
+unchanged, repainting the report shell.
+
+An earlier defensive scroll workaround then amplified that repaint: it observed
+an outer scroll reset, assigned `scrollTop` in `requestAnimationFrame`, and the
+assignment generated another scroll event after its guard cleared. Live browser
+logs captured dozens of `unexpected scroll reset restored` events in under one
+second. This was the apparent continuous refresh.
+
+Background decision checks are now silent, preserve the last good result across
+transient failures, and retain the previous array identity when data is
+unchanged. The corrective scroll loop was removed; the stable mounted pane now
+uses native scrolling. After hot reload, several polling cycles produced no new
+scroll-repair events, report remounts, or iframe loads.
+
+Verification: `ReportViewerStability.test.ts` (5/5) and `npx tsc -b` pass.

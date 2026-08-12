@@ -39,6 +39,7 @@ function terminal(partial: Partial<TerminalSnapshot> & { session_id: string; own
 }
 
 describe('selectTerminalEvents — owned terminal (workflow step, message-sequence item, ...)', () => {
+
   it('matches an event whose execution_id equals the terminal owner id', () => {
     const t = terminal({ session_id: 's1', owner_id: 'exec-1' })
     const events = [
@@ -857,6 +858,48 @@ describe('formatted view for a tmux terminal', () => {
     expect(items.some(i => i.kind === 'tools')).toBe(true)
     const answer = items.find(i => i.kind === 'event' && (i as any).event.id === 'answer')
     expect(answer).toBeDefined()
+  })
+
+  it('does not render persisted streaming packets as unknown-event cards', () => {
+    const items = buildTranscriptItems([
+      ev('stream-start', 'streaming_start', {}),
+      ev('stream-chunk', 'streaming_chunk', { content: 'partial transport packet' }),
+      ev('stream-end', 'streaming_end', {}),
+      ev('answer', 'llm_generation_end', { content: 'Durable final answer.' }),
+    ])
+
+    expect(items.map(item => item.kind === 'event' ? (item as any).event.id : item.key)).toEqual(['answer'])
+  })
+
+  it('keeps the human conversation and removes provider setup diagnostics', () => {
+    const items = buildTranscriptItems([
+      ev('user', 'user_message', { content: 'Is the schedule fixed?' }),
+      ev('prompt', 'system_prompt', { content: 'internal system prompt' }),
+      ev('turn', 'conversation_turn', { last_message: 'Is the schedule fixed?' }),
+      ev('start', 'llm_generation_start', { model_id: 'claude-opus-5' }),
+      ev('retry', 'llm_generation_with_retry', { max_retries: 5 }),
+      ev('answer', 'llm_generation_end', { content: 'Yes, it is fixed.' }),
+    ])
+
+    expect(items.map(item => item.kind === 'event' ? (item as any).event.id : item.key)).toEqual(['user', 'answer'])
+  })
+
+  it('drops an empty successful agent-end trace after the reply', () => {
+    const items = buildTranscriptItems([
+      ev('answer', 'llm_generation_end', { content: 'Done.' }),
+      ev('end', 'agent_end', { success: true, agent_type: 'simple' }),
+    ])
+
+    expect(items.map(item => item.kind === 'event' ? (item as any).event.id : item.key)).toEqual(['answer'])
+  })
+
+  it('drops an empty retained-turn completion marker', () => {
+    const items = buildTranscriptItems([
+      ev('answer', 'llm_generation_end', { content: 'Done.' }),
+      ev('settled', 'unified_completion', { source: 'tmux_stream' }),
+    ])
+
+    expect(items.map(item => item.kind === 'event' ? (item as any).event.id : item.key)).toEqual(['answer'])
   })
 })
 

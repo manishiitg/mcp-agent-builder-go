@@ -136,10 +136,6 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
   const [error, setError] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [previewPreference, setPreviewPreference] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const lastStableScrollTopRef = useRef(0)
-  const lastUserScrollIntentAtRef = useRef(0)
-  const restoringScrollRef = useRef(false)
   const dataApi = useReportDataApi(workspacePath)
 
   const refresh = useCallback(() => setRefreshNonce(value => value + 1), [])
@@ -172,42 +168,6 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
     return () => debugReportView('unmounted', { workspacePath })
   }, [workspacePath])
 
-  // The connected workspace shell updates status on a timer. Chromium can
-  // occasionally respond to one of those outer layout/focus updates by moving
-  // this nested report scroller to 0 even though the report document did not
-  // reload. Preserve the user's position across that unsolicited reset while
-  // still allowing an actual wheel/touch/keyboard/scrollbar action to reach the
-  // top normally.
-  const noteUserScrollIntent = useCallback(() => {
-    lastUserScrollIntentAtRef.current = performance.now()
-  }, [])
-  const handleReportScroll = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (!container || restoringScrollRef.current) return
-    const nextTop = container.scrollTop
-    const recentUserIntent = performance.now() - lastUserScrollIntentAtRef.current < 1000
-    if (nextTop === 0 && lastStableScrollTopRef.current > 0 && !recentUserIntent) {
-      const restoreTop = lastStableScrollTopRef.current
-      restoringScrollRef.current = true
-      requestAnimationFrame(() => {
-        const current = scrollContainerRef.current
-        if (current?.scrollTop === 0) current.scrollTop = restoreTop
-        restoringScrollRef.current = false
-        debugReportView('unexpected scroll reset restored', { workspacePath, restoreTop })
-      })
-      return
-    }
-    lastStableScrollTopRef.current = nextTop
-  }, [workspacePath])
-
-  useEffect(() => {
-    // A different workflow is a different report document and should start at
-    // the top rather than inherit the prior workflow's position.
-    lastStableScrollTopRef.current = 0
-    const container = scrollContainerRef.current
-    if (container) container.scrollTop = 0
-  }, [workspacePath])
-
   const previewMode = focusTier || previewPreference
   const shellClass = previewMode === 'mobile' ? 'mx-auto w-full max-w-[480px] p-1.5' : 'w-full max-w-full'
   const runtime = useMemo(() => ({ data: dataApi }), [dataApi])
@@ -217,15 +177,9 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
       <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
         {onClose && <div className="flex shrink-0 justify-end border-b border-border/60 px-3 py-2"><button type="button" onClick={onClose} aria-label="Close report" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-lg text-muted-foreground hover:bg-muted hover:text-foreground">×</button></div>}
         <div
-          ref={scrollContainerRef}
           tabIndex={0}
           aria-label="Report content"
           className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
-          onScroll={handleReportScroll}
-          onWheelCapture={noteUserScrollIntent}
-          onTouchStartCapture={noteUserScrollIntent}
-          onPointerDownCapture={noteUserScrollIntent}
-          onKeyDownCapture={noteUserScrollIntent}
         >
           <div className={shellClass}>
             <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />

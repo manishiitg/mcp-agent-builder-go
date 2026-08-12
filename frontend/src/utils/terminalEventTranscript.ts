@@ -17,7 +17,25 @@ import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 // footer. They are not part of the conversation, so keep them out of Clear
 // View. A long reviewer can emit dozens of status_line updates; rendering each
 // one as a card pushes the actual finding off screen.
-const NON_TRANSCRIPT_TYPES = new Set(['token_usage', 'status_line'])
+const NON_TRANSCRIPT_TYPES = new Set([
+  'token_usage',
+  'status_line',
+  // Provider/setup diagnostics belong in Terminal, not in the readable
+  // conversation. Their useful human content is already represented by the
+  // user_message and final-answer events beside them.
+  'system_prompt',
+  'conversation_start',
+  'conversation_end',
+  'conversation_turn',
+  'llm_generation_start',
+  'llm_generation_with_retry',
+  // Live delivery is assembled by ChatArea into the transient streaming text
+  // buffer. Persisted chunks are protocol packets, not messages, and must not
+  // fall through EventDispatcher as noisy "Unknown Event Type" JSON cards.
+  'streaming_start',
+  'streaming_chunk',
+  'streaming_end',
+])
 
 // A full run is a CONTAINER, not an agent: it has no conversation of its own,
 // only the steps beneath it. The backend already declares this
@@ -345,6 +363,16 @@ function isTranscriptEvent(event: PollingEvent): boolean {
   if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
   if (isContainerTranscriptNoise(event)) return false
   if (isMessageSequenceWrapperEvent(event)) return false
+  if (event.type === 'agent_end' || event.type === 'unified_completion') {
+    const fields = eventFields(event)
+    const failed = fields.success === false || Boolean(textField(fields.error))
+    // The panel header already owns the terminal's state. A successful empty
+    // lifecycle card only repeats “Completed” after the real reply and makes
+    // the conversation look like a trace log. Retained coding-agent turns in
+    // particular emit an empty unified_completion solely to settle the live
+    // terminal lifecycle; it is transport state, not a chat message.
+    if (!failed && !answerText(event)) return false
+  }
   return true
 }
 

@@ -199,6 +199,7 @@ func (o *Observer) recordLLMGeneration(event *unifiedevents.AgentEvent, generati
 	entry.EffectiveModelID = effectiveModel
 	entry.TurnCount = 1
 	entry.LLMCallCount = 1
+	entry.LLMGenerationDurationMS = generation.Duration.Milliseconds()
 	entry.PromptTokens = generation.UsageMetrics.PromptTokens
 	entry.CompletionTokens = generation.UsageMetrics.CompletionTokens
 	entry.ReasoningTokens = generation.UsageMetrics.ReasoningTokens

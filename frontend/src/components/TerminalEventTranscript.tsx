@@ -1,13 +1,12 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import { CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, UserRound, Wrench, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import {
   buildTranscriptItems,
   pairToolCalls,
   type PairedToolCall,
   selectTerminalEvents,
-  toolBatchLabel,
   type TranscriptItem,
 } from '../utils/terminalEventTranscript'
 import { formatDurationCompact } from '../utils/duration'
@@ -43,6 +42,41 @@ import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 // is what produced triplicated server names, boxes inside boxes, and a scroll
 // container fighting itself.
 const PREVIEW_LIMIT = 600
+
+function transcriptEventPayload(event: PollingEvent): Record<string, unknown> {
+  const outer = event.data
+  if (!outer || typeof outer !== 'object') return {}
+  const nested = (outer as { data?: unknown }).data
+  return nested && typeof nested === 'object'
+    ? nested as Record<string, unknown>
+    : outer as Record<string, unknown>
+}
+
+const TranscriptEvent: React.FC<{
+  event: PollingEvent
+  onSendMessage?: (msg: string) => void
+}> = ({ event, onSendMessage }) => {
+  if (event.type !== 'user_message') {
+    return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
+  }
+
+  const payload = transcriptEventPayload(event)
+  const content = typeof payload.content === 'string' ? payload.content.trim() : ''
+  const rawTimestamp = event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : '')
+  const timestamp = rawTimestamp && Number.isFinite(Date.parse(rawTimestamp))
+    ? new Date(rawTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  return (
+    <div className="ml-auto my-1 flex max-w-[88%] items-start gap-2 rounded-2xl rounded-tr-md border border-cyan-900/50 bg-cyan-950/25 px-3 py-2.5">
+      <UserRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-400" />
+      <div className="min-w-0 flex-1">
+        <div className="whitespace-pre-wrap break-words text-xs leading-5 text-neutral-100">{content || 'Message sent'}</div>
+        {timestamp && <div className="mt-1 text-[10px] text-neutral-500">You · {timestamp}</div>}
+      </div>
+    </div>
+  )
+}
 
 function wheelDeltaPixels(deltaY: number, deltaMode: number, pageHeight: number): number {
   if (deltaMode === 1) return deltaY * 16
@@ -166,15 +200,11 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
 }
 
 const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> = ({ item }) => {
-  // Open by default. This view exists to answer "what did this agent actually
-  // do", and tool calls are the answer — collapsing them hides the substance
-  // behind a count and makes every batch a click. It also hid failures: a batch
-  // reading "6 tool calls" looks identical whether they succeeded or not, which
-  // is how bridge errors stayed invisible even after the result formatter
-  // learned to mark them.
-  const [expanded, setExpanded] = useState(true)
-  const label = useMemo(() => toolBatchLabel(item.events), [item.events])
   const pairs = useMemo(() => pairToolCalls(item.events), [item.events])
+  // A conversation should lead with what the agent said, not implementation
+  // detail. Even failures stay closed initially: the visible failed count is
+  // the signal, and the user chooses when to inspect arguments/results.
+  const [expanded, setExpanded] = useState(false)
   const toggle = useCallback(() => setExpanded(prev => !prev), [])
 
   return (
@@ -184,13 +214,13 @@ const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> 
         onClick={toggle}
         aria-expanded={expanded}
         data-testid="terminal-clear-tool-batch-toggle"
-        className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200"
+        className="flex w-full items-center gap-2 rounded-lg border border-neutral-800/80 bg-neutral-900/35 px-2.5 py-2 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-800/60 hover:text-neutral-200"
       >
-        <span className="font-mono text-neutral-500">{expanded ? '▾' : '▸'}</span>
-        <span>
-          {item.toolCount} tool {item.toolCount === 1 ? 'call' : 'calls'}
-        </span>
-        {label && <span className="truncate text-neutral-500">· {label}</span>}
+        <Wrench className="h-3.5 w-3.5 shrink-0" />
+        <span>+{item.toolCount} tool {item.toolCount === 1 ? 'call' : 'calls'}</span>
+        {expanded
+          ? <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />
+          : <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0" />}
       </button>
       {expanded && (
         <div data-testid="terminal-clear-tool-batch-content" className="mt-1 space-y-0.5 border-l border-neutral-700/60 pl-3">
@@ -339,7 +369,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
               disabled={!hasOlder || loadingOlder}
               className="mx-auto rounded px-2 py-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
             >
-              {loadingOlder ? 'Loading earlier events…' : 'Load earlier events'}
+              {loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
             </button>
           )}
         </div>
@@ -360,7 +390,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
             </div>
           ) : (
             <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-3 py-0.5">
-              <EventDispatcher event={item.event} onSendMessage={onSendMessage} hideOrchestratorContext />
+              <TranscriptEvent event={item.event} onSendMessage={onSendMessage} />
             </div>
           )
         }

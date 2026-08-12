@@ -1577,6 +1577,9 @@ export interface CostAggregate {
   cache_write_tokens: number
   total_cost_usd: number
   call_count: number
+  // Sum of time spent waiting for LLM generations. This deliberately excludes
+  // tool execution and queue time, so it is not a workflow wall-clock duration.
+  llm_generation_duration_ms?: number
 }
 
 // CostDateAggregate is one row in the per-date rollup. It inherits all
@@ -1585,6 +1588,12 @@ export interface CostAggregate {
 // can expand a row to see which models contributed.
 export interface CostDateAggregate extends CostAggregate {
   by_model?: Record<string, CostAggregate>
+  by_scope?: Record<string, CostScopeAggregate>
+  workflow_run_count?: number
+}
+
+export interface CostScopeAggregate extends CostAggregate {
+  by_execution?: Record<string, CostAggregate>
 }
 
 export interface CostSummary {
@@ -1593,6 +1602,19 @@ export interface CostSummary {
   total: CostAggregate
   by_date: Record<string, CostDateAggregate>
   by_model: Record<string, CostAggregate>
+  by_scope?: Record<string, CostScopeAggregate>
+}
+
+export interface WorkflowActivityTimingAggregate {
+  duration_ms: number
+  llm_duration_ms: number
+  tool_duration_ms: number
+  by_execution?: Record<string, WorkflowActivityTimingAggregate>
+}
+
+export interface WorkflowActivityTimingSummary {
+  by_scope: Record<string, WorkflowActivityTimingAggregate>
+  by_date: Record<string, { by_scope: Record<string, WorkflowActivityTimingAggregate> }>
 }
 
 // Preset LLM Configuration types
@@ -2016,10 +2038,12 @@ export interface WorkflowRunDailyCostsEntry {
 
 export interface WorkflowCostsResponse {
   success: boolean;
+  scoped_costs?: CostSummary;
   phase_token_usage?: PhaseTokenUsageFile;
   phase_daily_costs: WorkflowPhaseDailyCostsEntry[];
   run_daily_costs?: WorkflowRunDailyCostsEntry[];
   runs: WorkflowRunCostsEntry[];
+  activity_timing?: WorkflowActivityTimingSummary;
 }
 
 export interface ExecutionLogsResponse {

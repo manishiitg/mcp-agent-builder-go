@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `implemented` — contract upgrade added; live migration pending restart/run |
-| Last synchronized | `2026-08-11` |
+| Ticket state | `implemented` — contract upgrade and broken-DOM validation added; affected RTS report repaired |
+| Last synchronized | `2026-08-12` |
 
 - **Priority:** P1 — workflows retain their durable report data and HTML, but
   the Report UI can omit the primary user-facing dashboard after the platform
@@ -45,14 +45,29 @@ The migration explicitly rejects wrappers, iframes, generic placeholders, and
 empty navigation shells. A missing or ambiguous source blocks the version
 stamp rather than silently losing the report.
 
+### Follow-up found on RTS Latency (2026-08-12)
+
+The RTS migration preserved all three dashboards and prefixed their element IDs
+(`lat-`, `sec-`, and `cost-`) to avoid collisions, but it left the copied render
+scripts targeting the old unprefixed IDs. The document loaded, then threw four
+`Cannot set properties of null` errors and left the latency dashboard on
+`Loading live data…`.
+
+The report now resolves each render target through its section prefix. The
+shared `validate_report_html` tool also rejects immediate
+`document.getElementById("...").innerHTML/textContent/...` writes when the
+literal target ID does not exist. This catches the concrete consolidation
+failure before a workflow version can be stamped instead of accepting a file
+merely because it has an HTML root, body, and title.
+
 ## Verification boundary
 
-Source-level regression tests cover the `1.0.22 -> 1.0.23` route and the
-prompt's preservation/validation requirements. Per operator instruction, no
-build or test suite was run during this UI session. Live verification requires
-the updated server to start and Instagram's workflow upgrade preflight to
-complete; the expected result is that the real `Instagram Reel Workflow —
-Snapshot` document appears as a report page alongside the host/setup pages.
+Source-level regression tests cover the `1.0.22 -> 1.0.23` route, the prompt's
+preservation requirements, and missing literal DOM write targets. The focused
+report-validation tests pass. RTS Latency was also verified in the live Report
+tab: its latency data, KPIs, recommendations, environment details, language
+table, Sentry proof section, and baselines render rather than remaining on the
+loading state.
 
 ## Acceptance
 

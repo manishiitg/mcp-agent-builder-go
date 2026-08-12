@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalSnapshot } from '../services/api-types'
 import {
+  canToggleTerminalView,
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
   resolveTerminalFormattedView,
@@ -168,13 +169,17 @@ describe('shouldHydrateMainTerminalEvents', () => {
     expect(shouldHydrateMainTerminalEvents(true, true, 12, true, true)).toBe(false)
   })
 
-  it('does not reload main-agent history that is already present', () => {
-    expect(shouldHydrateMainTerminalEvents(true, true, 12)).toBe(false)
+  it('hydrates once even when a live event tail is already present', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12)).toBe(true)
+  })
+
+  it('does not hydrate the same durable page twice', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12, false, true)).toBe(false)
   })
 })
 
 describe('resolveTerminalFormattedView', () => {
-  it('defaults every terminal to raw mode even when structured events exist', () => {
+  it('defaults to raw tmux even when structured events exist', () => {
     expect(resolveTerminalFormattedView(true)).toBe(false)
   })
 
@@ -185,5 +190,24 @@ describe('resolveTerminalFormattedView', () => {
 
   it('never shows an unavailable formatted transcript', () => {
     expect(resolveTerminalFormattedView(false, true)).toBe(false)
+  })
+})
+
+describe('canToggleTerminalView', () => {
+  it('keeps Raw/Formatted available for an archived main-agent snapshot after tmux closes', () => {
+    const archived = terminal('main', {
+      active: false,
+      execution_kind: 'main_agent',
+      process_state: 'closed',
+      snapshot_kind: 'archived',
+      tmux_session: undefined,
+      content: 'retained raw terminal bytes',
+    })
+
+    expect(canToggleTerminalView(archived, false, true, true)).toBe(true)
+  })
+
+  it('does not offer a raw toggle for synthetic clean-view terminals', () => {
+    expect(canToggleTerminalView(terminal('synthetic'), true, true, false)).toBe(false)
   })
 })

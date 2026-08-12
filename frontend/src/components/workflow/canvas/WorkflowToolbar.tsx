@@ -76,6 +76,38 @@ import {
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
+type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
+
+const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'flow', 'files']
+const WORKSPACE_VIEW_IDS = new Set<WorkspaceView>([
+  'report', 'flow', 'files', 'costs', 'execution-logs', 'learnings', 'knowledgebase', 'database',
+])
+
+function quickWorkspaceViewsStorageKey(workspacePath?: string | null): string {
+  return `agentworks:quick-workspace-views:${normalizeWorkspacePath(workspacePath) || 'default'}`
+}
+
+function readQuickWorkspaceViews(workspacePath?: string | null): WorkspaceView[] {
+  if (typeof window === 'undefined') return DEFAULT_QUICK_WORKSPACE_VIEWS
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(quickWorkspaceViewsStorageKey(workspacePath)) || '[]')
+    if (!Array.isArray(parsed)) return DEFAULT_QUICK_WORKSPACE_VIEWS
+    const views = parsed.filter((value): value is WorkspaceView => WORKSPACE_VIEW_IDS.has(value))
+    return Array.from(new Set(views)).slice(0, 3)
+  } catch {
+    return DEFAULT_QUICK_WORKSPACE_VIEWS
+  }
+}
+
+function writeQuickWorkspaceViews(workspacePath: string | null | undefined, views: WorkspaceView[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(quickWorkspaceViewsStorageKey(workspacePath), JSON.stringify(views.slice(0, 3)))
+  } catch {
+    // A blocked localStorage must not make workspace navigation unusable.
+  }
+}
+
 type WorkflowScheduleStats = {
   total: number
   running: number
@@ -321,6 +353,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
   const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
   const [previewDevice, setPreviewDeviceState] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
+  const [recentWorkspaceViews, setRecentWorkspaceViews] = useState<WorkspaceView[]>(() => readQuickWorkspaceViews(workspacePath))
 
   useEffect(() => {
     const sync = () => setPreviewDeviceState(readReportPreviewPreference(workspacePath))
@@ -333,7 +366,11 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
   }, [workspacePath])
 
-  const openWorkspaceView = useCallback((view: 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database') => {
+  useEffect(() => {
+    setRecentWorkspaceViews(readQuickWorkspaceViews(workspacePath))
+  }, [workspacePath])
+
+  const openWorkspaceView = useCallback((view: WorkspaceView) => {
     if (view === 'flow' || view === 'report') setCanvasViewMode(view)
     setWorkflowWorkspaceView(view)
     setShowWorkspacePane(true)
@@ -352,6 +389,41 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     || workflowWorkspaceView === 'database'
   const isPreviewView = workflowWorkspaceView !== 'files' && !isInspectorView
     && (canvasViewMode === 'flow' || canvasViewMode === 'report')
+
+  const activeWorkspaceView: WorkspaceView = workflowWorkspaceView === 'files' || isInspectorView
+    ? workflowWorkspaceView
+    : canvasViewMode === 'flow' ? 'flow' : 'report'
+
+  const workspaceViewDefinitions = useMemo(() => ([
+    ['report', LayoutDashboard, 'Report', true],
+    ['flow', Route, 'Plan', hasPlan],
+    ['files', FolderOpen, 'Files', true],
+    ['costs', DollarSign, 'Costs', true],
+    ['execution-logs', FileText, 'Execution logs', true],
+    ['learnings', BookOpen, 'Learnings', true],
+    ['knowledgebase', Database, 'Knowledgebase', true],
+    ['database', Table2, 'Database', true],
+  ] as const).filter(([, , , visible]) => visible), [hasPlan])
+
+  const quickWorkspaceViews = useMemo(() => {
+    const available = new Set<WorkspaceView>(workspaceViewDefinitions.map(([view]) => view))
+    const candidates: WorkspaceView[] = [
+      ...recentWorkspaceViews,
+      ...DEFAULT_QUICK_WORKSPACE_VIEWS,
+      ...workspaceViewDefinitions.map(([view]) => view),
+    ]
+    return Array.from(new Set(candidates)).filter(view => available.has(view)).slice(0, 3)
+  }, [recentWorkspaceViews, workspaceViewDefinitions])
+
+  useEffect(() => {
+    if (!workspacePath || !workspaceViewDefinitions.some(([view]) => view === activeWorkspaceView)) return
+    setRecentWorkspaceViews(current => {
+      if (current[0] === activeWorkspaceView && current.length <= 3) return current
+      const next = [activeWorkspaceView, ...current.filter(view => view !== activeWorkspaceView)].slice(0, 3)
+      writeQuickWorkspaceViews(workspacePath, next)
+      return next
+    })
+  }, [activeWorkspaceView, workspacePath, workspaceViewDefinitions])
 
   // Post-run monitor opt-in (workflow.json::post_run_monitor). When on, Pulse
   // Gate runs after each scheduled run, records Bug + Goal verdicts, and selects
@@ -785,16 +857,11 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <>
               <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                {([
-                  ['report', LayoutDashboard, 'Report', true],
-                  ['flow', Route, 'Plan', hasPlan],
-                  ['files', FolderOpen, 'Files', true],
-                ] as const).filter(([, , , visible]) => visible).map(([view, Icon, label]) => {
-                  const active = view === 'report'
-                    ? workflowWorkspaceView !== 'files' && !isInspectorView && canvasViewMode === 'report'
-                    : view === 'flow'
-                      ? workflowWorkspaceView !== 'files' && !isInspectorView && canvasViewMode === 'flow'
-                      : workflowWorkspaceView === view
+                {quickWorkspaceViews.map(view => {
+                  const definition = workspaceViewDefinitions.find(([candidate]) => candidate === view)
+                  if (!definition) return null
+                  const [, Icon, label] = definition
+                  const active = view === activeWorkspaceView
                   const viewButton = (
                     <button
                       type="button"
@@ -826,18 +893,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 })}
                 <CompactToolbarMenu
                   label="More workspace views"
-                  active={isInspectorView}
+                  active={!quickWorkspaceViews.includes(activeWorkspaceView)}
                   icon={<MoreHorizontal className="h-3.5 w-3.5" />}
                 >
                   {(close) => (
                     <>
-                      {([
-                        ['costs', DollarSign, 'Costs'],
-                        ['execution-logs', FileText, 'Execution logs'],
-                        ['learnings', BookOpen, 'Learnings'],
-                        ['knowledgebase', Database, 'Knowledgebase'],
-                        ['database', Table2, 'Database'],
-                      ] as const).map(([view, Icon, label]) => (
+                      {workspaceViewDefinitions
+                        .filter(([view]) => !quickWorkspaceViews.includes(view))
+                        .map(([view, Icon, label]) => (
                         <CompactToolbarMenuItem
                           key={view}
                           icon={<Icon className="h-3.5 w-3.5" />}

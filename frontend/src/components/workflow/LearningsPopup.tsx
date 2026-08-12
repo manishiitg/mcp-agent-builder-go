@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal } from 'lucide-react'
+import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal, ArrowLeft } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
 import { isTodoTaskStep } from '../../utils/stepConfigMatching'
@@ -184,7 +184,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   const [globalFiles, setGlobalFiles] = useState<Array<{ name: string; relPath: string; absPath: string; dir: string }>>([])
   const [globalLoading, setGlobalLoading] = useState(false)
   const [globalError, setGlobalError] = useState<string | null>(null)
-  const [globalExpanded, setGlobalExpanded] = useState(true)
+  const [globalExpanded, setGlobalExpanded] = useState(false)
   const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [fileContentCache, setFileContentCache] = useState<Record<string, string>>({})
 
@@ -697,17 +697,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   // Toggle expand/collapse for a step
   const toggleExpand = (stepId: string) => {
     setExpandedStepIds(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(stepId)) {
-        newSet.delete(stepId)
+      if (prev.has(stepId)) {
+        return new Set()
       } else {
-        newSet.add(stepId)
         // Fetch content if not cached
         if (!learningContentCache[stepId]) {
           fetchLearningContent(stepId)
         }
+        return new Set([stepId])
       }
-      return newSet
     })
   }
 
@@ -779,6 +777,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     })
   }
 
+  const focusedStepId = expandedStepIds.values().next().value as string | undefined
+  const visibleStepsWithLearnings = focusedStepId
+    ? stepsWithLearnings.filter(step => step.stepId === focusedStepId)
+    : stepsWithLearnings
+
   console.log('[LEARNINGS_POPUP_DEBUG] visible', {
     workspacePath,
     allPlanStepIds: allStepsInOrder.map(step => step.stepId),
@@ -787,22 +790,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     showOnlyUnlocked,
     searchTerm,
   })
-
-  const handleExpandAll = () => {
-    const newExpanded = new Set<string>()
-    stepsWithLearnings.forEach(step => {
-      newExpanded.add(step.stepId)
-      // Trigger fetch if not cached
-      if (!learningContentCache[step.stepId]) {
-        fetchLearningContent(step.stepId)
-      }
-    })
-    setExpandedStepIds(newExpanded)
-  }
-
-  const handleCollapseAll = () => {
-    setExpandedStepIds(new Set())
-  }
 
   const shell = (
       <div className={embedded
@@ -1021,18 +1008,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
               </div>
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={handleExpandAll}
-                  className="px-2.5 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-md transition-colors whitespace-nowrap"
-                >
-                  Expand All
-                </button>
-                <button
-                  onClick={handleCollapseAll}
-                  className="px-2.5 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-md transition-colors whitespace-nowrap"
-                >
-                  Collapse All
-                </button>
-                <button
                   onClick={() => setShowOnlyUnlocked(!showOnlyUnlocked)}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
                     showOnlyUnlocked
@@ -1060,7 +1035,17 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
 
           {!isLoading && !error && stepsWithLearnings.length > 0 && (
             <div className="space-y-3">
-              {stepsWithLearnings.map(({ stepId, stepNumber, stepType, relationType }) => {
+              {focusedStepId && (
+                <button
+                  type="button"
+                  onClick={() => setExpandedStepIds(new Set())}
+                  className="sticky top-0 z-20 inline-flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-2 text-sm font-medium shadow-sm backdrop-blur-sm transition-colors hover:bg-accent"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to all steps
+                </button>
+              )}
+              {visibleStepsWithLearnings.map(({ stepId, stepNumber, stepType, relationType }) => {
                 const metadata = learnings[stepId]
                 // Lock state comes only from step_config.json (merged by the backend
                 // into metadata.lock_learnings for this API response). Metadata is
@@ -1144,7 +1129,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2.5 mb-2.5 flex-wrap sm:flex-nowrap">
+                          <div className={`flex items-center gap-2.5 flex-wrap sm:flex-nowrap ${isExpanded ? 'mb-2.5' : ''}`}>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1152,6 +1137,8 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                               }}
                               className="p-1 hover:bg-muted rounded-md transition-colors shrink-0 flex items-center justify-center"
                               title={isExpanded ? "Collapse" : "Expand"}
+                              aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${stepTitle} learnings`}
+                              aria-expanded={isExpanded}
                             >
                               {isExpanded ? (
                                 <ChevronDown className="w-4 h-4 text-muted-foreground" />
@@ -1174,7 +1161,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                             </span>
                           </div>
 
-                          <div className="flex flex-col gap-2 ml-7">
+                          {isExpanded && <div className="flex flex-col gap-2 ml-7">
                             {/* Single-line metadata: access, lock status, lock button, auto-unlock badge, turns, iterations. */}
                             <div className="flex items-center gap-2.5 flex-wrap text-xs">
                               
@@ -1322,11 +1309,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                               </div>
                             )}
 
-                          </div>
+                          </div>}
                         </div>
 
                         {/* Delete Button */}
-                        {hasLearningsFolder(metadata, cachedContent) && (
+                        {isExpanded && hasLearningsFolder(metadata, cachedContent) && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
