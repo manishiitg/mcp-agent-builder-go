@@ -104,6 +104,20 @@ for a Strategy Auditor result.
 
 First inspect current-run results, the complete active retained backlog,
 answered decisions, awaiting-verification work, and saved typed review receipts.
+
+**Drain every answered decision in this pass (PLAT-092).** Inspecting them is
+not enough: an answered decision that is only re-read leaves the operator's
+answer doing nothing, and 26 of them accumulated across six workflows this way,
+the oldest for 31 days. Each one you see must reach a terminal state before
+this turn ends — either apply it and call `mark_human_input_consumed` with an
+`outcome_summary` stating what actually changed, or re-park it with a concrete
+reason and a next-check boundary. Do not leave one silently `answered`.
+
+Two rules this depends on. Consume only what you really applied: if the change
+could not be made, re-park it with that reason rather than consuming it to tidy
+the list. And drain it yourself regardless of which module asked — a question's
+source module may be suppressed while its answer is still valid, so an answered
+decision must never wait on `goal_advisor` being selectable.
 Do not launch a reviewer merely because a module is due: if durable evidence
 already answers the question, send that module directly to the Engineering/Ops
 consolidation-and-repair sequence. Never combine agents in one shell command,
