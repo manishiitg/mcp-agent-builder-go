@@ -272,15 +272,9 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 	workflows := s.discoverWorkflows(ctx)
 	scheduleLogf("[SCHEDULER] Discovered %d workflows with manifests", len(workflows))
 	for _, wf := range workflows {
-		finalized, err := finalizeAllUnresolvedPulseFinalCommands(ctx, wf.WorkspacePath, "failed", "Pulse interrupted because the server restarted")
-		if err != nil {
-			scheduleLogf("[SCHEDULER] Failed to reconcile stale Pulse final commands in %s: %v", wf.WorkspacePath, err)
-		} else if finalized > 0 {
-			scheduleLogf("[SCHEDULER] Marked %d stale Pulse final command(s) failed in %s", finalized, wf.WorkspacePath)
-		}
-
-		// Reviewer rows are stranded by the same interruption, and were not
-		// covered by the sweep above (PLAT-017 reproduction).
+		// Reviewer rows are stranded by an interrupted agent process and no
+		// longer represent live work after restart. This cleanup does not infer
+		// backup/publish/notify outcomes; those remain exactly as the agent wrote.
 		reviews, err := finalizeAllRunningPulseReviewLogs(ctx, wf.WorkspacePath, "Pulse interrupted because the server restarted")
 		if err != nil {
 			scheduleLogf("[SCHEDULER] Failed to reconcile stale Pulse review rows in %s: %v", wf.WorkspacePath, err)
@@ -1941,11 +1935,6 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 	}
 
 	// Now the whole scheduled job, including post-run side effects, is done.
-	// Release the session so nothing outlives the run holding a stamp
-	// authorization, and so a later interactive session reusing the id is not
-	// treated as scheduler-driven.
-	contractupgrade.ClearScheduled(sessionID)
-
 	terminalState := schedulerstate.StateCompleted
 	if userInterrupted {
 		terminalState = schedulerstate.StateStopped
@@ -2057,9 +2046,6 @@ func (s *SchedulerService) runChiefTaskReportUpdate(ctx context.Context, sctx *S
 	if err := s.api.startSessionInternal(ctx, reqMap, sessionID, sctx.UserID, nil); err != nil {
 		return fmt.Errorf("task report update turn failed: %w", err)
 	}
-	if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
-		return fmt.Errorf("task report update idle wait failed: %w", err)
-	}
 	return nil
 }
 
@@ -2160,9 +2146,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	defer func() {
 		if r := recover(); r != nil {
 			s.logf(sctx, "[PULSE] post-run pulse panic (recovered): %v", r)
-			if err := finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", "Pulse stopped because the server recovered a panic"); err != nil {
-				s.logf(sctx, "[PULSE] failed to reconcile final commands after panic: %v", err)
-			}
 		}
 	}()
 	baseReqMap := s.buildWorkshopRequest(ctx, sctx)
@@ -2215,36 +2198,17 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		}
 		reqMap["query"] = query
 		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
-			s.sessionLogf(sctx, sessionID, "[PULSE] step %q failed to start: %v", st.label, err)
-			if st.label == "finalize" {
-				_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", "Pulse finalizer failed to start")
-			}
-			return postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed, err: err}
-		}
-		if includesIntro {
-			introSent = true
-		}
-		if err := s.waitForPulseTurnCompletion(ctx, sessionID, st.idleMaxInactivity()); err != nil {
-			s.sessionLogf(sctx, sessionID, "[PULSE] step %q idle wait failed: %v", st.label, err)
+			s.sessionLogf(sctx, sessionID, "[PULSE] step %q did not finish: %v", st.label, err)
 			outcome := postRunMonitorStepWaitFailed
 			if errors.Is(err, errWorkshopSequenceInterrupted) || errors.Is(err, context.Canceled) {
 				outcome = postRunMonitorStepInterrupted
 			} else if errors.Is(err, errWorkshopIdleWaitTimeout) {
 				outcome = postRunMonitorStepTimedOut
 			}
-			status := "failed"
-			if outcome == postRunMonitorStepTimedOut {
-				status = "timed_out"
-			}
-			if st.label == "finalize" {
-				_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, status, "Pulse finalizer did not finish cleanly")
-			}
 			return postRunMonitorStepRunResult{outcome: outcome, err: err}
 		}
-		if st.label == "finalize" {
-			if err := finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", "Finalizer ended without recording this command's outcome"); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] failed to reconcile final command state: %v", err)
-			}
+		if includesIntro {
+			introSent = true
 		}
 		s.sessionLogf(sctx, sessionID, "[PULSE] step %q done for %s", st.label, sctx.Schedule.ID)
 		return postRunMonitorStepRunResult{outcome: postRunMonitorStepCompleted}
@@ -2271,39 +2235,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		reason := fmt.Sprintf("Pulse stopped by user during %s", st.label)
 		pulseResult = postRunMonitorStopped
 		s.sessionLogf(sctx, sessionID, "[PULSE] %s; no later Review+Fix, Finalize, publish, or notification turn will run", reason)
-		_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "skipped", reason)
-		return true
-	}
-	abortIfTurnStillBusy := func(st postRunMonitorStep, result postRunMonitorStepRunResult) bool {
-		// PLAT-094: two independent "busy" signals can disagree, mirroring the
-		// PLAT-071 race at the workshop idle-wait — see
-		// reconcileSessionBusySignal for which one wins and why.
-		snapshotBusy := s.api.sessionIsBusy(sessionID)
-		busy := reconcileSessionBusySignal(snapshotBusy, s.api.isSessionBusy(sessionID))
-		if snapshotBusy && !busy {
-			s.sessionLogf(sctx, sessionID, "[PULSE] step %s reports snapshot-busy but its per-turn busy flag is clear; treating the turn as finished rather than stalled", st.label)
-		}
-		if !pulseStepFailureMustStopBeforeNextTurn(result, busy) {
-			return false
-		}
-		// PLAT-065: this abort can fire even when the step's own durable state
-		// (e.g. Gate's worklist) already committed successfully — the recovery
-		// logic that would notice that only runs for the Gate step, after this
-		// check, so it never gets the chance. The original incident's log
-		// window rotated out before this could be captured; logging outcome/err
-		// and the completion-recovery result here (best-effort, may not apply
-		// to every step) is what the next occurrence needs to confirm or rule
-		// out the reorder fix described in PLAT-065.
-		completionRecovered := false
-		if completionErr := validatePulseGateCompletion(ctx, sctx.WorkspacePath, pulseRunID); completionErr == nil {
-			completionRecovered = true
-		}
-		s.sessionLogf(sctx, sessionID, "[PULSE] abortIfTurnStillBusy diagnostic: step=%s outcome=%v err=%v sessionBusy=%v durableWorklistComplete=%v",
-			st.label, result.outcome, result.err, busy, completionRecovered)
-		reason := fmt.Sprintf("Pulse stopped after %s failed while its agent turn was still live; refusing to overlap another message in the same conversation", st.label)
-		s.sessionLogf(sctx, sessionID, "[PULSE] %s", reason)
-		_ = finalizeUnresolvedPulseFinalCommands(ctx, sctx.WorkspacePath, pulseRunID, "failed", reason)
-		pulseResult = postRunMonitorPartial
 		return true
 	}
 
@@ -2325,9 +2256,6 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		for attempt := 1; attempt <= 2; attempt++ {
 			result := runStep(gateStep)
 			if abortIfInterrupted(gateStep, result) {
-				return
-			}
-			if abortIfTurnStillBusy(gateStep, result) {
 				return
 			}
 			if result.outcome == postRunMonitorStepCompleted {
@@ -2390,18 +2318,12 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		if abortIfInterrupted(st, result) {
 			return
 		}
-		if abortIfTurnStillBusy(st, result) {
-			return
-		}
 		if result.outcome == postRunMonitorStepCompleted && st.label == "review-fix" {
 			if err := validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] Review+Fix receipt incomplete; asking the same conversation to finish it: %v", err)
 				continuation := postRunMonitorReviewFixContinuationStep(pulseRunID, err)
 				result = runStep(continuation)
 				if abortIfInterrupted(continuation, result) {
-					return
-				}
-				if abortIfTurnStillBusy(continuation, result) {
 					return
 				}
 				if result.outcome == postRunMonitorStepCompleted {
@@ -2433,7 +2355,6 @@ type postRunMonitorStepOutcome string
 
 const (
 	postRunMonitorStepCompleted   postRunMonitorStepOutcome = "completed"
-	postRunMonitorStepStartFailed postRunMonitorStepOutcome = "start_failed"
 	postRunMonitorStepWaitFailed  postRunMonitorStepOutcome = "wait_failed"
 	postRunMonitorStepTimedOut    postRunMonitorStepOutcome = "timed_out"
 	postRunMonitorStepInterrupted postRunMonitorStepOutcome = "interrupted"
@@ -2442,45 +2363,6 @@ const (
 type postRunMonitorStepRunResult struct {
 	outcome postRunMonitorStepOutcome
 	err     error
-}
-
-func pulseStepFailureMustStopBeforeNextTurn(result postRunMonitorStepRunResult, sessionBusy bool) bool {
-	return result.outcome != postRunMonitorStepCompleted && sessionBusy
-}
-
-// reconcileSessionBusySignal decides whether a scheduled-turn completion check
-// should trust the runtime snapshot phase (sessionIsBusy) when it disagrees
-// with the explicit per-turn flag (isSessionBusy, set when a turn starts and
-// cleared when it ends).
-//
-// PLAT-071 diagnosed and fixed this exact disagreement for the workshop
-// idle-wait (waitForWorkshopIdleWithInactivityTimeout): the snapshot phase can
-// lag a turn's own completion, reporting busy for minutes after the turn
-// genuinely finished. PLAT-094 found the same race at the Pulse
-// Gate/Review-Fix/Finalize step boundary (abortIfTurnStillBusy) — observed
-// live on build-in-public 2026-08-12, where [COMPLETION] and [ACTIVE_SESSION]
-// both logged the turn's status flipping to "completed" in the same second
-// the step boundary aborted on a stale snapshotBusy=true, dropping Finalize
-// entirely. No backup, publish, or notify ran for that pass, and nothing
-// surfaced the loss beyond one diagnostic log line.
-//
-// PLAT-095 merged what had become two independent copies of this same rule —
-// one inline in waitForWorkshopIdleWithInactivityTimeout, one in
-// abortIfTurnStillBusy — into this single function both now call. "Is this
-// message actually done" is asked at every scheduled-turn boundary across the
-// platform (schedule messages, contract upgrades, decision drains, Pulse
-// steps); it must have one answer, not one per call site re-deriving it.
-//
-// Deliberately asymmetric, matching PLAT-071's own precedent: the explicit
-// flag is only ever consulted to correct a snapshot CLAIMING busy. An idle
-// snapshot is trusted as-is and never escalated to busy from the explicit
-// flag alone — that would trade a known race (stale busy) for a new, unproven
-// one (spurious aborts on a session the snapshot never flagged).
-func reconcileSessionBusySignal(snapshotBusy, explicitBusy bool) bool {
-	if snapshotBusy && !explicitBusy {
-		return false
-	}
-	return snapshotBusy
 }
 
 func postRunMonitorIntro(contextSummary, workspacePath, pulseRunID, runStatus, runFolder string) string {
@@ -2977,11 +2859,6 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	sctx.ProducedRunEvidence = false
 
 	sessionID := s.newScheduleSessionID(sctx)
-	// Claim the session for the whole scheduled run — preflight, schedule
-	// messages, and the Pulse pass that reuses it. Only a claimed session needs
-	// an open upgrade turn to stamp; an operator in the workflow builder is
-	// authorized by being there.
-	contractupgrade.MarkScheduled(sessionID)
 
 	s.updateRuntimeState(scheduleRuntimeKey(sctx), func(state *ScheduleRuntimeState) {
 		state.LastSessionID = sessionID
@@ -3092,39 +2969,6 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		// the session for frontend tab labeling. Subsequent calls are
 		// no-ops (helper guards against overwriting an existing Title).
 		s.stampScheduleNameOnSession(sessionID, sctx)
-
-		if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
-			// Same rule as the start failure above: a decision drain that stalls
-			// costs its decisions, never the run (PLAT-093). Checked before the
-			// run-evidence reconciliation below because this turn precedes the
-			// first schedule message, so there is no run evidence to preserve yet.
-			if turn.decisionDrain {
-				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain did not settle (continuing to the run): %v", err)
-				continue
-			}
-			// A stalled session says the turn stopped progressing. It says nothing
-			// about whether the workflow ran. This path returns before the
-			// evidence check further below, so ProducedRunEvidence would keep its
-			// initialized false and Pulse would be told "the workflow did not run"
-			// purely because the wait expired — while run_metadata.json recorded a
-			// completed run. Observed on social-media 2026-08-10: the run completed
-			// at 12:15:18Z, the idle wait expired 34 minutes later at 12:49:35Z, and
-			// the finalizer skipped publish with "no Pulse Gate/reviewer/Fixer"
-			// against a run that had landed 19 verified actions.
-			//
-			// Consult the durable record before returning. Deliberately the
-			// baseline-free check: the pre-run snapshot can itself be lost
-			// (PLAT-070), and an empty baseline would make every folder look new
-			// and answer "evidence" unconditionally — the opposite error.
-			if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil && workshopRunStartedDuringInvocation(folders, invocationStartedAt) {
-				sctx.ProducedRunEvidence = true
-				s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but a full workflow run started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
-			} else if s.scheduledWorkflowStepProducedEvidence(sessionID, invocationStartedAt) {
-				sctx.ProducedRunEvidence = true
-				s.sessionLogf(sctx, sessionID, "[SCHEDULER] idle wait expired for %s, but scheduled workflow steps started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
-			}
-			return sessionID, runFolder, fmt.Errorf("workshop idle wait failed after turn %d (%s): %w", i+1, turn.label, err)
-		}
 
 		if turn.upgradeTarget != "" {
 			// Adjudicating the turn closes it. A turn that has been judged must
@@ -3664,10 +3508,6 @@ func (s *SchedulerService) executeMultiAgentJob(ctx context.Context, sctx *Sched
 				s.stampScheduleNameOnSession(sessionID, sctx)
 			}
 
-			if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
-				s.sessionLogf(sctx, sessionID, "[ORG_PULSE] step %d/%d idle wait failed: %v", i+1, len(messages), err)
-				return sessionID, "", fmt.Errorf("multi-agent step %d/%d idle wait failed: %w", i+1, len(messages), err)
-			}
 			s.sessionLogf(sctx, sessionID, "[ORG_PULSE] step %d/%d done for %s", i+1, len(messages), sctx.Schedule.ID)
 		}
 		s.sessionLogf(sctx, sessionID, "[ORG_PULSE] sequence completed for %s", sctx.Schedule.ID)
@@ -3690,11 +3530,6 @@ func (s *SchedulerService) executeMultiAgentJob(ctx context.Context, sctx *Sched
 	}
 
 	s.stampScheduleNameOnSession(sessionID, sctx)
-
-	if err := s.waitForWorkshopIdle(ctx, sessionID); err != nil {
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Multi-agent session wait failed for %s: %v", sctx.Schedule.ID, err)
-		return sessionID, "", fmt.Errorf("multi-agent session idle wait failed: %w", err)
-	}
 
 	return sessionID, "", nil
 }
@@ -3983,7 +3818,6 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 	return reqMap
 }
 
-var schedulerWorkshopIdlePollInterval = 3 * time.Second
 var schedulerWorkshopMaxInactivity = 10 * time.Minute
 
 // schedulerWorkshopLiveChildCeiling bounds how long a turn may be held open by
@@ -3995,25 +3829,6 @@ var schedulerWorkshopMaxInactivity = 10 * time.Minute
 // hours. This ceiling exists only so a child that hangs forever cannot block its
 // schedule forever.
 var schedulerWorkshopLiveChildCeiling = 3 * time.Hour
-
-// sessionHasLiveChildWork reports whether independently tracked child work is
-// still running for this session.
-//
-// Do not use sessionIsBusy here. Its presentation state includes the retained
-// main tmux pane, which intentionally remains live between scheduler messages.
-// Completion of the current main turn is already a structured fact
-// (startSessionInternal blocks until it) — only tracked child work may delay us.
-func (s *SchedulerService) sessionHasLiveChildWork(sessionID string) bool {
-	if s == nil || s.api == nil {
-		return false
-	}
-	for _, execution := range s.api.trackedExecutionsForSession(sessionID) {
-		if execution != nil && execution.Status == trackedExecutionStatusRunning {
-			return true
-		}
-	}
-	return s.api.bgAgentRegistry != nil && s.api.bgAgentRegistry.HasRunningAgents(sessionID)
-}
 
 var errWorkshopIdleWaitTimeout = errors.New("workshop idle wait timed out")
 var errWorkshopSequenceInterrupted = errors.New("workshop sequence interrupted by user")
@@ -4038,305 +3853,6 @@ func workflowUpgradePreflightStampError(label, target, actual string, failureCou
 		label, target, actual, failureCount, workflowSchedulePreflightFailOpenThreshold,
 		errWorkflowUpgradePreflightBlocked,
 	)
-}
-
-var pulseTurnSettleDelay = 500 * time.Millisecond
-
-// waitForPulseTurnCompletion advances Pulse from structured runtime events,
-// never from tmux-pane text. startSessionInternal has already received the
-// main agent's completion before this is called; the only work that can hold
-// the next Pulse message is a child execution or background agent the main
-// turn deliberately launched. A short settle window admits registrations that
-// race immediately after main-turn completion. The inactivity timer remains a
-// safety boundary for genuine stalled child work, not a poll.
-func (s *SchedulerService) waitForPulseTurnCompletion(ctx context.Context, sessionID string, maxInactivity time.Duration) error {
-	if s == nil || s.api == nil || s.api.eventStore == nil {
-		return s.waitForWorkshopIdleWithInactivityTimeout(ctx, sessionID, maxInactivity)
-	}
-	checkInterruption := func() error {
-		if activeSession, exists := s.api.getActiveSession(sessionID); exists &&
-			normalizeSessionLifecycleStatus(activeSession.Status) == sessionLifecycleFailed {
-			return fmt.Errorf("%w: session %s status is %s", errWorkshopSessionFailed, sessionID, activeSession.Status)
-		}
-		if s.api.isSessionMarkedStopped(sessionID) {
-			return fmt.Errorf("%w: session %s was stopped", errWorkshopSequenceInterrupted, sessionID)
-		}
-		if s.api.consumeSessionTurnInterrupted(sessionID) {
-			return fmt.Errorf("%w: current response in session %s was canceled", errWorkshopSequenceInterrupted, sessionID)
-		}
-		return nil
-	}
-	if err := checkInterruption(); err != nil {
-		return err
-	}
-
-	sub := s.api.eventStore.Subscribe(sessionID)
-	defer s.api.eventStore.Unsubscribe(sessionID, sub)
-
-	var inactivity <-chan time.Time
-	var inactivityTimer *time.Timer
-	if maxInactivity > 0 {
-		inactivityTimer = time.NewTimer(maxInactivity)
-		defer inactivityTimer.Stop()
-		inactivity = inactivityTimer.C
-	}
-	resetInactivity := func() {
-		if inactivityTimer == nil {
-			return
-		}
-		if !inactivityTimer.Stop() {
-			select {
-			case <-inactivityTimer.C:
-			default:
-			}
-		}
-		inactivityTimer.Reset(maxInactivity)
-	}
-
-	hasLiveChildWork := func() bool { return s.sessionHasLiveChildWork(sessionID) }
-	waitStartedAt := time.Now()
-
-	settleTimer := time.NewTimer(pulseTurnSettleDelay)
-	defer settleTimer.Stop()
-	settle := settleTimer.C
-	resetSettle := func() {
-		if !settleTimer.Stop() {
-			select {
-			case <-settleTimer.C:
-			default:
-			}
-		}
-		settleTimer.Reset(pulseTurnSettleDelay)
-		settle = settleTimer.C
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case _, ok := <-sub.Ch:
-			if !ok {
-				return fmt.Errorf("Pulse runtime event stream closed for session %s", sessionID)
-			}
-			if err := checkInterruption(); err != nil {
-				return err
-			}
-			resetInactivity()
-			resetSettle()
-		case <-settle:
-			if err := checkInterruption(); err != nil {
-				return err
-			}
-			if !hasLiveChildWork() {
-				return nil
-			}
-			settle = nil
-		case <-inactivity:
-			// Silence is not a stall while a child is demonstrably running. The
-			// main turn already completed before this wait began, so the only
-			// thing we are waiting on is child work — and a legitimate child
-			// (a browser step pacing itself, a long model call) can emit
-			// nothing for far longer than the inactivity window.
-			if hasLiveChildWork() && time.Since(waitStartedAt) < schedulerWorkshopLiveChildCeiling {
-				scheduleLogf("[SCHEDULER] Pulse turn quiet for %s in session %s but child work is still running; continuing to wait", maxInactivity, sessionID)
-				resetInactivity()
-				continue
-			}
-			return fmt.Errorf("%w: no runtime event progress for %s in session %s (live_child_work=%t)",
-				errWorkshopIdleWaitTimeout, maxInactivity, sessionID, hasLiveChildWork())
-		}
-	}
-}
-
-const schedulerWorkshopIdleConsecutiveChecks = 2
-
-// waitForWorkshopIdle polls until all background agents, tracked executions, and
-// tmux-backed turns have completed.
-func (s *SchedulerService) waitForWorkshopIdle(ctx context.Context, sessionID string) error {
-	return s.waitForWorkshopIdleWithInactivityTimeout(ctx, sessionID, schedulerWorkshopMaxInactivity)
-}
-
-func (s *SchedulerService) waitForWorkshopIdleWithInactivityTimeout(ctx context.Context, sessionID string, maxInactivity time.Duration) error {
-	ticker := time.NewTicker(schedulerWorkshopIdlePollInterval)
-	defer ticker.Stop()
-
-	consecutiveIdleChecks := 0
-	lastObservedProgress := s.workshopLastProgressAt(sessionID)
-	lastProgressAt := time.Now()
-	waitStartedAt := time.Now()
-	// workshopLastProgressAt can only report the START of still-running work —
-	// a running execution has no CompletedAt and an in-flight tool call has
-	// Duration 0 — so timestamp staleness alone cannot distinguish a stalled
-	// turn from a busy one. Ask liveness directly before expiring anything.
-	stillWaitingOnLiveChild := func(now time.Time) bool {
-		if !s.sessionHasLiveChildWork(sessionID) {
-			return false
-		}
-		if now.Sub(waitStartedAt) >= schedulerWorkshopLiveChildCeiling {
-			return false
-		}
-		scheduleLogf("[SCHEDULER] Workshop turn quiet for %s in session %s but child work is still running; continuing to wait", maxInactivity, sessionID)
-		return true
-	}
-	checkUserInterruption := func() error {
-		if activeSession, exists := s.api.getActiveSession(sessionID); exists &&
-			normalizeSessionLifecycleStatus(activeSession.Status) == sessionLifecycleFailed {
-			return fmt.Errorf("%w: session %s status is %s", errWorkshopSessionFailed, sessionID, activeSession.Status)
-		}
-		if s.api.isSessionMarkedStopped(sessionID) {
-			return fmt.Errorf("%w: session %s was stopped", errWorkshopSequenceInterrupted, sessionID)
-		}
-		if s.api.consumeSessionTurnInterrupted(sessionID) {
-			return fmt.Errorf("%w: current response in session %s was canceled", errWorkshopSequenceInterrupted, sessionID)
-		}
-		return nil
-	}
-	if err := checkUserInterruption(); err != nil {
-		return err
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := checkUserInterruption(); err != nil {
-				return err
-			}
-			refreshErr := s.refreshSessionTmuxSnapshotsForIdleCheck(ctx, sessionID)
-			now := time.Now()
-			if observedProgress := s.workshopLastProgressAt(sessionID); observedProgress.After(lastObservedProgress) {
-				lastObservedProgress = observedProgress
-				lastProgressAt = now
-			}
-			// A transient tmux capture failure is not proof that the agent failed.
-			// Keep observing other progress signals and only cancel after the same
-			// inactivity window has elapsed. Do not count a failed refresh as an
-			// idle-completion check because the pane state is not fresh.
-			if refreshErr != nil {
-				consecutiveIdleChecks = 0
-				if maxInactivity > 0 && now.Sub(lastProgressAt) >= maxInactivity {
-					if stillWaitingOnLiveChild(now) {
-						lastProgressAt = now
-						continue
-					}
-					return fmt.Errorf(
-						"%w: no tmux, tool, execution, or session progress for %s in session %s; last tmux refresh error: %w",
-						errWorkshopIdleWaitTimeout,
-						maxInactivity,
-						sessionID,
-						refreshErr,
-					)
-				}
-				continue
-			}
-			// Consolidated status — same busy/idle/stopped the UI sees, so the
-			// scheduler doesn't fire the next message while the (possibly tmux-
-			// backed) agent is still working.
-			if !s.api.sessionIsBusy(sessionID) {
-				consecutiveIdleChecks++
-				if consecutiveIdleChecks >= schedulerWorkshopIdleConsecutiveChecks {
-					return nil
-				}
-				continue
-			}
-			consecutiveIdleChecks = 0
-			if maxInactivity > 0 && now.Sub(lastProgressAt) >= maxInactivity {
-				if stillWaitingOnLiveChild(now) {
-					lastProgressAt = now
-					continue
-				}
-				// Two independent notions of "busy" can disagree, and only one of
-				// them carries positive evidence. sessionIsBusy reads the runtime
-				// snapshot phase; isSessionBusy is the explicit per-turn flag that
-				// is set when a turn starts and cleared when it ends. On
-				// social-media 2026-08-10 the turn's own completion was recorded
-				// (session status -> completed, 18:09:30) while the snapshot phase
-				// stayed busy for the following ten minutes with no live child and
-				// no progress, so a finished turn was reported as a stalled one and
-				// its completed workflow was written off as never having run.
-				//
-				// Reaching here already means: nothing is running, and nothing has
-				// progressed for the whole inactivity window. reconcileSessionBusySignal
-				// (PLAT-095, shared with the Pulse step boundary's identical check)
-				// decides whether the snapshot's claim still holds against the
-				// explicit flag. A genuine stall keeps its flag set and still times
-				// out.
-				if !reconcileSessionBusySignal(true, s.api.isSessionBusy(sessionID)) {
-					scheduleLogf("[SCHEDULER] session %s reports snapshot-busy with no live child work and no progress for %s, but its per-turn busy flag is clear; treating the turn as finished rather than stalled", sessionID, maxInactivity)
-					return nil
-				}
-				scheduleLogf("[SCHEDULER] idle-wait timeout diagnostic for %s: snapshotBusy=true perTurnBusy=true liveChildWork=false inactivity=%s", sessionID, maxInactivity)
-				return fmt.Errorf(
-					"%w: no tmux, tool, execution, or session progress for %s in session %s (live_child_work=false)",
-					errWorkshopIdleWaitTimeout,
-					maxInactivity,
-					sessionID,
-				)
-			}
-		}
-	}
-}
-
-// workshopLastProgressAt returns the latest observable activity timestamp for a
-// scheduled workshop turn. The inactivity timeout is deliberately sliding: a
-// long-running maintenance agent remains healthy while its tmux pane, tool calls,
-// tracked execution, or parent session continues to advance.
-func (s *SchedulerService) workshopLastProgressAt(sessionID string) time.Time {
-	if s == nil || s.api == nil || strings.TrimSpace(sessionID) == "" {
-		return time.Time{}
-	}
-	api := s.api
-	latest := time.Time{}
-	record := func(candidate time.Time) {
-		if candidate.After(latest) {
-			latest = candidate
-		}
-	}
-
-	api.activeSessionsMux.RLock()
-	if session := api.activeSessions[sessionID]; session != nil {
-		record(session.CreatedAt)
-		record(session.LastActivity)
-	}
-	api.activeSessionsMux.RUnlock()
-
-	if api.terminalStore != nil {
-		for _, snapshot := range api.terminalStore.ListMetadata(sessionID) {
-			record(snapshot.CreatedAt)
-			record(snapshot.UpdatedAt)
-		}
-	}
-
-	if api.bgAgentRegistry != nil {
-		for _, agent := range api.bgAgentRegistry.GetAll(sessionID) {
-			if agent == nil {
-				continue
-			}
-			snapshot := agent.GetSnapshot()
-			record(snapshot.CreatedAt)
-			if snapshot.CompletedAt != nil {
-				record(*snapshot.CompletedAt)
-			}
-			for _, call := range agent.GetRecentToolCalls(1) {
-				record(call.StartedAt)
-				if call.Duration > 0 {
-					record(call.StartedAt.Add(call.Duration))
-				}
-			}
-		}
-	}
-
-	for _, execution := range api.trackedExecutionsForSession(sessionID) {
-		if execution == nil {
-			continue
-		}
-		record(execution.StartedAt)
-		if execution.CompletedAt != nil {
-			record(*execution.CompletedAt)
-		}
-	}
-
-	return latest
 }
 
 func (s *SchedulerService) refreshSessionTmuxSnapshotsForIdleCheck(ctx context.Context, sessionID string) error {

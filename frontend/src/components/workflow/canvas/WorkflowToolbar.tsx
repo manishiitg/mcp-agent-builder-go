@@ -949,13 +949,29 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                       </>
                     )}
                   </CompactToolbarMenu>
+                  {activeWorkspaceView === 'report' && onRefresh && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => void onRefresh()}
+                          className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                          aria-label="Refresh report"
+                          data-testid="refresh-report"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom"><p>Refresh report</p></TooltipContent>
+                    </Tooltip>
+                  )}
                   <CompactToolbarMenu
                     label="Workspace actions"
                     icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
                   >
                     {(close) => (
                       <>
-                        {isPreviewView && onRefresh && (
+                        {isPreviewView && activeWorkspaceView !== 'report' && onRefresh && (
                           <CompactToolbarMenuItem
                             icon={<RefreshCw className="h-3.5 w-3.5" />}
                             label="Refresh"

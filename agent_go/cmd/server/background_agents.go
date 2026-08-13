@@ -295,6 +295,10 @@ type BackgroundAgentSnapshot struct {
 	ReasoningLevel    string                `json:"reasoning_level,omitempty"`
 	ModelID           string                `json:"model_id,omitempty"`
 	Metadata          map[string]string     `json:"metadata,omitempty"`
+	// CompletionNotified is a lifecycle-only field.
+	// It lets an exact conversation-turn waiter distinguish "child finished"
+	// from "the parent has processed that child's completion".
+	CompletionNotified bool `json:"-"`
 }
 
 // GetSnapshot returns a snapshot of the agent state (thread-safe)
@@ -302,19 +306,20 @@ func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	snap := BackgroundAgentSnapshot{
-		ID:                a.ID,
-		ParentExecutionID: a.ParentExecutionID,
-		Name:              a.Name,
-		SessionID:         a.SessionID,
-		Instruction:       a.Instruction,
-		Kind:              a.Kind,
-		Status:            a.Status,
-		Result:            a.Result,
-		Error:             a.Error,
-		CreatedAt:         a.CreatedAt,
-		ReasoningLevel:    a.ReasoningLevel,
-		ModelID:           a.ModelID,
-		Metadata:          a.Metadata,
+		ID:                 a.ID,
+		ParentExecutionID:  a.ParentExecutionID,
+		Name:               a.Name,
+		SessionID:          a.SessionID,
+		Instruction:        a.Instruction,
+		Kind:               a.Kind,
+		Status:             a.Status,
+		Result:             a.Result,
+		Error:              a.Error,
+		CreatedAt:          a.CreatedAt,
+		ReasoningLevel:     a.ReasoningLevel,
+		ModelID:            a.ModelID,
+		Metadata:           a.Metadata,
+		CompletionNotified: a.notified,
 	}
 	if a.CompletedAt != nil {
 		t := *a.CompletedAt
@@ -629,6 +634,13 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 	// BackgroundAgentID is set to this agent so delegation_start can link back.
 	bgSpec := virtualtools.SubAgentSpecFromContext(ctx)
 	parentExecutionID := bgSpec.BackgroundAgentID
+	if strings.TrimSpace(parentExecutionID) == "" {
+		// A first-level background agent belongs to the exact conversation turn
+		// that invoked run_in_background, not to the session-wide main node. This
+		// lets the scheduler wait for only that message's descendants and prevents
+		// an old/unrelated child completion from advancing a later message.
+		parentExecutionID = api.currentConversationTurnExecutionID(sessionID)
+	}
 	bgSpec.Depth = 0
 	bgSpec.BackgroundAgentID = agentID
 	bgCtx = virtualtools.WithSubAgentSpec(bgCtx, bgSpec)
@@ -1519,7 +1531,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentStartsLocked(sessionID str
 	for _, agentID := range emittedIDs {
 		api.emitSyntheticTurnReady(sessionID, agentID, "", "started", "Background work started. The main agent will be notified.")
 	}
-	if !api.executeSyntheticTurn(sessionID, syntheticMsg) && !api.autoNotificationSessionUnreachable(sessionID) {
+	if !api.executeSyntheticTurn(sessionID, syntheticMsg, commonBackgroundParentExecutionID(agentRefs)) && !api.autoNotificationSessionUnreachable(sessionID) {
 		for _, agent := range agentRefs {
 			agent.mu.Lock()
 			agent.startNotified = false
@@ -1643,6 +1655,23 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 		log.Printf("[BG AGENT] Session %s is stopped/inactive, skipping %d batched completion(s)", sessionID, len(agentIDs))
 		return
 	}
+	// Never combine completions owned by different message roots. Doing so would
+	// force one synthetic continuation to belong to the wrong tree (or none),
+	// allowing one schedule message to advance before its result was processed.
+	groups := make(map[string][]string)
+	for _, agentID := range agentIDs {
+		parentID := ""
+		if agent := api.bgAgentRegistry.Get(sessionID, agentID); agent != nil {
+			parentID = strings.TrimSpace(agent.GetSnapshot().ParentExecutionID)
+		}
+		groups[parentID] = append(groups[parentID], agentID)
+	}
+	if len(groups) > 1 {
+		for _, group := range groups {
+			api.processBatchedBackgroundAgentCompletions(sessionID, group)
+		}
+		return
+	}
 
 	// Single completion: use the normal individual path (simpler message).
 	if len(agentIDs) == 1 {
@@ -1724,7 +1753,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 	}
 
 	// Mark notified=true only for agents whose turn was actually dispatched.
-	dispatched := api.executeSyntheticTurn(sessionID, syntheticMsg)
+	dispatched := api.executeSyntheticTurn(sessionID, syntheticMsg, commonBackgroundParentExecutionID(agentRefs))
 	for _, a := range agentRefs {
 		a.finishCompletionNotification(dispatched)
 	}
@@ -1831,7 +1860,7 @@ func (api *StreamingAPI) processBackgroundAgentCompletion(sessionID, agentID str
 
 	// Trigger a synthetic turn using the stored QueryRequest.
 	// Set notified=true only when the turn was actually dispatched.
-	dispatched := api.executeSyntheticTurn(sessionID, syntheticMsg)
+	dispatched := api.executeSyntheticTurn(sessionID, syntheticMsg, snap.ParentExecutionID)
 	agent.finishCompletionNotification(dispatched)
 	if !dispatched && !api.autoNotificationSessionUnreachable(sessionID) {
 		// Dispatch failed but the session is still reachable (no stored agent yet,
@@ -2108,10 +2137,21 @@ func (api *StreamingAPI) steerBackgroundAgentCompletion(sessionID, agentID strin
 		return false
 	}
 
-	// Commit the dedup only after a confirmed SentToCLI hand-off.
+	// A live-steered auto-notification is a real continuation of the message
+	// that launched the completed child. Track it before releasing the child's
+	// notification hold so the exact conversation tree can never appear
+	// terminal in the hand-off gap. The retained-turn observer settles this node
+	// only after the coding CLI returns to its idle composer.
+	messageID := newSteerMessageID()
+	continuationExecutionID := "synthetic-turn:" + messageID
+	api.trackSyntheticConversationTurnStart(continuationExecutionID, sessionID, snap.ParentExecutionID, msg)
+	api.markRetainedMainCodingTurnRunning(sessionID, continuationExecutionID)
+
+	// Commit the dedup only after a confirmed SentToCLI hand-off and after its
+	// continuation is present in the execution tree.
 	delivered = true
 
-	api.recordLiveCodingAgentUserMessage(sessionID, msg, provider, newSteerMessageID(), deliveryStatus)
+	api.recordLiveCodingAgentUserMessage(sessionID, msg, provider, messageID, deliveryStatus)
 	api.emitAutoNotificationSteered(sessionID, snap.ID, snap.Name, string(snap.Status), provider)
 	log.Printf("[BG AGENT] Steered completion for agent %s into busy session %s (provider=%s status=%s)", agentID, sessionID, provider, deliveryStatus)
 	return true
@@ -2190,7 +2230,31 @@ func (api *StreamingAPI) registerRunningAgentForTurn(sessionID string, runningAg
 // before spawning the goroutine, preventing concurrent synthetic turns.
 // Returns true when the synthetic turn was successfully dispatched (goroutine spawned),
 // false when the session has no stored agent or is unreachable.
-func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bool {
+func commonBackgroundParentExecutionID(agents []*BackgroundAgent) string {
+	parentID := ""
+	for _, agent := range agents {
+		if agent == nil {
+			continue
+		}
+		snapshot := agent.GetSnapshot()
+		candidate := strings.TrimSpace(snapshot.ParentExecutionID)
+		if candidate == "" {
+			continue
+		}
+		if parentID == "" {
+			parentID = candidate
+			continue
+		}
+		if parentID != candidate {
+			// A batch spanning unrelated roots is not safe to attribute to either
+			// one. The background children themselves remain visible to each root.
+			return ""
+		}
+	}
+	return parentID
+}
+
+func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, parentExecutionIDs ...string) bool {
 	if api.autoNotificationSessionUnreachable(sessionID) {
 		log.Printf("[BG AGENT] Session %s is stopped/inactive, suppressing synthetic turn", sessionID)
 		return false
@@ -2207,6 +2271,15 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 		log.Printf("[BG AGENT] No stored agent for session %s, cannot trigger synthetic turn", sessionID)
 		return false
 	}
+	parentExecutionID := ""
+	if len(parentExecutionIDs) > 0 {
+		parentExecutionID = strings.TrimSpace(parentExecutionIDs[0])
+	}
+	if parentExecutionID == "" {
+		parentExecutionID = api.currentConversationTurnExecutionID(sessionID)
+	}
+	syntheticExecutionID := "synthetic-turn:" + newSteerMessageID()
+	api.trackSyntheticConversationTurnStart(syntheticExecutionID, sessionID, parentExecutionID, syntheticMsg)
 
 	// Synthetic turns share the same full-turn lane as user-created turns. This
 	// prevents an old completion turn and a resumed user turn from concurrently
@@ -2214,6 +2287,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 	releaseInputLane := api.lockSessionInputLane(sessionID)
 	if api.autoNotificationSessionUnreachable(sessionID) {
 		releaseInputLane()
+		api.completeTrackedExecution(syntheticExecutionID, trackedExecutionStatusCanceled, "session stopped before synthetic turn started", nil)
 		return false
 	}
 
@@ -2242,6 +2316,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 
 	// Create cancellable context for this synthetic turn
 	agentCtx, agentCancel := context.WithCancel(context.Background())
+	agentCtx = withConversationTurnExecutionID(agentCtx, syntheticExecutionID)
 
 	// Inject user ID into context
 	if hasReq && req.userID != "" {
@@ -2288,10 +2363,13 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 			api.terminalStore.MarkTurnFailed(mainTerminalID)
 		}
 		releaseInputLane()
+		api.completeTrackedExecution(syntheticExecutionID, trackedExecutionStatusFailed, err.Error(), nil)
 		return false
 	}
 
 	go func() {
+		syntheticStatus := trackedExecutionStatusCanceled
+		syntheticError := "synthetic turn ended before completion was recorded"
 		defer func() {
 			unregisterRunningAgent()
 
@@ -2306,6 +2384,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 			// Clear session busy first so any later work sees the session as idle.
 			api.setSessionBusy(sessionID, false)
 			releaseInputLane()
+			api.completeTrackedExecution(syntheticExecutionID, syntheticStatus, syntheticError, nil)
 
 			// If the session was explicitly stopped while this synthetic turn was running,
 			// do not chain any queued completions. That would re-enter the stopped session.
@@ -2330,10 +2409,18 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string) bo
 		// A stopped/canceled synthetic turn must not "complete" afterward, otherwise
 		// it can resurrect the stored agent and reopen stateful MCP connections after Esc/stop.
 		if agentCtx.Err() != nil || api.isSessionStoppedOrInactive(sessionID) {
+			syntheticStatus = trackedExecutionStatusCanceled
+			if agentCtx.Err() != nil {
+				syntheticError = agentCtx.Err().Error()
+			} else {
+				syntheticError = "session stopped"
+			}
 			log.Printf("[BG AGENT] Synthetic turn aborted for session %s after stream end (ctx_err=%v stopped=%v)",
 				sessionID, agentCtx.Err(), api.isSessionStoppedOrInactive(sessionID))
 			return
 		}
+		syntheticStatus = trackedExecutionStatusCompleted
+		syntheticError = ""
 
 		// Final save of conversation history
 		finalHistory := llmAgent.GetHistory()

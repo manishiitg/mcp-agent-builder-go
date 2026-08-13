@@ -394,69 +394,6 @@ func scanPulseFinalCommandState(row pulseFinalCommandScanner) (*PulseFinalComman
 	return &state, nil
 }
 
-func finalizeUnresolvedPulseFinalCommands(ctx context.Context, workspacePath, pulseRunID, status, reason string) error {
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT command, status FROM pulse_final_command_state
-		WHERE workspace_path = ? AND pulse_run_id = ?`, normalized, strings.TrimSpace(pulseRunID))
-	if err != nil {
-		return err
-	}
-	var unresolved []string
-	for rows.Next() {
-		var command, currentStatus string
-		if err := rows.Scan(&command, &currentStatus); err != nil {
-			rows.Close()
-			return err
-		}
-		if currentStatus == "waiting" || currentStatus == "running" {
-			unresolved = append(unresolved, command)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, command := range unresolved {
-		if _, err := markPulseFinalCommandStateInDB(ctx, db, normalized, command, pulseRunID, status, reason); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath, status, reason string) (int64, error) {
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
-	if err != nil || db == nil {
-		return 0, err
-	}
-	defer db.Close()
-	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
-		return 0, err
-	}
-	status = strings.TrimSpace(strings.ToLower(status))
-	if !isTerminalPulseFinalCommandStatus(status) {
-		return 0, fmt.Errorf("cleanup status %q is not terminal", status)
-	}
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return 0, fmt.Errorf("reason is required")
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := db.ExecContext(ctx, `UPDATE pulse_final_command_state SET
-			status = ?, reason = ?,
-			started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END,
-			finished_at = ?, updated_at = ?
-		WHERE workspace_path = ? AND status IN ('waiting', 'running')`,
-		status, reason, now, now, now, normalized)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 // finalizeAllRunningPulseReviewLogs closes reviewer rows that were left mid-flight.
 //
 // PLAT-054 / PLAT-017. pulse_review_log is only ever written by an agent through

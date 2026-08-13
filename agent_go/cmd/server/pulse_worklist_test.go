@@ -977,7 +977,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	}
 }
 
-func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
+func TestPulseFinalCommandStatesRemainWaitingUntilAgentRecordsOutcomes(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -1015,12 +1015,9 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 		t.Fatalf("done state missing finished_at: %+v", done)
 	}
 
-	if err := finalizeUnresolvedPulseFinalCommands(ctx, workspacePath, pulseRunID, "timed_out", "Finalizer timed out"); err != nil {
-		t.Fatalf("reconcile unresolved: %v", err)
-	}
 	states, err = getPulseFinalCommandStates(ctx, workspacePath)
 	if err != nil {
-		t.Fatalf("get reconciled commands: %v", err)
+		t.Fatalf("get command states: %v", err)
 	}
 	for _, state := range states {
 		if state.Command == pulseFinalCommandBackup {
@@ -1029,8 +1026,8 @@ func TestPulseFinalCommandStatesTrackAndReconcileOutcomes(t *testing.T) {
 			}
 			continue
 		}
-		if state.Status != "timed_out" {
-			t.Fatalf("unresolved command not timed out: %+v", state)
+		if state.Status != "waiting" {
+			t.Fatalf("Go inferred an outcome the agent did not record: %+v", state)
 		}
 	}
 }
@@ -1105,32 +1102,6 @@ func TestPulseFinalCommandAgentWritesAreOrderedAndMonotonic(t *testing.T) {
 	}
 	if _, err := markPulseFinalCommandStateFromAgent(ctx, workspacePath, pulseFinalCommandBackup, pulseRunID, "done", "Backed up"); err != nil {
 		t.Fatalf("mark backup done: %v", err)
-	}
-}
-
-func TestFinalizeAllUnresolvedPulseCommandsAfterRestart(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/example"
-	if err := initializePulseFinalCommandStates(ctx, workspacePath, "schedule-cron--old"); err != nil {
-		t.Fatalf("initialize final commands: %v", err)
-	}
-	changed, err := finalizeAllUnresolvedPulseFinalCommands(ctx, workspacePath, "failed", "Server restarted")
-	if err != nil {
-		t.Fatalf("finalize all: %v", err)
-	}
-	if changed != int64(len(pulseFinalCommandOrder)) {
-		t.Fatalf("changed = %d, want %d", changed, len(pulseFinalCommandOrder))
-	}
-	states, err := getPulseFinalCommandStates(ctx, workspacePath)
-	if err != nil {
-		t.Fatalf("get states: %v", err)
-	}
-	for _, state := range states {
-		if state.Status != "failed" || state.FinishedAt == "" {
-			t.Fatalf("state was not reconciled: %+v", state)
-		}
 	}
 }
 

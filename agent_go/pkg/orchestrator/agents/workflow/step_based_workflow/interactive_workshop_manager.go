@@ -1861,11 +1861,12 @@ func (iwm *InteractiveWorkshopManager) currentWorkshopModeFromConfigs(stepConfig
 // Without this check, they would create a derived context from a canceled parent,
 // spawn a CLI process, and that process would either fail immediately or, in edge
 // cases, run indefinitely if the cancel signal is not delivered quickly.
-func (iwm *InteractiveWorkshopManager) newExecContext() (context.Context, context.CancelFunc, error) {
+func (iwm *InteractiveWorkshopManager) newExecContext(launchCtx context.Context) (context.Context, context.CancelFunc, error) {
 	if iwm.sessionCtx.Err() != nil {
 		return nil, nil, fmt.Errorf("session was stopped")
 	}
 	ctx, cancel := context.WithCancel(iwm.sessionCtx)
+	ctx = withWorkshopExecutionParent(ctx, launchCtx)
 	return ctx, cancel, nil
 }
 
@@ -3105,7 +3106,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			execID := fmt.Sprintf("exec-%s-%d", stepID, time.Now().UnixNano())
-			execCtx, cancel, ctxErr := iwm.newExecContext()
+			execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 			if ctxErr != nil {
 				return "Session was stopped — execution skipped", nil
 			}
@@ -3376,7 +3377,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			execID := fmt.Sprintf("bg-%s-%05d", nameSlug, time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
+			execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 			if ctxErr != nil {
 				return "Session was stopped — execution skipped", nil
 			}
@@ -5097,7 +5098,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			execID := fmt.Sprintf("review-plan-%05d", time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
+			execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 			if ctxErr != nil {
 				return "Session was stopped — execution skipped", nil
 			}
@@ -5211,7 +5212,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 
 				execID := fmt.Sprintf("review-timing-%05d", time.Now().UnixNano()%100000)
-				execCtx, cancel, ctxErr := iwm.newExecContext()
+				execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 				if ctxErr != nil {
 					return "Session was stopped — execution skipped", nil
 				}
@@ -5350,7 +5351,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 
 				execID := fmt.Sprintf("review-costs-%05d", time.Now().UnixNano()%100000)
-				execCtx, cancel, ctxErr := iwm.newExecContext()
+				execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 				if ctxErr != nil {
 					return "Session was stopped — execution skipped", nil
 				}
@@ -5478,7 +5479,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			execID := fmt.Sprintf("review-step-code-%05d", time.Now().UnixNano()%100000)
-			execCtx, cancel, ctxErr := iwm.newExecContext()
+			execCtx, cancel, ctxErr := iwm.newExecContext(ctx)
 			if ctxErr != nil {
 				return "Session was stopped — execution skipped", nil
 			}

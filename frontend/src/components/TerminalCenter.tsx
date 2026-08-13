@@ -4635,9 +4635,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                             data-testid="terminal-error-indicator"
                           >
                             <AlertTriangle className="h-3.5 w-3.5" />
-                            <span className="absolute -right-1.5 -top-1.5 min-w-3.5 rounded-full bg-red-600 px-1 text-center text-[9px] font-semibold leading-3.5 text-white tabular-nums">
-                              {selectedTerminalErrorEntries.length > 99 ? '99+' : selectedTerminalErrorEntries.length}
-                            </span>
                           </button>
                           {errorPanelOpenForID === selectedTerminalErrorPanelKey && (
                             <div

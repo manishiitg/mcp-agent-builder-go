@@ -135,7 +135,7 @@ func trackedExecutionAppearsInRunningWorkflowList(exec *TrackedWorkflowExecution
 	if exec.Source == trackedExecutionSourceWorkflowRun {
 		return true
 	}
-	if exec.Source != trackedExecutionSourceWorkshopBackground {
+	if exec.Source != trackedExecutionSourceWorkshopBackground && exec.Source != trackedExecutionSourceConversationTurn {
 		return false
 	}
 	kind := normalizeTrackedExecutionKind(exec.Kind)
@@ -290,7 +290,11 @@ func (api *StreamingAPI) trackWorkflowRunStart(exec *ActiveWorkflowExecution) {
 	})
 }
 
-func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, presetQueryID, userID string, executionID, name string) {
+func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, presetQueryID, userID string, executionID, name, parentExecutionID string) {
+	metadata := map[string]string{}
+	if parentExecutionID = strings.TrimSpace(parentExecutionID); parentExecutionID != "" {
+		metadata["parent_execution_id"] = parentExecutionID
+	}
 	api.trackExecutionStart(&TrackedWorkflowExecution{
 		ExecutionID:   executionID,
 		SessionID:     sessionID,
@@ -305,6 +309,7 @@ func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, p
 		UserID:        userID,
 		TriggeredBy:   "workflow_builder",
 		StartedAt:     time.Now().UTC(),
+		Metadata:      metadata,
 	})
 }
 
@@ -332,11 +337,19 @@ func (api *StreamingAPI) completeTrackedExecution(executionID, status, errorMess
 		exec.LastError = errorMessage
 	}
 	if len(meta) > 0 {
-		exec.Metadata = cloneTrackedMetadata(meta)
+		// Completion metadata augments registration metadata. Replacing the map
+		// here would erase parent_execution_id and detach any still-running
+		// grandchildren from the exact conversation-turn tree.
+		if exec.Metadata == nil {
+			exec.Metadata = make(map[string]string, len(meta))
+		}
+		for key, value := range meta {
+			exec.Metadata[key] = value
+		}
 		if runFolder := strings.TrimSpace(meta["run_folder"]); runFolder != "" {
 			exec.RunFolder = runFolder
 		}
-		exec.Kind = inferTrackedExecutionKind(exec.Source, exec.PhaseID, exec.Name, meta)
+		exec.Kind = inferTrackedExecutionKind(exec.Source, exec.PhaseID, exec.Name, exec.Metadata)
 	}
 	api.pruneTrackedExecutionsLocked(now)
 	api.trackedWorkflowExecutionsMux.Unlock()
@@ -451,17 +464,8 @@ func (api *StreamingAPI) listRunningWorkflowExecutions(userID string) []ActiveWo
 	}
 	api.trackedWorkflowExecutionsMux.RUnlock()
 
-	// Enrich with blocking-input state after releasing the map lock because
-	// deriveSessionUserInputState reads from the eventStore (separate lock).
 	for i := range list {
-		needsInput, _, waitingSince, waitingMessage := api.deriveSessionUserInputState(list[i].SessionID)
-		list[i].NeedsUserInput = needsInput
-		list[i].WaitingMessage = waitingMessage
-		list[i].WaitingSince = waitingSince
-		if snapshot, ok := api.authoritativeRuntimeSnapshot(list[i].SessionID); ok {
-			list[i].RuntimeState = &snapshot
-			list[i].DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
-		}
+		api.enrichActiveWorkflowExecutionLifecycle(&list[i])
 	}
 
 	sort.Slice(list, func(i, j int) bool {
@@ -486,18 +490,33 @@ func (api *StreamingAPI) listRunningWorkflowExecutionsForWorkspace(workspacePath
 	}
 	api.trackedWorkflowExecutionsMux.RUnlock()
 
-	// Enrich with blocking-input state after releasing the map lock.
 	for i := range list {
-		needsInput, _, waitingSince, waitingMessage := api.deriveSessionUserInputState(list[i].SessionID)
-		list[i].NeedsUserInput = needsInput
-		list[i].WaitingMessage = waitingMessage
-		list[i].WaitingSince = waitingSince
+		api.enrichActiveWorkflowExecutionLifecycle(&list[i])
 	}
 
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].StartedAt.After(list[j].StartedAt)
 	})
 	return list
+}
+
+// enrichActiveWorkflowExecutionLifecycle is the sole projection used by both
+// Global Monitor and workspace-scoped activity. It reads the same canonical
+// runtime snapshot whose tracked query-root records drive scheduled-message
+// completion, so UI status and scheduler sequencing cannot disagree about
+// whether a turn is still active.
+func (api *StreamingAPI) enrichActiveWorkflowExecutionLifecycle(execution *ActiveWorkflowExecution) {
+	if api == nil || execution == nil {
+		return
+	}
+	needsInput, _, waitingSince, waitingMessage := api.deriveSessionUserInputState(execution.SessionID)
+	execution.NeedsUserInput = needsInput
+	execution.WaitingMessage = waitingMessage
+	execution.WaitingSince = waitingSince
+	if snapshot, ok := api.authoritativeRuntimeSnapshot(execution.SessionID); ok {
+		execution.RuntimeState = &snapshot
+		execution.DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
+	}
 }
 
 func (api *StreamingAPI) findRunningTrackedExecutionForWorkspaceWhere(

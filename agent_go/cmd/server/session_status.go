@@ -75,10 +75,3 @@ func sessionDisplayStatusFromRuntime(snapshot RuntimeSnapshot) SessionDisplaySta
 		HasRunningBackgroundAgents: snapshot.BackgroundLive,
 	}
 }
-
-// sessionIsBusy is a convenience wrapper: true when the session's consolidated
-// status is "busy". Use this instead of ad-hoc isSessionBusy + HasRunningAgents
-// checks so callers agree with the UI's notion of busy.
-func (api *StreamingAPI) sessionIsBusy(sessionID string) bool {
-	return api.sessionDisplayStatus(sessionID).Status == sessionExecutionDisplayBusy
-}

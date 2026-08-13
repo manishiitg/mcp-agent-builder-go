@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
-	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
@@ -2200,127 +2198,6 @@ func TestRefreshSessionTmuxSnapshotsForIdleCheckMarksMissingPaneStale(t *testing
 	}
 }
 
-func TestWaitForWorkshopIdleRequiresTwoFreshIdleTmuxChecks(t *testing.T) {
-	oldInterval := schedulerWorkshopIdlePollInterval
-	schedulerWorkshopIdlePollInterval = time.Millisecond
-	defer func() { schedulerWorkshopIdlePollInterval = oldInterval }()
-
-	store := terminals.NewStore()
-	sessionID := "session-scheduler-idle"
-	tmuxSession := "tmux-scheduler-idle"
-	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:review-plan", tmuxSession, "old pane", 1))
-
-	oldRunOutput := runTerminalTmuxOutputCommand
-	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
-	calls := 0
-	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
-		calls++
-		return "done\n❯", nil
-	}
-
-	svc := &SchedulerService{api: &StreamingAPI{terminalStore: store}}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := svc.waitForWorkshopIdle(ctx, sessionID); err != nil {
-		t.Fatalf("waitForWorkshopIdle returned error: %v", err)
-	}
-	if calls != schedulerWorkshopIdleConsecutiveChecks {
-		t.Fatalf("tmux captures = %d, want %d", calls, schedulerWorkshopIdleConsecutiveChecks)
-	}
-}
-
-func TestWaitForPulseTurnCompletionUsesRuntimeEventsWithoutTmuxPolling(t *testing.T) {
-	oldSettle := pulseTurnSettleDelay
-	pulseTurnSettleDelay = 5 * time.Millisecond
-	defer func() { pulseTurnSettleDelay = oldSettle }()
-
-	eventStore := storeevents.NewEventStore(100)
-	defer eventStore.Stop()
-	sessionID := "pulse-event-driven-completion"
-	api := &StreamingAPI{eventStore: eventStore, terminalStore: terminals.NewStore()}
-	// A retained main CLI stays live and can still look busy in its pane after
-	// the structured main-turn completion. It must not hold Pulse's next
-	// message; only tracked children/background agents may do that.
-	api.setSessionBusy(sessionID, true)
-	svc := &SchedulerService{api: api}
-
-	oldRunOutput := runTerminalTmuxOutputCommand
-	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
-	tmuxCaptures := 0
-	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
-		tmuxCaptures++
-		return "", nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := svc.waitForPulseTurnCompletion(ctx, sessionID, 500*time.Millisecond); err != nil {
-		t.Fatalf("waitForPulseTurnCompletion returned error: %v", err)
-	}
-	if tmuxCaptures != 0 {
-		t.Fatalf("tmux captures = %d, want 0 for event-driven Pulse wait", tmuxCaptures)
-	}
-}
-
-func TestWaitForPulseTurnCompletionWaitsForTrackedChild(t *testing.T) {
-	oldSettle := pulseTurnSettleDelay
-	pulseTurnSettleDelay = 5 * time.Millisecond
-	defer func() { pulseTurnSettleDelay = oldSettle }()
-
-	eventStore := storeevents.NewEventStore(100)
-	defer eventStore.Stop()
-	const sessionID = "pulse-structured-child"
-	api := &StreamingAPI{
-		eventStore: eventStore,
-		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
-			"child": {ExecutionID: "child", SessionID: sessionID, Status: trackedExecutionStatusRunning, StartedAt: time.Now()},
-		},
-	}
-	svc := &SchedulerService{api: api}
-
-	go func() {
-		time.Sleep(15 * time.Millisecond)
-		api.trackedWorkflowExecutionsMux.Lock()
-		api.trackedWorkflowExecutions["child"].Status = trackedExecutionStatusCompleted
-		api.trackedWorkflowExecutionsMux.Unlock()
-		eventStore.AddEvent(sessionID, storeevents.Event{ID: "child-complete", Type: "agent_end", Timestamp: time.Now(), SessionID: sessionID})
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	started := time.Now()
-	if err := svc.waitForPulseTurnCompletion(ctx, sessionID, 500*time.Millisecond); err != nil {
-		t.Fatalf("waitForPulseTurnCompletion returned error: %v", err)
-	}
-	if elapsed := time.Since(started); elapsed < 15*time.Millisecond {
-		t.Fatalf("Pulse wait returned before the tracked child settled: %s", elapsed)
-	}
-}
-
-func TestWaitForWorkshopIdleAbortsStoppedSequenceBeforeNextMessage(t *testing.T) {
-	api := &StreamingAPI{stoppedSessions: map[string]bool{"session-stopped": true}}
-	svc := &SchedulerService{api: api}
-
-	err := svc.waitForWorkshopIdle(context.Background(), "session-stopped")
-	if !errors.Is(err, errWorkshopSequenceInterrupted) {
-		t.Fatalf("error = %v, want errWorkshopSequenceInterrupted", err)
-	}
-}
-
-func TestWaitForWorkshopIdleAbortsCanceledTurnBeforeNextMessage(t *testing.T) {
-	api := &StreamingAPI{}
-	api.markSessionTurnInterrupted("session-canceled-turn")
-	svc := &SchedulerService{api: api}
-
-	err := svc.waitForWorkshopIdle(context.Background(), "session-canceled-turn")
-	if !errors.Is(err, errWorkshopSequenceInterrupted) {
-		t.Fatalf("error = %v, want errWorkshopSequenceInterrupted", err)
-	}
-	if api.consumeSessionTurnInterrupted("session-canceled-turn") {
-		t.Fatalf("interruption marker was not consumed by the scheduler wait")
-	}
-}
-
 func TestRunJobDoesNotJoinAnotherActiveRun(t *testing.T) {
 	startedAt := time.Now().Add(-time.Minute)
 	sctx := &ScheduleContext{
@@ -2344,134 +2221,6 @@ func TestRunJobDoesNotJoinAnotherActiveRun(t *testing.T) {
 	}
 	if got := svc.runtimeStates[runtimeKey].ActiveRunID; got != "active-run" {
 		t.Fatalf("active run ownership changed to %q", got)
-	}
-}
-
-func TestWaitForWorkshopIdleTimesOutWhenSessionStaysBusy(t *testing.T) {
-	oldInterval := schedulerWorkshopIdlePollInterval
-	oldMaxInactivity := schedulerWorkshopMaxInactivity
-	schedulerWorkshopIdlePollInterval = time.Millisecond
-	schedulerWorkshopMaxInactivity = 5 * time.Millisecond
-	defer func() {
-		schedulerWorkshopIdlePollInterval = oldInterval
-		schedulerWorkshopMaxInactivity = oldMaxInactivity
-	}()
-
-	sessionID := "session-scheduler-busy-timeout"
-	api := &StreamingAPI{terminalStore: terminals.NewStore()}
-	api.setSessionBusy(sessionID, true)
-	svc := &SchedulerService{api: api}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err := svc.waitForWorkshopIdle(ctx, sessionID)
-	if err == nil {
-		t.Fatal("waitForWorkshopIdle returned nil, want timeout")
-	}
-	if !strings.Contains(err.Error(), "workshop idle wait timed out") {
-		t.Fatalf("error = %v, want timeout", err)
-	}
-	if !errors.Is(err, errWorkshopIdleWaitTimeout) {
-		t.Fatalf("error = %v, want errWorkshopIdleWaitTimeout", err)
-	}
-	if !strings.Contains(err.Error(), "no tmux, tool, execution, or session progress") {
-		t.Fatalf("error = %v, want inactivity reason", err)
-	}
-}
-
-func TestWaitForWorkshopIdleTreatsTmuxRefreshFailureAsInactivity(t *testing.T) {
-	oldInterval := schedulerWorkshopIdlePollInterval
-	schedulerWorkshopIdlePollInterval = time.Millisecond
-	defer func() { schedulerWorkshopIdlePollInterval = oldInterval }()
-
-	store := terminals.NewStore()
-	sessionID := "session-scheduler-refresh-failure"
-	tmuxSession := "tmux-scheduler-refresh-failure"
-	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:bug-review", tmuxSession, "starting", 1))
-
-	api := &StreamingAPI{terminalStore: store}
-	api.setSessionBusy(sessionID, true)
-	svc := &SchedulerService{api: api}
-
-	oldRunOutput := runTerminalTmuxOutputCommand
-	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
-	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
-		return "", errors.New("tmux capture unavailable")
-	}
-
-	maxInactivity := 20 * time.Millisecond
-	startedAt := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err := svc.waitForWorkshopIdleWithInactivityTimeout(ctx, sessionID, maxInactivity)
-	if !errors.Is(err, errWorkshopIdleWaitTimeout) {
-		t.Fatalf("error = %v, want errWorkshopIdleWaitTimeout", err)
-	}
-	if elapsed := time.Since(startedAt); elapsed < maxInactivity {
-		t.Fatalf("wait failed after %s, want full inactivity window %s", elapsed, maxInactivity)
-	}
-	if !strings.Contains(err.Error(), "last tmux refresh error:") || !strings.Contains(err.Error(), "tmux capture unavailable") {
-		t.Fatalf("error = %v, want tmux refresh context", err)
-	}
-}
-
-func TestWaitForWorkshopIdleReportsRuntimeFailureBeforeStopGuard(t *testing.T) {
-	sessionID := "session-runtime-failed"
-	api := &StreamingAPI{
-		activeSessions: map[string]*ActiveSessionInfo{
-			sessionID: {SessionID: sessionID, Status: "error"},
-		},
-		stoppedSessions: map[string]bool{sessionID: true},
-	}
-	svc := &SchedulerService{api: api}
-
-	err := svc.waitForWorkshopIdleWithInactivityTimeout(context.Background(), sessionID, time.Minute)
-	if !errors.Is(err, errWorkshopSessionFailed) {
-		t.Fatalf("error = %v, want errWorkshopSessionFailed", err)
-	}
-	if errors.Is(err, errWorkshopSequenceInterrupted) {
-		t.Fatalf("runtime failure was misclassified as user interruption: %v", err)
-	}
-}
-
-func TestWaitForWorkshopIdleAllowsLongRunningTmuxWithProgress(t *testing.T) {
-	oldInterval := schedulerWorkshopIdlePollInterval
-	schedulerWorkshopIdlePollInterval = time.Millisecond
-	defer func() { schedulerWorkshopIdlePollInterval = oldInterval }()
-
-	store := terminals.NewStore()
-	sessionID := "session-scheduler-progress"
-	tmuxSession := "tmux-scheduler-progress"
-	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:bug-review", tmuxSession, "starting", 1))
-
-	api := &StreamingAPI{terminalStore: store}
-	api.setSessionBusy(sessionID, true)
-	svc := &SchedulerService{api: api}
-
-	oldRunOutput := runTerminalTmuxOutputCommand
-	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
-	calls := 0
-	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
-		calls++
-		if calls >= 130 {
-			api.setSessionBusy(sessionID, false)
-			return "done\n❯", nil
-		}
-		return fmt.Sprintf("bug-review progress %d", calls), nil
-	}
-
-	maxInactivity := 100 * time.Millisecond
-	startedAt := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := svc.waitForWorkshopIdleWithInactivityTimeout(ctx, sessionID, maxInactivity); err != nil {
-		t.Fatalf("waitForWorkshopIdleWithInactivityTimeout returned error: %v", err)
-	}
-	if elapsed := time.Since(startedAt); elapsed <= maxInactivity {
-		t.Fatalf("wait completed in %s, want total run longer than inactivity limit %s", elapsed, maxInactivity)
-	}
-	if calls < 130 {
-		t.Fatalf("tmux captures = %d, want at least 130", calls)
 	}
 }
 
@@ -2521,85 +2270,6 @@ func TestPostRunMonitorFinalStepClassification(t *testing.T) {
 	}
 }
 
-func TestPulseStepFailureMustStopBeforeNextTurn(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		result postRunMonitorStepRunResult
-		busy   bool
-		want   bool
-	}{
-		{name: "completed turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepCompleted}, busy: true},
-		{name: "failed idle turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed}, busy: false},
-		{name: "timed out live turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepTimedOut}, busy: true, want: true},
-		{name: "failed-to-start while prior turn remains live", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed}, busy: true, want: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := pulseStepFailureMustStopBeforeNextTurn(test.result, test.busy); got != test.want {
-				t.Fatalf("pulseStepFailureMustStopBeforeNextTurn() = %v, want %v", got, test.want)
-			}
-		})
-	}
-}
-
-// TestReconcileSessionBusySignal pins the PLAT-094 fix and its PLAT-095
-// generalization: neither a Pulse step boundary nor the workshop idle-wait
-// may abort on a stale runtime-snapshot busy signal once the explicit
-// per-turn flag says the turn has actually finished. Observed live on
-// build-in-public 2026-08-12 — Finalize was aborted on exactly this
-// disagreement, and no backup/publish/notify ran for that pass. Both call
-// sites now share this one function rather than each re-deriving the rule.
-func TestReconcileSessionBusySignal(t *testing.T) {
-	for _, test := range []struct {
-		name         string
-		snapshotBusy bool
-		explicitBusy bool
-		wantBusy     bool
-	}{
-		{name: "both agree idle", snapshotBusy: false, explicitBusy: false, wantBusy: false},
-		{name: "both agree busy", snapshotBusy: true, explicitBusy: true, wantBusy: true},
-		{
-			name:         "stale snapshot outlives the turn's own completion",
-			snapshotBusy: true, explicitBusy: false,
-			wantBusy: false, // the exact race: trust the explicit flag over the lagging snapshot
-		},
-		{
-			// Mirrors PLAT-071's own precedent exactly: the explicit flag is only
-			// ever consulted to correct a snapshot CLAIMING busy. An idle snapshot
-			// is trusted as-is and never escalated to busy from the explicit flag
-			// alone — that would be a new failure mode (spurious aborts), not the
-			// one either fix addresses.
-			name:         "snapshot idle is trusted even if the explicit flag disagrees",
-			snapshotBusy: false, explicitBusy: true,
-			wantBusy: false,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := reconcileSessionBusySignal(test.snapshotBusy, test.explicitBusy); got != test.wantBusy {
-				t.Fatalf("reconcileSessionBusySignal(snapshot=%v, explicit=%v) = %v, want %v",
-					test.snapshotBusy, test.explicitBusy, got, test.wantBusy)
-			}
-		})
-	}
-}
-
-// TestAbortIfTurnStillBusyReclassificationChangesTheOutcome proves the fix
-// matters, not just that the helper returns the right bool in isolation: with
-// the stale-snapshot shape, pulseStepFailureMustStopBeforeNextTurn — the
-// function that actually gates the abort — must flip from "stop" to
-// "continue" once the reconciliation is applied.
-func TestAbortIfTurnStillBusyReclassificationChangesTheOutcome(t *testing.T) {
-	result := postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed}
-	staleSnapshotBusy, explicitBusy := true, false
-
-	if !pulseStepFailureMustStopBeforeNextTurn(result, staleSnapshotBusy) {
-		t.Fatal("precondition: the unreconciled stale snapshot must still read as must-stop, or this test proves nothing")
-	}
-	reconciled := reconcileSessionBusySignal(staleSnapshotBusy, explicitBusy)
-	if pulseStepFailureMustStopBeforeNextTurn(result, reconciled) {
-		t.Fatal("a finished turn's stale snapshot-busy signal must not abort Finalize (PLAT-094)")
-	}
-}
-
 func TestRunningScheduleInSetLockedFindsOtherRunningSchedule(t *testing.T) {
 	states := map[string]*ScheduleRuntimeState{
 		"daily":     {LastStatus: "running", LastSessionID: "session-daily"},
@@ -2623,50 +2293,6 @@ func TestRunningScheduleInSetLockedIgnoresCurrentSchedule(t *testing.T) {
 	id, sessionID := runningScheduleInSetLocked(states, []string{"current"}, "current")
 	if id != "" || sessionID != "" {
 		t.Fatalf("running schedule = (%q, %q), want empty", id, sessionID)
-	}
-}
-
-func TestWaitForLiveInputTurnCompleteRequiresBusyBeforeIdle(t *testing.T) {
-	oldInterval := liveInputTurnPollInterval
-	oldStableAfter := liveInputTurnNoBusyStableAfter
-	liveInputTurnPollInterval = time.Millisecond
-	liveInputTurnNoBusyStableAfter = time.Hour
-	defer func() {
-		liveInputTurnPollInterval = oldInterval
-		liveInputTurnNoBusyStableAfter = oldStableAfter
-	}()
-
-	store := terminals.NewStore()
-	sessionID := "session-live-input-wait"
-	tmuxSession := "tmux-live-input-wait"
-	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "main:"+sessionID, tmuxSession, "old pane\n❯", 1))
-
-	oldRunOutput := runTerminalTmuxOutputCommand
-	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
-	outputs := []string{
-		"prompt echoed\n❯",
-		"thinking\nesc to interrupt",
-		"final answer\n❯",
-		"final answer\n❯",
-	}
-	calls := 0
-	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
-		if calls >= len(outputs) {
-			return outputs[len(outputs)-1], nil
-		}
-		out := outputs[calls]
-		calls++
-		return out, nil
-	}
-
-	api := &StreamingAPI{terminalStore: store}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := api.waitForLiveInputTurnComplete(ctx, nil, sessionID); err != nil {
-		t.Fatalf("waitForLiveInputTurnComplete returned error: %v", err)
-	}
-	if calls < 4 {
-		t.Fatalf("tmux captures = %d, want at least 4; initial idle must not complete the live-input turn", calls)
 	}
 }
 

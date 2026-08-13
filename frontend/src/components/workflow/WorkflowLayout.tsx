@@ -15,6 +15,7 @@ import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
+import { workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -1770,17 +1771,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       try {
         const response = await agentApi.listRunningWorkflows()
         if (cancelled) return
-        const runningWorkflows = (response.running || [])
+        const projectedRunningWorkflows = (response.running || [])
           .filter(item => item.session_id && isRunningWorkflowEntry(item))
-          // Scheduled/bot workflow runs are restored through the read-only
-          // run helpers when the user clicks their activity pill or run row.
-          // Creating normal workflow tabs here races those helpers and can
-          // leave duplicate "Schedule" tabs for the same session.
-          .filter(item => !isExternalReadOnlyWorkflowEntry(item))
           .filter(item => runningWorkflowBelongsToPreset(item, activePresetId, workspacePath))
           .sort((a, b) => new Date(b.started_at || 0).getTime() - new Date(a.started_at || 0).getTime())
+          .flatMap(running => {
+            const projection = workflowRuntimeTabProjection(running, activePresetId)
+            return projection ? [{ running, projection }] : []
+          })
 
-        if (runningWorkflows.length === 0) return
+        if (projectedRunningWorkflows.length === 0) return
 
         const chatStore = useChatStore.getState()
         const activeTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : undefined
@@ -1796,7 +1796,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           activeTab?.metadata?.mode === 'workflow' &&
           activeTab.metadata?.presetQueryId === activePresetId &&
           !activeTabIsStreaming
-        const latestRunning = runningWorkflows[0]
+        const latestInteractiveRunning = projectedRunningWorkflows.find(item => item.projection.autoActivate)?.running
         // Never auto-switch away from a read-only scheduled/bot run the user just
         // opened — that's the schedule→empty-chat bounce. They can still pick
         // another tab manually; this reconcile just must not stomp the run they
@@ -1808,38 +1808,41 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             !activeTab ||
             activeTab.metadata?.mode !== 'workflow' ||
             (
-              activeTab.sessionId !== latestRunning.session_id &&
+              latestInteractiveRunning != null &&
+              activeTab.sessionId !== latestInteractiveRunning.session_id &&
               (activeViewMode === 'terminal' || activeIsBuilderForPreset || activeIsCompletedWorkflowForPreset)
             )
           )
 
         let selectedRunningTabId: string | null = null
-        for (const running of runningWorkflows) {
+        for (const { running, projection } of projectedRunningWorkflows) {
           if (!running.session_id) continue
 
-          const existingTab = Object.values(chatStore.chatTabs).find(tab =>
+          // The run panel and this poll can discover the same schedule in the
+          // same moment. Re-read the store and dedupe on backend session ID.
+          const latestChatStore = useChatStore.getState()
+          const existingTab = Object.values(latestChatStore.chatTabs).find(tab =>
             tab.metadata?.mode === 'workflow' && tab.sessionId === running.session_id
           )
 
           let tabId = existingTab?.tabId
           if (!tabId) {
-            const phaseName = running.phase_name || running.title || running.preset_name || 'Running automation'
-            tabId = await chatStore.createChatTab(phaseName, {
-              mode: 'workflow',
-              phaseId: running.phase_id || undefined,
-              phaseName,
-              presetQueryId: activePresetId,
-            }, running.session_id)
+            tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
           }
-          selectedRunningTabId ||= tabId
+          if (projection.autoActivate) selectedRunningTabId ||= tabId
 
+          const currentTab = useChatStore.getState().chatTabs[tabId]
           chatStore.setTabMetadata(tabId, {
-            ...chatStore.chatTabs[tabId]?.metadata,
-            mode: 'workflow',
-            phaseId: running.phase_id || chatStore.chatTabs[tabId]?.metadata?.phaseId,
-            phaseName: running.phase_name || chatStore.chatTabs[tabId]?.metadata?.phaseName,
-            presetQueryId: activePresetId,
+            ...currentTab?.metadata,
+            ...projection.metadata,
           })
+          if (currentTab && currentTab.name !== projection.name) {
+            useChatStore.setState(state => {
+              const tab = state.chatTabs[tabId]
+              if (!tab) return state
+              return { chatTabs: { ...state.chatTabs, [tabId]: { ...tab, name: projection.name } } }
+            })
+          }
           chatStore.setTabStreaming(tabId, true)
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)
@@ -1849,7 +1852,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         if (shouldSwitch && selectedRunningTabId) {
           chatStore.switchTab(selectedRunningTabId)
           setShowChatArea(true)
-        } else if (activeTab?.sessionId && runningWorkflows.some(item => item.session_id === activeTab.sessionId)) {
+        } else if (activeTab?.sessionId && projectedRunningWorkflows.some(item => item.running.session_id === activeTab.sessionId)) {
           setShowChatArea(true)
         }
       } catch {

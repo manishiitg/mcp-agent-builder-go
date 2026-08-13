@@ -422,8 +422,14 @@ type StreamingAPI struct {
 	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
 	// instead of guessing activity solely from the latest rendered spinner text.
 	retainedMainTurns            map[string]time.Time
-	retainedMainTurnWatchCancels map[string]context.CancelFunc
-	retainedMainTurnsMu          sync.Mutex
+	retainedMainTurnExecutionIDs map[string]string
+	// A retained CLI turn can receive a live-steered child completion while it
+	// is already processing a user/schedule message. Both exact lifecycle nodes
+	// end at the same idle-composer boundary; keep the additional IDs instead of
+	// replacing the original message root.
+	retainedMainTurnAdditionalExecutionIDs map[string]map[string]struct{}
+	retainedMainTurnWatchCancels           map[string]context.CancelFunc
+	retainedMainTurnsMu                    sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -1598,24 +1604,26 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Initialize workflow step ID storage
 		workflowStepIDs: make(map[string]string),
 		// Initialize background agent infrastructure
-		bgAgentRegistry:                 NewBackgroundAgentRegistry(),
-		sessionBusy:                     make(map[string]bool),
-		sessionBusySince:                make(map[string]time.Time),
-		retainedMainTurns:               make(map[string]time.Time),
-		retainedMainTurnWatchCancels:    make(map[string]context.CancelFunc),
-		pendingCompletions:              make(map[string][]string),
-		completionRetryScheduled:        make(map[string]bool),
-		pendingStartNotifications:       make(map[string][]string),
-		startNotificationRetryScheduled: make(map[string]bool),
-		lastQueryRequests:               make(map[string]QueryRequest),
-		sessionWorkspaceFolders:         make(map[string]string),
-		sessionAgents:                   make(map[string]*agent.LLMAgentWrapper),
-		runningAgents:                   make(map[string]*mcpagent.Agent),
-		sessionInputLanes:               make(map[string]*sessionInputLane),
-		completionLoopStarted:           make(map[string]bool),
-		lastWorkshopModeBySession:       make(map[string]string),
-		stoppedSessions:                 make(map[string]bool),
-		interruptedTurns:                make(map[string]bool),
+		bgAgentRegistry:                        NewBackgroundAgentRegistry(),
+		sessionBusy:                            make(map[string]bool),
+		sessionBusySince:                       make(map[string]time.Time),
+		retainedMainTurns:                      make(map[string]time.Time),
+		retainedMainTurnExecutionIDs:           make(map[string]string),
+		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
+		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+		pendingCompletions:                     make(map[string][]string),
+		completionRetryScheduled:               make(map[string]bool),
+		pendingStartNotifications:              make(map[string][]string),
+		startNotificationRetryScheduled:        make(map[string]bool),
+		lastQueryRequests:                      make(map[string]QueryRequest),
+		sessionWorkspaceFolders:                make(map[string]string),
+		sessionAgents:                          make(map[string]*agent.LLMAgentWrapper),
+		runningAgents:                          make(map[string]*mcpagent.Agent),
+		sessionInputLanes:                      make(map[string]*sessionInputLane),
+		completionLoopStarted:                  make(map[string]bool),
+		lastWorkshopModeBySession:              make(map[string]string),
+		stoppedSessions:                        make(map[string]bool),
+		interruptedTurns:                       make(map[string]bool),
 	}
 	// Terminal Center's Formatted view and the runtime coordinator now consume
 	// the same accepted structured events. The terminal observer updates the
@@ -4038,6 +4046,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Every /api/query message is an execution root of its own. The query id is
+	// returned to internal sequence callers and is also the parent of any
+	// background agents launched by this turn. Do this before writing the
+	// response so a fast waiter can never observe an unregistered root.
+	req.userID = currentUserID
+	api.trackConversationTurnStart(queryID, sessionID, req)
+
 	// Return immediate response with query ID
 	response := QueryResponse{
 		QueryID:   queryID,
@@ -4047,6 +4062,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
+		api.completeTrackedExecution(queryID, trackedExecutionStatusFailed, fmt.Sprintf("encode query response: %v", err), nil)
 		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -4059,6 +4075,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// coding CLI session is idle. Synthetic turns also reuse this context.
 	req.userID = currentUserID
 	continuationReq := queryRequestForContinuation(req, isWorkflowPhase, workflowPhaseFolder)
+	continuationReq = queryRequestWithEffectiveRuntime(continuationReq, finalProvider, finalModelID)
 	api.lastQueryMu.Lock()
 	api.lastQueryRequests[sessionID] = continuationReq
 	api.lastQueryMu.Unlock()
@@ -4094,6 +4111,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Process the query in the background
 	go func() {
+		turnStatus := trackedExecutionStatusCanceled
+		turnError := "conversation turn ended before completion was recorded"
 		var agentCancel context.CancelFunc
 		defer func() {
 			if agentCancel != nil {
@@ -4117,11 +4136,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// Drain only after releasing the lane; synthetic turns acquire it.
 				api.drainPendingAutoNotificationsAfterTurn(sessionID)
 			}
+			api.completeTrackedExecution(queryID, turnStatus, turnError, nil)
 		}()
 
 		// Helper function to send error and continue (not terminate)
 		sendError := func(errorMsg string, shouldTerminate bool) {
 			if shouldTerminate {
+				turnStatus = trackedExecutionStatusFailed
+				turnError = errorMsg
 				tracer.EndTrace(traceID, map[string]interface{}{
 					"status": "failed",
 				})
@@ -5742,6 +5764,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Create a cancellable context for agent execution using background context
 		// This prevents the agent from being canceled when the HTTP request ends
 		agentCtx, agentCancel := context.WithCancel(context.Background())
+		agentCtx = withConversationTurnExecutionID(agentCtx, queryID)
 
 		// Inject user ID into the agent context
 		agentCtx = context.WithValue(agentCtx, common.UserIDKey, currentUserID)
@@ -5959,6 +5982,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// Check for context cancellation
 			select {
 			case <-streamCtx.Done():
+				turnStatus = trackedExecutionStatusCanceled
+				turnError = streamCtx.Err().Error()
 				tracer.EndTrace(traceID, map[string]interface{}{
 					"status":   "timeout",
 					"query_id": queryID,
@@ -6235,7 +6260,17 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// session as successfully completed.
 		if activeSession, exists := api.getActiveSession(sessionID); exists {
 			switch normalizeSessionLifecycleStatus(activeSession.Status) {
-			case sessionLifecycleFailed, sessionLifecycleStopped:
+			case sessionLifecycleFailed:
+				turnStatus = trackedExecutionStatusFailed
+				turnError = "session reported failure"
+				log.Printf("[COMPLETION] Preserving terminal status %q for session %s", activeSession.Status, sessionID)
+				tracer.EndTrace(traceID, map[string]interface{}{
+					"status": activeSession.Status,
+				})
+				return
+			case sessionLifecycleStopped:
+				turnStatus = trackedExecutionStatusCanceled
+				turnError = "session was stopped"
 				log.Printf("[COMPLETION] Preserving terminal status %q for session %s", activeSession.Status, sessionID)
 				tracer.EndTrace(traceID, map[string]interface{}{
 					"status": activeSession.Status,
@@ -6244,6 +6279,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if api.isSessionMarkedStopped(sessionID) {
+			turnStatus = trackedExecutionStatusCanceled
+			turnError = "session was stopped"
 			log.Printf("[COMPLETION] Session %s has a cancellation guard; skipping completed status", sessionID)
 			tracer.EndTrace(traceID, map[string]interface{}{
 				"status": "stopped",
@@ -6252,6 +6289,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update active session status to completed
+		turnStatus = trackedExecutionStatusCompleted
+		turnError = ""
 		log.Printf("[COMPLETION] Updating session %s status to completed", sessionID)
 		api.updateSessionStatus(sessionID, "completed")
 
@@ -6631,9 +6670,13 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 // follow-up is submitted directly to an idle retained CLI. This path does not
 // bootstrap a fresh /api/query stream, so it must explicitly reactivate the
 // existing terminal snapshot and session status after confirmed delivery.
-func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
+func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string, executionIDs ...string) {
 	if api == nil || api.terminalStore == nil {
 		return
+	}
+	executionID := ""
+	if len(executionIDs) > 0 {
+		executionID = strings.TrimSpace(executionIDs[0])
 	}
 	for _, snapshot := range api.terminalStore.ListRaw(sessionID) {
 		if !codingAgentSnapshotIsMainAgent(snapshot) || !terminalSnapshotHasLiveTmux(snapshot) {
@@ -6649,8 +6692,31 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 		if api.retainedMainTurnWatchCancels == nil {
 			api.retainedMainTurnWatchCancels = make(map[string]context.CancelFunc)
 		}
+		if api.retainedMainTurnExecutionIDs == nil {
+			api.retainedMainTurnExecutionIDs = make(map[string]string)
+		}
+		if api.retainedMainTurnAdditionalExecutionIDs == nil {
+			api.retainedMainTurnAdditionalExecutionIDs = make(map[string]map[string]struct{})
+		}
+		if _, alreadyTracked := api.retainedMainTurns[sessionID]; alreadyTracked {
+			primaryID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
+			if executionID != "" && executionID != primaryID {
+				aliases := api.retainedMainTurnAdditionalExecutionIDs[sessionID]
+				if aliases == nil {
+					aliases = make(map[string]struct{})
+					api.retainedMainTurnAdditionalExecutionIDs[sessionID] = aliases
+				}
+				aliases[executionID] = struct{}{}
+			}
+			api.retainedMainTurnsMu.Unlock()
+			watchCancel()
+			api.setSessionBusy(sessionID, true)
+			api.updateSessionStatus(sessionID, "running")
+			return
+		}
 		previousWatchCancel := api.retainedMainTurnWatchCancels[sessionID]
 		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnExecutionIDs[sessionID] = executionID
 		api.retainedMainTurnWatchCancels[sessionID] = watchCancel
 		api.retainedMainTurnsMu.Unlock()
 		if previousWatchCancel != nil {
@@ -6755,7 +6821,12 @@ func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, 
 		return
 	}
 	now := time.Now()
-	executionID := strings.TrimSpace(snapshot.ExecutionID)
+	api.retainedMainTurnsMu.Lock()
+	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
+	api.retainedMainTurnsMu.Unlock()
+	if executionID == "" {
+		executionID = strings.TrimSpace(snapshot.ExecutionID)
+	}
 	if executionID == "" {
 		executionID = "main:" + sessionID
 	}
@@ -6835,9 +6906,21 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 
 	api.retainedMainTurnsMu.Lock()
 	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
+	executionIDs := make([]string, 0, 1+len(api.retainedMainTurnAdditionalExecutionIDs[sessionID]))
+	if executionID != "" {
+		executionIDs = append(executionIDs, executionID)
+	}
+	for additionalID := range api.retainedMainTurnAdditionalExecutionIDs[sessionID] {
+		if additionalID = strings.TrimSpace(additionalID); additionalID != "" && additionalID != executionID {
+			executionIDs = append(executionIDs, additionalID)
+		}
+	}
 	var watchCancel context.CancelFunc
 	if stillTracked && currentStart.Equal(startedAt) {
 		delete(api.retainedMainTurns, sessionID)
+		delete(api.retainedMainTurnExecutionIDs, sessionID)
+		delete(api.retainedMainTurnAdditionalExecutionIDs, sessionID)
 		watchCancel = api.retainedMainTurnWatchCancels[sessionID]
 		delete(api.retainedMainTurnWatchCancels, sessionID)
 	} else {
@@ -6854,8 +6937,14 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 	api.setSessionBusy(sessionID, false)
 	if strings.EqualFold(strings.TrimSpace(snapshot.State), "failed") {
 		api.updateSessionStatus(sessionID, "error")
+		for _, id := range executionIDs {
+			api.completeTrackedExecution(id, trackedExecutionStatusFailed, "retained coding-agent turn failed", nil)
+		}
 	} else {
 		api.updateSessionStatus(sessionID, "completed")
+		for _, id := range executionIDs {
+			api.completeTrackedExecution(id, trackedExecutionStatusCompleted, "", nil)
+		}
 	}
 	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
 		eventType, sessionID, snapshot.TerminalID, snapshot.State)
@@ -6882,21 +6971,30 @@ func (api *StreamingAPI) deliverRetainedMainTerminalInput(ctx context.Context, s
 	api.lastQueryMu.RLock()
 	request, ok := api.lastQueryRequests[sessionID]
 	api.lastQueryMu.RUnlock()
+	liveProvider := strings.TrimSpace(retainedCodingAgentProvider(snapshot))
+	storedProvider := ""
 	modelID := ""
 	if ok {
-		provider = strings.TrimSpace(request.Provider)
+		storedProvider = strings.TrimSpace(request.Provider)
 		modelID = strings.TrimSpace(request.ModelID)
 		if request.LLMConfig != nil {
-			if provider == "" {
-				provider = strings.TrimSpace(request.LLMConfig.Primary.Provider)
+			if storedProvider == "" {
+				storedProvider = strings.TrimSpace(request.LLMConfig.Primary.Provider)
 			}
 			if modelID == "" {
 				modelID = strings.TrimSpace(request.LLMConfig.Primary.ModelID)
 			}
 		}
 	}
+	// The live tmux identifies the process that will receive this input. A
+	// continuation record can legitimately lag behind after Update Automation
+	// switches the workflow from one coding provider to another, so it may
+	// supply a model only when it describes that same provider.
+	provider = liveProvider
 	if provider == "" {
-		provider = retainedCodingAgentProvider(snapshot)
+		provider = storedProvider
+	} else if storedProvider != "" && !strings.EqualFold(provider, storedProvider) {
+		modelID = ""
 	}
 	if provider == "" {
 		return "", false, nil
@@ -6912,10 +7010,22 @@ func (api *StreamingAPI) deliverRetainedMainTerminalInput(ctx context.Context, s
 	return provider, true, llmproviders.SendCodingAgentLiveInput(ctx, llmproviders.Provider(provider), modelID, sessionID, message)
 }
 
-func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, provider string) string {
+func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, provider string, executionIDs ...string) string {
 	messageID := newSteerMessageID()
+	executionID := "live-turn:" + messageID
+	if len(executionIDs) > 0 && strings.TrimSpace(executionIDs[0]) != "" {
+		executionID = strings.TrimSpace(executionIDs[0])
+	}
+	request := QueryRequest{Query: message, TriggeredBy: "interactive"}
+	api.lastQueryMu.RLock()
+	if prior, ok := api.lastQueryRequests[sessionID]; ok {
+		request = prior
+		request.Query = message
+	}
+	api.lastQueryMu.RUnlock()
+	api.trackConversationTurnStart(executionID, sessionID, request)
 	api.recordLiveCodingAgentUserMessage(sessionID, message, provider, messageID, "sent_to_cli")
-	api.markRetainedMainCodingTurnRunning(sessionID)
+	api.markRetainedMainCodingTurnRunning(sessionID, executionID)
 	return messageID
 }
 
@@ -7652,7 +7762,7 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 			http.Error(w, fmt.Sprintf("Live input unavailable: %v", err), http.StatusConflict)
 			return true
 		}
-		api.recordRetainedTerminalLiveInput(sessionID, message, retainedProvider)
+		api.recordRetainedTerminalLiveInput(sessionID, message, retainedProvider, queryID)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(QueryResponse{
 			QueryID:        queryID,
@@ -7715,8 +7825,9 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 	// The chat UI dedups this against its optimistic bubble by exact content, so
 	// there is no double message.
 	if !hasActiveForegroundTurn {
+		api.trackConversationTurnStart(queryID, sessionID, QueryRequest{Query: message, TriggeredBy: "interactive"})
 		api.setSessionBusy(sessionID, false)
-		api.markRetainedMainCodingTurnRunning(sessionID)
+		api.markRetainedMainCodingTurnRunning(sessionID, queryID)
 	}
 	api.recordLiveCodingAgentUserMessage(sessionID, message, provider, messageID, deliveryStatus)
 	log.Printf("[QUERY→LIVE] Delivered /api/query message to retained CLI for session %s status=%s: %.80s", sessionID, deliveryStatus, message)
@@ -7873,7 +7984,9 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 	}
 	api.recordLiveCodingAgentUserMessage(sessionID, req.Message, provider, messageID, deliveryStatus)
 	if !hasActiveForegroundTurn {
-		api.markRetainedMainCodingTurnRunning(sessionID)
+		executionID := "live-turn:" + messageID
+		api.trackConversationTurnStart(executionID, sessionID, QueryRequest{Query: req.Message, TriggeredBy: "interactive"})
+		api.markRetainedMainCodingTurnRunning(sessionID, executionID)
 	}
 	log.Printf("[LIVE INPUT] Delivered user message to provider %s session %s status=%s: %.80s", provider, sessionID, deliveryStatus, req.Message)
 
@@ -7916,6 +8029,28 @@ func queryRequestForContinuation(req QueryRequest, isWorkflowPhase bool, workflo
 	req.AgentMode = "workflow_phase"
 	if strings.TrimSpace(req.SelectedFolder) == "" {
 		req.SelectedFolder = strings.TrimSpace(workflowPhaseFolder)
+	}
+	return req
+}
+
+// queryRequestWithEffectiveRuntime records the provider/model that actually
+// launched the retained coding CLI. The incoming request may carry tab state
+// from before Update Automation changed workflow.json, while finalProvider and
+// finalModelID have already been resolved from the current manifest.
+func queryRequestWithEffectiveRuntime(req QueryRequest, provider, modelID string) QueryRequest {
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	if provider == "" && modelID == "" {
+		return req
+	}
+	req.Provider = provider
+	req.ModelID = modelID
+	if req.LLMConfig != nil {
+		configCopy := *req.LLMConfig
+		configCopy.Primary = req.LLMConfig.Primary
+		configCopy.Primary.Provider = provider
+		configCopy.Primary.ModelID = modelID
+		req.LLMConfig = &configCopy
 	}
 	return req
 }

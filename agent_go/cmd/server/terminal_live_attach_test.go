@@ -32,6 +32,44 @@ func TestLiveAttachEnabled(t *testing.T) {
 	}
 }
 
+func TestRetainedTurnKeepsOriginalRootWhenSteeredContinuationArrives(t *testing.T) {
+	const sessionID = "retained-turn-multiple-owners"
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, "mlp-codex-cli-int-multiple-owners",
+	))
+	terminalID := sessionID + ":main:" + sessionID
+	if _, ok := terminalStore.MarkTurnCompleted(terminalID); !ok {
+		t.Fatal("could not prepare retained main terminal")
+	}
+
+	api := &StreamingAPI{
+		terminalStore:                          terminalStore,
+		activeSessions:                         map[string]*ActiveSessionInfo{sessionID: {SessionID: sessionID, Status: "completed"}},
+		retainedMainTurns:                      make(map[string]time.Time),
+		retainedMainTurnExecutionIDs:           make(map[string]string),
+		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
+		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+	}
+	api.markRetainedMainCodingTurnRunning(sessionID, "scheduled-message-root")
+	api.markRetainedMainCodingTurnRunning(sessionID, "live-completion-continuation")
+
+	api.retainedMainTurnsMu.Lock()
+	primary := api.retainedMainTurnExecutionIDs[sessionID]
+	_, hasContinuation := api.retainedMainTurnAdditionalExecutionIDs[sessionID]["live-completion-continuation"]
+	cancel := api.retainedMainTurnWatchCancels[sessionID]
+	api.retainedMainTurnsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if primary != "scheduled-message-root" {
+		t.Fatalf("primary retained execution = %q, want scheduled-message-root", primary)
+	}
+	if !hasContinuation {
+		t.Fatal("live completion continuation replaced the original root instead of joining its idle boundary")
+	}
+}
+
 func TestTmuxVersionAtLeast(t *testing.T) {
 	cases := []struct {
 		banner string

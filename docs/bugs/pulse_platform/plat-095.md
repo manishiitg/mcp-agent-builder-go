@@ -1,196 +1,131 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-095 — "is this message actually done" was answered by two different copies of the same rule, and a third mechanism the rule never reaches
+# PLAT-095 — Scheduled messages had no exact lifecycle identity
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | unassigned |
-| Ticket state | `implemented` — busy-signal reconciliation consolidated in Go, plus a follow-up fix for the global-monitor gap this investigation found; runtime reverify pending |
+| Assigned agent | Codex |
+| Ticket state | `implemented` — exact query-rooted lifecycle and shared Global Monitor projection; live reverify pending |
 | Last synchronized | `2026-08-12` |
 
-- **Priority:** P1 — every scheduled message in the platform depends on this
-  decision; a wrong answer either drops real work (PLAT-071/094) or shows a
-  stale "running" badge over a session that already finished.
-- **Owner:** scheduler turn-completion checks (`scheduler.go`), runtime
-  snapshot classification (`runtime_coordinator.go`), frontend runtime status
-  (`frontend/src/utils/runtimeActivity.ts`)
-- **Follows:** [PLAT-071](plat-071.md) (workshop idle-wait fix) and
-  [PLAT-094](plat-094.md) (the same fix at the Pulse step boundary) — this
-  ticket is what happens when you ask "why do we have this fix in two places
-  and not one."
+- **Priority:** P0 — every schedule, upgrade, Pulse turn, and Chief-of-Staff
+  sequence depends on advancing exactly once after the current message finishes.
+- **Owner:** query dispatch, background-agent lifecycle, scheduler sequencing,
+  runtime activity projection.
+- **Supersedes:** the symptom reconciliations in [PLAT-071](plat-071.md) and
+  [PLAT-094](plat-094.md).
 
-## What was actually duplicated
+## Actual defect
 
-Auditing every place the platform decides "has this scheduled turn finished"
-found **three distinct mechanisms**, not two shared ones:
+The scheduler sent a message and then tried to rediscover whether it had ended
+from session-wide symptoms. Two independent algorithms answered that question:
 
-1. **Workshop turns** (`waitForWorkshopIdleWithInactivityTimeout`,
-   `scheduler.go:4052`) — a polling loop. Declares done from the runtime
-   snapshot phase (`sessionIsBusy`), and only consulted the explicit per-turn
-   flag (`isSessionBusy`) as a tie-breaker at timeout (PLAT-071). Used by
-   schedule messages, contract-upgrade preflights, the PLAT-093 decision
-   drain, step-based-workflow steps, and Chief-of-Staff task reports.
-2. **Pulse turns** (`waitForPulseTurnCompletion`, `scheduler.go:3945`) — a
-   different mechanism entirely: subscribes to the session's event stream and
-   declares done when it goes quiet for a settle window with no live child
-   work. It does not consult `sessionIsBusy`/`isSessionBusy` to decide the
-   turn is over at all.
-3. **Pulse's post-wait recheck** (`abortIfTurnStillBusy`, PLAT-094) — runs
-   *after* #2 says done, and re-checks the same two busy signals before
-   allowing the next message — using its own independent copy of the exact
-   reconciliation rule already inline in #1.
+1. `waitForWorkshopIdleWithInactivityTimeout` polled tmux, session busy flags,
+   tools, and every execution in the session.
+2. `waitForPulseTurnCompletion` watched the session event stream and a settle
+   timer, then Pulse ran a third `abortIfTurnStillBusy` recheck.
 
-So the reconciliation rule (PLAT-071's fix) existed twice, hand-written
-separately, only because Pulse's completion check (#2) doesn't route through
-the same code as everyone else's (#1).
+None of them identified **the message being waited on**. Consequently:
 
-## Fix shipped: one shared reconciliation function
+- stale tmux/runtime state could keep a completed message alive;
+- quiet time could complete a live message;
+- an unrelated child or old turn in the same session could affect the answer;
+- a child could finish and release the wait before the main agent processed its
+  auto-notification;
+- Go then marked still-waiting backup/publish/notify receipts permanently
+  failed even though the agent had never reported those outcomes.
 
-`reconcileSessionBusySignal(snapshotBusy, explicitBusy bool) bool`
-(`scheduler.go:2440`, renamed from PLAT-094's `reconcilePulseStepSessionBusy`)
-is now the single implementation, called from both:
+The shared busy-signal helper previously recorded in this ticket reduced one
+symptom but did not fix the missing identity. Runtime re-verification exposed
+that limitation, so the earlier partial solution has been replaced.
 
-- `abortIfTurnStillBusy` (Pulse step boundary), unchanged call shape.
-- `waitForWorkshopIdleWithInactivityTimeout`'s timeout branch, which
-  previously hand-rolled `if !s.api.isSessionBusy(sessionID) { return nil }`
-  inline — replaced with a call to the shared function.
+## Implemented design
 
-Deliberately asymmetric, same as PLAT-071/094: the explicit flag only ever
-corrects a snapshot *claiming* busy; an idle snapshot is never escalated to
-busy. Two independent, hand-rolled copies of an asymmetric rule are exactly
-the shape that drifts silently — the next person patching one copy has no
-reason to know the other exists.
+### One identity per sent message
 
-**Deliberately not merged**: mechanisms #1 (polling) and #2 (event
-subscription) stay separate. That's a real implementation-strategy
-difference — Pulse turns can run for hours and event-driven waiting avoids
-polling overhead — not the same duplication as the reconciliation rule.
-Collapsing them was scoped out explicitly: higher risk, touches every
-scheduled message in the platform, and this file has multiple concurrent
-editors at any given time.
+`/api/query` already creates and returns a `query_id`. That ID is now the
+canonical execution root for the message; no second turn identifier was added.
+`startSessionInternal` dispatches the message and waits on that exact ID.
 
-## Follow-up fix shipped: `ActiveWorkflowExecution` was missing the collapsed status entirely
+### One recursive execution tree
 
-Chasing the frontend finding below turned up something more concrete than a
-"same bug class, be careful" note. `ActiveSessionInfo` (the model behind
-polling/SSE/the execution tree) has always computed and shipped a pre-collapsed
-`DisplayStatus` (`busy`/`idle`/`stopped`) alongside its raw `RuntimeState`, from
-one `snapshot` value in one call — `polling.go:440-443`:
+First-level background agents inherit the active query ID as
+`parent_execution_id`. Nested agents retain their direct parent. Synthetic
+auto-notification turns are also tracked and linked to the originating child’s
+parent, so the original message remains active while the main agent processes a
+child result. A completed child is held open during the narrow interval before
+that continuation is registered.
 
-```go
-if snapshot, ok := api.authoritativeRuntimeSnapshot(session.SessionID); ok {
-    enriched.RuntimeState = &snapshot
-    enriched.DisplayStatus = sessionDisplayStatusFromRuntime(snapshot).Status
-}
-```
+Completion now means:
 
-Because both come from the same value, they can never disagree — the
-frontend's own `runtimeDisplayStatus()` re-deriving the identical mapping from
-`runtime_state.phase` is redundant, but not a live bug (verified: the two
-mappings agree today).
+1. the exact query root is terminal; and
+2. every recursively linked descendant is terminal; and
+3. every non-suppressed child completion has been dispatched back to its parent.
 
-`ActiveWorkflowExecution` — the model behind `/api/workflow/running`, the
-endpoint the Global Monitor actually reads for workflow-level busy state — had
-**no `DisplayStatus` field at all** (`workflow.go:598-624`). All three call
-sites that attach its `RuntimeState` shipped only the raw 7-state `Phase`,
-with no collapsed answer available — the one API surface where a consumer is
-*forced* to re-derive busy/idle/stopped from scratch, because nothing
-authoritative was ever offered.
+Events only wake the waiter. Silence, tmux prompt text, session-wide idle, and an
+unrelated completion can never declare the message complete.
 
-Fixed by adding the field and populating it the same way, at all three sites:
-`workflow_execution_tracker.go:463` (`listRunningWorkflowExecutions`),
-`workflow_running_routes.go:87` (`handleGetRunningWorkflow`), and
-`workflow_running_routes.go:157` (`handleUpdateRunningWorkflow`). Mirrored
-into the frontend type (`RunningWorkflowInfo` gained `runtime_state` — which
-the Go struct had always sent but the TS type never declared — and
-`display_status`) so it's actually usable from TypeScript.
+### One projection for the scheduler and Global Monitor
 
-## Open finding: the same bug class exists in the frontend, but the naive fix is wrong
+The execution roots and descendants live in the existing tracked-execution and
+background-agent stores consumed by `authoritativeRuntimeSnapshot`. Both global
+and workspace-scoped running-workflow APIs now use one enrichment function to
+attach `RuntimeState` and `DisplayStatus`. The scheduler waits on the exact tree;
+the UI projects the same underlying lifecycle records.
 
-The Global Activity Monitor (`frontend/src/utils/runtimeActivity.ts:5`,
-`runtimeDisplayStatus`) classifies a session busy/idle purely from
-`runtime.phase`, never consulting `runtime.foreground_turn.busy` — which is
-already present in every payload
-(`snapshot.ForegroundTurn.Busy = api.isSessionBusy(sessionID)`,
-`runtime_coordinator.go:376`). So the UI can show "running" over a session
-whose foreground turn has already ended: the same class of staleness as
-PLAT-071/094, one layer further out.
+### No inferred Pulse action failures
 
-**It cannot be fixed the same way.** `deriveRuntimePhase`
-(`runtime_coordinator.go:447`) does not compare two views of one fact — it
-ORs four independent live-evidence signals: foreground-turn busy, a running
-child execution, a live background agent, or a busy terminal. Any one alone
-is enough to call it "running", including states with **no foreground turn at
-all** — "waiting for background agents" is a real, intentionally distinct
-state the frontend already branches on elsewhere
-(`hasLiveBackgroundAgents` in `globalActivityMonitorStatus.ts`). Reconciling
-`phase` against `foreground_turn.busy` alone, the same two-signal way as the
-Go fix, would misclassify every one of those as idle — trading a known
-staleness bug for a real, immediate regression.
+The scheduler no longer rewrites unresolved backup/publish/notify commands to
+`failed`, `timed_out`, or `skipped` on a wait error, panic, interruption, or
+server restart. Those durable states change only when an agent explicitly
+records the command outcome. Go may expose that a turn failed; it may not invent
+the business action’s result.
 
-What actually explains a stuck "running" phase is more likely one of the
-*other three* OR'd inputs going stale — `BackgroundLive` or `TerminalBusy`
-staying true after the real work ended is exactly the shape PLAT-091 already
-fixed for one specific input (orphaned evaluation-step background agents).
-The generic fix for "is Phase trustworthy" is making each of the four inputs
-self-correcting, the way PLAT-091 did for one of them — not adding a second
-reconciliation layer on top of an OR, which would just be a third
-reimplementation of the same rule in TypeScript, on top of the two already
-merged into one in Go.
+## Removed code
 
-## Not fixed here
+- `waitForWorkshopIdle*`
+- `waitForPulseTurnCompletion`
+- `abortIfTurnStillBusy`
+- `reconcileSessionBusySignal`
+- `pulseStepFailureMustStopBeforeNextTurn`
+- automatic unresolved-final-command terminalizers
 
-- Whether `collectRuntimeSnapshot`'s read of `RawSessionStatus`
-  (`snapshot.RawSessionStatus = active.Status`, `runtime_coordinator.go:363`)
-  can race a concurrent completion writer — i.e., whether a stale in-memory
-  `ActiveSessionInfo.Status` read is what actually explained PLAT-094's
-  incident, given `ForegroundTurn.Busy` (`isSessionBusy`) had *already*
-  cleared by the time the abort fired, and per `deriveRuntimePhase`'s OR
-  logic, that alone should not have kept Phase "running" unless one of the
-  other three evidence fields was also stale at that instant. Not
-  investigated this pass — the PLAT-094 fix is safe regardless of which input
-  was actually stale, since it corrects at the point of use, but it does not
-  explain the underlying cause any more than PLAT-065 or PLAT-094's own "not
-  fixed here" sections did.
-- `BackgroundLive`/`TerminalBusy` staleness beyond PLAT-091's specific fix
-  (orphaned evaluation-step children). Whether other background-agent or
-  terminal shapes can go stale the same way is unaudited.
-- The frontend Global Activity Monitor itself. No code change shipped there;
-  see the finding above for why a same-shape fix is unsafe.
+This is intentionally a replacement, not another fallback layered over the old
+algorithms.
+
+## Regression coverage
+
+- an unrelated completed turn in the same session cannot complete the target;
+- recursive descendants hold the target open;
+- a completed child remains live until its parent notification dispatches;
+- exact root failure is returned as a failed turn;
+- workspace activity and Global Monitor receive the same runtime/display
+  projection;
+- unrecorded Pulse final commands remain `waiting` rather than receiving a
+  Go-inferred outcome.
 
 ## Verification
 
-- `go build ./...` clean.
-- `TestReconcileSessionBusySignal` (renamed from PLAT-094's
-  `TestReconcilePulseStepSessionBusy`, same cases, doc comment updated to
-  note it now backs both call sites) and
-  `TestAbortIfTurnStillBusyReclassificationChangesTheOutcome` still pass
-  unchanged.
-- Full existing `waitForWorkshopIdle*` test suite (10 tests, including
-  `TestWaitForWorkshopIdleTimesOutWhenSessionStaysBusy` and
-  `TestWaitForWorkshopIdleAllowsLongRunningTmuxWithProgress`, which exercise
-  the exact branch rewired to call the shared function) passes unchanged —
-  proving the substitution is behavior-preserving, not just compiling.
-- No new integration test was added for the workshop-idle-wait's use of the
-  shared function specifically: the test harness couples `sessionIsBusy` and
-  `isSessionBusy` together through `setSessionBusy` +
-  `observeRuntimeSnapshot`, so forcing the two signals to disagree inside a
-  full timing-loop test would need separate test infrastructure. Coverage
-  instead comes from the pure-function table test (proves the rule) plus the
-  unchanged integration suite (proves no regression in the common paths).
-- `TestRunningWorkflowListCarriesTheCollapsedDisplayStatus` (new): pins that
-  `listRunningWorkflowExecutions` populates `DisplayStatus` from the same
-  snapshot as `RuntimeState`, and that the two can never disagree. Verified to
-  fail (with a nil-vs-populated mismatch) when the assignment is neutered, and
-  pass with it restored.
-- `npx tsc --noEmit` clean after the `RunningWorkflowInfo` type additions.
-- **Not yet reverified live.**
+- `go build ./...` passes.
+- All new lifecycle, Global Monitor projection, and Pulse command-state tests
+  pass together.
+- The full server suite still has the unrelated existing
+  `TestWorkflowScheduleTrackingWindowStartSurvivesEmptySchedulerState` failure;
+  the terminal-pipe E2E is timing-sensitive (failed once in the full run and
+  passed alone). The workflow package retains its two existing prompt-contract
+  failures. None touch lifecycle code.
+- Live schedule re-verification is pending a server restart with this commit.
 
 ## Acceptance
 
-- Exactly one function decides whether a stale runtime-snapshot busy signal
-  should be trusted over the explicit per-turn flag, and both places that
-  make this decision (the workshop idle-wait, the Pulse step boundary) call
-  it.
-- The frontend/global-monitor finding is documented with a stated reason it
-  was not fixed the same way, not silently dropped.
+- Every internally sequenced message advances only on its own query-rooted tree.
+- Child result processing is part of that tree.
+- Global Monitor and scheduler state derive from the same lifecycle records.
+- Go never fabricates a Pulse final-command result.
+
+## Follow-up boundary repair
+
+[PLAT-100](plat-100.md) fixes the workshop-launch boundary that could detach a
+full workflow or other workshop background execution from this ticket's exact
+query root. PLAT-095 defines the canonical lifecycle and waiter; PLAT-100 makes
+all workshop descendants participate in that lifecycle.
