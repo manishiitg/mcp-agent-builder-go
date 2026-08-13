@@ -4120,6 +4120,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if credentialErr != nil {
 			logfWithContext(queryLogCtx.WithWorkflow(workflowPhaseFolder), "[WORKFLOW_AUTH] Failed to load provider credentials: %v", credentialErr)
 		}
+	} else if req.LLMConfig != nil && req.LLMConfig.APIKeys != nil {
+		// resolveAgentProfileForQuery already resolved a project-scoped credential
+		// for a product surface (e.g. Video Studio) and overlaid it onto this same
+		// MergedProviderAPIKeys base — req.LLMConfig.APIKeys is the only place that
+		// happens. Recomputing mergedAPIKeys from scratch below would silently
+		// discard it: NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+		mergedAPIKeys = req.LLMConfig.APIKeys
 	}
 
 	queryInputLaneRelease := releaseInputLane

@@ -128,6 +128,44 @@ func encryptProfileSecretForTest(t *testing.T, userID, value string) string {
 	return base64.StdEncoding.EncodeToString(append(nonce, sealed...))
 }
 
+// A per-project Cursor API key must reach the agent the same way a per-project
+// Claude Code token does. This is the regression for a live bug: the
+// credential branch here originally checked strings.EqualFold(provider,
+// "claude-code") explicitly, so a project scoped to cursor-cli saved a key
+// through the UI, the save succeeded, and every following turn still failed
+// "Authentication required" because this function silently never loaded it.
+func TestResolveAgentProfileInjectsProjectScopedCursorAPIKey(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userID = "user-1"
+	const workspacePath = "Chats/Video Studio/projects/launch"
+	const cursorKey = "crsr_project_scoped_key"
+	if err := store.UpsertWorkflowProviderCredential(context.Background(), userID, workspacePath, cursorCLIProviderID, encryptProviderCredentialForTest(t, cursorKey, userID)); err != nil {
+		t.Fatalf("store project Cursor credential: %v", err)
+	}
+
+	registry := agentprofiles.NewRegistry()
+	if err := registry.RegisterProfile(agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "{{.ProjectTitle}}",
+		Runtime: agentprofiles.RuntimePolicy{
+			Transport: "auto", Provider: "cursor-cli", ModelID: "auto",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry, chatStore: store}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "video-studio", SelectedFolder: workspacePath, AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"}}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if req.LLMConfig == nil || req.LLMConfig.APIKeys == nil || req.LLMConfig.APIKeys.CursorCLI == nil || *req.LLMConfig.APIKeys.CursorCLI != cursorKey {
+		t.Fatalf("project-scoped Cursor key was not injected: %+v", req.LLMConfig)
+	}
+}
+
 func TestResolveProfileRuntimeModelUsesOnlyYAMLProviderOptions(t *testing.T) {
 	runtime := agentprofiles.RuntimePolicy{
 		Provider: "claude-code", ModelID: "claude-sonnet-5",

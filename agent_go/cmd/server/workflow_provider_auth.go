@@ -20,6 +20,20 @@ const (
 	cursorCLIProviderID  = "cursor-cli"
 )
 
+// isWorkflowCredentialProvider reports whether provider has a per-project
+// credential story (a scoped Claude Code token or Cursor API key). Callers
+// use this to decide whether resolving workflowProviderAPIKeys for a chat
+// turn is worth the store lookup, not to gate correctness — the function
+// itself already no-ops for whichever of these two providers isn't in use.
+func isWorkflowCredentialProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case claudeCodeProviderID, cursorCLIProviderID:
+		return true
+	default:
+		return false
+	}
+}
+
 // workflowCredentialProvider carries the handful of things that differ between
 // one coding-CLI provider's stored credential and another's. Everything else —
 // encryption, per-user/per-workflow scoping, the busy-session guard, the masked
