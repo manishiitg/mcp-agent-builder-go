@@ -6,6 +6,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,5 +255,113 @@ func TestWorkflowCursorCLIKeyOverridesSharedKeyOnlyWhenPresent(t *testing.T) {
 	}
 	if sharedKey != "crsr_server_wide_key" {
 		t.Fatal("the base key was mutated through the clone")
+	}
+}
+
+// resolveEffectiveAPIKeys is the single call site every part of this package
+// should use for a turn's effective provider keys — see its doc comment for
+// why. This test proves the two things that actually mattered when it was
+// missing: base=nil self-computes rather than panicking, and a non-nil base
+// is layered rather than discarded.
+func TestResolveEffectiveAPIKeysSelfComputesBaseWhenNil(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	const userID = "alice"
+	const workspacePath = "Chats/Video Studio/projects/launch"
+	const scopedKey = "crsr_scoped_key"
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(context.Background(), userID, workspacePath, cursorCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+
+	keys, err := api.resolveEffectiveAPIKeys(context.Background(), userID, workspacePath, nil)
+	if err != nil {
+		t.Fatalf("resolveEffectiveAPIKeys(nil base) error = %v", err)
+	}
+	if keys == nil || keys.CursorCLI == nil || *keys.CursorCLI != scopedKey {
+		t.Fatalf("nil base did not self-compute and layer the scoped credential: %+v", keys)
+	}
+}
+
+func TestResolveEffectiveAPIKeysLayersOntoProvidedBase(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	const userID = "alice"
+	const workspacePath = "Chats/Video Studio/projects/launch"
+	const scopedKey = "crsr_scoped_key"
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(context.Background(), userID, workspacePath, cursorCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+	directKey := "direct-anthropic-key"
+	base := &llm.ProviderAPIKeys{Anthropic: &directKey}
+
+	keys, err := api.resolveEffectiveAPIKeys(context.Background(), userID, workspacePath, base)
+	if err != nil {
+		t.Fatalf("resolveEffectiveAPIKeys(base) error = %v", err)
+	}
+	if keys.Anthropic == nil || *keys.Anthropic != directKey {
+		t.Fatalf("provided base was not preserved: %+v", keys)
+	}
+	if keys.CursorCLI == nil || *keys.CursorCLI != scopedKey {
+		t.Fatalf("scoped credential was not layered onto the provided base: %+v", keys)
+	}
+	if base.Anthropic == nil || *base.Anthropic != directKey {
+		t.Fatal("the caller's base was mutated in place")
+	}
+}
+
+// This is the actual consolidation guarantee: every place in this package
+// that wants a turn's effective provider keys goes through
+// resolveEffectiveAPIKeys, not a direct call to the lower-level
+// workflowProviderAPIKeys. Before this, five call sites independently
+// reimplemented the same two-line pattern; two of them gated it incorrectly,
+// and Video Studio's Cursor turns silently ran under the server's shared
+// login for two commits before either gate was caught and fixed. A future
+// edit that adds a sixth direct call — instead of routing through the shared
+// function — reintroduces exactly that risk, and this test catches it at
+// compile-test time rather than in a live "I saved a key and it still
+// failed" report.
+func TestWorkflowProviderAPIKeysHasExactlyOneCallSite(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read cmd/server: %v", err)
+	}
+	fset := token.NewFileSet()
+	var callSites []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "workflowProviderAPIKeys" {
+				return true
+			}
+			pos := fset.Position(sel.Pos())
+			callSites = append(callSites, fmt.Sprintf("%s:%d", name, pos.Line))
+			return true
+		})
+	}
+	if len(callSites) != 1 {
+		t.Fatalf("workflowProviderAPIKeys called from %d site(s), want exactly 1 (inside resolveEffectiveAPIKeys): %v.\n"+
+			"If you added a new caller, route it through resolveEffectiveAPIKeys instead — that is the whole point of consolidating this.",
+			len(callSites), callSites)
 	}
 }

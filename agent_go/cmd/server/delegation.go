@@ -266,7 +266,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 			}
 		}
 		var credentialErr error
-		apiKeys, credentialErr = api.workflowProviderAPIKeys(ctx, subAgentUserID, workflowDecisionScope, apiKeys)
+		apiKeys, credentialErr = api.resolveEffectiveAPIKeys(ctx, subAgentUserID, workflowDecisionScope, apiKeys)
 		if credentialErr != nil {
 			return "", fmt.Errorf("load delegated workflow provider credentials: %w", credentialErr)
 		}

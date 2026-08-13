@@ -3553,7 +3553,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if workflowLLMConfig == nil {
 			workflowLLMConfig = &orchestrator.LLMConfig{}
 		}
-		workflowKeys, credentialErr := api.workflowProviderAPIKeys(r.Context(), currentUserID, manifestWorkspacePath, MergedProviderAPIKeys(r.Context()))
+		workflowKeys, credentialErr := api.resolveEffectiveAPIKeys(r.Context(), currentUserID, manifestWorkspacePath, nil)
 		if credentialErr != nil {
 			http.Error(w, "Failed to load workflow provider credentials", http.StatusInternalServerError)
 			return
@@ -4116,7 +4116,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	mergedAPIKeys := MergedProviderAPIKeys(r.Context())
 	if isWorkflowPhase && workflowPhaseFolder != "" {
 		var credentialErr error
-		mergedAPIKeys, credentialErr = api.workflowProviderAPIKeys(r.Context(), currentUserID, workflowPhaseFolder, mergedAPIKeys)
+		mergedAPIKeys, credentialErr = api.resolveEffectiveAPIKeys(r.Context(), currentUserID, workflowPhaseFolder, mergedAPIKeys)
 		if credentialErr != nil {
 			logfWithContext(queryLogCtx.WithWorkflow(workflowPhaseFolder), "[WORKFLOW_AUTH] Failed to load provider credentials: %v", credentialErr)
 		}
@@ -4126,6 +4126,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// MergedProviderAPIKeys base — req.LLMConfig.APIKeys is the only place that
 		// happens. Recomputing mergedAPIKeys from scratch below would silently
 		// discard it: NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+		//
+		// This branch is deliberately narrower than "any chat with SelectedFolder
+		// set": an ordinary multi-agent chat that merely references a workflow
+		// folder must not inherit that workflow's credential (see delegation.go's
+		// workflowOwnedDelegation check, which enforces the same rule for
+		// sub-agents) — only a chat resolveAgentProfileForQuery actually bound to
+		// an agent profile reaches this branch, because only it sets this field.
 		mergedAPIKeys = req.LLMConfig.APIKeys
 	}
 
@@ -8636,11 +8643,11 @@ func (api *StreamingAPI) buildWorkshopConfig(
 	if workshopLLMConfig == nil {
 		workshopLLMConfig = &orchestrator.LLMConfig{}
 	}
-	baseAPIKeys := MergedProviderAPIKeys(ctx)
+	var preloadedAPIKeys *llm.ProviderAPIKeys
 	if len(apiKeys) > 0 && apiKeys[0] != nil {
-		baseAPIKeys = apiKeys[0]
+		preloadedAPIKeys = apiKeys[0]
 	}
-	workshopAPIKeys, credentialErr := api.workflowProviderAPIKeys(ctx, currentUserID, workspacePath, baseAPIKeys)
+	workshopAPIKeys, credentialErr := api.resolveEffectiveAPIKeys(ctx, currentUserID, workspacePath, preloadedAPIKeys)
 	if credentialErr != nil {
 		return nil, fmt.Errorf("load workflow provider credentials: %w", credentialErr)
 	}

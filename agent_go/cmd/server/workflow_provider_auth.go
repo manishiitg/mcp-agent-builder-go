@@ -20,20 +20,6 @@ const (
 	cursorCLIProviderID  = "cursor-cli"
 )
 
-// isWorkflowCredentialProvider reports whether provider has a per-project
-// credential story (a scoped Claude Code token or Cursor API key). Callers
-// use this to decide whether resolving workflowProviderAPIKeys for a chat
-// turn is worth the store lookup, not to gate correctness — the function
-// itself already no-ops for whichever of these two providers isn't in use.
-func isWorkflowCredentialProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case claudeCodeProviderID, cursorCLIProviderID:
-		return true
-	default:
-		return false
-	}
-}
-
 // workflowCredentialProvider carries the handful of things that differ between
 // one coding-CLI provider's stored credential and another's. Everything else —
 // encryption, per-user/per-workflow scoping, the busy-session guard, the masked
@@ -281,6 +267,30 @@ func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, wo
 		keys.CursorCLI = cursorKey
 	}
 	return keys, nil
+}
+
+// resolveEffectiveAPIKeys is the single call every part of the codebase uses
+// to get a turn's effective provider keys: the environment/workspace-wide
+// base (computed fresh when base is nil) layered with a per-project
+// coding-CLI credential for userID/workspacePath, via workflowProviderAPIKeys.
+//
+// Before this existed, six call sites across server.go, delegation.go, and
+// agent_profile_runtime.go each independently wrote the same two-line
+// MergedProviderAPIKeys-then-workflowProviderAPIKeys pattern. Two of them
+// gated it incorrectly — one only for the claude-code provider, one only for
+// workflow-phase turns — and Video Studio's Cursor turns silently ran under
+// whichever login was on the server for two commits in a row before either
+// was caught. Consolidating the mechanism here doesn't remove the need for
+// each caller to still decide WHETHER and to WHICH workspace path this
+// applies (see the comment at each call site — a plain multi-agent chat
+// must not inherit a credential merely because it references a workflow
+// folder, which delegation.go documents and depends on) — but it means a
+// provider added to workflowProviderAPIKeys only has to be handled once.
+func (api *StreamingAPI) resolveEffectiveAPIKeys(ctx context.Context, userID, workspacePath string, base *llm.ProviderAPIKeys) (*llm.ProviderAPIKeys, error) {
+	if base == nil {
+		base = MergedProviderAPIKeys(ctx)
+	}
+	return api.workflowProviderAPIKeys(ctx, userID, workspacePath, base)
 }
 
 func normalizeWorkflowCredentialPath(workflowPath string) string {

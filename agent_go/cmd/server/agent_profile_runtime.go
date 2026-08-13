@@ -183,14 +183,15 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		req.ModelID = modelID
 		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}
 		req.LLMConfigSource = llmConfigSourceAgentProfile
-		if isWorkflowCredentialProvider(provider) && api.chatStore != nil {
+		if api.chatStore != nil {
 			// Product workspaces use the same encrypted per-project credential store
 			// as AgentWorks workflows (Claude Code's setup token, Cursor's API key).
 			// It stays scoped to this user/workspace and is injected only into the
-			// provider runtime, never into a prompt or tool. workflowProviderAPIKeys
-			// is a no-op for whichever of these two providers isn't in use, so this
-			// is safe to call for either.
-			keys, credentialErr := api.workflowProviderAPIKeys(ctx, userID, workspacePath, MergedProviderAPIKeys(ctx))
+			// provider runtime, never into a prompt or tool. resolveEffectiveAPIKeys
+			// always checks both supported providers and is a no-op for whichever
+			// one isn't in use, so this call needs no gate on the resolved provider
+			// name — that gate existed before and silently excluded cursor-cli.
+			keys, credentialErr := api.resolveEffectiveAPIKeys(ctx, userID, workspacePath, nil)
 			if credentialErr != nil {
 				return nil, fmt.Errorf("load agent profile %s credential: %w", provider, credentialErr)
 			}
